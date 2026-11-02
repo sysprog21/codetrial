@@ -1,9 +1,12 @@
-# Keep the interactive review block in a pull request description honest.
+# Decide whether a pull request needs the interactive review, and whether a
+# maintainer has marked it explained.
 #
-# check.yml cannot re-run on every description edit without paying for the whole
-# matrix, so this one carries only the description check. It compares what the
-# description declares with what the diff requires; the review itself is local
-# evidence this job never sees.
+# check.yml cannot re-run on every label change without paying for the whole
+# matrix, so this one carries only that check. It measures the commits and the
+# diff itself and reads nothing the author writes: a change over the thresholds
+# passes only with the maintainer's label. The review itself is local evidence
+# this job never sees. The file keeps its name from when it read the
+# description.
 #
 # PR events run on pull_request_target, so their workflow is the base branch's
 # and a pull request cannot edit or remove it. The same reason makes this job
@@ -24,7 +27,7 @@ name: pr-description
 
 on:
   pull_request_target:
-    types: [opened, edited, synchronize, reopened]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
   merge_group:
     types: [checks_requested]
 
@@ -55,13 +58,13 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
           persist-credentials: false
           path: base
-      - name: Compare the description with the diff
+      - name: Measure the change
         env:
           GH_TOKEN: ${{ github.token }}
           EVENT: ${{ github.event_name }}
           REPOSITORY: ${{ github.repository }}
           BASE_REF: ${{ github.event.merge_group.base_ref }}
-          PR_BODY: ${{ github.event.pull_request.body }}
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
           AUTHOR_LOGIN: ${{ github.event.pull_request.user.login }}
           AUTHOR_TYPE: ${{ github.event.pull_request.user.type }}
           APPROVED_HEAD: ${{ vars.CODETRIAL_POLICY_APPROVED_HEAD }}
@@ -85,9 +88,7 @@ jobs:
             python3 ../base/scripts/check-queue-review.py \
                 --base "$BASE_SHA" --head "$HEAD_SHA" --guard \
                 --approved "$APPROVED_HEAD"
-            printf '%s' "$PR_BODY" > "$RUNNER_TEMP/description.md"
-            python3 ../base/scripts/check-interactive-review.py pr-body \
-                --base "$BASE_SHA" --head "$HEAD_SHA" \
-                --body-file "$RUNNER_TEMP/description.md" \
+            python3 ../base/scripts/check-interactive-review.py pr \
+                --base "$BASE_SHA" --head "$HEAD_SHA" --labels "$LABELS" \
                 --author-login "$AUTHOR_LOGIN" --author-type "$AUTHOR_TYPE"
           fi

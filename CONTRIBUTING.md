@@ -280,11 +280,9 @@ requirement](docs/large-change-explanation.md) for counting, coverage, and what
 belongs in the PR body. An agent-written summary or approval alone does not
 meet this requirement; submission waits for your explanation and any material
 corrections.
-The pull request template includes an interactive review block; the pre-push
-hook writes it to `.git/codetrial-review/pr-description.md` once the check
-passes. When several branches go at once there is no such file: each head gets
-`pr-description-<head>.md` in the same directory, and the hook prints the paths. The
-`interactive-review` check compares the block with the diff.
+The pull request carries no review block. The `interactive-review` check measures
+the change itself, and a change over the thresholds passes once a maintainer adds
+the `explained` label.
 
 A review thread carries a correction, a measurement, or nothing: no pasted
 agent walkthroughs, no severity tables, no re-summarizing a diff that GitHub

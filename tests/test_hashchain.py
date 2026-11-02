@@ -550,7 +550,7 @@ class HashchainTests(unittest.TestCase):
             result = run(sys.executable, str(ROOT / "scripts/hashchain.py"), "verify")
             self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_the_description_check_runs_the_base_branchs_workflow(self):
+    def test_the_review_check_runs_the_base_branchs_workflow(self):
         text = (ROOT / ".github/workflows/pr-description.yml").read_text()
         self.assertIn("\non:\n  pull_request_target:", text)
         self.assertNotIn("\n  pull_request:", text)

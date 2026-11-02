@@ -494,81 +494,29 @@ def record_workbench(bundle):
 
 
 DOC = "docs/large-change-explanation.md#troubleshooting"
-BLOCK = re.compile(
-    r"<!-- interactive-review -->\n(.*?)\n<!-- /interactive-review -->", re.S
-)
+# A maintainer adds this label to a pull request they have seen explained. Only
+# people with triage access can, so an author cannot add or strip it.
+LABEL = "explained"
 
 
-def declaration(base, head):
-    """The pull request description block for this base and head."""
-    base, head, total, large, unknown = scope(base, head)
-    required = needs_review(total, large, unknown)
-    state = "not required"
-    if required:
-        try:
-            verify(head, base)
-            state = "complete"
-        except VERIFY_ERRORS:
-            state = "pending"
-    diff = hashlib.sha256(patch(base, head)).hexdigest()
-    return (
-        "<!-- interactive-review -->\n"
-        f"Interactive review: {state}\n"
-        f"Head: {head}\n"
-        f"Base: {base}\n"
-        f"Diff: sha256:{diff}\n"
-        f"PR text lines: {total}; commits at {LARGE_COMMIT} lines or more: {len(large)}\n"
-        "<!-- /interactive-review -->\n"
-    )
+def check_labels(base, head, labels):
+    """Refuse a change that needs the interactive review and has no label.
 
-
-def check_body(base, head, text):
-    """Refuse a description whose declaration the diff does not support.
-
-    The description is written by hand and CI cannot see local evidence, so
-    this keeps the page honest about the diff rather than proving a review.
+    CI measures the change itself, from the commits and the diff, so nothing in
+    the description can be edited out. It cannot see the contributor's local
+    evidence, so the proof that the change was explained is a maintainer's label.
     """
     base, head, total, large, unknown = scope(base, head)
-    required = needs_review(total, large, unknown)
-    found = BLOCK.findall(text.replace("\r\n", "\n"))
-    if not found:
-        raise ValueError(
-            "[interactive-review/missing-section] The description has no "
-            f"interactive review block; paste the one the pre-push hook wrote. See {DOC}"
-        )
-    if len(found) > 1:
-        raise ValueError(
-            "[interactive-review/undeclared] The description has more than one "
-            f"interactive review block; keep only the one from the hook. See {DOC}"
-        )
-    fields = dict(line.split(": ", 1) for line in found[0].splitlines() if ": " in line)
-    declared = fields.get("Interactive review", "").strip()
-    if declared not in ("complete", "not required"):
-        raise ValueError(
-            "[interactive-review/undeclared] The block must say 'complete' or "
-            f"'not required', not '{declared}'. See {DOC}"
-        )
-    if required and declared != "complete":
+    if not needs_review(total, large, unknown):
+        return False
+    if LABEL not in labels:
         raise ValueError(
             "[interactive-review/required] This change needs the interactive "
             f"review ({len(large)} commits at {LARGE_COMMIT} lines or more, "
-            f"PR diff {total} lines, {len(unknown)} unmeasured). See {DOC}"
+            f"PR diff {total} lines, {len(unknown)} unmeasured). A maintainer "
+            f"adds the '{LABEL}' label once it has been explained. See {DOC}"
         )
-    # Whatever it declares, the block was written for a diff; one copied from
-    # another pull request, or from before the change moved, names a different one.
-    for name, value in (("Head", head), ("Base", base)):
-        if fields.get(name) != value:
-            raise ValueError(
-                f"[interactive-review/stale] The block names {name.lower()} "
-                f"{fields.get(name) or '(none)'}, not {value}; review evidence "
-                f"belongs to one exact head. See {DOC}"
-            )
-    want = "sha256:" + hashlib.sha256(patch(base, head)).hexdigest()
-    if fields.get("Diff") != want:
-        raise ValueError(
-            "[interactive-review/stale] The block's diff is not this pull "
-            f"request's diff; the change moved after it was written. See {DOC}"
-        )
+    return True
 
 
 def dependabot_exempt(base, head, login, kind):
@@ -585,30 +533,20 @@ def dependabot_exempt(base, head, login, kind):
     return bool(commits) and len(chain.bots(commits)) == len(commits)
 
 
-def write_note(path, text):
-    try:
-        path = Path(path)
-        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        path.write_text(text)
-    except OSError as error:
-        raise ValueError(
-            f"Cannot write the pull request description block to {path}: {error}"
-        ) from error
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "command",
-        choices=["staged", "push", "certify", "status", "mark", "note", "pr-body"],
+        choices=["staged", "push", "certify", "status", "mark", "pr"],
     )
     parser.add_argument("--base")
     parser.add_argument("--head", default="HEAD")
     parser.add_argument("--bundle")
-    parser.add_argument("--body-file", help="pr-body: the pull request description")
-    parser.add_argument("--out", help="push, note: write the description block here")
-    parser.add_argument("--author-login", help="pr-body: the pull request opener")
-    parser.add_argument("--author-type", help="pr-body: the opener's account type")
+    parser.add_argument(
+        "--labels", default="[]", help="pr: the pull request's labels, as a JSON list"
+    )
+    parser.add_argument("--author-login", help="pr: the pull request opener")
+    parser.add_argument("--author-type", help="pr: the opener's account type")
     args = parser.parse_args()
     try:
         if args.command == "staged":
@@ -632,26 +570,22 @@ def main():
                 parser.error("certify requires --bundle")
             certify(args.bundle)
             print("Interactive review evidence retained for this committed head.")
-        elif args.command in ("status", "mark", "note", "pr-body"):
+        elif args.command in ("status", "mark", "pr"):
             if not args.base:
                 parser.error(args.command + " requires --base")
-            if args.command == "note":
-                block = declaration(args.base, args.head)
-                if args.out:
-                    write_note(args.out, block)
-                else:
-                    print(block, end="")
-                return 0
-            if args.command == "pr-body":
-                if not args.body_file:
-                    parser.error("pr-body requires --body-file")
+            if args.command == "pr":
                 if args.author_login and dependabot_exempt(
                     args.base, args.head, args.author_login, args.author_type
                 ):
-                    print("Dependabot's own pull request; no description to compare.")
+                    print("Dependabot's own pull request; no explanation to ask for.")
                     return 0
-                check_body(args.base, args.head, Path(args.body_file).read_text())
-                print("The description matches this change's interactive review need.")
+                labels = json.loads(args.labels)
+                if not isinstance(labels, list):
+                    raise ValueError("--labels must be a JSON list of names")
+                if check_labels(args.base, args.head, labels):
+                    print(f"A maintainer's '{LABEL}' label covers this change.")
+                else:
+                    print("This change is under the interactive review thresholds.")
                 return 0
             if args.command == "mark":
                 record_marker(args.base, args.head)
@@ -672,8 +606,6 @@ def main():
                     raise ValueError(
                         f"Interactive review required ({len(large)} commits >=200 lines; PR diff {total} lines). Unmeasured commits: {len(unknown)}. Trigger: {triggers}. Run /codetrial-review on the full committed branch; finish its web explanation and durable report before retrying. {error} See {DOC}"
                     ) from error
-            if args.out:
-                write_note(args.out, declaration(args.base, args.head))
     except (
         OSError,
         ValueError,
