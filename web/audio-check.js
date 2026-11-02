@@ -124,7 +124,8 @@ export function mediaReadiness({
       steps,
       ready: false,
       blocker: "output",
-      message: "Play the test tone or voice and confirm you heard it.",
+      message:
+        'Play the test tone or voice to check your audio, or click "I heard it" if it already works.',
     };
   }
   return {
