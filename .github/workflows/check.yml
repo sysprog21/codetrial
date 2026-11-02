@@ -1152,7 +1152,15 @@ jobs:
 
           gh release create "$staged" --draft --target "$GITHUB_SHA" \
             --title "$tag" --notes "Automated build of ${GITHUB_SHA:0:7}."
-          gh release upload "$staged" "${assets[@]}"
+          # An upload can time out (HTTP 408) on the GitHub side with nothing
+          # wrong in the build. --clobber replaces an asset a cut-off attempt
+          # left behind, so trying again is safe.
+          for attempt in 1 2 3; do
+            gh release upload --clobber "$staged" "${assets[@]}" && break
+            [ "$attempt" -lt 3 ] || exit 1
+            echo "upload failed; trying again (attempt $attempt of 3)" >&2
+            sleep $((attempt * 10))
+          done
 
           # Sizes, not just presence: an upload cut off partway still leaves a
           # named asset behind, and a truncated binary is the one outcome this
