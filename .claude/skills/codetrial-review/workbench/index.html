@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CodeTrial - Explain your change</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="/style.css" />
+    <script type="module" src="/app.js"></script>
+  </head>
+  <body class="practice-page">
+    <main class="lobby review-workbench">
+      <header>
+        <div class="brand">CODETRIAL</div>
+        <span class="workbench-caption"
+          >Contributor workspace · Local only</span
+        >
+      </header>
+      <section class="practice-hero" aria-labelledby="page-title">
+        <span class="practice-badge">Before your pull request</span>
+        <h1 id="page-title">Start with why.</h1>
+        <p class="practice-lead">
+          Read the diff and explain what motivated this change. Your reviewer
+          will compare your intent with one key change and offer a reference.
+        </p>
+      </section>
+      <div id="loading" role="status">Opening the review snapshot…</div>
+      <div id="error" role="alert" hidden></div>
+      <button id="retry" class="duration-button" type="button" hidden>
+        Retry loading
+      </button>
+      <section id="finished" class="completion-notice" role="status" hidden>
+        <span class="completion-icon" aria-hidden="true">&#10003;</span>
+        <div>
+          <h2>Interactive review finished</h2>
+          <p>
+            The review server has stopped and nothing more is needed here. You
+            can close this tab and continue submitting your pull request.
+          </p>
+          <ol class="next-steps">
+            <li>
+              Push the branch. The pre-push hook checks the review and writes
+              the pull request description block.
+            </li>
+            <li>
+              Open the pull request and paste the block from
+              <code>.git/codetrial-review/pr-description.md</code> in place of
+              the template's interactive review placeholder.
+            </li>
+          </ol>
+          <p id="close-hint" class="field-hint"></p>
+        </div>
+      </section>
+      <div id="workspace" hidden>
+        <section class="review-summary" aria-label="Review progress">
+          <div>
+            <strong id="change-size"></strong><span id="snapshot"></span>
+          </div>
+          <div>
+            <strong id="progress"></strong><span id="review-status"></span>
+          </div>
+        </section>
+        <section
+          id="completion-notice"
+          class="completion-notice"
+          role="status"
+          aria-atomic="true"
+          hidden
+        >
+          <span class="completion-icon" aria-hidden="true">&#10003;</span>
+          <div>
+            <h2>Interactive review complete</h2>
+            <p>
+              Your explanation and reflection have been confirmed and saved for
+              this snapshot. You can close this window and continue submitting
+              your pull request.
+            </p>
+            <ol class="next-steps">
+              <li>
+                Push the branch. The pre-push hook checks the review and writes
+                the pull request description block.
+              </li>
+              <li>
+                Open the pull request and paste the block from
+                <code>.git/codetrial-review/pr-description.md</code> in place of
+                the template's interactive review placeholder.
+              </li>
+            </ol>
+            <p class="field-hint">
+              Editing your explanation will require confirmation again, and a
+              change to the code makes this review stale.
+            </p>
+            <button id="close-window" class="save-button" type="button">
+              Finish and close
+            </button>
+            <p class="field-hint">
+              This stops the review server on your computer. Your confirmation
+              stays saved.
+            </p>
+          </div>
+        </section>
+        <p id="coverage-note" class="coverage-note" hidden></p>
+        <div class="review-grid">
+          <nav class="setup-panel file-panel" aria-labelledby="files-heading">
+            <div class="setup-heading">
+              <span class="step-number" aria-hidden="true">1</span>
+              <div>
+                <h2 id="files-heading">Read the change</h2>
+                <p>Browse the code while considering the motivation.</p>
+              </div>
+            </div>
+            <div id="file-list" class="file-list"></div>
+            <button id="all-diff" class="duration-button" type="button">
+              View complete diff
+            </button>
+          </nav>
+          <section
+            class="setup-panel diff-panel"
+            aria-labelledby="diff-heading"
+          >
+            <div class="diff-heading">
+              <div>
+                <h2 id="diff-heading">Complete diff</h2>
+                <p id="diff-meta"></p>
+              </div>
+            </div>
+            <pre id="diff" tabindex="0" aria-label="Code changes"></pre>
+          </section>
+          <section
+            class="setup-panel answer-panel"
+            aria-labelledby="explain-heading"
+          >
+            <div class="setup-heading">
+              <span class="step-number" aria-hidden="true">2</span>
+              <div>
+                <h2 id="explain-heading">Your motivation</h2>
+                <p id="question-scope">
+                  One core explanation for the whole change.
+                </p>
+              </div>
+            </div>
+            <form id="answers-form">
+              <div id="overall-answers"></div>
+              <div id="answer-coach" class="answer-coach" hidden>
+                <div class="coach-line">
+                  <progress
+                    id="coach-meter"
+                    class="coach-meter"
+                    max="12"
+                    value="0"
+                    aria-hidden="true"
+                  ></progress>
+                  <span id="coach-count" class="field-hint"></span>
+                </div>
+                <p
+                  id="coach-message"
+                  class="field-hint"
+                  role="status"
+                  aria-live="polite"
+                ></p>
+                <div id="coach-anchors" class="coach-anchors" hidden>
+                  <span class="field-hint">Add to your answer:</span>
+                  <span id="coach-chips"></span>
+                </div>
+              </div>
+              <button
+                id="main-question"
+                class="duration-button"
+                type="button"
+                hidden
+              >
+                Back to core question
+              </button>
+              <label for="confidence"
+                >Confidence before seeing the reference (optional)</label
+              >
+              <select id="confidence">
+                <option value="">Not recorded</option>
+                <option value="sure">Confident</option>
+                <option value="probably">Probably</option>
+                <option value="guessing">Guessing</option>
+                <option value="unknown">I do not know yet</option>
+              </select>
+              <div class="save-row">
+                <button id="save" class="duration-button" type="submit">
+                  Save explanation
+                </button>
+                <button id="send" class="save-button" type="button">
+                  Send to reviewer
+                </button>
+                <span id="save-status" role="status"
+                  >Changes are saved when you choose Save.</span
+                >
+              </div>
+            </form>
+          </section>
+        </div>
+        <section
+          class="setup-panel feedback-panel"
+          aria-labelledby="feedback-heading"
+        >
+          <div class="setup-heading">
+            <span class="step-number" aria-hidden="true">3</span>
+            <div>
+              <h2 id="feedback-heading">Strengthen the change</h2>
+              <p id="feedback-status">
+                Send your explanations when you are ready for reviewer feedback.
+              </p>
+            </div>
+          </div>
+          <p id="reviewer-presence" class="field-hint" role="status"></p>
+          <div id="waiting" class="waiting" hidden>
+            <span class="waiting-dots" aria-hidden="true"
+              ><i></i><i></i><i></i
+            ></span>
+            <span class="waiting-bar" aria-hidden="true"></span>
+            <span
+              id="waiting-time"
+              class="field-hint"
+              aria-hidden="true"
+            ></span>
+          </div>
+          <ul id="feedback-list"></ul>
+          <form id="reflection-form" hidden>
+            <label for="self-grade"
+              >How does the reference compare with your explanation?</label
+            >
+            <select id="self-grade" required>
+              <option value="">Choose your assessment</option>
+              <option value="got">I covered it</option>
+              <option value="partly">I covered part of it</option>
+              <option value="missed">I missed it or do not know yet</option>
+            </select>
+            <label for="correction">Correction or remaining uncertainty</label>
+            <textarea id="correction" maxlength="4000"></textarea>
+            <p class="field-hint">
+              Required when partly covered or missed. Your own assessment
+              completes this step; AI does not grade you.
+            </p>
+            <button id="reflect-save" class="save-button" type="submit">
+              Record reflection
+            </button>
+            <p id="reflection-state" role="status"></p>
+          </form>
+          <div class="feedback-actions">
+            <button id="refresh" class="duration-button" type="button">
+              Check for feedback
+            </button>
+            <button id="download" class="duration-button" type="button">
+              Download my explanations
+            </button>
+          </div>
+          <p class="field-hint">
+            This workspace saves a private explanation record. Your code review,
+            tests, and final approval still belong in the submission workflow.
+          </p>
+        </section>
+      </div>
+    </main>
+  </body>
+</html>

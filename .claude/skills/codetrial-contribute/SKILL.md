@@ -169,6 +169,22 @@ PR. Report commands and outcomes, including failures and skipped or unrun
 checks with reasons. Local success is not evidence that remote CI passed, and
 a PR is not ready for review until CI is green.
 
+Before handing the draft to gh-submit or opening it directly, apply
+[the large-change explanation requirement](../../../docs/large-change-explanation.md)
+to the complete committed PR diff and every proposed commit. If any commit
+has at least 200 reviewable added plus deleted lines, or the whole PR has more
+than 500, the local review must include the contributor's explanation and
+follow-up answers checked against this base and head. If absent, incorrect, or
+stale, ask for the missing account and keep submission pending while continuing
+independent preparation. An approval to publish or an agent-written summary
+does not replace the answers. Preserve the useful rationale and reading order
+in the PR body, but keep the private report and transcript out. Fill in
+the template's interactive review block from
+`.git/codetrial-review/pr-description.md`, which the pre-push hook writes (or
+`python3 scripts/check-interactive-review.py note --base <base>`); never type
+its status by hand. A later code or
+base change requires rechecking the count and affected answers before handoff.
+
 The description should cover:
 
 - the concrete problem and resulting behavior, with a before/after example

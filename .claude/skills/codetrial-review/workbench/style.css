@@ -1,0 +1,486 @@
+/* The shared lobby owns the palette, type, themes, cards and focus treatment. */
+.review-workbench {
+  width: min(100%, 112rem);
+}
+.workbench-caption {
+  color: var(--sub);
+  font-size: 0.875rem;
+}
+.review-workbench .practice-hero {
+  margin-bottom: 1.5rem;
+}
+.review-workbench h1 {
+  font-size: clamp(2rem, 3.5vw, 3.25rem);
+}
+.review-summary {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 1rem;
+  padding: 1rem 0;
+  border-block: 1px solid var(--hairline);
+  margin-bottom: 1.5rem;
+}
+.review-summary strong,
+.review-summary span {
+  display: block;
+}
+.review-summary strong {
+  font-size: 0.9375rem;
+}
+.review-summary span {
+  color: var(--sub);
+  font-size: 0.8125rem;
+  margin-top: 0.375rem;
+  overflow-wrap: anywhere;
+}
+.review-grid {
+  display: grid;
+  grid-template-columns: minmax(12rem, 0.7fr) minmax(0, 1.7fr) minmax(
+      20rem,
+      1.2fr
+    );
+  gap: 1rem;
+  align-items: start;
+}
+.review-grid .setup-panel {
+  padding: 1.25rem;
+}
+.review-grid h2 {
+  font-size: 1.125rem;
+}
+.file-panel {
+  position: sticky;
+  top: 1rem;
+}
+.file-list {
+  display: grid;
+  gap: 0.5rem;
+  margin: 1.25rem 0;
+  max-height: 58vh;
+  overflow: auto;
+  padding: 0.25rem;
+}
+.file-button {
+  width: 100%;
+  text-align: left;
+  padding: 0.75rem;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+}
+.file-button:hover {
+  border-color: var(--accent);
+}
+.file-button[aria-current="true"] {
+  background: var(--practice-tint);
+  border-color: var(--accent);
+}
+.file-name {
+  display: block;
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+.file-stats {
+  display: block;
+  color: var(--sub);
+  font-size: 0.75rem;
+  margin-top: 0.375rem;
+}
+.diff-heading h2 {
+  margin: 0;
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+  line-height: 1.5;
+}
+.diff-heading p {
+  margin: 0.5rem 0 1rem;
+  font-size: 0.8125rem;
+}
+#diff {
+  margin: 0;
+  max-height: 72vh;
+  overflow: auto;
+  background: var(--step-surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  padding: 0.75rem;
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  line-height: 1.65;
+  tab-size: 4;
+}
+.diff-line {
+  display: block;
+  min-height: 1.65em;
+  width: max-content;
+  min-width: 100%;
+}
+.diff-add {
+  color: var(--good);
+}
+.diff-delete {
+  color: var(--critical);
+}
+.diff-hunk {
+  color: var(--accent-ink);
+}
+.answer-panel details {
+  padding-block: 1rem;
+  border-bottom: 1px solid var(--hairline);
+}
+.answer-panel summary {
+  font-weight: 650;
+  font-size: 0.9375rem;
+  cursor: pointer;
+}
+.answer-field {
+  margin-top: 1.25rem;
+}
+.answer-field label {
+  display: block;
+  color: var(--ink);
+  font-weight: 600;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.answer-field textarea {
+  display: block;
+  width: 100%;
+  min-height: 7rem;
+  resize: vertical;
+  margin-top: 0.5rem;
+  padding: 0.75rem;
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.875rem;
+  line-height: 1.6;
+}
+.field-hint {
+  color: var(--sub);
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  margin-top: 0.5rem;
+}
+.save-row {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 1.25rem;
+}
+.save-button {
+  min-height: 2.75rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--accent-fill);
+  border-radius: var(--radius-sm);
+  background: var(--accent-fill);
+  color: var(--on-accent);
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: var(--shadow-cta);
+}
+.save-button:hover {
+  background: var(--accent-deep);
+}
+.save-button:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+#save-status {
+  color: var(--sub);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+.feedback-panel {
+  margin-top: 1.5rem;
+}
+.feedback-panel li {
+  margin-block: 0.75rem;
+  color: var(--sub);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.feedback-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+.review-workbench .duration-button {
+  cursor: pointer;
+}
+.coverage-note,
+#error {
+  padding: 1rem;
+  margin-bottom: 1rem;
+  max-width: none;
+  background: var(--practice-tint);
+  border: 1px solid var(--practice-tint-edge);
+  border-radius: var(--radius-sm);
+  line-height: 1.6;
+}
+#error {
+  color: var(--critical);
+}
+#retry {
+  margin-block: 1rem;
+}
+@media (max-width: 1200px) {
+  .review-grid {
+    grid-template-columns: minmax(11rem, 0.65fr) minmax(0, 1.7fr);
+  }
+  .answer-panel {
+    grid-column: 1 / -1;
+  }
+  #overall-answers,
+  #question-answers {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0 1.5rem;
+  }
+}
+@media (max-width: 680px) {
+  .review-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .file-panel {
+    position: static;
+  }
+  .file-list {
+    max-height: 14rem;
+  }
+  #diff {
+    max-height: 28rem;
+  }
+  #overall-answers,
+  #question-answers {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+#reflection-form label,
+#answers-form > label {
+  display: block;
+  margin-top: 1rem;
+}
+#reflection-form textarea {
+  display: block;
+  width: 100%;
+  min-height: 6rem;
+}
+.save-button[aria-disabled="true"],
+.duration-button[aria-disabled="true"] {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+.completion-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 1rem;
+  padding: 1.25rem;
+  margin-bottom: 1.5rem;
+  border: 1px solid var(--good);
+  border-radius: var(--radius-sm);
+  background: var(--practice-tint);
+}
+.completion-notice[hidden] {
+  display: none;
+}
+.completion-icon {
+  color: var(--good);
+  font-size: 1.5rem;
+  font-weight: 700;
+  line-height: 1.25;
+}
+.completion-notice h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1.125rem;
+}
+.completion-notice p {
+  margin: 0.5rem 0 0;
+  line-height: 1.6;
+}
+.review-complete .review-summary {
+  border-color: var(--good);
+}
+.review-complete #review-status {
+  color: var(--good);
+}
+.review-complete #reflect-save {
+  background: var(--surface);
+  border-color: var(--good);
+  color: var(--good);
+  opacity: 1;
+  cursor: default;
+  box-shadow: none;
+}
+
+.review-complete #reflection-state {
+  color: var(--good);
+  font-weight: 600;
+}
+
+#main-question {
+  margin-top: 0.75rem;
+  padding: 0.625rem 0.75rem;
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
+}
+
+.completion-notice .next-steps {
+  margin: 0.5rem 0 0.75rem;
+  padding-left: 1.25rem;
+}
+
+.completion-notice .next-steps li {
+  margin: 0.25rem 0;
+}
+
+.answer-coach {
+  margin: 0.5rem 0 1rem;
+}
+
+.answer-coach[hidden] {
+  display: none;
+}
+
+.coach-line {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.coach-meter {
+  width: 8rem;
+  height: 0.4rem;
+  accent-color: currentColor;
+}
+
+.coach-anchors {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.4rem;
+}
+
+.coach-anchors[hidden] {
+  display: none;
+}
+
+.coach-chip {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85em;
+  padding: 0.15rem 0.5rem;
+}
+
+/* Shown while the reviewer holds the answer and has not replied. It is motion
+   with no meaning of its own: the sentence above it says what is happening. */
+.waiting {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0.25rem 0 1rem;
+}
+
+.waiting[hidden] {
+  display: none;
+}
+
+.waiting-dots {
+  display: inline-flex;
+  gap: 0.3rem;
+}
+
+.waiting-dots i {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--accent-fill);
+  animation: waiting-bounce 1.2s ease-in-out infinite;
+}
+
+.waiting-dots i:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.waiting-dots i:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+.waiting-bar {
+  position: relative;
+  flex: 1 1 auto;
+  max-width: 12rem;
+  height: 0.25rem;
+  overflow: hidden;
+  border-radius: 0.125rem;
+  background: var(--control-border);
+}
+
+.waiting-bar::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 35%;
+  border-radius: inherit;
+  background: var(--accent-fill);
+  animation: waiting-slide 1.6s ease-in-out infinite;
+}
+
+@keyframes waiting-bounce {
+  0%,
+  80%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.4;
+  }
+  40% {
+    transform: translateY(-0.4rem);
+    opacity: 1;
+  }
+}
+
+@keyframes waiting-slide {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(300%);
+  }
+}
+
+/* No travelling motion for anyone who asked for none; the dots still say the
+   reviewer is working, and slowly breathe instead. */
+@media (prefers-reduced-motion: reduce) {
+  .waiting-dots i {
+    animation: waiting-breathe 2.4s ease-in-out infinite;
+  }
+
+  .waiting-bar::after {
+    animation: none;
+    width: 100%;
+    opacity: 0.4;
+  }
+
+  @keyframes waiting-breathe {
+    0%,
+    100% {
+      opacity: 0.35;
+    }
+    50% {
+      opacity: 1;
+    }
+  }
+}

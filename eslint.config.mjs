@@ -75,7 +75,7 @@ export default [
     // The browser tier. `web/*worker*.js` runs without a `window`, so the
     // worker globals ride along rather than splitting the tree in two for the
     // sake of two files.
-    files: ["web/**/*.js"],
+    files: ["web/**/*.js", ".claude/skills/codetrial-review/workbench/*.js"],
     languageOptions: {
       ecmaVersion: 2023,
       sourceType: "module",

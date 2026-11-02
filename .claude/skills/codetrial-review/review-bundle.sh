@@ -47,7 +47,9 @@
 # pr.diff, numbered.txt and the manifest only; the files at the head are the
 # checkout. Untracked files are named in the manifest, not diffed, and
 # `committed` says whether the diff is exactly what HEAD holds, which is when a
-# review of it speaks for a push of HEAD.
+# review of it speaks for a push of HEAD. Local bundles also embed commit_sizes
+# collected against the full supplied or resolved branch base; a dirty HEAD-only
+# preview leaves that coverage unknown.
 #
 # The manifest's outside_reviewers is "allowed" only for a diff the account
 # running this wrote (its own PRs, and a local one whose commits all carry the
@@ -235,21 +237,29 @@ if [ "$mode" = local ]; then
 
     # The diff as the scripts parse it, whatever the user's diff config: no
     # color, no external driver, the a/ and b/ prefixes.
-    git diff --no-color --no-ext-diff --src-prefix=a/ --dst-prefix=b/ \
-        "$against" > "$dir/pr.diff"
+    python3 "$here/commit-sizes.py" --diff "$against" > "$dir/pr.diff"
     number < "$dir/pr.diff" > "$dir/numbered.txt"
     # -z, so a path git would quote reaches the rule patterns as it is.
-    git diff "$against" --numstat --no-renames -z | jq -Rs 'split("\u0000")
+    python3 "$here/commit-sizes.py" --diff "$against" --numstat > "$dir/numstat.raw"
+    jq -Rs 'split("\u0000")
         | map(select(length > 0) | split("\t")
           | {path: .[2], additions: (.[0] | tonumber? // null),
-             deletions: (.[1] | tonumber? // null)})' > "$dir/files.json"
+             deletions: (.[1] | tonumber? // null)})' "$dir/numstat.raw" > "$dir/files.json"
+    rm -f "$dir/numstat.raw"
+    printf '%s\n' '{"commits":[],"complete":false}' > "$dir/commit-sizes.json"
+    if [ -n "$base" ]; then
+        if ! python3 "$here/commit-sizes.py" --base "$base" --head HEAD > "$dir/commit-sizes.json"; then
+            echo 'review-bundle.sh: commit-size coverage incomplete; inspect the full PR range before submission' >&2
+        fi
+    fi
     manifest "$(jq -n --arg head "$(git rev-parse HEAD)" --arg against "$against" \
+        --slurpfile sizes "$dir/commit-sizes.json" \
         --arg untracked "$untracked" --argjson committed "$committed" \
         --arg outside "$outside" '{pr: null,
         head: $head, against: $against, committed: $committed,
         outside_reviewers: $outside,
         untracked: ($untracked | split("\n") | map(select(length > 0))),
-        since: null}')"
+        since: null, commit_sizes: $sizes[0]}')"
     exit 0
 fi
 

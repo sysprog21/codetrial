@@ -5,6 +5,7 @@ import argparse
 import contextlib
 import fcntl
 import functools
+import hashlib
 import importlib.util
 import json
 import os
@@ -330,6 +331,52 @@ def retry(pending, api):
         ):
             root = private_dir(Path(config["common_dir"]) / "codetrial-review")
             marker(root, current["head"])
+            explanation = bundle / "explanation.json"
+            if explanation.exists():
+                try:
+                    state = json.loads(explanation.read_text())
+                except (OSError, ValueError):
+                    state = {}
+                if not isinstance(state, dict):
+                    state = {}
+                feedback = state.get("feedback") or {}
+                answer_hash = hashlib.sha256(
+                    json.dumps(state.get("answers", {}), sort_keys=True).encode()
+                ).hexdigest()
+                if (state.get("reflection") or {}).get(
+                    "answer_digest"
+                ) == answer_hash and feedback.get("answer_digest") == answer_hash:
+                    result = subprocess.run(
+                        [
+                            sys.executable,
+                            str(
+                                Path(__file__).resolve().parents[3]
+                                / "scripts/check-interactive-review.py"
+                            ),
+                            "certify",
+                            "--bundle",
+                            str(bundle),
+                        ],
+                        capture_output=True,
+                        text=True,
+                    )
+                    if result.returncode:
+                        # The review is recorded either way; the caller still
+                        # needs the receipt, and the code tells it certification
+                        # did not happen.
+                        print(json.dumps(dict(receipt, pending=str(pending))))
+                        print(
+                            "Code review recorded; interactive evidence was not certified: "
+                            + result.stderr,
+                            file=sys.stderr,
+                        )
+                        return result.returncode
+                else:
+                    print(
+                        "Code review recorded; interactive evidence was not certified: "
+                        "the explanation has no feedback and reflection for its current answers.",
+                        file=sys.stderr,
+                    )
         print(json.dumps(dict(receipt, pending=str(pending))))
         return 0
 
