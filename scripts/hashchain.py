@@ -67,10 +67,10 @@ def base(tip="HEAD", staged=False):
             if value:
                 break
         if not value:
-            path = Path(git("rev-parse", "--show-toplevel").decode().strip()) / POLICY
-            if not path.exists():
-                return None
-            value = path.read_bytes().strip()
+            # Nothing committed names a policy; a file lying in the working
+            # tree must not become one, or a pushed tip would be judged by
+            # whatever happens to be on this machine.
+            return None
     if not re.fullmatch(rb"[0-9a-f]{40}", value):
         raise ValueError("hashchain-base must contain exactly one full commit ID")
     return resolve(value.decode())
@@ -269,12 +269,31 @@ def link(sha, anchor):
     return previous
 
 
+GENERATED = re.compile(rb"(?i)^(change-id|rechained):")
+
+
 def clean(message):
+    """The message without any line that looks like a generated trailer."""
     return b"\n".join(
-        line
-        for line in message.splitlines()
-        if not re.match(rb"(?i)^(change-id|rechained):", line)
+        line for line in message.splitlines() if not GENERATED.match(line)
     ).strip()
+
+
+def lookalikes(message):
+    """Lines outside the last paragraph that begin like a generated trailer.
+
+    The verifier accepts exactly one such line in a message, the trailer, so a
+    quotation or example in the body would fail verification later. Dropping it
+    would lose the contributor's text without telling them; the commit-msg hook
+    refuses instead, and says which lines.
+    """
+    lines = message.strip().splitlines()
+    end = len(lines)
+    while end > 0 and lines[end - 1].strip():
+        end -= 1
+    return [
+        line.decode(errors="replace") for line in lines[:end] if GENERATED.match(line)
+    ]
 
 
 def stamped(message, value):
@@ -356,6 +375,12 @@ def message(path):
     # `git commit -v` appends the patch after a scissors line, which comment
     # stripping would otherwise turn into message text.
     text = re.split(rb"(?m)^.*-{8,}\s*>8\s*-{8,}.*$", text, maxsplit=1)[0]
+    quoted = lookalikes(git("stripspace", "--strip-comments", data=text))
+    if quoted:
+        raise ValueError(
+            "Only the generated trailer may begin with Change-Id: or Rechained:. "
+            "Indent or reword: " + "; ".join(quoted)
+        )
     try:
         old = change_id(text)
     except ValueError:

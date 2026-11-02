@@ -354,6 +354,58 @@ print(json.dumps(seen))
         self.assertNotEqual(twice.returncode, 0)
         self.assertIn("more than one", twice.stderr)
 
+    def test_a_block_for_another_head_or_base_is_refused_even_with_the_same_diff(self):
+        self.large(10)
+        block = self.gate("note").stdout
+        head = self.git("rev-parse", "HEAD").stdout.strip()
+        for field, value in (("Head", head), ("Base", self.base)):
+            other = block.replace(value, "0" * 40)
+            result = self.description(other)
+            self.assertNotEqual(result.returncode, 0, field)
+            self.assertIn("[interactive-review/stale]", result.stderr)
+            self.assertIn(field.lower(), result.stderr)
+
+    def test_a_block_that_cannot_be_written_fails_with_its_reason(self):
+        self.large(10)
+        result = self.gate("note", "--out", "/dev/full")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Cannot write the pull request description block", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+
+    def test_malformed_evidence_is_a_failed_review_not_a_crash(self):
+        self.large()
+        head = self.git("rev-parse", "HEAD").stdout.strip()
+        evidence = self.repo / ".git/codetrial-review/interactive"
+        evidence.mkdir(parents=True, exist_ok=True)
+        (evidence / (head + ".json")).write_text("[]\n")
+        for command in ("status", "push"):
+            result = self.gate(command, "--head", head)
+            self.assertNotIn("Traceback", result.stderr, command)
+        pushed = self.push()
+        self.assertNotEqual(pushed.returncode, 0)
+        self.assertNotIn("Traceback", pushed.stderr)
+
+    def test_each_branch_of_one_push_gets_its_own_description_block(self):
+        self.large(10)
+        first = self.git("rev-parse", "HEAD").stdout.strip()
+        (self.repo / "change.txt").write_text("base\n" + "line\n" * 11)
+        self.commit("Change the fixture again")
+        second = self.git("rev-parse", "HEAD").stdout.strip()
+        zero = "0" * 40
+        result = self.run_command(
+            ["sh", "scripts/git-pre-push.sh", "fork", "local-fixture"],
+            data=(
+                f"refs/heads/one {first} refs/heads/one {zero}\n"
+                f"refs/heads/two {second} refs/heads/two {zero}\n"
+            ),
+        )
+        directory = self.repo / ".git/codetrial-review"
+        for head in (first, second):
+            written = directory / f"pr-description-{head[:12]}.md"
+            self.assertIn(f"Head: {head}", written.read_text())
+            self.assertIn(written.name, result.stderr)
+        self.assertFalse((directory / "pr-description.md").exists())
+
     def test_push_without_a_base_is_refused_not_skipped(self):
         self.large(10)
         self.git("update-ref", "-d", "refs/remotes/upstream/main")

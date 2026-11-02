@@ -54,7 +54,8 @@ review snapshot as context for subsequent agent work.
 While you write, the page counts words against a minimum of 12 and offers the
 identifiers from the changed lines as buttons. Sending is refused only for an
 answer that is too short or that repeats the question or the code word for
-word; "I don't know" is always acceptable. An answer that names nothing from
+word; "I don't know" is acceptable however short, though it does not excuse
+pasting the question or the code after it. An answer that names nothing from
 the changed lines is accepted with a hint, and the reviewer then asks how the
 quoted code behaves. Pasting a prompt or an agent-written summary is the thing
 being discouraged: the explanation is yours.
@@ -88,16 +89,19 @@ question-and-answer transcript and the local review report private; do not post
 a score or claim that a contributor has been certified. The explanation can be
 in the contributor's language locally.
 
-The pull request template ends with an interactive review block. When the
+The pull request template includes an interactive review block. When the
 pre-push check passes it writes the block for the pushed head to
-`.git/codetrial-review/pr-description.md`; paste it in place of the placeholder.
-It names `complete` or `not required`, the head and base, a hash of the diff,
-and the line counts, and holds no answers or scores. A pull request carries the
-block even when it is small. The `pr-description` check compares the block with
-the diff: a large change must say `complete`, and a `complete` block must carry
-the hash of this pull request's diff, so a change made after the review makes
-it stale. The check sees the description, not the local evidence, so it keeps
-the description honest and does not prove a review took place.
+`.git/codetrial-review/pr-description.md`, or to one file per head when several
+branches are pushed at once; paste it in place of the placeholder. It names
+`complete` or `not required`, the head and base, a hash of the diff, and the line
+counts, and holds no answers or scores. A pull request carries the block even
+when it is small. The `pr-description` check compares the block with the pull
+request: a large change must say `complete`, and the block must name this pull
+request's head and base and carry the hash of its diff, so a change made after
+the review, or a block from another head, makes it stale. The check runs from the
+base branch's workflow and checker, so a pull request cannot edit it. It sees
+the description, not the local evidence, so it keeps the description honest and
+does not prove a review took place.
 `python3 scripts/check-interactive-review.py note --base <base>` prints the
 block for any head without pushing.
 

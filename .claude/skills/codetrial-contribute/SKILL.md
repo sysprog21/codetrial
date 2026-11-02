@@ -183,7 +183,10 @@ the template's interactive review block from
 `.git/codetrial-review/pr-description.md`, which the pre-push hook writes (or
 `python3 scripts/check-interactive-review.py note --base <base>`); never type
 its status by hand. A later code or
-base change requires rechecking the count and affected answers before handoff.
+base change requires rechecking the count, and a new review session: the
+evidence is bound to the exact base, head and diff, so the earlier session is
+refused and the answers are written and sent again, which can start from the
+earlier text.
 
 The description should cover:
 

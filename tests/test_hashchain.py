@@ -499,6 +499,64 @@ class HashchainTests(unittest.TestCase):
             result = self.chain("verify", "--tip", sha, check=False)
             self.assertEqual(result.returncode == 0, accepted, result.stderr)
 
+    def test_a_body_line_that_quotes_a_trailer_is_refused_not_dropped(self):
+        (self.repo / "sample.txt").write_text("quoted\n")
+        self.git("add", "sample.txt")
+        body = (
+            "The hook writes a line such as:\n\n"
+            "Change-Id: I0000000000000000000000000000000000000000\n\n"
+            "and this paragraph says why."
+        )
+        refused = self.git(
+            "commit", "-q", "-m", "Explain the trailer", "-m", body, check=False
+        )
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("Only the generated trailer may begin with", refused.stderr)
+        self.assertIn("Change-Id: I0000", refused.stderr)
+        # Indented, the same example commits and verifies.
+        self.git(
+            "commit",
+            "-q",
+            "-m",
+            "Explain the trailer",
+            "-m",
+            body.replace("\nChange-Id:", "\n    Change-Id:"),
+        )
+        self.chain("verify")
+
+    def test_an_untracked_policy_file_is_not_a_policy(self):
+        with tempfile.TemporaryDirectory() as other:
+
+            def run(*args):
+                return subprocess.run(
+                    args, cwd=other, env=self.env, text=True, capture_output=True
+                )
+
+            run("git", "init", "-q")
+            run("git", "config", "user.name", "t")
+            run("git", "config", "user.email", "t@example.test")
+            Path(other, "a.txt").write_text("a\n")
+            run("git", "add", ".")
+            run(
+                "git",
+                "commit",
+                "-qm",
+                "No policy yet",
+                "-m",
+                "Nothing names an anchor.",
+            )
+            Path(other, "scripts").mkdir()
+            Path(other, "scripts/hashchain-base").write_text("f" * 40 + "\n")
+            result = run(sys.executable, str(ROOT / "scripts/hashchain.py"), "verify")
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_the_description_check_runs_the_base_branchs_workflow(self):
+        text = (ROOT / ".github/workflows/pr-description.yml").read_text()
+        self.assertIn("\non:\n  pull_request_target:", text)
+        self.assertNotIn("\n  pull_request:", text)
+        self.assertIn("permissions:\n  contents: read", text)
+        self.assertIn("../base/scripts/check-interactive-review.py", text)
+
     def test_message_only_amend_preserves_index_and_worktree(self):
         tree = self.git("rev-parse", "HEAD^{tree}").stdout
         (self.repo / "sample.txt").write_text("base\nstaged\n")

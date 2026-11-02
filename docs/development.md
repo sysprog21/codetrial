@@ -397,8 +397,10 @@ The hooks run the `scripts/` of the checkout they fire in, as
 as you would before building it. No script of ours runs while a merge is
 concluded: by the time its commit-msg or prepare-commit-msg fires the incoming
 tree is written, and running it would make `git pull` execute what it pulled, so
-the wrapper skips it, and there is no pre-merge-commit hook. CI checks a pull
-request's content.
+the wrapper skips it, and there is no pre-merge-commit hook. Post-commit also
+checks the resulting commit's parent count, since Git has already removed
+`MERGE_HEAD` at that point. A user-owned `.local` hook still runs. CI checks a
+pull request's content.
 
 The pre-commit hook runs ESLint, `ruff check` and `shellcheck`, then
 `scripts/indent.sh --staged`, over a checkout of the index, so an unstaged edit
@@ -422,9 +424,217 @@ in `scripts/git-commit-msg.awk`, one process per message, which is also what
 `--stored` for a message a commit already holds. The pre-push hook replays the
 same message rules over commits a rebase or an amend rewrote after
 the fact, and CI runs them over a pull request's own commits. On a topic branch
-it also prints one line when the head has no `/codetrial-review` on record (the
-skill records a reviewed head under the git directory); that line is advice and
-never refuses the push.
+small changes get one advisory line when the head has no `/codetrial-review`
+record. A topic branch with any commit at least 200 added plus deleted text
+lines, or a net PR diff over 500, is refused without matching durable code-review
+and interactive-explanation evidence. The hook uses raw text counts
+conservatively, without automatically exempting generated or vendored paths;
+record any exclusion evidence during the review. It resolves the PR base from
+the canonical upstream's local `main` tracking ref, falling back to the push
+remote's `main` when no canonical upstream is configured. Missing history
+is refused when there is no remote-tracking `main` to measure against (for
+example a push to a bare URL from a clone that never fetched it): skipping the
+check would let any large change through, so fetch the base and push again. No
+browser or model starts in a hook.
+Deleting the local skill file does not disable a review policy present at the
+pushed tip or the upstream PR base.
+
+`scripts/hashchain-base` holds the configurable chain anchor. Python's standard
+library implements `scripts/hashchain.py`: pre-commit records the checked
+index, commit-msg generates the tree-linked Change-Id, and post-commit repairs
+amend inference only for a matching checked candidate. A skipped commit without
+that claim is not repaired automatically. Pre-push checks every pushed commit
+tip, including tags and main, independently of the checked-out branch. PR CI
+checks the actual PR head rather than GitHub's synthetic merge; push CI checks
+the pushed head. Merge-queue CI also verifies the actual group head against
+its event base policy.
+
+A commit authored by `dependabot[bot]` continues the chain without a
+Change-Id trailer, because the bot cannot run the hooks; the author line is
+unauthenticated, so this is a convenience and not a trust boundary. Its link is
+derived from the preceding link and its tree, including a consecutive run of bot
+commits; any trailer in a bot message is ignored consistently. A normal hooked
+commit or amend can follow such a parent directly. Rechain preserves accepted bot
+commits when their parent is unchanged; when an earlier repair changes their
+parent, it preserves their message rather than imposing contributor message rules.
+Any other commit made without the hooks (a web edit, `--no-verify`) fails verification
+until `rechain` restamps it.
+
+`scripts/test-interactive-review.sh` runs every test that covers this workflow
+(chain, thresholds and evidence, the workbench server and worker, the hooks in a
+scratch repository, and the page in a browser) without the rest of the gate.
+
+post-commit never runs scripts that the commit itself brought in: it is
+skipped for a commit that changes the hook scripts or the review skill, and
+during a merge, rebase or cherry-pick sequence. Such a commit keeps the
+Change-Id its commit-msg hook computed, which is correct unless it was amended
+with a fresh message; run `python3 scripts/hashchain.py rechain` before pushing
+if pre-push reports a broken link.
+
+### What cannot be enforced locally
+
+Nothing on a contributor's machine can make the hooks or the interactive review
+impossible to skip, for a person or for an agent. `git commit --no-verify`,
+`core.hooksPath`, building a commit with `commit-tree`, and `rechain` all work
+for anyone with a shell, and a Change-Id is a hash of public inputs, so it
+proves that a commit is consistent and not that a hook ran. What this tree does
+instead is layer three things, each closing a different gap:
+
+- **Hooks** do the work at commit and push time, which is when it is cheapest to
+  fix, and catch the honest mistake.
+- **`scripts/agent-guard.py`**, registered in `.claude/settings.json` as a
+  Claude Code `PreToolUse` hook, refuses an agent's shell command that skips
+  the hooks (`--no-verify`, `core.hooksPath`, `commit-tree`, `update-ref`,
+  editing `.git/hooks` or a hook script). It stops an agent that follows its
+  permissions from doing it by habit or to get past an error; it does not stop
+  a determined one, and it does not cover another agent runner, which should be
+  given the same rule in its own configuration.
+- **CI recomputes everything it can** and is the only part a contributor cannot
+  edit locally: the Change-Id chain, the size of every commit and of the whole
+  pull request, and that the description's interactive review block matches the
+  diff. It runs the base branch's checker, so a pull request cannot weaken it.
+  It holds only if the repository requires it: make `check` and
+  `pr-description` required status checks, merge only through the merge queue,
+  allow no bypass for administrators, and require maintainer review for changes
+  to `scripts/hashchain.py`, `scripts/check-interactive-review.py`,
+  `scripts/agent-guard.py`, `.claude/settings.json` and `.github/workflows/`.
+
+`pr-description.yml` runs on `pull_request_target`, so the workflow that runs is
+the base branch's and a pull request cannot edit or remove it. That trigger runs
+with the base repository's token, which is why the job asks for read access
+only, checks the pull request out as data and runs only the base branch's
+checker. It is also why `apply-pr-actions.sh` otherwise sends every approval of
+a first-time contributor's run to the confirmed list while a workflow uses that
+trigger: `pr-description.yml` is the one workflow it names as reviewed, and only
+for `pull_request_target`. A new workflow on either base-token trigger needs the
+same review, and the script's tests fail until it has one.
+
+What remains open is proof that a person did the interactive review: CI cannot
+see the local evidence, and anything the page records, a script on the same
+machine can record too. Closing that needs a witness the contributor's machine
+cannot forge, such as a WebAuthn assertion from the person's authenticator over
+the diff hash, verified against a key they registered, or a maintainer
+sign-off. Neither exists here, and this section should not be read as
+claiming either.
+
+The chain is a checksum of each parent link and tree, not proof of review: a
+commit made with `--no-verify` can be restamped by `rechain` and still verify.
+It catches accidental history edits. Interactive-review evidence lives under
+`.git/codetrial-review/` on the contributor's machine, so the pre-push check is
+local deterrence and CI does not see it.
+
+Each ordinary commit continues the link of its own parent, including commits
+on both sides of a merge. GitHub's two-parent integration commits need no
+Change-Id trailer: their tree must equal a successful `git merge-tree --write-tree`
+result for those exact parents. Conflicts, extra edits and octopus merges fail.
+Resolve conflicts on the topic branch and rebase before integration. Repository
+and merge-queue settings must retain the reviewed topic commits under a merge
+commit; squash and server-side rebase do not preserve these parent-linked IDs.
+Verification requires Git 2.45 or newer for `--no-lazy-fetch` and merge-tree with a pinned
+attribute source. Each merge is recomputed in a temporary bare object context using its first parent's
+attributes, independent of the current checkout, index, local attributes or
+configured merge drivers. The original object database is read through alternates;
+computed objects stay in the temporary context. A merge's descendant
+link is SHA-256 of `codetrial/merge:<full merge SHA>`, truncated to 40 hex digits,
+so changing its tree, parents or message also changes subsequent links.
+
+After a rebase, explicitly run `python3 scripts/hashchain.py rechain` on a work
+branch, never `stability`. Repair verifies and preserves the most recent
+integration on the first-parent path, then repairs only the linear topic suffix.
+It refuses to repair an invalid integrated prefix rather than rewriting main.
+The repair preserves trees and author metadata, removes invalidated Git
+signatures, changes only necessary parent/message headers, and adds no repair
+trailer. It does not change the index or worktree. The chain detects missing,
+copied or stale links; a reproducible hash is not authentication that a human
+actually ran the hooks. CI independently verifies the chain and code gates.
+
+The anchor is public policy, not a secret. Keeping its commit ID private does
+not turn an unkeyed hash into proof of hook execution: anyone able to create
+commits can recompute the same links, including with `rechain`. Standalone
+verification defaults to policy in the submitted history; use
+`verify --tip <head> --anchor <full-trusted-commit-sha>` to pin the boundary
+independently. A symbolic ref or abbreviated anchor is refused.
+Pre-push pins it to the canonical upstream main policy when available. CI uses
+the PR base, merge-group base or previous push tip policy and verifier, so the
+outgoing branch cannot reset its own policy or verifier. Pull-request jobs run
+the workflow from the PR's merge ref, so steps that run before the verifier are
+contributor-controlled: protect the required workflow as described below, and
+treat this as a guard against accidental drift, not against a hostile author.
+Missing trusted verifier code fails the check rather
+than falling back to the candidate's code. Once the policy is installed, trusted
+verification rejects a submitted tip that changes or deletes its anchor file,
+even if its links still match the old anchor. A changed seed also changes the
+links, so a future migration needs coordinated maintainer-controlled policy
+installation and history repair; the ordinary candidate cannot authorize that
+transition.
+Protect the required CI workflow against contributor changes through repository
+rules; local hooks and private review records are not tamper-proof remote
+attestations.
+
+The first policy installation has no trusted verifier in its base. CI refuses
+this case unless a maintainer sets the repository Actions variable
+`CODETRIAL_HASHCHAIN_BOOTSTRAP_HEAD` to the exact full reviewed PR head SHA.
+Only that committed verifier is loaded, never the working-tree copy, and the
+initial anchor remains `b6eb8ba9bfbb14ff8d8a7dee920d29590ee89f25`. The approved
+head may be wrapped in one clean two-parent integration whose first parent is
+the event's trusted base/previous push tip and whose second parent is exactly that
+approved head. The resulting merge must retain the approved verifier and policy
+blobs; the approved verifier checks its entire graph and merge tree. This covers
+the first queue integration and the corresponding main push without guessing
+or pre-approving their newly generated SHAs. New topic heads need new approval.
+For initial installation, a batched queue wrapping several PRs is refused unless
+the exact tested group head is explicitly approved instead. Remove the variable
+after installation. This exception is an explicit approval of verifier code, not evidence that hooks or interactive
+review ran; it grants no approval of answers. No repository variable is set by
+the local installation or tests.
+
+Review patches and line counts use one canonical object-based diff. Textconv,
+external drivers, current checkout/index attributes and local diff configuration
+cannot change evidence for a committed base/head. Attributes come from the target
+head, or from each measured commit for parent-relative sizes. Dirty previews use
+a copied index and the existing worktree while retaining HEAD's attribute policy;
+they remain provisional. A corrected canonical format may require a fresh bundle
+for older previews; retain their author records instead of silently rebinding them.
+Certificate revocation syncs the certificate directory before changed answers are
+saved, so an acknowledged edit cannot depend on an unsynced deletion.
+
+Hashchain and size inspection ignore Git replacement objects and refuse local
+history grafts or a shallow repository. Fetch complete history and remove
+grafts before retrying; a truncated or rewritten local graph cannot clear the
+large-change requirement.
+
+To inspect the interactive requirement without pushing, run:
+
+```sh
+python3 scripts/check-interactive-review.py status --base origin/main --head HEAD
+```
+
+Use the intended upstream PR base when it differs from `origin/main`. The JSON
+names every triggering full commit SHA and its added plus deleted text lines,
+the final PR text total, and `not_required`, `pending`, or `complete`. A large
+commit remains a trigger when later commits undo it. `coverage_complete` is
+false and `unmeasured_commits` names the SHAs and paths when Git cannot report
+text line counts. These changes also require interactive review: binary
+attributes such as `-diff` cannot turn a large text change into an automatic
+pass. Inspect real binaries separately during that review. Missing history is
+an error.
+`complete` requires current matching evidence, not a commit-message label or a
+line in the reviewed-head file. The evidence binds the whole reviewed branch
+head and base; it does not certify a separate per-commit review. Rebase, amend,
+base changes, or edited answers require revalidation. No `Reviewed: yes` or
+`Rechained: yes` trailer is generated.
+
+Interactive review events are displayed in local Git notes under
+`refs/notes/codetrial-review`. Post-commit marks individual large/unmeasured
+commits, and pre-push includes the full PR aggregate. The head's note names
+its Change-Id, exact head/base, triggering commit SHAs, pending/complete state
+and whether the matching workbench server started. View it with
+`git log -1 --notes=codetrial-review`; starting a server is not completion.
+Only certificate verification can produce the generated complete state, and
+the push hook never trusts the note as proof. Editing answers revokes the
+certificate and refreshes the note to pending. The note contains no private
+explanation or feedback. Notes preserve commit identities and are not pushed
+automatically. See [the marker lifecycle](../.claude/skills/codetrial-review/workbench.md#inspect-the-requirement).
 
 ## Releases and the embedded web tree
 

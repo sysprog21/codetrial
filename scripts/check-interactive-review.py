@@ -61,7 +61,10 @@ def common():
 def load(path):
     if path.stat().st_size > 8 * 1024 * 1024:
         raise ValueError("Review evidence exceeds the supported size")
-    return json.loads(path.read_text())
+    value = json.loads(path.read_text())
+    if not isinstance(value, dict):
+        raise ValueError("Review evidence is not a JSON object")
+    return value
 
 
 def digest(value):
@@ -553,6 +556,13 @@ def check_body(base, head, text):
         )
     # Whatever it declares, the block was written for a diff; one copied from
     # another pull request, or from before the change moved, names a different one.
+    for name, value in (("Head", head), ("Base", base)):
+        if fields.get(name) != value:
+            raise ValueError(
+                f"[interactive-review/stale] The block names {name.lower()} "
+                f"{fields.get(name) or '(none)'}, not {value}; review evidence "
+                f"belongs to one exact head. See {DOC}"
+            )
     want = "sha256:" + hashlib.sha256(patch(base, head)).hexdigest()
     if fields.get("Diff") != want:
         raise ValueError(
@@ -566,8 +576,10 @@ def write_note(path, text):
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         path.write_text(text)
-    except OSError:
-        pass
+    except OSError as error:
+        raise ValueError(
+            f"Cannot write the pull request description block to {path}: {error}"
+        ) from error
 
 
 def main():

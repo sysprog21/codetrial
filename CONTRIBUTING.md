@@ -202,7 +202,8 @@ alike. It recognizes a tool by the address agents commit with, or by a trailer
 or footer that names the tool itself; a person who shares a tool's first name,
 such as `Claude Shannon`, or works where one is made, is unaffected.
 
-An issue a commit finishes is closed with `Close #N` on the last line;
+An issue a commit finishes is closed with `Close #N` on the last prose line,
+before the generated Change-Id trailer;
 `Closes #N` is accepted and closes it the same way. A `Refs #N` may appear in
 the description, where it reads as context, and never as the last line, which
 the hook refuses: a last line that closes nothing reads like the closing line,
@@ -248,7 +249,41 @@ before opening the pull request. It reads what the gate cannot: the scope the
 issue accepted, the contracts in `docs/`, and what maintainers already decided
 about the same files. Fix what it confirms; its report stays out of the pull
 request. The pre-push hook prints one line when the head being pushed has no
-such review on record, and never refuses the push for it.
+such review on record for small changes. Large topic branches require the
+matching interactive explanation and durable review evidence before pushing.
+
+Every ordinary contributor commit after the anchor in `scripts/hashchain-base`
+must carry exactly one generated `Change-Id: I<40 hex digits>` trailer. The hooks compute a
+SHA-256 link from the preceding Change-Id and the committed tree; pre-push and
+CI recompute it. Clean two-parent GitHub integration merges do not need a
+trailer: the verifier checks both histories and recomputes their merge tree.
+Install the hooks with `make hooks` before committing. After
+rewriting history, use `python3 scripts/hashchain.py rechain` on your work
+branch, then review the new head again. This preserves code trees, staged and
+unstaged changes, and adds no repair trailer. Rechaining changes commit IDs and
+invalidates earlier head-specific review evidence. The anchor is a tracked
+policy setting; changes to it need review like other contribution rules.
+Agents must not skip the hooks (`--no-verify`, `core.hooksPath`, hand-built
+commits); `.claude/settings.json` refuses those commands for Claude Code, and CI
+checks the chain and the review requirement again.
+It is public, and its hashes do not prove that hooks executed. CI pins the
+policy and verifier to trusted history; the first installation needs explicit
+maintainer approval of the exact verifier commit. See
+[the hashchain trust boundary](docs/development.md#git-hooks).
+
+Before opening a pull request, use the interactive review web page if any
+commit has at least 200 added plus deleted reviewable lines, or the whole PR
+has more than 500. Explain the change and its design choices in your own words,
+and answer
+questions grounded in the diff. Follow [the large-change explanation
+requirement](docs/large-change-explanation.md) for counting, coverage, and what
+belongs in the PR body. An agent-written summary or approval alone does not
+meet this requirement; submission waits for your explanation and any material
+corrections.
+The pull request template includes an interactive review block; the pre-push
+hook writes it to `.git/codetrial-review/pr-description.md` once the check
+passes (one file per pushed head when several branches go at once), and the
+`pr-description` check compares it with the diff.
 
 A review thread carries a correction, a measurement, or nothing: no pasted
 agent walkthroughs, no severity tables, no re-summarizing a diff that GitHub

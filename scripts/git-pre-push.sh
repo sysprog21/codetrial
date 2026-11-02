@@ -107,8 +107,11 @@ git rev-parse --verify --quiet "$review_policy^{commit}" > /dev/null 2>&1 \
     || review_policy=
 review_path=.claude/skills/codetrial-review/SKILL.md
 # The description block for the pull request, written when the check passes.
-pr_block=$(git rev-parse --git-common-dir)/codetrial-review/pr-description.md
-block_written=0
+block_dir=$(git rev-parse --git-common-dir)/codetrial-review
+
+# One block per pushed head: a push of several branches would otherwise leave
+# only the last branch's block, and the others would look unreviewed.
+blocks=
 note=
 
 while read -r local_ref local_sha remote_ref remote_sha; do
@@ -225,6 +228,7 @@ while read -r local_ref local_sha remote_ref remote_sha; do
 
                 # Only this push's block is worth pasting; one from an earlier
                 # push, or from another head, would describe something else.
+                pr_block=$block_dir/pr-description-$(printf '%.12s' "$local_sha").md
                 rm -f "$pr_block"
                 if ! command -v python3 > /dev/null 2>&1 \
                     || ! python3 "$script_dir/check-interactive-review.py" push \
@@ -233,7 +237,8 @@ while read -r local_ref local_sha remote_ref remote_sha; do
                     failed=1
                     continue
                 fi
-                [ ! -f "$pr_block" ] || block_written=1
+                [ ! -f "$pr_block" ] || blocks="$blocks$pr_block
+"
             fi
             if [ -z "$note" ] && [ "$review_enabled" -eq 1 ] \
                 && ! grep -qx "$local_sha" "$reviewed" 2> /dev/null; then
@@ -246,10 +251,19 @@ done << EOF
 $refs
 EOF
 
-if [ "$failed" -eq 0 ] && [ "$block_written" -eq 1 ]; then
-    echo "Pull request description: paste the interactive review block from" >&2
-    echo "  $pr_block" >&2
-    echo "into the pull request, replacing the placeholder block." >&2
+if [ "$failed" -eq 0 ] && [ -n "$blocks" ]; then
+    count=$(printf '%s' "$blocks" | grep -c . || true)
+    if [ "$count" -eq 1 ]; then
+        # The usual push: one branch, and one file with a name to remember.
+        only=$(printf '%s' "$blocks" | head -n 1)
+        cp "$only" "$block_dir/pr-description.md"
+        echo "Pull request description: paste the interactive review block from" >&2
+        echo "  $block_dir/pr-description.md" >&2
+        echo "into the pull request, replacing the placeholder block." >&2
+    else
+        echo "Pull request descriptions: each pushed head has its own interactive review block:" >&2
+        printf '%s' "$blocks" | sed 's/^/  /' >&2
+    fi
 fi
 
 # Said once the whole push is judged, so a push refused over another ref does

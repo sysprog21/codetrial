@@ -186,7 +186,11 @@ When any commit reaches 200 reviewable added plus deleted lines, or the whole
 PR exceeds 500, select the single most consequential modification in the pinned
 diff: a changed behavior, trust boundary, failure path or consequential design
 choice. Point to its manifest path and quote a short changed passage in
-`$bundle/questions.json`. Ask one concrete question about why this change is needed or
+`$bundle/questions.json`. If the large commit was reverted before the head, so that
+no path or passage of it remains in the pinned diff, ask about the largest change
+that does remain, and say in the report that the triggering commit has no passage
+left; if the final diff is empty, interactive evidence cannot be certified and a
+maintainer decides. Ask one concrete question about why this change is needed or
 why this approach serves the contributor's goal. That question replaces the
 generic motivation prompt; it never adds a second required answer. When another
 file has a consequential boundary or regression test worth discussing, add at
