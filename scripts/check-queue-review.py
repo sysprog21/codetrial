@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Recheck each pull request description represented in a merge group, and
-keep a pull request from editing the workflow that does so."""
+"""Recheck each pull request represented in a merge group for the
+interactive review it needs, and keep a pull request from editing the workflow
+that does so."""
 
 import argparse
 import importlib.util
@@ -67,7 +68,7 @@ def check(base, head, pulls, checker):
         included.append(pull)
         user = pull["user"]
         if not checker.dependabot_exempt(base, tip, user["login"], user.get("type")):
-            checker.check_body(base, tip, pull.get("body") or "")
+            checker.check_labels(base, tip, [x["name"] for x in pull.get("labels", [])])
         pending.difference_update(within(tip, parents))
     if not included or pending:
         raise ValueError(
@@ -164,7 +165,7 @@ def main():
     except (subprocess.CalledProcessError, OSError, ValueError) as error:
         parser.exit(1, f"Cannot list the open pull requests: {error}\n")
     print(
-        "Verified merge-group PR descriptions:",
+        "Verified merge-group pull requests:",
         check(args.base, args.head, pulls, checker),
     )
 

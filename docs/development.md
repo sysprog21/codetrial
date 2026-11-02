@@ -499,8 +499,9 @@ instead is layer three things, each closing a different gap:
   given the same rule in its own configuration.
 - **CI recomputes everything it can** and is the only part a contributor cannot
   edit locally: the Change-Id chain, the size of every commit and of the whole
-  pull request, and that the description's interactive review block matches the
-  diff. It runs the base branch's checker, so a pull request cannot weaken it.
+  pull request, and that a change over the review thresholds carries a
+  maintainer's `explained` label. It reads nothing the author writes in the
+  description. It runs the base branch's checker, so a pull request cannot weaken it.
   It holds only if the repository requires it: make `check` and
   `interactive-review` required status checks, merge only through the merge queue,
   let only the maintainer bypass them, from a pull request and never by pushing
@@ -523,13 +524,14 @@ The required job is named `interactive-review` (the workflow is
 `pr-description`); require that job and `check` in the branch ruleset. The
 workflow also handles `merge_group`: using the base branch's checker, it lists
 open PRs targeting that branch, selects heads present in the group but absent
-from its base, and rechecks each description against its own head and its
-group base. Every ordinary commit in the group must belong to one of those heads;
-missing PRs, stale blocks and API errors fail the check. Merge commits are
+from its base, and rechecks each one's size against its own head and its group
+base, and its labels. Every ordinary commit in the group must belong to one of
+those heads; missing PRs, a missing label and API errors fail the check. Merge commits are
 verified by the separate hashchain gate. This requires the merge method described
-below; squash and rebase queues are unsupported. A PR rebased onto a newer base
-needs a fresh description block. Queue checks use a read-only token with
-`pull-requests: read` to retrieve current descriptions, never local answers.
+below; squash and rebase queues are unsupported. Queue checks use a read-only
+token with `pull-requests: read` to retrieve the open PRs and their labels, never
+local answers. The `explained` label is not bound to a head, so a push keeps it;
+the ruleset's dismissal of stale approvals is what asks for a fresh review.
 
 Use GitHub's required-review rules as the independent approval boundary: require
 at least one non-author maintainer approval, require code-owner review for the
@@ -576,7 +578,7 @@ machines, and have CI verify the signature, issuer, policy, repository and every
 snapshot field against current data. Reject receipts copied between PRs or
 replayed after any snapshot change. Keep answers private. Such a receipt proves
 what the service observed, not comprehension. This service and receipt verifier
-are future work; the current `complete` field remains a contributor declaration.
+are future work; the current `explained` label remains a maintainer's word.
 
 The chain is a checksum of each parent link and tree, not proof of review: a
 commit made with `--no-verify` can be restamped by `rechain` and still verify.

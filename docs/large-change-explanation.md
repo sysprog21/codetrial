@@ -89,21 +89,15 @@ question-and-answer transcript and the local review report private; do not post
 a score or claim that a contributor has been certified. The explanation can be
 in the contributor's language locally.
 
-The pull request template includes an interactive review block. When the
-pre-push check passes it writes the block for the pushed head to
-`.git/codetrial-review/pr-description.md`, or to one file per head when several
-branches are pushed at once; paste it in place of the placeholder. It names
-`complete` or `not required`, the head and base, a hash of the diff, and the line
-counts, and holds no answers or scores. A pull request carries the block even
-when it is small. The `interactive-review` check compares the block with the pull
-request: a large change must say `complete`, and the block must name this pull
-request's head and base and carry the hash of its diff, so a change made after
-the review, or a block from another head, makes it stale. The check runs from the
-base branch's workflow and checker, so a pull request cannot edit it. It sees
-the description, not the local evidence, so it keeps the description honest and
-does not prove a review took place.
-`python3 scripts/check-interactive-review.py note --base <base>` prints the
-block for any head without pushing.
+The pull request carries no review block. CI measures the commits and the diff
+itself, from the base branch's workflow and checker, so nothing in the
+description can be edited out and a pull request cannot change the check. A change
+under the thresholds passes. A change over them passes only once a maintainer has
+added the `explained` label, which only people with triage access can add. The
+label means a maintainer has seen the contributor explain the change. CI cannot
+see the local evidence, so the label is the maintainer's word and not a
+verification. It is not tied to a head: a later push keeps it, and the ruleset's
+dismissal of stale approvals is what asks for a fresh review of that push.
 
 An unanswered explanation or incomplete reflection means submission is pending,
 even if the code review and tests pass. Continue useful review and validation
@@ -118,16 +112,9 @@ who wrote an answer or whether the contributor understands it.
 
 Each rejection names its reason in brackets.
 
-- `[interactive-review/missing-section]`: the description lacks the block. Paste
-  the one the pre-push hook wrote, or run `check-interactive-review.py note`.
-- `[interactive-review/undeclared]`: the block still holds the placeholder, or
-  says something other than `complete` or `not required`.
-- `[interactive-review/required]`: the diff reaches a threshold, so the block
-  must say `complete`. Run the interactive review on the committed branch,
-  push again, and paste the new block.
-- `[interactive-review/stale]`: the hash in the block is not this pull request's
-  diff. The branch changed after the block was written; push from the reviewed
-  head again, or review the new diff.
+- `[interactive-review/required]`: the pull request reaches a threshold and has
+  no `explained` label. Finish the interactive review on the committed branch and
+  show the explanation to a maintainer, who adds the label.
 - `Interactive review required` at push: the same thresholds, found before the
   pull request exists. Finish the explanation and durable report for the exact
   head being pushed; amending or rechaining changes the head and needs them
@@ -139,8 +126,9 @@ Each rejection names its reason in brackets.
   fully present locally. Fetch upstream `main` and retry.
 
 The required status check is the `interactive-review` job in the `pr-description`
-workflow. Merge groups recheck each included PR's current description with the
-base checker; they do not carry a shared description or certify local evidence.
-An independent maintainer approval is a separate GitHub ruleset requirement,
-with stale approvals dismissed after a push. A contributor's `complete` declaration
-and any future signature must not be described as proof of understanding.
+workflow, which keeps its name from when it read the description. It reruns when a
+label is added or removed. Merge groups recheck each included pull request's
+current labels with the base checker. An independent maintainer approval is a
+separate GitHub ruleset requirement, with stale approvals dismissed after a push.
+The label and any future signature must not be described as proof of
+understanding.

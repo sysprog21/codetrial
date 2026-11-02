@@ -178,11 +178,10 @@ follow-up answers checked against this base and head. If absent, incorrect, or
 stale, ask for the missing account and keep submission pending while continuing
 independent preparation. An approval to publish or an agent-written summary
 does not replace the answers. Preserve the useful rationale and reading order
-in the PR body, but keep the private report and transcript out. Fill in
-the template's interactive review block from
-`.git/codetrial-review/pr-description.md`, which the pre-push hook writes (or
-`python3 scripts/check-interactive-review.py note --base <base>`); never type
-its status by hand. A later code or
+in the PR body, but keep the private report and transcript out. The pull
+request has no review block to fill in: CI measures the change itself, and a
+change over the thresholds passes once a maintainer adds the `explained` label.
+A later code or
 base change requires rechecking the count, and a new review session: the
 evidence is bound to the exact base, head and diff, so the earlier session is
 refused and the answers are written and sent again, which can start from the

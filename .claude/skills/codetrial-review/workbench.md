@@ -158,8 +158,8 @@ Once the reflection is confirmed the page offers **Finish and close**. It asks
 the server to stop (`PUT /api/finish`, refused until the explanation is
 confirmed), which also stops the managed worker, removes the token from the
 address bar, and replaces the page with what comes next: push the branch, then
-paste the block from `.git/codetrial-review/pr-description.md` into the pull
-request. A browser lets a script close only a window the script opened, so the
+open the pull request, where a maintainer adds the `explained` label to a large
+change. A browser lets a script close only a window the script opened, so the
 tab may stay; the page then says it is safe to close. The saved explanation and
 confirmation are not touched, and starting the server again reopens them.
 

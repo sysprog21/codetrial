@@ -264,50 +264,42 @@ print(json.dumps(seen))
             check=False,
         )
 
-    def description(self, text):
-        path = self.root / "description.md"
-        path.write_text(text)
-        return self.gate("pr-body", "--body-file", str(path))
+    def labelled(self, *names):
+        return self.gate("pr", "--labels", json.dumps(list(names)))
 
-    def test_description_of_a_small_change_carries_a_matching_block(self):
+    def test_a_small_change_needs_no_label(self):
         self.large(10)
-        block = self.gate("note").stdout
-        self.assertIn("Interactive review: not required", block)
-        self.assertEqual(self.description("Intro\n\n" + block).returncode, 0)
-        missing = self.description("Only prose, no review block.\n")
-        self.assertNotEqual(missing.returncode, 0)
-        self.assertIn("[interactive-review/missing-section]", missing.stderr)
-        placeholder = self.description(
-            "<!-- interactive-review -->\n"
-            "Interactive review: replace this block with the hook's output\n"
-            "<!-- /interactive-review -->\n"
-        )
-        self.assertNotEqual(placeholder.returncode, 0)
-        self.assertIn("[interactive-review/undeclared]", placeholder.stderr)
+        result = self.labelled()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("under the interactive review thresholds", result.stdout)
 
-    def test_description_of_a_large_change_must_declare_its_own_reviewed_diff(self):
+    def test_a_large_change_passes_only_with_the_maintainers_label(self):
         self.large()
-        pending = self.gate("note").stdout
-        self.assertIn("Interactive review: pending", pending)
-        self.assertIn(
-            "[interactive-review/undeclared]", self.description(pending).stderr
-        )
-        claimed = pending.replace("pending", "not required")
-        refused = self.description(claimed)
+        for names in ((), ("bug",), ("not-explained",)):
+            refused = self.labelled(*names)
+            self.assertNotEqual(refused.returncode, 0, names)
+            self.assertIn("[interactive-review/required]", refused.stderr)
+        self.assertEqual(self.labelled("bug", "explained").returncode, 0)
+        malformed = self.gate("pr", "--labels", '{"explained": true}')
+        self.assertNotEqual(malformed.returncode, 0)
+        self.assertNotIn("Traceback", malformed.stderr)
+
+    def test_the_label_does_not_replace_the_local_review_at_push(self):
+        self.large()
+        self.assertEqual(self.labelled("explained").returncode, 0)
+        refused = self.push()
         self.assertNotEqual(refused.returncode, 0)
-        self.assertIn("[interactive-review/required]", refused.stderr)
+        self.assertIn("Interactive review required", refused.stderr)
         self.prepare()
-        block = self.gate("note").stdout
-        self.assertIn("Interactive review: complete", block)
-        self.assertEqual(self.description(block).returncode, 0)
         self.assertEqual(self.push().returncode, 0)
-        written = self.repo / ".git/codetrial-review/pr-description.md"
-        self.assertEqual(written.read_text(), block)
-        (self.repo / "change.txt").write_text("base\n" + "line\n" * 201)
-        self.commit("Change the fixture after its review")
-        stale = self.description(block)
-        self.assertNotEqual(stale.returncode, 0)
-        self.assertIn("[interactive-review/stale]", stale.stderr)
+
+    def test_a_push_writes_no_description_block(self):
+        self.large(10)
+        pushed = self.push()
+        self.assertEqual(pushed.returncode, 0)
+        self.assertNotIn("description", pushed.stderr.lower())
+        directory = self.repo / ".git/codetrial-review"
+        self.assertEqual(list(directory.glob("pr-description*")), [])
 
     def test_a_base_diff_rule_removed_by_the_branch_cannot_hide_its_size(self):
         (self.repo / ".gitattributes").write_text("change.txt -diff\n")
@@ -331,50 +323,6 @@ print(json.dumps(seen))
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Interactive review required", result.stderr)
 
-    def test_pushing_a_tag_does_not_discard_the_description_block(self):
-        self.large(10)
-        self.assertEqual(self.push().returncode, 0)
-        written = self.repo / ".git/codetrial-review/pr-description.md"
-        block = written.read_text()
-        self.assertIn("Interactive review: not required", block)
-        head = self.git("rev-parse", "HEAD").stdout.strip()
-        tag = self.run_command(
-            ["sh", "scripts/git-pre-push.sh", "fork", "local-fixture"],
-            data=f"refs/tags/v1 {head} refs/tags/v1 {'0' * 40}\n",
-        )
-        self.assertEqual(tag.returncode, 0)
-        self.assertEqual(written.read_text(), block)
-        self.assertNotIn("Pull request description", tag.stderr)
-
-    def test_a_block_copied_from_another_diff_or_doubled_is_refused(self):
-        self.large(10)
-        block = self.gate("note").stdout
-        other = block.replace("Diff: sha256:", "Diff: sha256:00")
-        stale = self.description(other)
-        self.assertNotEqual(stale.returncode, 0)
-        self.assertIn("[interactive-review/stale]", stale.stderr)
-        twice = self.description(block + "\n" + block)
-        self.assertNotEqual(twice.returncode, 0)
-        self.assertIn("more than one", twice.stderr)
-
-    def test_a_block_for_another_head_or_base_is_refused_even_with_the_same_diff(self):
-        self.large(10)
-        block = self.gate("note").stdout
-        head = self.git("rev-parse", "HEAD").stdout.strip()
-        for field, value in (("Head", head), ("Base", self.base)):
-            other = block.replace(value, "0" * 40)
-            result = self.description(other)
-            self.assertNotEqual(result.returncode, 0, field)
-            self.assertIn("[interactive-review/stale]", result.stderr)
-            self.assertIn(field.lower(), result.stderr)
-
-    def test_a_block_that_cannot_be_written_fails_with_its_reason(self):
-        self.large(10)
-        result = self.gate("note", "--out", "/dev/full")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("Cannot write the pull request description block", result.stderr)
-        self.assertNotIn("Traceback", result.stderr)
-
     def test_malformed_evidence_is_a_failed_review_not_a_crash(self):
         self.large()
         head = self.git("rev-parse", "HEAD").stdout.strip()
@@ -387,31 +335,6 @@ print(json.dumps(seen))
         pushed = self.push()
         self.assertNotEqual(pushed.returncode, 0)
         self.assertNotIn("Traceback", pushed.stderr)
-
-    def test_each_branch_of_one_push_gets_its_own_description_block(self):
-        self.large(10)
-        first = self.git("rev-parse", "HEAD").stdout.strip()
-        (self.repo / "change.txt").write_text("base\n" + "line\n" * 11)
-        self.commit("Change the fixture again")
-        second = self.git("rev-parse", "HEAD").stdout.strip()
-        zero = "0" * 40
-        # The block of an earlier single-head push must not outlive a wider one.
-        stale = self.repo / ".git/codetrial-review/pr-description.md"
-        stale.parent.mkdir(parents=True, exist_ok=True)
-        stale.write_text("an earlier head's block\n")
-        result = self.run_command(
-            ["sh", "scripts/git-pre-push.sh", "fork", "local-fixture"],
-            data=(
-                f"refs/heads/one {first} refs/heads/one {zero}\n"
-                f"refs/heads/two {second} refs/heads/two {zero}\n"
-            ),
-        )
-        directory = self.repo / ".git/codetrial-review"
-        for head in (first, second):
-            written = directory / f"pr-description-{head[:12]}.md"
-            self.assertIn(f"Head: {head}", written.read_text())
-            self.assertIn(written.name, result.stderr)
-        self.assertFalse((directory / "pr-description.md").exists())
 
     def test_push_without_a_base_is_refused_not_skipped(self):
         self.large(10)
@@ -778,25 +701,25 @@ class QueueReviewTests(unittest.TestCase):
         self.git("commit", "-qm", value)
         return self.git("rev-parse", "HEAD")
 
-    def pull(self, number, tip, body="current"):
+    def pull(self, number, tip, labels=("explained",)):
         return {
             "number": number,
             "head": {"sha": tip},
             "user": {"login": "contributor", "type": "User"},
-            "body": body,
+            "labels": [{"name": name} for name in labels],
         }
 
     def checker(self):
         calls = []
 
-        def check_body(base, tip, body):
-            calls.append((base, tip, body))
-            if body != "current":
-                raise ValueError("stale description")
+        def check_labels(base, tip, labels):
+            calls.append((base, tip, labels))
+            if "explained" not in labels:
+                raise ValueError("unlabeled")
 
         return (
             SimpleNamespace(
-                check_body=check_body,
+                check_labels=check_labels,
                 dependabot_exempt=lambda *a: a[2] == "dependabot[bot]",
             ),
             calls,
@@ -817,17 +740,20 @@ class QueueReviewTests(unittest.TestCase):
         self.assertEqual(result, [1, 2])
         self.assertEqual(
             calls,
-            [(self.base, self.first, "current"), (self.base, self.second, "current")],
+            [
+                (self.base, self.first, ["explained"]),
+                (self.base, self.second, ["explained"]),
+            ],
         )
 
-    def test_stale_description_in_any_pr_fails_the_group(self):
+    def test_a_missing_label_in_any_pr_fails_the_group(self):
         checker, _ = self.checker()
-        with self.assertRaisesRegex(ValueError, "stale"):
+        with self.assertRaisesRegex(ValueError, "unlabeled"):
             self.queue.check(
                 self.base,
                 self.second,
                 [
-                    self.pull(1, self.first, "stale"),
+                    self.pull(1, self.first, ()),
                     self.pull(2, self.second),
                 ],
                 checker,
@@ -866,17 +792,8 @@ class QueueReviewTests(unittest.TestCase):
         )
         self.assertEqual(len(calls), 1)
 
-    def note(self, head):
-        return subprocess.check_output(
-            [sys.executable, str(GATE), "note", "--base", self.base, "--head", head],
-            cwd=self.repo,
-            env=self.env,
-            text=True,
-        )
-
-    def run_queue(self, body=None, api_failure=False):
-        if body is None:
-            body = self.note(self.second)
+    def run_queue(self, labels=("explained",), head=None, api_failure=False):
+        head = head or self.second
         binary = self.repo / "bin"
         binary.mkdir(exist_ok=True)
         stub = binary / "gh"
@@ -892,7 +809,7 @@ class QueueReviewTests(unittest.TestCase):
                 "--base",
                 self.base,
                 "--head",
-                self.second,
+                head,
                 "--branch",
                 "main",
                 "--repo",
@@ -905,23 +822,31 @@ class QueueReviewTests(unittest.TestCase):
                 **self.env,
                 "PATH": str(binary) + os.pathsep + self.env["PATH"],
                 "QUEUE_API_FAILURE": "1" if api_failure else "0",
-                "QUEUE_API_PAGES": json.dumps([[], [self.pull(2, self.second, body)]]),
+                "QUEUE_API_PAGES": json.dumps([[], [self.pull(2, head, labels)]]),
             },
         )
 
-    def test_cli_checks_real_description_from_later_api_page(self):
+    def big(self):
+        (self.repo / "file").write_text("line\n" * 600)
+        self.git("add", "file")
+        self.git("commit", "-qm", "A change over the threshold")
+        return self.git("rev-parse", "HEAD")
+
+    def test_cli_checks_the_real_labels_from_later_api_page(self):
         result = self.run_queue()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("[2]", result.stdout)
 
-    def test_cli_rejects_description_from_another_head(self):
-        body = self.note(self.first)
-        result = self.run_queue(body=body)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("interactive-review/stale", result.stderr)
+    def test_cli_rejects_a_large_change_without_the_label(self):
+        head = self.big()
+        refused = self.run_queue(labels=(), head=head)
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("interactive-review/required", refused.stderr)
+        accepted = self.run_queue(labels=("other", "explained"), head=head)
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
 
     def test_cli_does_not_pass_when_github_cannot_be_read(self):
-        result = self.run_queue(body="unused", api_failure=True)
+        result = self.run_queue(api_failure=True)
         self.assertNotEqual(result.returncode, 0)
         self.assertNotIn("Verified", result.stdout)
 
@@ -950,9 +875,9 @@ class QueueReviewTests(unittest.TestCase):
         )
         self.assertEqual([call[1] for call in calls], [self.first, other])
 
-    def test_dependabot_pull_request_skips_only_its_own_description(self):
+    def test_dependabot_pull_request_skips_only_its_own_label_check(self):
         checker, calls = self.checker()
-        bot = self.pull(1, self.first, "unused")
+        bot = self.pull(1, self.first, ())
         bot["user"] = {"login": "dependabot[bot]", "type": "Bot"}
         result = self.queue.check(
             self.base, self.second, [bot, self.pull(2, self.second)], checker
@@ -1138,17 +1063,15 @@ class QueueReviewTests(unittest.TestCase):
         self.git("commit", "-q", "--allow-empty", "-m", "unrelated")
         self.assertEqual(run(self.git("rev-parse", "HEAD")).returncode, 1)
 
-    def test_pr_body_excuses_only_a_dependabot_pull_request(self):
+    def test_pr_excuses_only_a_dependabot_pull_request(self):
         bot = "49699333+dependabot[bot]@users.noreply.github.com"
         theirs = self.commit_by(bot, self.base, "Bump a")
         mine = self.commit_by("person@example.test", self.base, "Change a")
-        empty = self.repo / "empty.md"
-        empty.write_text("")
 
         def run(head, login, kind):
             return subprocess.run(
-                [sys.executable, str(GATE), "pr-body", "--base", self.base]
-                + ["--head", head, "--body-file", str(empty)]
+                [sys.executable, str(GATE), "pr", "--base", self.base]
+                + ["--head", head, "--labels", "[]"]
                 + ["--author-login", login, "--author-type", kind],
                 cwd=self.repo,
                 env=self.env,
@@ -1156,18 +1079,22 @@ class QueueReviewTests(unittest.TestCase):
                 capture_output=True,
             )
 
-        self.assertEqual(run(theirs, "dependabot[bot]", "Bot").returncode, 0)
+        excused = run(theirs, "dependabot[bot]", "Bot")
+        self.assertEqual(excused.returncode, 0)
+        self.assertIn("Dependabot's own pull request", excused.stdout)
         for head, login, kind in (
             (mine, "dependabot[bot]", "Bot"),
             (theirs, "dependabot[bot]", "User"),
             (theirs, "contributor", "User"),
         ):
             with self.subTest(login=login, kind=kind, human=head == mine):
-                self.assertNotEqual(run(head, login, kind).returncode, 0)
+                # A small change needs no label, so only the message tells
+                # whether the exemption applied.
+                self.assertNotIn("Dependabot's own", run(head, login, kind).stdout)
 
     def test_the_workflow_passes_only_flags_and_variables_that_exist(self):
         text = (ROOT / ".github/workflows/pr-description.yml").read_text()
-        step = text[text.index("- name: Compare the description") :]
+        step = text[text.index("- name: Measure the change") :]
         env, run = step.split("        run: |", 1)
         declared = set(re.findall(r"^          (\w+):", env, re.M))
         for name in set(re.findall(r"\$\{?([A-Z_]+)", run)):
