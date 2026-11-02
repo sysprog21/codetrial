@@ -8,6 +8,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { FakeStream, FakeTrack, settle } from "./fake-media.js";
+import { loadInterview, read } from "./source.js";
 
 import {
   MIC_CONFIRM_FRAMES,
@@ -104,6 +105,41 @@ test("hearing nothing keeps the room closed even with a working microphone", () 
 
   assert.equal(state.ready, false);
   assert.equal(state.blocker, "output");
+});
+
+test("the Sound step reads the same before and after the preflight paints it", () => {
+  // The candidate may confirm without playing anything, so no line may read
+  // as if the test sound were required. The step text is written twice, once
+  // in the markup and again by `paintPreflight` on every refresh, and the two
+  // drifting apart would change the instruction under the candidate's eyes.
+  const markup = /id="audio-output-state"[^>]*>([^<]*)</.exec(
+    read("web/interview.html"),
+  )[1];
+  const nodes = new Proxy(
+    { audioHeard: {} },
+    {
+      get: (target, key) =>
+        (target[key] ??= { textContent: "", classList: { toggle() {} } }),
+    },
+  );
+  const { paintPreflight } = loadInterview(["paintPreflight"], { nodes });
+  paintPreflight(
+    mediaReadiness({ ...passingMedia, outputConfirmed: false }),
+    null,
+  );
+  assert.equal(
+    nodes.audioOutputState.textContent,
+    markup.replace(/\s+/g, " ").trim(),
+  );
+  assert.equal(
+    nodes.audioOutputState.textContent,
+    'play a test sound to check your audio, or click "I heard it" if it already works.',
+  );
+  // With output the remaining step, the status line says the same thing.
+  assert.equal(
+    nodes.audioStatus.textContent,
+    'Play the test tone or voice to check your audio, or click "I heard it" if it already works.',
+  );
 });
 
 test("all required media proven opens the room", () => {
