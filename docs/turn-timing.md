@@ -220,6 +220,9 @@ for its room in the durable file; transcript order alone cannot pass the smoke.
 This proves neither hint/tool-state alignment nor physical audibility. H-3/TT-2
 still need separately digested WAV and headerless 16 kHz mono s16le PCM
 fixtures, a replay pilot and explicit exclusion counts for misaligned trials.
+The [observational replay contract](observational-replay.md) defines the named
+fixture format and offline validator; its transport and evidence requirements
+remain prerequisites for that pilot.
 
 ## Continuity gaps
 
