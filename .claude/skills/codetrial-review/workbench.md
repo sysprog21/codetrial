@@ -176,9 +176,15 @@ agent is waiting on the page:
 until python3 .claude/skills/codetrial-review/workbench.py wait --for confirmation \
     --bundle "$bundle" --questions "$bundle/questions.json" \
     --after -1 --timeout 55 > "$bundle/confirmation.json"; do
-  [ $? -eq 2 ] || break
+  code=$?
+  [ "$code" -eq 2 ] || exit "$code"
 done
 ```
+
+Run it with the harness's background option, so the review goes on while it waits
+and its exit wakes the agent; run in the foreground it would block the review
+until the contributor confirms. Status 2 only means the budget ran out, so it
+waits again; any other failure leaves with its own status.
 
 Exit 0 leaves the confirmed snapshot in `$bundle/confirmation.json`: the answers, the
 reference, and `reflection` with the grade and any correction. Exit 1 is an

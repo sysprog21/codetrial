@@ -229,7 +229,10 @@ while read -r local_ref local_sha remote_ref remote_sha; do
                 # Only this push's block is worth pasting; one from an earlier
                 # push, or from another head, would describe something else.
                 pr_block=$block_dir/pr-description-$(printf '%.12s' "$local_sha").md
-                rm -f "$pr_block"
+
+                # The plain name belongs to a single-head push that passed; one
+                # from an earlier push must not outlive a refused or wider push.
+                rm -f "$pr_block" "$block_dir/pr-description.md"
                 if ! command -v python3 > /dev/null 2>&1 \
                     || ! python3 "$script_dir/check-interactive-review.py" push \
                         --head "$local_sha" --base "$review_policy" --out "$pr_block"; then
@@ -256,10 +259,14 @@ if [ "$failed" -eq 0 ] && [ -n "$blocks" ]; then
     if [ "$count" -eq 1 ]; then
         # The usual push: one branch, and one file with a name to remember.
         only=$(printf '%s' "$blocks" | head -n 1)
-        cp "$only" "$block_dir/pr-description.md"
-        echo "Pull request description: paste the interactive review block from" >&2
-        echo "  $block_dir/pr-description.md" >&2
-        echo "into the pull request, replacing the placeholder block." >&2
+        if cp "$only" "$block_dir/pr-description.md"; then
+            echo "Pull request description: paste the interactive review block from" >&2
+            echo "  $block_dir/pr-description.md" >&2
+            echo "into the pull request, replacing the placeholder block." >&2
+        else
+            echo "Push rejected: cannot write $block_dir/pr-description.md." >&2
+            failed=1
+        fi
     else
         echo "Pull request descriptions: each pushed head has its own interactive review block:" >&2
         printf '%s' "$blocks" | sed 's/^/  /' >&2

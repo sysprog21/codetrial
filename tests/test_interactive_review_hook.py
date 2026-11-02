@@ -395,6 +395,10 @@ print(json.dumps(seen))
         self.commit("Change the fixture again")
         second = self.git("rev-parse", "HEAD").stdout.strip()
         zero = "0" * 40
+        # The block of an earlier single-head push must not outlive a wider one.
+        stale = self.repo / ".git/codetrial-review/pr-description.md"
+        stale.parent.mkdir(parents=True, exist_ok=True)
+        stale.write_text("an earlier head's block\n")
         result = self.run_command(
             ["sh", "scripts/git-pre-push.sh", "fork", "local-fixture"],
             data=(

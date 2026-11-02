@@ -520,6 +520,13 @@ class ExplainedTests(unittest.TestCase):
             {"feedback": [], "reflection": {"answer_digest": digest}},
             {"feedback": {"answer_digest": digest}, "reflection": "yes"},
             {"feedback": {}, "reflection": {}, "answers": {1, 2}},
+        ) + tuple(
+            {
+                "answers": answers,
+                "feedback": {"answer_digest": self.digest(answers)},
+                "reflection": {"answer_digest": self.digest(answers)},
+            }
+            for answers in ([], "text", 1)
         ):
             self.assertFalse(lifecycle.explained(state), state)
 

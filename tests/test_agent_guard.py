@@ -25,6 +25,12 @@ BLOCKED = [
     "nice -n 5 git commit --no-verify -m x",
     "env -u HOME git commit --no-verify -m x",
     "git c --no-verify -m x",
+    # A quoted heredoc body ending in a backslash does not swallow its delimiter.
+    "cat <<'EOF'\nfoo\\\nEOF\ngit commit --no-verify -m x",
+    "time -p git commit --no-verify -m x",
+    # A command substitution in an unquoted heredoc body runs, on several lines too.
+    "cat <<EOF\n$(\ngit commit --no-verify -m x\n)\nEOF",
+    "cat <<EOF\nsay `git commit --no-verify -m x`\nEOF",
     "git ci --no-verify",
     "dd if=/dev/null of=scripts/git-pre-push.sh",
     'echo x > "scripts/git-pre-push.sh"',
@@ -105,6 +111,10 @@ ALLOWED = [
     "git commit -m 'Handle -n' -m 'and --no-verify in docs'",
     "git push origin topic -n",
     "git log --grep=no-verify",
+    # The word after -m is the message, whatever it looks like.
+    "git commit -m --no-verify",
+    "cat <<EOF\nhello $(date)\nEOF",
+    "cat <<'EOF'\n$(\ngit commit --no-verify -m x\n)\nEOF",
     "git diff scripts/git-pre-push.sh",
     "cp scripts/git-pre-push.sh /tmp/copy.sh",
     "cat scripts/git-pre-push.sh",

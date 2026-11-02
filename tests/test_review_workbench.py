@@ -9,6 +9,7 @@ from pathlib import Path
 import select
 import socket
 import subprocess
+import time
 import sys
 import tempfile
 import unittest
@@ -636,6 +637,22 @@ class WorkbenchTest(unittest.TestCase):
         self.assertIsNone(self.app.wait(woken["revision"], 0, "confirmation"))
         with self.assertRaisesRegex(ValueError, "submission or a confirmation"):
             self.app.wait(-1, 0, "finish")
+
+    def test_a_confirmation_watch_does_not_claim_the_agent_is_waiting(self):
+        import threading
+
+        self.save()
+        for event, shown in (("submission", "waiting"), ("confirmation", "offline")):
+            with self.subTest(event):
+                found = []
+                watcher = threading.Thread(
+                    target=lambda: found.append(self.app.wait(-1, 1, event))
+                )
+                watcher.start()
+                time.sleep(0.3)
+                self.assertEqual(self.app.snapshot()["reviewer"], shown)
+                watcher.join()
+                self.assertEqual(found, [None])
 
     def test_wait_cli_reports_a_confirmation_or_stays_pending(self):
         self.save()

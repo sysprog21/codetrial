@@ -77,17 +77,41 @@ def abbreviates(token, option):
 
 def lines(text):
     """The command texts in a script: heredoc bodies are data unless a shell reads them."""
-    out, pending = [], None
-    for line in text.split("\n"):
+    out, pending, body = [], None, []
+
+    def expand():
+        # An unquoted body is expanded, so a $(...) in it runs, across lines too.
+        for found in SUBSTITUTION.findall("\n".join(body)):
+            out.extend((found[0] or found[1]).split("\n"))
+        body.clear()
+
+    rows, at = text.split("\n"), 0
+    while at < len(rows):
+        line = rows[at]
+        at += 1
         if pending:
             word, mode = pending
             if line.strip() == word:
+                expand()
                 pending = None
             elif mode == "shell":
+                # A shell reading the body deletes backslash-newline too; a
+                # quoted body that is only data keeps its lines as written, so a
+                # trailing backslash cannot swallow the delimiter after it.
+                while (
+                    line.endswith("\\") and at < len(rows) and rows[at].strip() != word
+                ):
+                    line = line[:-1] + rows[at]
+                    at += 1
                 out.append(line)
             elif mode == "expanded":
-                out += [m[0] or m[1] for m in SUBSTITUTION.findall(line)]
+                body.append(line)
             continue
+        # A backslash-newline is deleted by the shell, so `--no-\<newline>verify`
+        # is one word.
+        while line.endswith("\\") and at < len(rows):
+            line = line[:-1] + rows[at]
+            at += 1
         found = HEREDOC.search(line)
         if found:
             # The command written just before `<<` is the one that reads it.
@@ -107,13 +131,13 @@ def lines(text):
             pending = (found.group(2), mode)
             line = HEREDOC.sub(" ", line)
         out.append(line)
+    expand()
     return out
 
 
 def simple_commands(text):
     """Split on ; & | and newlines outside quotes, and add every nested command."""
-    # A backslash-newline is deleted by the shell, so `--no-\<newline>verify` is one word.
-    for line in lines(text.replace("\\\n", "")):
+    for line in lines(text):
         for found in SUBSTITUTION.findall(line):
             yield from simple_commands(found[0] or found[1])
         parts, current, quote = [], "", None
@@ -153,7 +177,7 @@ WRAPPER_VALUES = {
     "time": {"-f", "-o"},
 }
 # Words that open a command in a compound statement.
-KEYWORDS_BEFORE = {"if", "then", "do", "else", "elif", "while", "until", "!", "time"}
+KEYWORDS_BEFORE = {"if", "then", "do", "else", "elif", "while", "until", "!"}
 
 
 def strip_prefix(tokens):
@@ -257,11 +281,13 @@ def git_reason(tokens):
     for entry in config:
         if config_reason(entry):
             return config_reason(entry)
-    if skips_hooks(verb, args) or any(
-        abbreviates(token, "--no-verify") for token in args
+    if skips_hooks(verb, args) or (
+        verb not in NO_VERIFY_VERBS
+        and any(abbreviates(token, "--no-verify") for token in args)
     ):
-        # Any verb: an alias already in the user's configuration can stand for
-        # commit or push, and git accepts the flag wherever the verb does.
+        # Any other verb: an alias already in the user's configuration can stand
+        # for commit or push, and git accepts the flag wherever the verb does.
+        # The verbs above read their own options, values included, in skips_hooks.
         return "skips the git hooks (--no-verify)"
     if verb in ("commit-tree", "fast-import", "filter-branch"):
         return "builds or rewrites commits without running the commit hooks"

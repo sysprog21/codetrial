@@ -385,6 +385,8 @@ def explained(state):
     reflection = state.get("reflection")
     if not isinstance(feedback, dict) or not isinstance(reflection, dict):
         return False
+    if not isinstance(state.get("answers", {}), dict):
+        return False
     try:
         answers = json.dumps(state.get("answers", {}), sort_keys=True)
     except (TypeError, ValueError):
