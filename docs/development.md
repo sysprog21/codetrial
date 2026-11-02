@@ -503,7 +503,8 @@ instead is layer three things, each closing a different gap:
   diff. It runs the base branch's checker, so a pull request cannot weaken it.
   It holds only if the repository requires it: make `check` and
   `interactive-review` required status checks, merge only through the merge queue,
-  allow no bypass for administrators, and require maintainer review for changes
+  let only the maintainer bypass them, from a pull request and never by pushing
+  to main, and require maintainer review for changes
   to `scripts/hashchain.py`, `scripts/check-interactive-review.py`,
   `scripts/check-queue-review.py`, `.claude/skills/codetrial-review/commit-sizes.py`,
   `scripts/agent-guard.py`, `.claude/settings.json` and `.github/workflows/`.
@@ -534,7 +535,10 @@ Use GitHub's required-review rules as the independent approval boundary: require
 at least one non-author maintainer approval, require code-owner review for the
 policy files and all their checker dependencies, dismiss stale approvals when
 new commits are pushed, and require approval of the most recent reviewable push.
-Require these rules without bypass, including for administrators. A merge group
+Require these rules for everyone except the maintainer, who may bypass them from
+a pull request only. That bypass skips the review, the required checks and the
+queue for the maintainer's own pull requests, so the gate binds contributors, not
+the maintainer. A merge group
 runs the workflow file as the queue ref has it, edits from the pull request
 included, and a job its own `if:` skips counts as passing, so loading the checker
 from base is not enough. The pull-request run is the base branch's workflow, so
