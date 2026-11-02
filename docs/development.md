@@ -534,7 +534,7 @@ needs a fresh description block. Queue checks use a read-only token with
 Use GitHub's required-review rules as the independent approval boundary: require
 at least one non-author maintainer approval, require code-owner review for the
 policy files and all their checker dependencies, dismiss stale approvals when
-new commits are pushed, and require approval of the most recent reviewable push.
+new commits are pushed.
 Require these rules for everyone except the maintainer, who may bypass them from
 a pull request only. That bypass skips the review, the required checks and the
 queue for the maintainer's own pull requests, so the gate binds contributors, not
