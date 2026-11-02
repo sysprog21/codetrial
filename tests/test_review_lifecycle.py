@@ -490,5 +490,46 @@ class LifecycleTest(unittest.TestCase):
         self.assertTrue((self.root / "environment.db").exists())
 
 
+class ExplainedTests(unittest.TestCase):
+    """What closeout makes of an explanation file, whatever is in it."""
+
+    @staticmethod
+    def digest(answers):
+        import hashlib
+
+        return hashlib.sha256(json.dumps(answers, sort_keys=True).encode()).hexdigest()
+
+    def test_feedback_and_a_reflection_for_the_current_answers_count(self):
+        answers = {"motivation": "why"}
+        digest = self.digest(answers)
+        state = {
+            "answers": answers,
+            "feedback": {"answer_digest": digest},
+            "reflection": {"answer_digest": digest},
+        }
+        self.assertTrue(lifecycle.explained(state))
+        state["answers"] = {"motivation": "changed"}
+        self.assertFalse(lifecycle.explained(state))
+
+    def test_a_malformed_file_is_not_explained_and_is_not_a_crash(self):
+        digest = self.digest({})
+        for state in (
+            [],
+            "text",
+            None,
+            {"feedback": [], "reflection": {"answer_digest": digest}},
+            {"feedback": {"answer_digest": digest}, "reflection": "yes"},
+            {"feedback": {}, "reflection": {}, "answers": {1, 2}},
+        ) + tuple(
+            {
+                "answers": answers,
+                "feedback": {"answer_digest": self.digest(answers)},
+                "reflection": {"answer_digest": self.digest(answers)},
+            }
+            for answers in ([], "text", 1)
+        ):
+            self.assertFalse(lifecycle.explained(state), state)
+
+
 if __name__ == "__main__":
     unittest.main()

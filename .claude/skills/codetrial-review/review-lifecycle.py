@@ -5,6 +5,7 @@ import argparse
 import contextlib
 import fcntl
 import functools
+import hashlib
 import importlib.util
 import json
 import os
@@ -330,8 +331,71 @@ def retry(pending, api):
         ):
             root = private_dir(Path(config["common_dir"]) / "codetrial-review")
             marker(root, current["head"])
+            explanation = bundle / "explanation.json"
+            if explanation.exists():
+                try:
+                    state = json.loads(explanation.read_text())
+                except (OSError, ValueError):
+                    state = {}
+                if explained(state):
+                    result = subprocess.run(
+                        [
+                            sys.executable,
+                            str(
+                                Path(__file__).resolve().parents[3]
+                                / "scripts/check-interactive-review.py"
+                            ),
+                            "certify",
+                            "--bundle",
+                            str(bundle),
+                        ],
+                        capture_output=True,
+                        text=True,
+                    )
+                    if result.returncode:
+                        # The review is recorded either way; the caller still
+                        # needs the receipt, and the code tells it certification
+                        # did not happen.
+                        print(json.dumps(dict(receipt, pending=str(pending))))
+                        print(
+                            "Code review recorded; interactive evidence was not certified: "
+                            + result.stderr,
+                            file=sys.stderr,
+                        )
+                        return result.returncode
+                else:
+                    print(
+                        "Code review recorded; interactive evidence was not certified: "
+                        "the explanation has no feedback and reflection for its current answers.",
+                        file=sys.stderr,
+                    )
         print(json.dumps(dict(receipt, pending=str(pending))))
         return 0
+
+
+def explained(state):
+    """Whether the explanation holds feedback and a reflection for its current answers.
+
+    Whatever is in the file, a malformed one is "not explained" and not a crash:
+    this runs after the review's receipt and marker are written.
+    """
+    if not isinstance(state, dict):
+        return False
+    feedback = state.get("feedback")
+    reflection = state.get("reflection")
+    if not isinstance(feedback, dict) or not isinstance(reflection, dict):
+        return False
+    if not isinstance(state.get("answers", {}), dict):
+        return False
+    try:
+        answers = json.dumps(state.get("answers", {}), sort_keys=True)
+    except (TypeError, ValueError):
+        return False
+    digest = hashlib.sha256(answers.encode()).hexdigest()
+    return (
+        reflection.get("answer_digest") == digest
+        and feedback.get("answer_digest") == digest
+    )
 
 
 def main(argv=None):

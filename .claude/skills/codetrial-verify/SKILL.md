@@ -221,9 +221,16 @@ test suites or check generated-artifact drift; that is what the gate is for.
 `scripts/git-commit-msg.sh` holds the message to the rules it prints with
 `--rules`, `scripts/git-prepare-commit-msg.sh` splices the template above a
 `commit -v` scissors line, and `scripts/git-pre-push.sh` replays the rules over
-commits a rebase or an amend rewrote after the fact, and notes a topic head
-[codetrial-review](../codetrial-review/SKILL.md) has not recorded, without
-refusing it. A push to `origin` also refreshes the rolling `latest` and
+commits a rebase or an amend rewrote after the fact. Small topic heads without
+[codetrial-review](../codetrial-review/SKILL.md) get an advisory note; large ones
+require matching interactive evidence from `scripts/check-interactive-review.py`.
+`scripts/hashchain.py` generates and verifies Change-Ids after the anchor in
+`scripts/hashchain-base`. The post-commit hook repairs only checked candidates;
+history repair is explicit and preserves the worktree. `tests/test_hashchain.py`
+and `tests/test_interactive_review_hook.py` run in the `hashchain-tests` and
+`interactive-review-hook-tests` gates, covering real hooks, stale receipts,
+199/200 and 500/501 boundaries and durable lifecycle evidence.
+A push to `origin` also refreshes the rolling `latest` and
 `desktop-latest` tags first, bounded to a minute and skipped with a note when
 neither `timeout` nor `gtimeout` exists; an unreachable `origin` refuses that
 push. The installer adds a `+refs/tags/*latest:refs/tags/*latest` fetch refspec
@@ -336,6 +343,18 @@ run it on its own after changing either
 side. It catches a rename, not a change of meaning, so a changed rule still
 needs the skill reread. The scripts the skills run are tested in
 `tests/test_skill_scripts.py`.
+
+The explanation workbench has its own regression suite,
+`tests/test_review_workbench.py`, run by the `review-workbench-tests` gate.
+It checks answer durability, stale-session refusal, feedback invalidation and
+local HTTP access boundaries, plus actual Git history with commits below and
+at 200 lines whose final diff is small and binary/unknown coverage.
+The `review-worker-tests` gate runs `tests/test_review_worker.py` with an
+isolated fake CLI over real subprocesses: deduplication, explicit retry, stale
+results, interrupted calls, ownership and shutdown. It needs no provider login.
+The browser lane also runs `tests/browser/review-workbench.test.js` against the
+real local server: browser submission to the waiting agent, feedback back to
+the page, cross-tab conflicts, and the shared lobby themes.
 
 Routing is the other half. Run `scripts/check-skill-routing.py` after changing
 a description (its header says why), with `--skill` naming the edited skill

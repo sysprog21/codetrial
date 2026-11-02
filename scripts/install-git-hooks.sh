@@ -70,6 +70,30 @@ top=\$(git rev-parse --show-toplevel) || exit 1
 script=\$top/scripts/git-$1.sh
 [ -f "\$script" ] || script=/dev/null
 [ -f "\$(git rev-parse --git-path MERGE_HEAD)" ] && script=/dev/null
+EOF
+    if [ "$1" = post-commit ]; then
+        cat << 'EOF'
+# Git removes MERGE_HEAD before post-commit. Inspect the result before loading
+# any script from the incoming tree; a user-owned .local hook still runs.
+if git rev-parse --verify 'HEAD^2' > /dev/null 2>&1; then
+    script=/dev/null
+fi
+# A commit that itself changes the hook code (a single cherry-pick runs
+# post-commit with no replay directory) must not run what it just brought in.
+if git diff-tree --root --no-commit-id --name-only -r HEAD -- \
+    scripts/git-post-commit.sh scripts/hashchain.py scripts/check-interactive-review.py \
+    .claude/skills/codetrial-review | grep -q .; then
+    script=/dev/null
+fi
+# A rebase, cherry-pick or revert replays commits after the incoming tree is
+# written, so `git pull --rebase` would run the scripts it just pulled. The
+# chain is repaired afterwards with scripts/hashchain.py rechain.
+for state in rebase-merge rebase-apply sequencer; do
+    [ -e "$(git rev-parse --git-path "$state")" ] && script=/dev/null
+done
+EOF
+    fi
+    cat << EOF
 [ -x "\$0.local" ] || exec sh "\$script" "\$@"
 input=\$(mktemp) || exit 1
 trap 'rm -f "\$input"' EXIT

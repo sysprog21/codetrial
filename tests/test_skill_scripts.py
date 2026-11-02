@@ -2156,6 +2156,9 @@ class ReviewBundleTests(unittest.TestCase):
             self.assertEqual(clean["outside_reviewers"], "allowed")
             self.assertEqual(clean["against"], f"{base}...HEAD")
             self.assertTrue(clean["committed"])
+            self.assertTrue(clean["commit_sizes"]["complete"])
+            self.assertEqual(clean["commit_sizes"]["head"], clean["head"])
+            self.assertEqual(clean["commit_sizes"]["commits"][0]["known_lines"], 1)
             self.assertEqual(clean["files"][0]["rules"], ["browser.md"])
             self.assertIn("     2 +two", Path(out, "numbered.txt").read_text())
 
@@ -2170,6 +2173,7 @@ class ReviewBundleTests(unittest.TestCase):
             untracked = local()
             self.assertEqual(untracked["against"], "HEAD")
             self.assertFalse(untracked["committed"])
+            self.assertFalse(untracked["commit_sizes"]["complete"])
             self.assertEqual(untracked["files"], [])
             self.assertEqual(untracked["untracked"], ["notes.txt"])
             self.assertEqual(Path(out, "pr.diff").read_text(), "")
@@ -3472,6 +3476,28 @@ class ApplyPrActionsTests(unittest.TestCase):
             )
             self.assertEqual(got[("approve", 1)], "confirm", trigger)
             self.assertNotIn("/approve", log, trigger)
+
+    def test_the_reviewed_description_check_does_not_confirm_every_approval(self):
+        # pr-description.yml runs on pull_request_target on purpose: the base
+        # branch's copy, a read-only token, the pull request only as data.
+        reviewed = {"pr-description.yml": "on:\n  pull_request_target:\n"}
+        _, got, log = self.run_actions(
+            self.sweep(**self.approval()), workflows=reviewed
+        )
+        self.assertEqual(got[("approve", 1)], "applied")
+        # Any other workflow on that trigger still does, alongside it.
+        _, got, log = self.run_actions(
+            self.sweep(**self.approval()),
+            workflows={**reviewed, "other.yml": "on: pull_request_target\n"},
+        )
+        self.assertEqual(got[("approve", 1)], "confirm")
+        self.assertNotIn("/approve", log)
+        # The review covered one trigger; the same name on another is no exception.
+        _, got, _ = self.run_actions(
+            self.sweep(**self.approval()),
+            workflows={"pr-description.yml": "on: workflow_run\n"},
+        )
+        self.assertEqual(got[("approve", 1)], "confirm")
 
     def test_workflows_that_cannot_be_inspected_confirm_the_approval(self):
         _, got, _ = self.run_actions(self.sweep(**self.approval()), workflows={})

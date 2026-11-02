@@ -1,0 +1,93 @@
+# Keep the interactive review block in a pull request description honest.
+#
+# check.yml cannot re-run on every description edit without paying for the whole
+# matrix, so this one carries only the description check. It compares what the
+# description declares with what the diff requires; the review itself is local
+# evidence this job never sees.
+#
+# PR events run on pull_request_target, so their workflow is the base branch's
+# and a pull request cannot edit or remove it. The same reason makes this job
+# the dangerous kind: it has the base repository's token. It therefore asks for
+# read access only, checks the pull request out as data, and runs only the base
+# branch's checker, never a script from the pull request. While the base has no
+# gate (the pull request that adds it) there is nothing to compare, and this
+# workflow does not exist on the base either until that pull request merges.
+# Merge groups recheck each included PR with the group base's checker, but run
+# the workflow file as the queue ref has it, edits from the pull request
+# included, and a job its own condition skips counts as passing. So no job here
+# may have an `if:`, and the pull-request run's --guard step refuses a change to
+# this file (or another workflow naming this check) without an approved head.
+# See docs/development.md.
+# Changing the trigger or the token's scope needs the review that
+# .claude/skills/codetrial-triage/apply-pr-actions.sh names for this file.
+name: pr-description
+
+on:
+  pull_request_target:
+    types: [opened, edited, synchronize, reopened]
+  merge_group:
+    types: [checks_requested]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: pr-description-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  interactive-review:
+    # No job-level condition: a job its own condition skips counts as passing.
+    # Dependabot, which cannot run the hooks, is excused by the checker, from
+    # the opener GitHub reports and the authorship of every commit.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+          path: head
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          persist-credentials: false
+          path: base
+      - name: Compare the description with the diff
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          REPOSITORY: ${{ github.repository }}
+          BASE_REF: ${{ github.event.merge_group.base_ref }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          AUTHOR_LOGIN: ${{ github.event.pull_request.user.login }}
+          AUTHOR_TYPE: ${{ github.event.pull_request.user.type }}
+          APPROVED_HEAD: ${{ vars.CODETRIAL_POLICY_APPROVED_HEAD }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
+        run: |
+          set -eu
+          export GIT_TERMINAL_PROMPT=0
+          if [ ! -f base/scripts/check-interactive-review.py ] \
+              || [ ! -f base/scripts/check-queue-review.py ] \
+              || [ ! -f base/.claude/skills/codetrial-review/commit-sizes.py ]; then
+              echo "The base branch has no interactive review gate yet; nothing to compare."
+              exit 0
+          fi
+          cd head
+          if [ "$EVENT" = merge_group ]; then
+            python3 ../base/scripts/check-queue-review.py \
+                --base "$BASE_SHA" --head "$HEAD_SHA" \
+                --branch "${BASE_REF#refs/heads/}" --repo "$REPOSITORY"
+          else
+            python3 ../base/scripts/check-queue-review.py \
+                --base "$BASE_SHA" --head "$HEAD_SHA" --guard \
+                --approved "$APPROVED_HEAD"
+            printf '%s' "$PR_BODY" > "$RUNNER_TEMP/description.md"
+            python3 ../base/scripts/check-interactive-review.py pr-body \
+                --base "$BASE_SHA" --head "$HEAD_SHA" \
+                --body-file "$RUNNER_TEMP/description.md" \
+                --author-login "$AUTHOR_LOGIN" --author-type "$AUTHOR_TYPE"
+          fi

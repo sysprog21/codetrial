@@ -11,6 +11,7 @@
 # never installed the hooks.
 
 set -u
+export GIT_NO_REPLACE_OBJECTS=1
 
 remote=${1:-}
 url=${2:-}
@@ -91,18 +92,44 @@ to_upstream=0
 printf '%s\n' "$url" | grep -Eiq "$upstream_url" && to_upstream=1
 
 # A topic branch about to become a pull request is the moment a review is
-# cheapest, so a head the codetrial-review skill has not recorded gets one line
-# saying so. It never refuses the push: the review is advice, the rules above
-# are not. Only where the skill exists, since a checkout without it has nothing
-# to run.
+# cheapest. Small changes get an advisory note; large topic branches require
+# matching durable code-review and interactive-explanation evidence, and a push
+# the policy covers is refused when there is no base to measure it against.
 reviewed=$(git rev-parse --git-common-dir)/codetrial-review/reviewed
 review_skill=$(git rev-parse --show-toplevel)/.claude/skills/codetrial-review/SKILL.md
+
+# Fully qualified, so a local branch or tag named origin/main cannot shadow the
+# remote-tracking ref, and never built from a URL, which names no such ref. When
+# it is missing the change cannot be measured, so a push that the review policy
+# covers is refused below until the base is fetched.
+review_policy=refs/remotes/${upstream:-$remote}/main
+git rev-parse --verify --quiet "$review_policy^{commit}" > /dev/null 2>&1 \
+    || review_policy=
+review_path=.claude/skills/codetrial-review/SKILL.md
+# The description block for the pull request, written when the check passes.
+block_dir=$(git rev-parse --git-common-dir)/codetrial-review
+
+# One block per pushed head: a push of several branches would otherwise leave
+# only the last branch's block, and the others would look unreviewed.
+blocks=
 note=
 
 while read -r local_ref local_sha remote_ref remote_sha; do
     [ -n "${local_ref:-}" ] || continue
     [ "$local_sha" != "$zero" ] || continue
     git cat-file -e "${local_sha}^{commit}" 2> /dev/null || continue
+    # A published upstream policy must not be reset by the outgoing branch.
+    set -- verify --tip "$local_sha"
+    if [ -n "$upstream" ] \
+        && git cat-file -e "refs/remotes/$upstream/main:scripts/hashchain-base" 2> /dev/null; then
+        anchor=$(git show "refs/remotes/$upstream/main:scripts/hashchain-base") || exit 1
+        set -- "$@" --anchor "$anchor"
+    fi
+    if ! python3 "$script_dir/hashchain.py" "$@"; then
+        echo "Push rejected: Change-Id hashchain failed for $local_ref." >&2
+        failed=1
+        continue
+    fi
 
     # A pull request follows its head branch, so one opened from a fork's main
     # takes in every later push there, and the contributor cannot start a second
@@ -175,7 +202,48 @@ while read -r local_ref local_sha remote_ref remote_sha; do
     case $remote_ref in
         refs/heads/main) ;;
         refs/heads/*)
-            if [ -z "$note" ] && [ -e "$review_skill" ] \
+            review_enabled=0
+            if [ -e "$review_skill" ] || [ -e "${review_skill%/*}/commit-sizes.py" ] \
+                || git cat-file -e "$local_sha:$review_path" 2> /dev/null \
+                || {
+                    [ -n "$review_policy" ] \
+                        && git cat-file -e "$review_policy:$review_path" 2> /dev/null
+                }; then
+                review_enabled=1
+            fi
+
+            # Skipping the check for want of a base would let any large change
+            # through, so the base has to be there.
+            if [ "$review_enabled" -eq 1 ] && [ -z "$review_policy" ]; then
+                echo "Push rejected: no remote-tracking main to measure $local_ref against." >&2
+                if git remote | grep -qxF "${upstream:-$remote}"; then
+                    echo "Run git fetch ${upstream:-$remote}, then push again." >&2
+                else
+                    echo "Add the upstream remote and fetch it, then push again: git remote add upstream https://github.com/sysprog21/codetrial && git fetch upstream" >&2
+                fi
+                failed=1
+                continue
+            fi
+            if [ "$review_enabled" -eq 1 ]; then
+
+                # Only this push's block is worth pasting; one from an earlier
+                # push, or from another head, would describe something else.
+                pr_block=$block_dir/pr-description-$(printf '%.12s' "$local_sha").md
+
+                # The plain name belongs to a single-head push that passed; one
+                # from an earlier push must not outlive a refused or wider push.
+                rm -f "$pr_block" "$block_dir/pr-description.md"
+                if ! command -v python3 > /dev/null 2>&1 \
+                    || ! python3 "$script_dir/check-interactive-review.py" push \
+                        --head "$local_sha" --base "$review_policy" --out "$pr_block"; then
+                    echo "Push rejected: interactive review check failed for $local_ref." >&2
+                    failed=1
+                    continue
+                fi
+                [ ! -f "$pr_block" ] || blocks="$blocks$pr_block
+"
+            fi
+            if [ -z "$note" ] && [ "$review_enabled" -eq 1 ] \
                 && ! grep -qx "$local_sha" "$reviewed" 2> /dev/null; then
                 note="Note: $(git rev-parse --short "$local_sha") has no review on record;"
                 note="$note in Claude Code, /codetrial-review checks it before a pull request does."
@@ -185,6 +253,25 @@ while read -r local_ref local_sha remote_ref remote_sha; do
 done << EOF
 $refs
 EOF
+
+if [ "$failed" -eq 0 ] && [ -n "$blocks" ]; then
+    count=$(printf '%s' "$blocks" | grep -c . || true)
+    if [ "$count" -eq 1 ]; then
+        # The usual push: one branch, and one file with a name to remember.
+        only=$(printf '%s' "$blocks" | head -n 1)
+        if cp "$only" "$block_dir/pr-description.md"; then
+            echo "Pull request description: paste the interactive review block from" >&2
+            echo "  $block_dir/pr-description.md" >&2
+            echo "into the pull request, replacing the placeholder block." >&2
+        else
+            echo "Push rejected: cannot write $block_dir/pr-description.md." >&2
+            failed=1
+        fi
+    else
+        echo "Pull request descriptions: each pushed head has its own interactive review block:" >&2
+        printf '%s' "$blocks" | sed 's/^/  /' >&2
+    fi
+fi
 
 # Said once the whole push is judged, so a push refused over another ref does
 # not also advise a review of a head that is not going anywhere.

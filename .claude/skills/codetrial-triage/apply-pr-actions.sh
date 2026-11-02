@@ -91,10 +91,22 @@ if [ "$repo" != sysprog21/codetrial ]; then
 elif ! ls "$workflows"/* > /dev/null 2>&1; then
     risky="no workflow files were found to inspect"
 else
-    if grep -lE 'pull_request_target|workflow_run' "$workflows"/* > /dev/null 2>&1; then
-        risky="a workflow runs on pull_request_target or workflow_run"
-    elif [ $? -ne 1 ]; then
+
+    # pr-description.yml is the one reviewed exception. It runs the base
+    # branch's copy on a read-only token, checks the pull request out as data
+    # and runs only the base branch's checker, so a fork's code never runs with
+    # the base's token. Any other workflow on these triggers is still a reason
+    # to confirm.
+    status=0
+    found=$(grep -lE 'pull_request_target|workflow_run' "$workflows"/* 2> /dev/null) \
+        || status=$?
+    if [ "$status" -gt 1 ]; then
         risky="the workflows could not be searched"
+    elif [ -n "$(printf '%s\n' "$found" | grep -vE '(^|/)pr-description[.]yml$' || true)" ]; then
+        risky="a workflow runs on pull_request_target or workflow_run"
+    elif grep -q 'workflow_run' "$workflows/pr-description.yml" 2> /dev/null; then
+        # The review covered pull_request_target and nothing else.
+        risky="pr-description.yml runs on workflow_run"
     fi
 fi
 # One row per held run: the PR, the run, and whether every guard holds exactly.

@@ -16,7 +16,10 @@ set -u
 ROOT=$(git rev-parse --show-toplevel) || exit 1
 cd "$ROOT" || exit 1
 
-git diff --cached --quiet && exit 0
+if git diff --cached --quiet; then
+    python3 "$ROOT/scripts/hashchain.py" precommit
+    exit $?
+fi
 
 failed=0
 work=$(mktemp -d) || exit 1
@@ -41,6 +44,10 @@ if ! command -v python3 > /dev/null 2>&1; then
     exit 1
 fi
 python3 "$ROOT/scripts/check-secrets.py" || exit 1
+
+if [ -f "$ROOT/.claude/skills/codetrial-review/SKILL.md" ]; then
+    python3 "$ROOT/scripts/check-interactive-review.py" staged || exit 1
+fi
 
 # quotePath off, so a name with a byte past ASCII comes back as itself rather
 # than quoted and silently matched by no lane below.
@@ -127,7 +134,7 @@ fi
 # Include deletions: removing a checker or a skill target can break its users.
 changed=$(git -c core.quotePath=false diff --cached --name-only)
 if [ "$(git config --get codetrial.hookSuite)" != true ] && printf '%s\n' "$changed" \
-    | grep -Eq '^scripts/(git-.*[.]sh|git-commit-msg[.]awk|install-git-hooks[.]sh|test-git-hooks[.]sh|check-commit-log[.]sh|check-secrets[.]py)$'; then
+    | grep -Eq '^scripts/(git-.*[.]sh|git-commit-msg[.]awk|install-git-hooks[.]sh|test-git-hooks[.]sh|check-commit-log[.]sh|check-secrets[.]py|check-interactive-review[.]py|hashchain[.]py|hashchain-base)$'; then
     # The suite owns scratch repositories; none may inherit this index.
     (
         for variable in $(git rev-parse --local-env-vars); do
@@ -164,5 +171,6 @@ if [ "$failed" -ne 0 ]; then
     exit 1
 fi
 
+python3 "$ROOT/scripts/hashchain.py" precommit || exit 1
 echo "Staged checks passed${skipped:+, except what was not checked:$skipped}."
 echo "The message rules run next: what and why, 50 and 72."

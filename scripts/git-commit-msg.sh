@@ -124,7 +124,13 @@ scissors | strip_comments | awk -f "$awk_script" >&2
 # to a tool).
 status=$?
 case $status in
-    16 | 17 | 18 | 19) exit $((status - 16)) ;;
+    16)
+        if [ "$stored" -eq 0 ] && [ "$message_file" != - ]; then
+            python3 "$script_dir/hashchain.py" message "$message_file" || exit 4
+        fi
+        exit 0
+        ;;
+    17 | 18 | 19) exit $((status - 16)) ;;
     *)
         echo "git-commit-msg.sh: awk failed with status $status" >&2
         exit 4

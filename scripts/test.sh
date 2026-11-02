@@ -620,14 +620,23 @@ gate gap-state-tests unittest_gate "$ROOT/tests/test_check_gap_state.py"
 # like any other, against a fake gh and a scratch repository.
 gate skill-refs "$PYTHON" "$ROOT/scripts/check-skill-refs.py"
 gate skill-scripts-tests unittest_gate "$ROOT/tests/test_skill_scripts.py"
-gate review-memory-tests unittest_gate "$ROOT/tests/test_review_memory.py"
+
+# These cases patch the shared subprocess module, including authentication
+# errors.
+gate review-memory-tests unittest_gate --jobs 1 "$ROOT/tests/test_review_memory.py"
 gate review-memory-publisher-tests unittest_gate "$ROOT/tests/test_review_memory_publish.py"
 gate review-memory-benchmark-tests unittest_gate "$ROOT/tests/test_review_memory_benchmark.py"
 gate review-memory-evaluation-tests unittest_gate "$ROOT/tests/test_review_memory_evaluation.py"
 gate review-memory-retrieval-tests unittest_gate "$ROOT/tests/test_review_memory_retrieval.py"
 gate review-memory-experience-tests unittest_gate "$ROOT/tests/test_review_memory_experience.py"
-# Lifecycle cases patch process globals; they cannot share the runner threads.
+# Lifecycle and workbench cases patch globals; run each suite serially.
 gate review-lifecycle-tests unittest_gate --jobs 1 "$ROOT/tests/test_review_lifecycle.py"
+gate review-workbench-tests unittest_gate --jobs 1 "$ROOT/tests/test_review_workbench.py"
+gate review-worker-tests unittest_gate --jobs 1 "$ROOT/tests/test_review_worker.py"
+gate interactive-review-hook-tests unittest_gate "$ROOT/tests/test_interactive_review_hook.py"
+gate hashchain-tests unittest_gate "$ROOT/tests/test_hashchain.py"
+gate agent-guard-tests unittest_gate "$ROOT/tests/test_agent_guard.py"
+gate diffmodel-tests unittest_gate "$ROOT/tests/test_diffmodel.py"
 gate --lane browser browser-tests browser_tests static
 gate test-timing node "$ROOT/scripts/check-test-timing.mjs"
 gate test-timing-tests unittest_gate "$ROOT/tests/test_check_test_timing.py"
