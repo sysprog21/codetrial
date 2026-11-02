@@ -2,6 +2,8 @@
 """Drive submitted motivation feedback with an installed, authenticated Codex CLI."""
 
 import fcntl
+import functools
+import importlib.util
 import json
 import os
 import re
@@ -12,6 +14,18 @@ import subprocess
 import tempfile
 import threading
 import time
+
+
+@functools.lru_cache(maxsize=None)
+def workbench_diffmodel():
+    path = Path(__file__).with_name("diffmodel.py")
+    spec = importlib.util.spec_from_file_location("diffmodel", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+OPENING = 3000  # bytes of a large file's first changed lines shown when it does not fit
 
 
 class Reviewer:
@@ -194,47 +208,122 @@ class Reviewer:
             self.presence("error", code, force=True)
 
     def fit(self, limit):
-        """The diff to show, and the files left out, within `limit` bytes.
+        """The diff to show within `limit` bytes, and what was reduced to fit.
 
-        The file the question is about goes first, so the passage the
-        contributor was asked about is always in front of the reviewer; the
-        rest follows while it fits. Cutting the diff off at the limit instead
-        dropped whatever came last, which for a large change was the question.
+        Returns the text, the files shown as changed lines alone, the files
+        shown only by their opening lines, the files shown only as a count, and
+        what was folded. A diff that fits is given as written. One that does not
+        is read file by file with the same model the page uses: lines that moved
+        elsewhere in the change are named once instead of repeated, and
+        whitespace-only edits become one line, before anything is cut. The file
+        the question is about goes first and whole. The others follow smallest
+        first: whole while they fit, then without context, then as their opening
+        lines from an allowance set aside for the purpose, because a large new
+        file is nothing but changed lines and its start is what says what it is,
+        and last as a count. Every file is named with its size, and the reviewer
+        is told which it could not read in full.
         """
         diff = self.app.diff
+        folded = {"moved_lines": 0, "whitespace_lines": 0}
         if len(diff.encode()) <= limit:
-            return diff, []
-        blocks = [b for b in re.split(r"(?m)^(?=diff --git )", diff) if b]
-        core = self.app.core_patch if self.app.questions else ""
-        ordered = ([core] if core else []) + [b for b in blocks if b != core]
-        shown, omitted, used = [], [], 0
-        for block in ordered:
-            size = len(block.encode())
-            if size > limit - used:
-                path = re.match(r"diff --git a/(\S+)", block)
-                if not shown and block is core:
-                    # Even alone it does not fit: keep its start.
-                    shown.append(
-                        block.encode()[: limit - used].decode(errors="replace")
+            return diff, [], [], [], folded
+        reading = self.app.diff_reading()
+        core_path = self.app.questions[0]["path"] if self.app.questions else None
+        entries = []  # (name, text, added, deleted, is_core)
+        if reading["problems"]:
+            # The reading cannot be trusted, so the raw blocks are all there is.
+            for block in (b for b in re.split(r"(?m)^(?=diff --git )", diff) if b):
+                found = re.match(r"diff --git a/(\S+)", block)
+                lines = block.splitlines()
+                entries.append(
+                    (
+                        found.group(1) if found else "(unnamed)",
+                        block,
+                        sum(1 for x in lines if x[:1] == "+" and x[:3] != "+++"),
+                        sum(1 for x in lines if x[:1] == "-" and x[:3] != "---"),
+                        block == self.app.core_patch and bool(core_path),
                     )
-                    used = limit
-                omitted.append(path.group(1) if path else "(unnamed)")
+                )
+        else:
+            dm = workbench_diffmodel()
+            for item in reading["files"]:
+                is_core = item["path"] == core_path
+                if not is_core:
+                    folded["moved_lines"] += item["moved"]
+                    folded["whitespace_lines"] += item["whitespace"]
+                text = self.app.core_patch if is_core else dm.compact(item)
+                entries.append(
+                    (item["path"], text, item["additions"], item["deletions"], is_core)
+                )
+        core = next((e for e in entries if e[4]), None)
+        rest = [e for e in entries if not e[4]]
+        large = [e for e in rest if len(e[1].encode()) > 4 * OPENING]
+        pool = OPENING * len(large)
+        # A count line is about 100 bytes; keep room for one per file.
+        room = limit - 150 * len(entries) - pool
+        parts, condensed, opening, counted = {}, [], [], []
+
+        def changed_only(text):
+            return "".join(
+                line
+                for line in text.splitlines(True)
+                if line[:1] in "+-" or line.startswith(("diff --git", "@@"))
+            )
+
+        def start_of(text, size):
+            only = changed_only(text)
+            shown = only.encode()[:size].decode(errors="replace")
+            shown = shown[: shown.rfind("\n") + 1]
+            hidden = max(0, only.count("\n") - shown.count("\n"))
+            return shown + f"# ... {hidden} more changed lines not shown\n"
+
+        if core:
+            if len(core[1].encode()) <= room:
+                parts[id(core)] = core[1]
             else:
-                shown.append(block)
-                used += size
-        return "".join(shown), omitted
+                parts[id(core)] = start_of(core[1], room)
+                opening.append(core[0])
+            room -= len(parts[id(core)].encode())
+        for entry in sorted(rest, key=lambda e: len(e[1].encode())):
+            name, text, added, deleted, _ = entry
+            if len(text.encode()) <= room:
+                parts[id(entry)] = text
+                room -= len(text.encode())
+            elif len(changed_only(text).encode()) <= room:
+                parts[id(entry)] = "# context lines omitted\n" + changed_only(text)
+                condensed.append(name)
+                room -= len(parts[id(entry)].encode())
+            elif pool >= OPENING // 2:
+                take = min(OPENING, pool)
+                parts[id(entry)] = start_of(text, take)
+                opening.append(name)
+                pool -= take
+            else:
+                parts[id(entry)] = f"# {name}: +{added} -{deleted}, not shown\n"
+                counted.append(name)
+        ordered = ([core] if core else []) + rest
+        return (
+            "".join(parts[id(e)] for e in ordered),
+            condensed,
+            opening,
+            counted,
+            folded,
+        )
 
     def call(self, snapshot):
         limit = 200000
-        shown, omitted = self.fit(limit)
-        truncated = bool(omitted)
+        shown, condensed, opening, counted, folded = self.fit(limit)
+        truncated = bool(condensed or opening or counted)
         note_limit = 7800 if truncated else 8000
         evidence = {
             "head": snapshot["manifest"]["head"],
             "scope": snapshot["manifest"].get("against"),
             "diff": shown,
             "diff_truncated": truncated,
-            "files_not_shown": omitted,
+            "folded": folded,
+            "files_without_context": condensed,
+            "files_first_lines_only": opening,
+            "files_counts_only": counted,
             "answers": snapshot["answers"],
             "questions": snapshot["questions"],
             "previous_feedback": snapshot["feedback"],
@@ -248,7 +337,7 @@ class Reviewer:
             "If implementation misses that goal, identify the concrete gap and one possible adjustment. "
             "Ask at most one focused clarification only when intent is genuinely ambiguous; do not repeat answered questions. "
             "Mention unsupported claims or unverified behavior as uncertainty. No questionnaire or scoring. "
-            "files_not_shown lists files left out of the diff for size; say so instead of guessing about them. "
+            "folded counts lines that moved elsewhere in the change or changed only in whitespace; they are named once in the diff and their text is not repeated. files_without_context were shown as changed lines only, files_first_lines_only as their opening changed lines and files_counts_only as a count of added and deleted lines; say which you could not read in full instead of guessing about them. "
             "answer_checks are deterministic facts about the core answer, not a verdict: when grounded is false the answer names nothing from the changed lines, so use your one clarification on how the quoted code behaves (for example what it does for a particular input, or which of the listed anchors it depends on) instead of restating the goal, and say plainly that the explanation did not yet show how the code works. When grounded is true or null, do not press for more.\n"
             + json.dumps(evidence)
         )
@@ -360,6 +449,6 @@ class Reviewer:
                 raise ValueError("Invalid reviewer response")
             if truncated:
                 result["notes"][0]["text"] += (
-                    " Evidence is incomplete: the diff was truncated."
+                    " Evidence is incomplete: part of the diff was condensed or left out."
                 )
             return result

@@ -101,6 +101,34 @@
   margin: 0.5rem 0 1rem;
   font-size: 0.8125rem;
 }
+.diff-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  margin-bottom: 0.5rem;
+}
+.diff-controls {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+}
+.diff-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.8125rem;
+}
+.diff-notice {
+  margin: 0 0 0.5rem;
+  font-size: 0.8125rem;
+  color: var(--accent-ink);
+}
+.diff-notice[hidden] {
+  display: none;
+}
 #diff {
   margin: 0;
   max-height: 72vh;
@@ -108,26 +136,155 @@
   background: var(--step-surface);
   border: 1px solid var(--hairline);
   border-radius: var(--radius-sm);
-  padding: 0.75rem;
   font-family: var(--font-mono);
   font-size: 0.8125rem;
   line-height: 1.65;
   tab-size: 4;
 }
-.diff-line {
-  display: block;
-  min-height: 1.65em;
+.diff-file + .diff-file {
+  border-top: 1px solid var(--hairline);
+}
+.file-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.75rem;
+  margin: 0;
+  padding: 0.35rem 0.75rem;
+  background: var(--step-surface);
+  border-bottom: 1px solid var(--hairline);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+.file-head .path {
+  overflow-wrap: anywhere;
+}
+.file-head .counts {
+  color: var(--sub);
+  font-weight: 400;
+}
+.file-toggle {
+  border: 0;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  padding: 0 0.25rem;
+}
+.tag {
+  margin-left: 0.5rem;
+  padding: 0 0.4rem;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  font-size: 0.75rem;
+  font-weight: 400;
+  color: var(--sub);
+  white-space: nowrap;
+}
+.file-body[hidden] {
+  display: none;
+}
+.hunk {
+  display: flex;
+  gap: 0.75rem;
+  padding: 0.15rem 0.75rem;
+  color: var(--accent-ink);
+  background: color-mix(in srgb, var(--accent-ink) 8%, transparent);
+}
+.hunk .section {
+  color: var(--sub);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.note {
+  padding: 0.5rem 0.75rem;
+  color: var(--sub);
+}
+.row {
+  display: grid;
+  grid-template-columns: 3.25rem 3.25rem 1.25rem max-content auto;
+  align-items: start;
   width: max-content;
   min-width: 100%;
 }
-.diff-add {
-  color: var(--good);
+.row.raw {
+  display: block;
+  padding: 0 0.75rem;
 }
-.diff-delete {
-  color: var(--critical);
+.num {
+  padding-right: 0.5rem;
+  text-align: right;
+  color: var(--sub);
+  user-select: none;
 }
-.diff-hunk {
-  color: var(--accent-ink);
+.sign {
+  text-align: center;
+  user-select: none;
+}
+.code {
+  white-space: pre;
+  padding-right: 0.75rem;
+}
+.k-a {
+  background: color-mix(in srgb, var(--good) 13%, transparent);
+}
+.k-d {
+  background: color-mix(in srgb, var(--critical) 13%, transparent);
+}
+mark.word {
+  color: inherit;
+  border-radius: 2px;
+}
+mark.add {
+  background: color-mix(in srgb, var(--good) 38%, transparent);
+}
+mark.del {
+  background: color-mix(in srgb, var(--critical) 38%, transparent);
+}
+/* A move is neither colour: it is text that was already in the change. */
+.moved {
+  background: color-mix(in srgb, var(--sub) 14%, transparent);
+  box-shadow: inset 3px 0 0 var(--sub);
+}
+.moved-note {
+  position: sticky;
+  left: 0;
+  padding: 0.1rem 0.75rem 0.1rem 3.25rem;
+  color: var(--sub);
+  font-size: 0.75rem;
+  background: color-mix(in srgb, var(--sub) 14%, transparent);
+  box-shadow: inset 3px 0 0 var(--sub);
+}
+.ws {
+  opacity: 0.6;
+}
+.ws .code {
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}
+.asked {
+  outline: 2px solid var(--accent-fill);
+  outline-offset: -2px;
+}
+.row.split {
+  grid-template-columns: 1fr 1fr;
+  width: 100%;
+}
+.half {
+  display: grid;
+  grid-template-columns: 3.25rem 1.25rem minmax(0, 1fr) auto;
+  align-items: start;
+  min-width: 0;
+  overflow-x: auto;
+}
+.half + .half {
+  border-left: 1px solid var(--hairline);
+}
+.half.empty {
+  background: color-mix(in srgb, var(--hairline) 40%, transparent);
 }
 .answer-panel details {
   padding-block: 1rem;

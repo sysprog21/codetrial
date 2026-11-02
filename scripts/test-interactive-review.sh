@@ -9,6 +9,7 @@
 #   test_hashchain.py                  Change-Id generation, chain verification,
 #                                      merges, bootstrap, rechain, rebase, bots
 #   test_agent_guard.py                the agent hook-bypass guard
+#   test_diffmodel.py                  reading a diff: lines, words, moves
 #   test_interactive_review_hook.py    200-line and 500-line thresholds, evidence,
 #                                      certificates, markers, real hook runs
 #   test_review_workbench.py           the local server, state, stale requests,
@@ -68,6 +69,7 @@ suite()
 
 suite test_hashchain.py
 suite test_agent_guard.py
+suite test_diffmodel.py
 suite test_interactive_review_hook.py
 suite test_review_workbench.py --jobs 1
 suite test_review_worker.py --jobs 1

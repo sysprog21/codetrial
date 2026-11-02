@@ -636,6 +636,7 @@ gate review-worker-tests unittest_gate --jobs 1 "$ROOT/tests/test_review_worker.
 gate interactive-review-hook-tests unittest_gate "$ROOT/tests/test_interactive_review_hook.py"
 gate hashchain-tests unittest_gate "$ROOT/tests/test_hashchain.py"
 gate agent-guard-tests unittest_gate "$ROOT/tests/test_agent_guard.py"
+gate diffmodel-tests unittest_gate "$ROOT/tests/test_diffmodel.py"
 gate --lane browser browser-tests browser_tests static
 gate test-timing node "$ROOT/scripts/check-test-timing.mjs"
 gate test-timing-tests unittest_gate "$ROOT/tests/test_check_test_timing.py"

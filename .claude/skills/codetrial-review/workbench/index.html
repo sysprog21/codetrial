@@ -124,7 +124,48 @@
                 <p id="diff-meta"></p>
               </div>
             </div>
-            <pre id="diff" tabindex="0" aria-label="Code changes"></pre>
+            <div class="diff-tools">
+              <span id="diff-summary" class="field-hint"></span>
+              <span class="diff-controls">
+                <button
+                  id="diff-mode"
+                  class="duration-button"
+                  type="button"
+                  aria-pressed="false"
+                >
+                  Side by side
+                </button>
+                <label class="diff-toggle"
+                  ><input id="diff-ws" type="checkbox" /> Hide whitespace-only
+                  changes</label
+                >
+                <button
+                  id="diff-prev"
+                  class="duration-button"
+                  type="button"
+                  aria-label="Previous change"
+                >
+                  &#8593;
+                </button>
+                <button
+                  id="diff-next"
+                  class="duration-button"
+                  type="button"
+                  aria-label="Next change"
+                >
+                  &#8595;
+                </button>
+                <span id="diff-position" class="field-hint"></span>
+              </span>
+            </div>
+            <p id="diff-notice" class="diff-notice" role="status" hidden></p>
+            <div
+              id="diff"
+              class="diff-view"
+              tabindex="0"
+              role="region"
+              aria-label="Code changes"
+            ></div>
           </section>
           <section
             class="setup-panel answer-panel"

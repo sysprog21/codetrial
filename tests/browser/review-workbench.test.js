@@ -25,7 +25,13 @@ after(async () => {
   await browser?.close();
 });
 
-async function start(t, followUps = [], managed = false, patchText = null) {
+async function start(
+  t,
+  followUps = [],
+  managed = false,
+  patchText = null,
+  manifestFiles = null,
+) {
   const bundle = mkdtempSync(join(tmpdir(), "codetrial-workbench-test-"));
   t.after(() => rmSync(bundle, { recursive: true, force: true }));
   const files = ["src/example.rs", "tests/example.rs"];
@@ -35,7 +41,9 @@ async function start(t, followUps = [], managed = false, patchText = null) {
       head: "a".repeat(40),
       committed: true,
       pr: null,
-      files: files.map((path) => ({ path, additions: 1, deletions: 1 })),
+      files:
+        manifestFiles ||
+        files.map((path) => ({ path, additions: 1, deletions: 1 })),
       commit_sizes: {
         head: "a".repeat(40),
         complete: true,
@@ -616,10 +624,9 @@ test(
       false,
       patchText,
     );
-    assert.match(
-      await page.locator("#diff").textContent(),
-      /rename to src\/example.rs/,
-    );
+    const shown = await page.locator("#diff").textContent();
+    assert.match(shown, /src\/example\.rs/);
+    assert.match(shown, /renamed from src\/old\.rs/);
     assert.doesNotMatch(
       await page.locator("#diff").textContent(),
       /unrelated-new/,
@@ -904,5 +911,247 @@ test(
     await page.getByText("13 of 12 words", { exact: true }).waitFor({
       timeout: 15000,
     });
+  },
+);
+
+const modified = (path, lines, extra = "") =>
+  `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n${extra}${lines}`;
+
+test(
+  "the diff shows line numbers and marks the words that changed",
+  { timeout: 30000 },
+  async (t) => {
+    if (!browser) return t.skip("playwright chromium unavailable");
+    const patch = modified(
+      "src/example.rs",
+      "@@ -10,3 +10,3 @@ fn total()\n keep\n-let total = max(a, b);\n+let total = max(a, b, c);\n tail\n",
+    );
+    const { page } = await start(t, [], false, patch, [
+      { path: "src/example.rs", additions: 1, deletions: 1 },
+    ]);
+    await page.locator("#diff .row.k-a").waitFor();
+    assert.equal(
+      await page.locator("#diff mark.word.add").first().textContent(),
+      ", c",
+    );
+    assert.equal(
+      await page.locator("#diff .row.k-d .num").first().textContent(),
+      "11",
+    );
+    assert.equal(
+      await page.locator("#diff .row.k-a .num").nth(1).textContent(),
+      "11",
+    );
+    assert.match(
+      await page.locator("#diff .hunk").textContent(),
+      /@@ -10,3 \+10,3 @@fn total\(\)/,
+    );
+    assert.match(
+      await page.locator("#diff-summary").textContent(),
+      /\+1 \u22121/,
+    );
+  },
+);
+
+test(
+  "lines moved between files are neutral, marked in text, and say where they went",
+  { timeout: 30000 },
+  async (t) => {
+    if (!browser) return t.skip("playwright chromium unavailable");
+    const func = [
+      "def compute(total, counted):",
+      "    result = max(total, counted)",
+      "    return result + len(str(total))",
+      "    # keep the larger reading",
+    ];
+    const patch =
+      modified(
+        "a.py",
+        `@@ -1,5 +1,1 @@\n head\n${func.map((x) => `-${x}\n`).join("")}`,
+      ) +
+      modified(
+        "b.py",
+        `@@ -1,1 +1,5 @@\n head\n${func.map((x) => `+${x}\n`).join("")}`,
+      );
+    const { page } = await start(t, [], false, patch, [
+      { path: "a.py", additions: 0, deletions: 4 },
+      { path: "b.py", additions: 4, deletions: 0 },
+    ]);
+    await page.locator("#diff .moved").first().waitFor();
+    // One file is shown at first: the four lines that left a.py.
+    assert.equal(await page.locator("#diff .moved").count(), 4);
+    await page.locator("#all-diff").click();
+    await page.waitForFunction(
+      () => document.querySelectorAll("#diff .moved").length === 8,
+    );
+    assert.equal(await page.locator("#diff .moved").count(), 8);
+    assert.equal(
+      await page.locator("#diff .moved .sign").first().textContent(),
+      "\u00bb",
+    );
+    assert.match(
+      await page.locator("#diff").textContent(),
+      /4 lines moved from a\.py:2/,
+    );
+    assert.match(
+      await page.locator("#diff").textContent(),
+      /4 lines moved to b\.py:2/,
+    );
+    assert.match(
+      await page.locator("#diff-summary").textContent(),
+      /8 lines moved/,
+    );
+  },
+);
+
+test(
+  "side by side pairs removed and added lines, and whitespace-only edits can be hidden",
+  { timeout: 30000 },
+  async (t) => {
+    if (!browser) return t.skip("playwright chromium unavailable");
+    const patch = modified(
+      "src/example.rs",
+      "@@ -1,3 +1,3 @@\n keep\n-    x = 1\n+        x = 1\n-old_word here\n+new_word here\n",
+    );
+    const { page } = await start(t, [], false, patch, [
+      { path: "src/example.rs", additions: 2, deletions: 2 },
+    ]);
+    await page.locator("#diff .row").first().waitFor();
+    assert.equal(await page.locator("#diff .row.k-d").count(), 2);
+    await page.locator("#diff-ws").check();
+    assert.equal(await page.locator("#diff .row.k-d").count(), 1);
+    assert.equal((await page.locator("#diff .row.k-c").count()) >= 2, true);
+    await page.locator("#diff-ws").uncheck();
+    await page.locator("#diff-mode").click();
+    assert.equal(
+      await page.locator("#diff-mode").getAttribute("aria-pressed"),
+      "true",
+    );
+    assert.equal(await page.locator("#diff .row.split").count(), 2);
+    assert.match(
+      await page.locator("#diff .row.split").first().textContent(),
+      /x = 1.*x = 1/,
+    );
+    await page.reload();
+    await page.locator("#diff .row.split").first().waitFor();
+  },
+);
+
+test(
+  "the next and previous buttons walk the changes",
+  { timeout: 30000 },
+  async (t) => {
+    if (!browser) return t.skip("playwright chromium unavailable");
+    const patch = modified(
+      "src/example.rs",
+      "@@ -1,9 +1,9 @@\n-a1\n+b1\n k\n k\n k\n-a2\n+b2\n k\n k\n k\n-a3\n+b3\n",
+    );
+    const { page } = await start(t, [], false, patch, [
+      { path: "src/example.rs", additions: 3, deletions: 3 },
+    ]);
+    await page.locator("#diff .row").first().waitFor();
+    assert.match(
+      await page.locator("#diff-position").textContent(),
+      /of 3 changes/,
+    );
+    await page.locator("#diff-next").click();
+    assert.match(await page.locator("#diff-position").textContent(), /^1 of 3/);
+    await page.locator("#diff-next").click();
+    await page.locator("#diff-next").click();
+    await page.locator("#diff-next").click();
+    assert.match(await page.locator("#diff-position").textContent(), /^3 of 3/);
+    await page.locator("#diff-prev").click();
+    assert.match(await page.locator("#diff-position").textContent(), /^2 of 3/);
+  },
+);
+
+test(
+  "a large diff is drawn completely, in pieces, without dropping a line",
+  { timeout: 60000 },
+  async (t) => {
+    if (!browser) return t.skip("playwright chromium unavailable");
+    const count = 6000;
+    const body = Array.from(
+      { length: count },
+      (_, i) => `+line number ${i}\n`,
+    ).join("");
+    const patch = `diff --git a/big.txt b/big.txt\nnew file mode 100644\n--- /dev/null\n+++ b/big.txt\n@@ -0,0 +1,${count} @@\n${body}`;
+    const { page } = await start(t, [], false, patch, [
+      { path: "big.txt", additions: count, deletions: 0 },
+    ]);
+    await page.waitForFunction(
+      (n) => document.querySelectorAll("#diff .row.k-a").length === n,
+      count,
+      { timeout: 30000 },
+    );
+    assert.match(
+      await page.locator("#diff .row.k-a").last().textContent(),
+      new RegExp(`line number ${count - 1}`),
+    );
+    assert.equal(await page.locator("#diff-notice").isVisible(), false);
+  },
+);
+
+test(
+  "a diff the page cannot account for line by line is shown as written, with a warning",
+  { timeout: 30000 },
+  async (t) => {
+    if (!browser) return t.skip("playwright chromium unavailable");
+    // The header promises 5 lines each side; the body holds 2.
+    const patch = modified("src/example.rs", "@@ -1,5 +1,5 @@\n-old\n+new\n");
+    const { page } = await start(t, [], false, patch, [
+      { path: "src/example.rs", additions: 1, deletions: 1 },
+    ]);
+    await page.locator("#diff-notice").waitFor({ state: "visible" });
+    assert.match(
+      await page.locator("#diff-notice").textContent(),
+      /could not account for every line/,
+    );
+    assert.equal((await page.locator("#diff .row.raw").count()) > 0, true);
+    assert.match(await page.locator("#diff").textContent(), /@@ -1,5 \+1,5 @@/);
+  },
+);
+
+test(
+  "a function moved with new names and one edited line says so and keeps the edit visible",
+  { timeout: 30000 },
+  async (t) => {
+    if (!browser) return t.skip("playwright chromium unavailable");
+    const before = [
+      "def compute(total, counted):",
+      "    result = max(total, counted)",
+      "    if result > limit(total):",
+      "        result = limit(total)",
+      "    return result + len(str(total))",
+    ];
+    const after = before.map((x) => x.replaceAll("total", "amount"));
+    after[1] = "    result = min(amount, counted)";
+    const patch =
+      modified(
+        "a.py",
+        `@@ -1,6 +1,1 @@\n head\n${before.map((x) => `-${x}\n`).join("")}`,
+      ) +
+      modified(
+        "b.py",
+        `@@ -1,1 +1,6 @@\n head\n${after.map((x) => `+${x}\n`).join("")}`,
+      );
+    const { page } = await start(t, [], false, patch, [
+      { path: "a.py", additions: 0, deletions: 5 },
+      { path: "b.py", additions: 5, deletions: 0 },
+    ]);
+    await page.locator("#all-diff").click();
+    await page.locator("#diff .moved-note").nth(1).waitFor();
+    const note = await page.locator("#diff .moved-note").nth(1).textContent();
+    assert.match(note, /5 lines moved from a\.py:2/);
+    assert.match(note, /names changed: .*total \u2192 amount/);
+    // The lines that changed are still edits, not hidden in the move.
+    assert.equal(
+      (await page.locator("#diff .row.k-a:not(.moved)").count()) >= 1,
+      true,
+    );
+    assert.equal(
+      await page.locator("#diff .row.k-a mark.word").first().isVisible(),
+      true,
+    );
   },
 );

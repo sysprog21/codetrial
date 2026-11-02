@@ -79,6 +79,53 @@ Use a new printed URL after restarting. To preserve an existing local URL,
 `--token-file` may point to a private (0600) file containing that access token;
 keep it outside Git and never publish it.
 
+## Reading the diff
+
+`diffmodel.py` reads the pinned diff once, with the standard library only, into
+files, hunks and numbered lines, and the page draws that reading
+(`GET /api/diff`; the polled session no longer carries the diff). The same reading
+decides what the reviewer is given. It knows no language: it matches lines and
+words, and a change it cannot classify stays an ordinary edit.
+
+- **Lines** carry their old and new line number, and a hunk shows the function
+  git put in its header.
+- **Words:** a removed line and the added line it became are paired by
+  similarity, and only the words that differ are marked. A rewrite with little
+  in common is marked as a whole line instead.
+- **Moves:** at least three consecutive lines and forty characters that were
+  removed in one place and added in another, ignoring indentation, are shown
+  in a neutral colour with a `»` sign and a note saying where they went. Text
+  with more than one possible source, and runs inside one change block, stay
+  ordinary edits.
+- **Functions that moved and changed on the way:** changed lines are cut into
+  units (a function, a class, a block) where one starts at the shallowest
+  indentation, which is a guess at syntax and not a parse. A removed unit and an
+  added one are paired when they are the same code with its names changed
+  (every name replaced by its order of first appearance, the way two renamings
+  of one function compare equal), or when they keep at least 60% of their lines
+  and no other candidate is nearly as close. The note says what changed:
+  `names changed: total \u2192 amount` and how many lines differ. Lines that are
+  the same once whitespace is ignored are the move; every other line stays an
+  edit with its words marked, so an edit made on the way is never folded away.
+  A unit with two plausible sources, or in the same change block as its twin, is
+  not matched. There is no parser behind this, so a language it cannot segment
+  gets line matching only.
+- **Whitespace only:** a pair that differs only in spacing is dimmed and can be
+  hidden. A file whose every change is moved or whitespace-only says so.
+- **Side by side** and unified views; `]` and `[` (or the arrows) step through
+  changes. The choice is remembered.
+
+Nothing is dropped to keep the page quick: a large diff is drawn in pieces, with
+a percentage, until every line is there. The reading is checked against the hunk
+headers and the manifest's counts for every file; if any of them disagree, the
+page says it cannot account for every line and shows the diff as written
+instead of a reading it cannot vouch for.
+
+For the reviewer, a diff over the size limit is first folded with the same
+reading: a moved run is named once and its text not repeated, a whitespace-only
+edit is one line, and the evidence counts what was folded. Only then are files
+cut, as described under the managed reviewer.
+
 ## Checks on the core answer
 
 The page says how the answer stands while it is written, not only after it is
@@ -133,9 +180,13 @@ A changed submission or an intervening manual reply cancels the running process
 and discards its result. Shutdown terminates the reviewer process group.
 
 A diff over 200 000 bytes is not cut off at the end. The patch of the file the
-question is about goes first, the other files follow while they fit, and the
-files left out are named in the evidence so the reference says what it could
-not see.
+question is about goes first and whole. The other files follow smallest first:
+whole while they fit, then as their changed lines alone, then, for a large file
+that is mostly new lines, as its first changed lines from an allowance set
+aside for the purpose, and last as a line giving the added and deleted counts.
+Every file is therefore named with its size, and the evidence lists which were
+reduced, so the reference says what it could not read in full instead of
+guessing about it.
 
 The runner receives the pinned diff and author explanation as untrusted data,
 with a strict response schema. It uses an ephemeral read-only Codex invocation,

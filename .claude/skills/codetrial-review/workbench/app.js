@@ -1,5 +1,13 @@
+import { DiffView } from "/diffview.js";
+
 const $ = (id) => document.getElementById(id);
 const token = new URLSearchParams(location.hash.slice(1)).get("token");
+const diffView = new DiffView({
+  root: $("diff"),
+  notice: $("diff-notice"),
+  summary: $("diff-summary"),
+  position: $("diff-position"),
+});
 const MOTIVATION = {
   prompt: "Why is this change needed?",
   hint: "Describe the problem or goal that motivated it, in your own words.",
@@ -225,64 +233,15 @@ function renderFiles() {
 }
 
 function renderDiff(path) {
-  let diff = session.diff;
-  if (path) {
-    const blocks = diff.split(/(?=^diff --git )/m);
-    // Match an entire Git header; never guess by a substring shared by paths.
-    const quoted = (value) =>
-      JSON.stringify(value).replace(/[\u007f-\uffff]/g, (char) => {
-        return Array.from(
-          new TextEncoder().encode(char),
-          (byte) => `\\${byte.toString(8).padStart(3, "0")}`,
-        ).join("");
-      });
-    const names = [`a/${path}`, `b/${path}`];
-    const headers = [
-      `diff --git ${names[0]} ${names[1]}`,
-      `diff --git ${quoted(names[0])} ${quoted(names[1])}`,
-    ];
-    const destination = new Set([
-      `+++ ${names[1]}`,
-      `+++ ${quoted(names[1])}`,
-      `rename to ${path}`,
-      `rename to ${quoted(path)}`,
-    ]);
-    const origin = new Set([
-      `--- ${names[0]}`,
-      `--- ${quoted(names[0])}`,
-      `rename from ${path}`,
-      `rename from ${quoted(path)}`,
-    ]);
-    const metadata = (item) => item.split("\n@@", 1)[0].split("\n").slice(1);
-    // A path's current content wins over a block that only renames it away.
-    const block =
-      blocks.find(
-        (item) =>
-          headers.includes(item.split("\n", 1)[0]) ||
-          metadata(item).some((line) => destination.has(line)),
-      ) ||
-      blocks.find((item) => metadata(item).some((line) => origin.has(line)));
-    diff = block || session.diff;
-    $("diff-meta").textContent = block
-      ? "Changes in this file"
-      : "Showing complete diff because the patch could not be matched to a single file.";
-  } else {
-    $("diff-meta").textContent =
-      "The entire bundled change, including deletions and renamed files";
-  }
+  const question = session.questions.find((item) => item.path === path);
+  diffView.show({
+    path,
+    asked: question?.quote ? { path, quote: question.quote } : undefined,
+  });
   $("diff-heading").textContent = path || "Complete diff";
-  const fragment = document.createDocumentFragment();
-  for (const text of diff.split("\n")) {
-    const line = document.createElement("span");
-    line.className = "diff-line";
-    if (text.startsWith("+")) line.classList.add("diff-add");
-    else if (text.startsWith("-")) line.classList.add("diff-delete");
-    else if (text.startsWith("@@")) line.classList.add("diff-hunk");
-    line.textContent = text || " ";
-    fragment.append(line);
-  }
-  $("diff").replaceChildren(fragment);
-  $("diff").scrollTop = 0;
+  $("diff-meta").textContent = path
+    ? "Changes in this file"
+    : "The entire bundled change, including deletions and renamed files";
 }
 
 function renderQuestion() {
@@ -507,6 +466,7 @@ async function loadSession() {
       );
     $("coverage-note").textContent = notes.join(" ");
     $("coverage-note").hidden = !notes.length;
+    diffView.setModel(await api("/api/diff"));
     $("loading").hidden = true;
     $("workspace").hidden = false;
     $("error").hidden = true;
@@ -741,3 +701,32 @@ $("close-window").addEventListener("click", async () => {
       "This browser kept the tab open; you can close it yourself.";
   }, 300);
 });
+
+// How the diff is drawn is the reader's choice and is kept between visits.
+function setSplit(split) {
+  $("diff-mode").setAttribute("aria-pressed", String(split));
+  $("diff-mode").textContent = split ? "Unified" : "Side by side";
+  try {
+    localStorage.setItem("codetrial-diff-split", split ? "1" : "0");
+  } catch {
+    // Storage may be off; the choice then lasts until the page closes.
+  }
+  diffView.setSplit(split);
+}
+$("diff-mode").addEventListener("click", () =>
+  setSplit($("diff-mode").getAttribute("aria-pressed") !== "true"),
+);
+$("diff-ws").addEventListener("change", (event) =>
+  diffView.setHideWhitespace(event.target.checked),
+);
+$("diff-prev").addEventListener("click", () => diffView.step(-1));
+$("diff-next").addEventListener("click", () => diffView.step(1));
+$("diff").addEventListener("keydown", (event) => {
+  if (event.key === "]" || event.key === "n") diffView.step(1);
+  else if (event.key === "[" || event.key === "p") diffView.step(-1);
+});
+try {
+  if (localStorage.getItem("codetrial-diff-split") === "1") setSplit(true);
+} catch {
+  // Unreadable storage leaves the default view.
+}

@@ -29,6 +29,7 @@ CONFIDENCE = ("sure", "probably", "guessing", "unknown")
 ASSETS = {
     "/": ("index.html", "text/html"),
     "/app.js": ("app.js", "text/javascript"),
+    "/diffview.js": ("diffview.js", "text/javascript"),
     "/style.css": ("style.css", "text/css"),
     "/styles.css": ("shared", "text/css"),
 }
@@ -85,6 +86,15 @@ def file_patch(diff, path):
         if source is None and any(line in origin for line in metadata):
             source = block
     return source or ""
+
+
+@functools.lru_cache(maxsize=None)
+def load_diffmodel():
+    path = Path(__file__).with_name("diffmodel.py")
+    spec = importlib.util.spec_from_file_location("diffmodel", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 @functools.lru_cache(maxsize=None)
@@ -223,6 +233,19 @@ class Workbench:
 
     def revoke(self):
         load_gate().revoke(self.manifest["head"], self.identity)
+
+    def diff_reading(self):
+        """The diff as files, hunks and labelled lines, with what does not add up.
+
+        Read once: the diff is part of the session's identity and never changes.
+        """
+        if getattr(self, "_reading", None) is None:
+            self._reading = load_diffmodel().reading(
+                self.diff,
+                self.manifest["files"],
+                self.manifest.get("files_complete") is not False,
+            )
+        return self._reading
 
     def checks(self, answers):
         """The deterministic checks on the core answer; see understanding.py."""
@@ -710,14 +733,28 @@ def server(workbench, port, *, reviewer="manual", token=None):
                     else assets / name
                 )
                 return self.reply(200, path.read_bytes(), kind)
-            if route != "/api/session":
+            if route not in ("/api/session", "/api/diff"):
                 return self.reply(404, {"error": "Not found"})
             if not self.authorized(token):
                 return self.reply(
                     403, {"error": "Reopen the URL printed by the workbench"}
                 )
             try:
-                self.reply(200, workbench.snapshot())
+                if route == "/api/diff":
+                    reading = workbench.diff_reading()
+                    # The raw text only travels when the reading cannot be trusted.
+                    return self.reply(
+                        200,
+                        {
+                            **reading,
+                            "raw": workbench.diff if reading["problems"] else None,
+                        },
+                    )
+                # The diff is fetched once from /api/diff, not on every poll.
+                self.reply(
+                    200,
+                    {k: v for k, v in workbench.snapshot().items() if k != "diff"},
+                )
             except (ValueError, OSError, subprocess.SubprocessError) as error:
                 self.reply(409, {"error": str(error)})
 

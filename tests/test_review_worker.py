@@ -115,16 +115,16 @@ Path(sys.argv[sys.argv.index('--output-last-message')+1]).write_text(json.dumps(
         self.until(lambda: self.app.snapshot()["status"] == "reflection_needed")
         note = self.app.snapshot()["feedback"]["notes"][0]["text"]
         self.assertLessEqual(len(note), 8000)
-        self.assertIn("diff was truncated", note)
+        self.assertIn("condensed or left out", note)
 
     def test_the_question_file_is_shown_first_when_the_diff_must_be_cut(self):
         big = lambda name: (  # noqa: E731
-            f"diff --git a/{name} b/{name}\n--- a/{name}\n+++ b/{name}\n@@ -1 +1 @@\n"
+            f"diff --git a/{name} b/{name}\n--- a/{name}\n+++ b/{name}\n@@ -0,0 +1,9000 @@\n"
             + "+filler line\n" * 9000
         )
         asked = (
             "diff --git a/asked.py b/asked.py\n--- a/asked.py\n+++ b/asked.py\n"
-            "@@ -1 +1 @@\n+the_passage_the_question_is_about()\n"
+            "@@ -0,0 +1 @@\n+the_passage_the_question_is_about()\n"
         )
         (self.bundle / "pr.diff").write_text(
             big("one.py") + big("two.py") + big("three.py") + asked
@@ -158,9 +158,129 @@ Path(sys.argv[sys.argv.index('--output-last-message')+1]).write_text(json.dumps(
         evidence = json.loads(prompt[prompt.index('{"head"') :])
         self.assertIn("the_passage_the_question_is_about()", evidence["diff"])
         self.assertTrue(evidence["diff_truncated"])
-        self.assertTrue(evidence["files_not_shown"])
-        self.assertNotIn("asked.py", evidence["files_not_shown"])
+        # Changed lines alone do not shrink a file that is only additions, so a
+        # large one that does not fit is shown by its opening lines.
+        self.assertTrue(evidence["files_first_lines_only"])
+        self.assertNotIn("asked.py", evidence["files_first_lines_only"])
+        self.assertEqual(evidence["files_counts_only"], [])
+        self.assertIn("more changed lines not shown", evidence["diff"])
         self.assertLessEqual(len(evidence["diff"].encode()), 200000)
+
+    def test_a_large_diff_keeps_every_file_by_dropping_context_first(self):
+        def padded(name):
+            return (
+                f"diff --git a/{name} b/{name}\n--- a/{name}\n+++ b/{name}\n"
+                "@@ -1,6001 +1,6001 @@\n"
+                + " unchanged context line\n" * 6000
+                + f"-old_{name}\n+new_{name}\n"
+            )
+
+        asked = (
+            "diff --git a/asked.py b/asked.py\n--- a/asked.py\n+++ b/asked.py\n"
+            "@@ -0,0 +1 @@\n+the_passage_the_question_is_about()\n"
+        )
+        names = ["one.py", "two.py", "three.py", "four.py", "five.py"]
+        (self.bundle / "pr.diff").write_text("".join(padded(n) for n in names) + asked)
+        manifest = json.loads((self.bundle / "manifest.json").read_text())
+        manifest["files"] += [
+            {"path": n, "additions": 1, "deletions": 1} for n in [*names, "asked.py"]
+        ]
+        (self.bundle / "manifest.json").write_text(json.dumps(manifest))
+        self.questions.write_text(
+            json.dumps(
+                [
+                    {
+                        "id": "core",
+                        "path": "asked.py",
+                        "prompt": "What does the asked passage do?",
+                        "quote": "the_passage_the_question_is_about()",
+                    }
+                ]
+            )
+        )
+        self.app = workbench.Workbench(self.bundle, self.questions)
+        self.app.revoke = lambda: None
+        self.submit(
+            "It calls the_passage_the_question_is_about() before replying to the caller."
+        )
+        self.start()
+        self.until(lambda: self.app.snapshot()["status"] == "reflection_needed")
+        prompt = next(self.root.glob("prompt-*")).read_text()
+        evidence = json.loads(prompt[prompt.index('{"head"') :])
+        self.assertIn("the_passage_the_question_is_about()", evidence["diff"])
+        self.assertTrue(evidence["files_without_context"])
+        self.assertEqual(evidence["files_counts_only"], [])
+        for name in names:
+            self.assertIn(f"new_{name}", evidence["diff"], name)
+        self.assertLessEqual(len(evidence["diff"].encode()), 200000)
+
+    def test_moved_lines_and_whitespace_edits_are_folded_before_anything_is_cut(self):
+        func = [
+            "def compute(total, counted):",
+            "    result = max(total, counted)",
+            "    return result + len(str(total))",
+            "    # keep the larger reading",
+        ]
+        filler = "+filler line\n" * 18000
+
+        def block(name, hunk):
+            return f"diff --git a/{name} b/{name}\n--- a/{name}\n+++ b/{name}\n{hunk}"
+
+        diff = (
+            block("big.py", "@@ -0,0 +1,18000 @@\n" + filler)
+            + block(
+                "a.py",
+                "@@ -1,6 +1,2 @@\n head\n"
+                + "".join(f"-{x}\n" for x in func)
+                + "-    x  = 1\n+    x = 1\n",
+            )
+            + block(
+                "b.py",
+                "@@ -1,1 +1,5 @@\n head\n" + "".join(f"+{x}\n" for x in func),
+            )
+            + block(
+                "asked.py",
+                "@@ -0,0 +1 @@\n+the_passage_the_question_is_about()\n",
+            )
+        )
+        (self.bundle / "pr.diff").write_text(diff)
+        manifest = json.loads((self.bundle / "manifest.json").read_text())
+        manifest["files"] = [
+            {"path": "big.py", "additions": 18000, "deletions": 0},
+            {"path": "a.py", "additions": 1, "deletions": 5},
+            {"path": "b.py", "additions": 4, "deletions": 0},
+            {"path": "asked.py", "additions": 1, "deletions": 0},
+        ]
+        (self.bundle / "manifest.json").write_text(json.dumps(manifest))
+        self.questions.write_text(
+            json.dumps(
+                [
+                    {
+                        "id": "core",
+                        "path": "asked.py",
+                        "prompt": "What does the asked passage do?",
+                        "quote": "the_passage_the_question_is_about()",
+                    }
+                ]
+            )
+        )
+        self.app = workbench.Workbench(self.bundle, self.questions)
+        self.app.revoke = lambda: None
+        self.submit(
+            "It calls the_passage_the_question_is_about() before replying to the caller."
+        )
+        self.start()
+        self.until(lambda: self.app.snapshot()["status"] == "reflection_needed")
+        prompt = next(self.root.glob("prompt-*")).read_text()
+        evidence = json.loads(prompt[prompt.index('{"head"') :])
+        shown = evidence["diff"]
+        self.assertIn(
+            "lines moved here from a.py:2 (unchanged text not repeated)", shown
+        )
+        self.assertNotIn("def compute", shown)
+        self.assertIn("# whitespace-only change", shown)
+        self.assertEqual(evidence["folded"]["moved_lines"], 8)
+        self.assertEqual(evidence["folded"]["whitespace_lines"], 2)
 
     def test_transient_session_read_failure_does_not_repeat_the_cli_call(self):
         self.mode("hold")
