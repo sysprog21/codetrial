@@ -47,11 +47,12 @@ pub(super) fn write_floor(
         let sample = sample.get_or_insert_with(|| latency.observation_clock());
         let number = |key: &str| value(sample[key].as_i64());
         let event_time = |at: Option<Instant>| value(at.and_then(|at| latency.interview_ms(at)));
-        writeln!(output, "{} opened_ms={} resolved_ms={} activity_end_ms={} emitted_ms={} emitted_unix_ms={} start_unix_ms={} clock_uncertainty_ms={} pid={}",
+        // One write, so the line cannot be split or cost a syscall per field.
+        let line = format!("{} opened_ms={} resolved_ms={} activity_end_ms={} emitted_ms={} emitted_unix_ms={} start_unix_ms={} clock_uncertainty_ms={} pid={}\n",
             record.log_line(room, session, socket, at),
             event_time(Some(record.opened_at)), event_time(record.resolved_at), event_time(record.activity_end_at),
-            number("emitted_ms"), number("emitted_unix_ms"), number("start_unix_ms"), number("clock_uncertainty_ms"), std::process::id())
-            .expect("failed to write floor observation");
+            number("emitted_ms"), number("emitted_unix_ms"), number("start_unix_ms"), number("clock_uncertainty_ms"), std::process::id());
+        output.write_all(line.as_bytes()).expect("failed to write floor observation");
     });
 }
 

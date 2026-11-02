@@ -1,11 +1,16 @@
 const fs = require("node:fs");
 const { TextDecoder } = require("node:util");
 
-class ReplayInputError extends Error {}
+class ReplayInputError extends Error {
+  constructor(message, reason) {
+    super(message);
+    this.reason = reason;
+  }
+}
 
 function readReplayFile(filename, limit, label) {
-  const fail = (reason) => {
-    throw new ReplayInputError(`${label}: ${reason}`);
+  const fail = (message, reason) => {
+    throw new ReplayInputError(`${label}: ${message}`, reason);
   };
   let fd;
   try {
@@ -16,29 +21,33 @@ function readReplayFile(filename, limit, label) {
         (fs.constants.O_NONBLOCK ?? 0),
     );
     const before = fs.fstatSync(fd, { bigint: true });
-    if (!before.isFile() || before.size > BigInt(limit))
-      fail("input is not a bounded regular file");
-    const bytes = Buffer.alloc(limit + 1);
+    if (!before.isFile())
+      fail("input is not a bounded regular file", "invalid-input-file");
+    if (before.size > BigInt(limit))
+      fail("input exceeds byte limit", "input-limit");
+    // One spare byte detects growth without zero-filling the whole limit.
+    const bytes = Buffer.alloc(Number(before.size) + 1);
     let size = 0;
-    while (size <= limit) {
-      const count = fs.readSync(fd, bytes, size, limit + 1 - size, null);
+    while (size < bytes.length) {
+      const count = fs.readSync(fd, bytes, size, bytes.length - size, null);
       if (!count) break;
       size += count;
     }
     const after = fs.fstatSync(fd, { bigint: true });
-    if (size > limit) fail("input exceeds byte limit");
+    if (size > limit) fail("input exceeds byte limit", "input-limit");
     if (
       BigInt(size) !== BigInt(before.size) ||
       after.size !== before.size ||
       after.mtimeNs !== before.mtimeNs ||
       after.ctimeNs !== before.ctimeNs
     )
-      fail("input changed while reading");
+      fail("input changed while reading", "input-changed");
     return bytes.subarray(0, size);
   } catch (error) {
     if (error instanceof ReplayInputError) throw error;
     const failure = new ReplayInputError(
       `${label}: ${error.code === "ELOOP" ? "input symlink refused" : "input is not a readable bounded regular file"}`,
+      error.code === "ENOENT" ? "file-missing" : "invalid-input-file",
     );
     if (
       typeof error.code === "string" &&
@@ -60,7 +69,10 @@ function decodeReplayJson(bytes, label) {
     );
     value = JSON.parse(text);
   } catch {
-    throw new Error(`${label}: input is not UTF-8 JSON`);
+    throw new ReplayInputError(
+      `${label}: input is not UTF-8 JSON`,
+      "invalid-json",
+    );
   }
   const stack = [];
   for (const match of text.matchAll(/"(?:\\[\s\S]|[^"\\])*"|[{}\[\]]/g)) {
@@ -76,9 +88,15 @@ function decodeReplayJson(bytes, label) {
     ) {
       const key = JSON.parse(token);
       if (key === "__proto__")
-        throw new Error(`${label}: input has a forbidden object key`);
+        throw new ReplayInputError(
+          `${label}: input has a forbidden object key`,
+          "forbidden-key",
+        );
       if (stack.at(-1).has(key))
-        throw new Error(`${label}: input has a duplicate object key`);
+        throw new ReplayInputError(
+          `${label}: input has a duplicate object key`,
+          "duplicate-key",
+        );
       stack.at(-1).add(key);
     }
   }

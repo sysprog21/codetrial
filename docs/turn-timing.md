@@ -206,8 +206,9 @@ its own injection bracket and uncertainty, verify anchor identity and clock
 drift, and reject ambiguous or out-of-window attribution. Emission order and
 max emitted sequence remain insufficient for joining an injection to a record.
 
-Tool-response latency records include allowlisted `accepted_tool_names` and
-`hint_given`, separate from `sent`. Accepted means no tool error, not that a
+Tool-response latency records include allowlisted `accepted_tool_names`,
+`hint_given` and `closing`, separate from `sent`. `closing` observes the existing
+end-requested or ended state after the batch; it does not end the session. Accepted means no tool error, not that a
 response was delivered. `hint_given` means this batch advanced an authored hint
 rung or recorded a volunteered hint; withheld/exhausted requests cannot supply
 hint context merely because their tool response has no error. It establishes
@@ -215,7 +216,19 @@ server tool context, never the content or audibility of a generated phrase.
 
 `codetrial replay_gate` JSON lines carry `event=gate_boundary`, version 1,
 room/process/session/socket identity, optional turn, stage, event `interview_ms`
-and an emission `clock` sample. Each invocation of the latency boundary handler
+and an emission `clock` sample. `event_end_ms` is the upper bound of the
+observed transition. For an ordinary provider boundary, `interview_ms` is when
+the event arrived and `event_end_ms` is when the room loop handled it, so a
+boundary queued behind a tool send spans that wait; only records without the
+field have equal endpoints. A boundary may also appear as a latency record of
+the same stage, and a consumer treats the pair as one event.
+A `close_requested` observation brackets the tool call that first requests an
+end, before any asynchronous response/board work. A `closing` observation
+brackets the control reduction that first ends the session, before farewell or
+report work. These observations leave reply traces intact. A consumer must
+retain the interval rather than assigning a delayed transition to its emission
+time. Missing interval fields on older ordinary boundaries mean their original
+single event offset. Each invocation of the latency boundary handler
 emits one, even without an open reply trace: accepted turn completion or
 interruption, hold, and socket replacement cannot silently leave an old tool
 gate eligible. Provider events rejected by existing acceptance, hold or discard

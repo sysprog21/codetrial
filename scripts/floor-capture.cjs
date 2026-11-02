@@ -84,24 +84,24 @@ class DiagnosticCapture {
           else this.write(this.pending);
         }
       } finally {
-        this.pending = "";
-        this.pendingBytes = 0;
-        this.tail = "";
-        this.diagnostic = false;
-        this.discarding = false;
+        this.resetLine();
       }
     }
+  }
+
+  resetLine() {
+    this.pending = "";
+    this.pendingBytes = 0;
+    this.tail = "";
+    this.diagnostic = false;
+    this.discarding = false;
   }
 
   discontinuity(reason) {
     try {
       this.incomplete(reason);
     } finally {
-      this.pending = "";
-      this.pendingBytes = 0;
-      this.tail = "";
-      this.diagnostic = false;
-      this.discarding = false;
+      this.resetLine();
       this.decoder = new StringDecoder("utf8");
     }
   }
@@ -224,6 +224,7 @@ function assertInterruptedOverlap(path, room) {
 }
 
 module.exports = {
+  PREFIXES,
   DiagnosticCapture,
   captureDiagnosticStream,
   drainDiagnosticStreams,

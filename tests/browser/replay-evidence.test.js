@@ -85,6 +85,21 @@ test("joins actual floor fields by opening time even when resolution emits at te
     0,
   );
 });
+test("a replacement that began before the window but took effect inside it invalidates", (t) => {
+  const replaced = (extra = {}) =>
+    artifacts(
+      t,
+      floor(),
+      gate(0) +
+        gate(900, { stage: "socket_replaced", clock: clock(1200), ...extra }) +
+        gate(2500),
+    ).load();
+  assert.equal(partition(replaced()).invalidations.length, 0);
+  assert.equal(
+    partition(replaced({ event_end_ms: 1200 })).invalidations.length,
+    1,
+  );
+});
 test("late preexisting emission cannot be selected as injected activity", (t) => {
   const result = partition(artifacts(t, floor({ opened_ms: 100 })).load());
   assert.equal(result.definitely_in.length, 0);

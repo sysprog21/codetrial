@@ -26,6 +26,29 @@ pub(super) fn known_tool_name(name: &str) -> &'static str {
     .unwrap_or("unknown")
 }
 
+pub(super) fn execute_timed_tool_batch(
+    state: &mut RuntimeState,
+    activity: &mut RuntimeActivity,
+    calls: Vec<GeminiFunctionCall>,
+    reviewed_revision: u64,
+    timed: bool,
+) -> Vec<(GeminiFunctionCall, Value)> {
+    super::execute_tool_batch_observed(
+        state,
+        calls,
+        reviewed_revision,
+        |started, finished, closing| {
+            if timed {
+                activity.turn_timing.note_tool_request(started);
+                activity.turn_timing.note_tool_execution(started, finished);
+            }
+            if closing {
+                activity.latency.closing_requested(started, finished);
+            }
+        },
+    )
+}
+
 pub(super) struct HintCounters {
     rungs: usize,
     volunteered: u32,
@@ -83,6 +106,7 @@ pub(super) fn tool_timing(
         (accepted.contains(&TOOL_LOG_HINT) && hints_before.advanced(state)).into();
     record["accepted_tool_names"] = accepted.into();
     record["sent"] = timing.sent.into();
+    record["closing"] = (state.end_requested || state.ended).into();
     record
 }
 

@@ -1,17 +1,17 @@
 // Complete diagnostic artifacts are evidence; arrival order is never event order.
-const crypto = require("node:crypto");
+const { sha256 } = require("./long-interview-schedule.cjs");
 const { TextDecoder } = require("node:util");
 const { readReplayFile, decodeReplayJson } = require("./replay-input.cjs");
-const { createClockJoin } = require("./replay-clock.cjs");
+const { createClockJoin, whole: integer } = require("./replay-clock.cjs");
+const { PREFIXES: CAPTURE_PREFIXES } = require("./floor-capture.cjs");
 
 const FILE_BYTES = 16 * 1024 * 1024;
-const PREFIXES = [
-  "codetrial floor ",
-  "codetrial latency ",
-  "codetrial replay_gate ",
-  "interview clock: ",
-  "replacement start: ",
-  "replacement end: ",
+const PREFIXES = Object.values(CAPTURE_PREFIXES).flat();
+const CLOCK_KEYS = [
+  "start_unix_ms",
+  "emitted_ms",
+  "emitted_unix_ms",
+  "clock_uncertainty_ms",
 ];
 const TOOLS = new Set([
   "read_editor",
@@ -22,6 +22,10 @@ const TOOLS = new Set([
   "end_interview",
 ]);
 
+function knownReplayTool(name) {
+  return TOOLS.has(name);
+}
+
 class ReplayEvidenceError extends Error {
   constructor(reason) {
     super(`replay evidence: ${reason}`);
@@ -31,30 +35,23 @@ class ReplayEvidenceError extends Error {
 function requireValue(condition, reason) {
   if (!condition) throw new ReplayEvidenceError(reason);
 }
-function integer(n) {
-  return Number.isSafeInteger(n) && n >= 0;
-}
 function room(n) {
   return typeof n === "string" && /^[a-zA-Z0-9_.:-]{1,128}$/.test(n);
 }
 function optional(n) {
   return n === null || integer(n);
 }
-function scope(record) {
-  return JSON.stringify([record.pid, record.room, record.session]);
-}
+const sameScope = (a, b) =>
+  a.pid === b.pid && a.room === b.room && a.session === b.session;
 function clockId(record) {
-  return `producer:${crypto
-    .createHash("sha256")
-    .update(
-      JSON.stringify([
-        record.pid,
-        record.room,
-        record.session,
-        record.clock.start_unix_ms,
-      ]),
-    )
-    .digest("hex")}`;
+  return `producer:${sha256(
+    JSON.stringify([
+      record.pid,
+      record.room,
+      record.session,
+      record.clock.start_unix_ms,
+    ]),
+  )}`;
 }
 
 function tokens(text) {
@@ -92,14 +89,9 @@ function clock(value) {
     value && typeof value === "object" && !Array.isArray(value),
     "invalid-clock",
   );
-  const keys = [
-    "start_unix_ms",
-    "emitted_ms",
-    "emitted_unix_ms",
-    "clock_uncertainty_ms",
-  ];
-  for (const key of keys) requireValue(optional(value[key]), "invalid-clock");
-  return Object.fromEntries(keys.map((key) => [key, value[key]]));
+  for (const key of CLOCK_KEYS)
+    requireValue(optional(value[key]), "invalid-clock");
+  return Object.fromEntries(CLOCK_KEYS.map((key) => [key, value[key]]));
 }
 function floor(text) {
   const fields = tokens(text);
@@ -134,12 +126,7 @@ function floor(text) {
         : [];
   requireValue(pairs.includes(record.outcome), "invalid-floor-outcome");
   record.clock = Object.fromEntries(
-    [
-      "start_unix_ms",
-      "emitted_ms",
-      "emitted_unix_ms",
-      "clock_uncertainty_ms",
-    ].map((key) => [key, numeric(fields[key])]),
+    CLOCK_KEYS.map((key) => [key, numeric(fields[key])]),
   );
   // Older logs have no numeric opening clocks; they remain visible but unusable.
   record.usable =
@@ -249,6 +236,20 @@ function jsonRecord(text, family) {
       record.interview_ms <= record.clock.emitted_ms,
       "event-after-emission",
     );
+  if (family === "gate") {
+    record.event_end_ms =
+      value.event_end_ms === undefined
+        ? record.interview_ms
+        : value.event_end_ms;
+    requireValue(optional(record.event_end_ms), "invalid-event-interval");
+    if (record.usable)
+      requireValue(
+        integer(record.event_end_ms) &&
+          record.event_end_ms >= record.interview_ms &&
+          record.event_end_ms <= record.clock.emitted_ms,
+        "invalid-event-interval",
+      );
+  }
   if (family === "latency") {
     requireValue(integer(value.origin_socket), "invalid-origin-socket");
     record.origin_socket = value.origin_socket;
@@ -266,11 +267,16 @@ function jsonRecord(text, family) {
           typeof value.hint_given === "boolean" &&
           Array.isArray(value.accepted_tool_names) &&
           value.accepted_tool_names.length <= 64 &&
-          value.accepted_tool_names.every((name) => TOOLS.has(name)),
+          value.accepted_tool_names.every(knownReplayTool),
         "invalid-tool-context",
       );
       record.sent = value.sent;
       record.hint_given = value.hint_given;
+      requireValue(
+        value.closing === undefined || typeof value.closing === "boolean",
+        "invalid-closing-context",
+      );
+      record.closing = value.closing ?? null;
       record.accepted_tool_names = [...value.accepted_tool_names];
     }
   }
@@ -362,16 +368,13 @@ function parseStream(bytes, family) {
           : line;
     requireValue(!seen.has(key), "duplicate-evidence");
     seen.add(key);
+    record.evidence_sha256 = sha256(line + "\n");
     records.push(record);
   }
   return records;
 }
 
-function loadEvidence({ floorPath, latencyPath, finalized, drained }) {
-  requireValue(
-    finalized === true && drained === true,
-    "evidence-not-finalized",
-  );
+function readEvidenceSnapshot({ floorPath, latencyPath }) {
   const records = [
     ...parseStream(
       readReplayFile(floorPath, FILE_BYTES, "replay evidence"),
@@ -382,10 +385,22 @@ function loadEvidence({ floorPath, latencyPath, finalized, drained }) {
       "latency",
     ),
   ];
-  return { finalized: true, drained: true, records };
+  return { finalized: false, drained: false, records };
 }
 
-function partitionFloor({
+function loadEvidence({ floorPath, latencyPath, finalized, drained }) {
+  requireValue(
+    finalized === true && drained === true,
+    "evidence-not-finalized",
+  );
+  return {
+    ...readEvidenceSnapshot({ floorPath, latencyPath }),
+    finalized: true,
+    drained: true,
+  };
+}
+
+function joinEvidenceClock({
   evidence,
   selected,
   harness,
@@ -399,12 +414,12 @@ function partitionFloor({
   );
   identity(selected);
   requireValue(
-    window &&
-      Number.isFinite(window.low) &&
-      Number.isFinite(window.high) &&
-      window.low < window.high &&
-      Array.isArray(harness) &&
-      harness.every((sample) => sample.clock_id === window.clock_id),
+    !window ||
+      (Number.isFinite(window.low) &&
+        Number.isFinite(window.high) &&
+        window.low < window.high &&
+        Array.isArray(harness) &&
+        harness.every((sample) => sample.clock_id === window.clock_id)),
     "invalid-trial-window",
   );
   requireValue(
@@ -416,7 +431,7 @@ function partitionFloor({
   );
   const relevant = evidence.records.filter(
     (record) =>
-      scope(record) === scope(selected) ||
+      sameScope(record, selected) ||
       (record.family === "floor" &&
         record.pid === null &&
         record.room === selected.room),
@@ -435,7 +450,43 @@ function partitionFloor({
     provider: samples,
     maxUncertaintyMs,
   });
-  const rawWindow = joined.providerWindow(window);
+  const rawWindow = window ? joined.providerWindow(window) : null;
+  return {
+    records: relevant,
+    clock: joined,
+    rawWindow,
+    project(record, at = record.interview_ms) {
+      requireValue(sameScope(record, selected), "event-scope-mismatch");
+      return joined.project(
+        at,
+        record.clock ? clockId(record) : joined.provider_clock_id,
+      );
+    },
+  };
+}
+
+function partitionFloor({
+  evidence,
+  selected,
+  harness,
+  window,
+  sampleSpan,
+  maxUncertaintyMs,
+}) {
+  requireValue(window, "invalid-trial-window");
+  const {
+    records: relevant,
+    clock: joined,
+    rawWindow,
+    project,
+  } = joinEvidenceClock({
+    evidence,
+    selected,
+    harness,
+    window,
+    sampleSpan,
+    maxUncertaintyMs,
+  });
   const partitions = {
     definitely_in: [],
     ambiguous: [],
@@ -450,19 +501,17 @@ function partitionFloor({
       continue;
     }
     if (record.family !== "floor") {
-      if (
-        record.interview_ms < rawWindow.low ||
-        record.interview_ms > rawWindow.high
-      )
+      // A gate observation spans the time its boundary took effect, which can
+      // be later than the provider event that queued it.
+      const eventEnd = record.event_end_ms ?? record.interview_ms;
+      if (eventEnd < rawWindow.low || record.interview_ms > rawWindow.high)
         continue;
       // Auxiliary event offsets use the same anchor as this validated
       // process/room/session; the producer does not include a clock pair there.
-      const at = joined.project(
-        record.interview_ms,
-        record.clock ? clockId(record) : joined.provider_clock_id,
-      );
+      const at = project(record);
+      const last = project(record, eventEnd);
       if (
-        at.high >= window.low &&
+        last.high >= window.low &&
         at.low <= window.high &&
         (record.family === "replacement" ||
           (record.family === "pressure" &&
@@ -485,7 +534,7 @@ function partitionFloor({
         partitions.preexisting_open.push(record);
       continue;
     }
-    const opening = joined.project(record.opened_ms, clockId(record));
+    const opening = project(record, record.opened_ms);
     if (
       record.socket !== selected.socket &&
       opening.high >= window.low &&
@@ -511,4 +560,12 @@ function partitionFloor({
   };
 }
 
-module.exports = { loadEvidence, partitionFloor, ReplayEvidenceError };
+module.exports = {
+  sameScope,
+  knownReplayTool,
+  readEvidenceSnapshot,
+  loadEvidence,
+  joinEvidenceClock,
+  partitionFloor,
+  ReplayEvidenceError,
+};

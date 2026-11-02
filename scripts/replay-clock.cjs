@@ -83,7 +83,7 @@ function createClockJoin({ harness, provider, maxUncertaintyMs }) {
   });
   const start = provider[0]?.start_unix_ms;
   requireValue(whole(start), "missing-provider-anchor");
-  const remote = provider.flatMap((sample) => {
+  const remote = provider.map((sample) => {
     requireValue(
       sample &&
         sample.clock_id === providerId &&
@@ -95,12 +95,10 @@ function createClockJoin({ harness, provider, maxUncertaintyMs }) {
         sample.clock_uncertainty_ms <= maxUncertaintyMs,
       "invalid-provider-sample",
     );
-    return [
-      interval(
-        sample.emitted_unix_ms - sample.emitted_ms,
-        sample.clock_uncertainty_ms,
-      ),
-    ];
+    return interval(
+      sample.emitted_unix_ms - sample.emitted_ms,
+      sample.clock_uncertainty_ms,
+    );
   });
   for (let i = 1; i < harness.length; i++) {
     requireValue(
@@ -179,4 +177,4 @@ function createClockJoin({ harness, provider, maxUncertaintyMs }) {
   };
 }
 
-module.exports = { createClockJoin, ReplayClockError };
+module.exports = { createClockJoin, ReplayClockError, number, whole };

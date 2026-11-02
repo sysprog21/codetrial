@@ -328,6 +328,8 @@ pub(super) fn reduce_data_packet(
     received: bool,
     receipt_timestamp_ms: u64,
 ) -> crate::agent::DataEventResult {
+    let reduction_started = Instant::now();
+    let was_ended = state.ended;
     let code_revision_before = state.evidence_ledger.code.revision;
     let test_runs_before = state.test_runs;
     let result = if received {
@@ -347,6 +349,9 @@ pub(super) fn reduce_data_packet(
             receipt_timestamp_ms,
         )
     };
+    if !was_ended && state.ended {
+        activity.latency.closing(reduction_started, Instant::now());
+    }
     activity.observe_candidate_work(state, code_revision_before, test_runs_before);
     result
 }
@@ -679,3 +684,7 @@ pub(super) fn test_run_line<'a>(
 pub(super) fn owes_failed_reply(result: &crate::agent::DataEventResult) -> bool {
     result.carries_thinking_debt
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/livekit/packets.rs"]
+mod tests;

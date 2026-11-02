@@ -19,7 +19,7 @@ mod recovery;
 
 use floor::write_floor;
 pub(super) use floor::{observe_floor, reconcile_floor};
-use observations::{HintCounters, ToolTiming, known_tool_name};
+use observations::{HintCounters, ToolTiming, execute_timed_tool_batch, known_tool_name};
 
 use recovery::log_socket_pressure;
 pub(super) use recovery::{
@@ -1879,21 +1879,6 @@ fn agent_state_attributes(
     attributes
 }
 
-fn execute_timed_tool_batch(
-    state: &mut RuntimeState,
-    activity: &mut RuntimeActivity,
-    calls: Vec<GeminiFunctionCall>,
-    reviewed_revision: u64,
-    timed: bool,
-) -> Vec<(GeminiFunctionCall, serde_json::Value)> {
-    execute_tool_batch_observed(state, calls, reviewed_revision, |started, finished| {
-        if timed {
-            activity.turn_timing.note_tool_request(started);
-            activity.turn_timing.note_tool_execution(started, finished);
-        }
-    })
-}
-
 /// Public so the behaviour check in `tests/interview_behavior.rs` answers a
 /// text model's tool calls with this dispatch rather than a copy of it.
 pub fn execute_tool_call(state: &mut RuntimeState, call: &GeminiFunctionCall) -> serde_json::Value {
@@ -1937,14 +1922,14 @@ pub(super) fn execute_tool_batch(
     calls: Vec<GeminiFunctionCall>,
     reviewed_revision: u64,
 ) -> Vec<(GeminiFunctionCall, serde_json::Value)> {
-    execute_tool_batch_observed(state, calls, reviewed_revision, |_, _| {})
+    execute_tool_batch_observed(state, calls, reviewed_revision, |_, _, _| {})
 }
 
 fn execute_tool_batch_observed(
     state: &mut RuntimeState,
     calls: Vec<GeminiFunctionCall>,
     reviewed_revision: u64,
-    mut observe: impl FnMut(Instant, Instant),
+    mut observe: impl FnMut(Instant, Instant, bool),
 ) -> Vec<(GeminiFunctionCall, serde_json::Value)> {
     let review_changed = editor_review_allowed(state)
         && state.code != state.code_shown
@@ -1963,13 +1948,18 @@ fn execute_tool_batch_observed(
         .enumerate()
         .map(|(index, call)| {
             let started = Instant::now();
+            let was_requested = state.end_requested;
             let response = execute_tool_call_with_continuity(
                 state,
                 &call,
                 Some(index) == last_continuity,
                 Some(index) == last_framework,
             );
-            observe(started, Instant::now());
+            observe(
+                started,
+                Instant::now(),
+                !was_requested && state.end_requested,
+            );
             (call, response)
         })
         .collect::<Vec<_>>();

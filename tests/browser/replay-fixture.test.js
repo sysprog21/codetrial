@@ -276,17 +276,11 @@ test("caps are checked at the limit and one frame/byte past, without provider ac
   f.setBytes(audio("pcm_s16le", 30000));
   assert.equal(loadFixture(f.filename, "socket").duration_ms, 30000);
   f.setBytes(Buffer.concat([audio("pcm_s16le", 30000), Buffer.alloc(2)]));
-  assert.throws(
-    () => loadFixture(f.filename, "socket"),
-    /bounded regular file/,
-  );
+  assert.throws(() => loadFixture(f.filename, "socket"), /exceeds byte limit/);
   fs.writeFileSync(f.filename, " ".repeat(16384));
   assert.throws(() => loadFixture(f.filename, "socket"), /UTF-8 JSON/);
   fs.appendFileSync(f.filename, " ");
-  assert.throws(
-    () => loadFixture(f.filename, "socket"),
-    /bounded regular file/,
-  );
+  assert.throws(() => loadFixture(f.filename, "socket"), /exceeds byte limit/);
 });
 
 test("CLI exits nonzero on invalid input and prints only offline fixture metadata", (t) => {
@@ -436,10 +430,7 @@ test("WAV duration and file-byte ceilings accept exact boundaries and reject exc
   assert.equal(loadFixture(f.filename, "browser").bytes.length, 2945536);
   assert.equal(loadFixture(f.filename, "browser").frames, 4800);
   f.setBytes(Buffer.concat([atLimit, Buffer.alloc(1)]));
-  assert.throws(
-    () => loadFixture(f.filename, "browser"),
-    /bounded regular file/,
-  );
+  assert.throws(() => loadFixture(f.filename, "browser"), /exceeds byte limit/);
 });
 
 test("pause threshold is inclusive at +/-500 and bounds require a real internal interval", (t) => {

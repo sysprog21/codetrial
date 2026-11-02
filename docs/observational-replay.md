@@ -228,3 +228,31 @@ A floor record's socket identifies its emission context. Current room recovery
 flushes the floor tracker before advancing the socket; a consumer must still
 check replacement evidence rather than treating a matching socket as proof of
 an opening generation. No correlation result establishes physical audibility.
+
+## Provisional and finalized tool gates
+
+`scripts/replay-gates.cjs` selects an accepted-and-sent tool acknowledgement
+from a snapshot of both diagnostic families. It pins the room actually joined
+and a unique process/session (or a known agent child PID), then derives the
+socket from the candidate. A hint also requires `hint_given`; every candidate
+requires explicit `closing: false`. Missing legacy context remains unknown.
+Same-turn batches are distinct by exact diagnostic-line digest, not turn ID.
+
+A live candidate and its wall-pair age estimate are provisional. Decode,
+resume, budget admission and the final page-state check still belong to the
+adapter. Only finalized, drained evidence can establish gate alignment:
+any newer batch or authoritative boundary before injection expires the selected
+acknowledgement, even if the line arrived late. An event overlapping injection
+stays unknown. A normal completion strictly after injection is an outcome;
+replacement, discarded or terminal state before the observation window ends
+invalidates alignment across every socket of the pinned process/session.
+A socket pressure summary is a best-effort record written once when a socket
+is released, so it carries a drop time rather than an interval. A discarded
+one comes from a standby socket that may never have carried the gate; it
+still invalidates, which can only exclude a trial, never align one.
+
+Freshness uses one fixture maximum age in both phases. An age interval wholly
+past that limit is stale; one straddling it is unknown. Closing transitions use
+the complete producer reduction interval. These helpers do not supply a named
+replay flow or a scenario verdict by themselves; actual adapter integration and
+common judgment remain required.

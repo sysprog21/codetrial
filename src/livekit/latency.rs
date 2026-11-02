@@ -970,15 +970,46 @@ impl ReplyLatency {
     }
 
     /// Unlike a reply trace, gate invalidation exists even with no output.
-    fn gate_boundary(&self, boundary: Boundary, now: Instant) -> Value {
+    fn gate_observation(&self, stage: &str, started: Instant, finished: Instant) -> Value {
         json!({
             "event": "gate_boundary", "version": 1,
             "pid": std::process::id(), "room": self.room,
             "session": self.session, "socket": self.socket,
             "turn": self.trace.as_ref().map(|trace| trace.turn),
-            "stage": boundary.label(), "interview_ms": self.interview_ms(now),
+            "stage": stage, "interview_ms": self.interview_ms(started),
+            "event_end_ms": self.interview_ms(finished),
             "clock": self.observation_clock(),
         })
+    }
+
+    /// Observations do not settle or replace the reply latency trace.
+    pub(super) fn closing(&self, started: Instant, finished: Instant) {
+        self.gate_observation_to("closing", started, finished, &mut std::io::stderr().lock());
+    }
+
+    pub(super) fn closing_requested(&self, started: Instant, finished: Instant) {
+        self.gate_observation_to(
+            "close_requested",
+            started,
+            finished,
+            &mut std::io::stderr().lock(),
+        );
+    }
+
+    fn gate_observation_to(
+        &self,
+        stage: &str,
+        started: Instant,
+        finished: Instant,
+        output: &mut impl std::io::Write,
+    ) {
+        let line = format!(
+            "codetrial replay_gate {}\n",
+            self.gate_observation(stage, started, finished)
+        );
+        output
+            .write_all(line.as_bytes())
+            .expect("failed to write replay gate observation");
     }
 
     pub(super) fn boundary(&mut self, boundary: Boundary, now: Instant) -> Option<Value> {
@@ -991,12 +1022,10 @@ impl ReplyLatency {
         now: Instant,
         output: &mut impl std::io::Write,
     ) -> Option<Value> {
-        writeln!(
-            output,
-            "codetrial replay_gate {}",
-            self.gate_boundary(boundary, now)
-        )
-        .expect("failed to write replay gate boundary");
+        // `now` is when the provider event arrived. A queued boundary can be
+        // handled after a later tool acknowledgement, so the observation also
+        // spans the time it took effect.
+        self.gate_observation_to(boundary.label(), now, Instant::now().max(now), output);
         if matches!(boundary, Boundary::Held) {
             self.voice_ended = false;
             self.voice_started = false;
