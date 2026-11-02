@@ -1,0 +1,13 @@
+# The files that decide whether a change is reviewed are the maintainer's to
+# approve. Pair this with "Require review from Code Owners" on main.
+/.github/                         @jserv
+/scripts/                         @jserv
+/.claude/skills/codetrial-review/ @jserv
+
+# The product code, Rust and JavaScript, and its tests are shared.
+/src/                             @jserv @ColtenOuO
+/web/                             @jserv @ColtenOuO
+/tests/                           @jserv @ColtenOuO
+/build.rs                         @jserv @ColtenOuO
+/Cargo.toml                       @jserv @ColtenOuO
+/Cargo.lock                       @jserv @ColtenOuO
