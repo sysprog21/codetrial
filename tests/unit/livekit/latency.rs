@@ -1456,3 +1456,26 @@ fn a_reply_already_answered_is_not_owed_to_a_later_episode() {
 }
 
 include!("latency_parts/mic_mapping_and_mic_gaps.rs");
+
+#[test]
+fn observation_clock_pairs_bound_sampling_and_rounding_on_one_anchor() {
+    let (start, mut trace) = traced();
+    let unanchored = trace.observation_clock_at(start, Some(10000), start);
+    assert!(unanchored["emitted_ms"].is_null());
+    assert!(unanchored["clock_uncertainty_ms"].is_null());
+    trace.anchor = Some(start);
+    trace.start_unix_ms = Some(10000);
+    trace.anchor_uncertainty_ms = 2;
+    let sample = trace.observation_clock_at(ms(start, 100), Some(10100), ms(start, 103));
+    assert_eq!(sample["start_unix_ms"], 10000);
+    assert_eq!(sample["emitted_ms"], 100);
+    assert_eq!(sample["emitted_unix_ms"], 10100);
+    assert_eq!(sample["clock_uncertainty_ms"], 7);
+    let absent_wall = trace.observation_clock_at(start, None, start);
+    assert!(absent_wall["clock_uncertainty_ms"].is_null());
+    let reversed = trace.observation_clock_at(ms(start, 1), Some(10001), start);
+    assert!(reversed["clock_uncertainty_ms"].is_null());
+}
+
+#[path = "latency/gates.rs"]
+mod gates;

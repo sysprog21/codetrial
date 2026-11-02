@@ -313,3 +313,129 @@ fn completed_tool_only_response_cannot_borrow_a_later_generations_audio() {
     assert_eq!(records[0].gap_ms, Some(100));
     assert_eq!(records[0].suspect, None);
 }
+
+#[test]
+fn deferred_pause_retains_its_opening_and_first_resolution() {
+    let records = run(vec![
+        (10, Event::End),
+        (30, Event::Output { audio: false }),
+        (50, Event::Output { audio: true }),
+        (200, Event::Output { audio: true }),
+        (1000, Event::Reset),
+    ]);
+    assert_eq!(records.len(), 1);
+    let record = &records[0];
+    assert_eq!(record.kind, "pause");
+    assert_eq!(record.outcome, "respond");
+    assert_eq!(
+        record.resolved_at.unwrap().duration_since(record.opened_at),
+        Duration::from_millis(20)
+    );
+    assert_eq!(record.activity_end_at, None);
+}
+
+#[test]
+fn overlap_resolution_and_candidate_end_keep_distinct_clocks() {
+    for (resolve, end) in [(100, 500), (700, 500)] {
+        let mut events = vec![(0, start())];
+        if resolve < end {
+            events.push((resolve, Event::Interrupted));
+        }
+        events.push((end, Event::End));
+        if resolve > end {
+            events.push((resolve, Event::Interrupted));
+        }
+        events.push((1000, Event::Reset));
+        let records = run(events);
+        let record = records.iter().find(|r| r.kind == "overlap").unwrap();
+        assert_eq!(
+            record.resolved_at.unwrap().duration_since(record.opened_at),
+            Duration::from_millis(resolve)
+        );
+        assert_eq!(
+            record
+                .activity_end_at
+                .unwrap()
+                .duration_since(record.opened_at),
+            Duration::from_millis(end)
+        );
+    }
+}
+
+#[test]
+fn continuation_resolves_at_drain_without_borrowing_the_emission_time() {
+    let records = run(vec![
+        (0, start()),
+        (100, Event::Complete { playing: true }),
+        (200, Event::Drained),
+        (500, Event::End),
+    ]);
+    let record = records.iter().find(|r| r.kind == "overlap").unwrap();
+    assert_eq!(record.outcome, "continued");
+    assert_eq!(
+        record.resolved_at.unwrap().duration_since(record.opened_at),
+        Duration::from_millis(200)
+    );
+    assert_eq!(
+        record
+            .activity_end_at
+            .unwrap()
+            .duration_since(record.opened_at),
+        Duration::from_millis(500)
+    );
+}
+
+#[test]
+fn loss_and_reset_clear_resolution_of_an_overlap_with_no_end() {
+    for event in [Event::Reset, Event::ActivityLost] {
+        let records = run(vec![(0, start()), (100, Event::Interrupted), (200, event)]);
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].outcome, "unresolved");
+        assert_eq!(records[0].resolved_at, None);
+        assert_eq!(records[0].activity_end_at, None);
+    }
+}
+
+#[test]
+fn resumed_pause_keeps_the_end_to_start_resolution_clock() {
+    let records = run(vec![
+        (0, Event::End),
+        (
+            250,
+            Event::Start {
+                generating: false,
+                ahead: Duration::ZERO,
+            },
+        ),
+        (600, Event::Reset),
+    ]);
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].outcome, "continue");
+    assert_eq!(
+        records[0]
+            .resolved_at
+            .unwrap()
+            .duration_since(records[0].opened_at),
+        Duration::from_millis(250)
+    );
+}
+
+#[test]
+fn loss_after_end_does_not_clear_an_already_ended_overlap() {
+    let records = run(vec![
+        (0, start()),
+        (100, Event::End),
+        (200, Event::ActivityLost),
+        (300, Event::Drained),
+    ]);
+    let record = records.iter().find(|r| r.kind == "overlap").unwrap();
+    assert_eq!(record.outcome, "continued");
+    assert_eq!(record.overlap_ms, Some(100));
+    assert_eq!(
+        record
+            .activity_end_at
+            .unwrap()
+            .duration_since(record.opened_at),
+        Duration::from_millis(100)
+    );
+}

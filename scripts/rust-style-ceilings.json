@@ -6,7 +6,7 @@
   "src/agent/report.rs": 1730,
   "src/gemini.rs": 2838,
   "src/livekit.rs": 3572,
-  "src/livekit/session.rs": 3026,
+  "src/livekit/session.rs": 2956,
   "src/livekit/turn.rs": 2333,
   "tests/agent/framework.rs": 4640,
   "tests/agent/prompts.rs": 2380,
