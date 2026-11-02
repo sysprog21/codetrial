@@ -231,6 +231,9 @@ Read their answers against the bundled code and owning contracts, identify
 specific gaps, and revisit those
 gaps after explaining them. Never generate or silently infer their answers.
 
+Right after giving the URL, start the background watch that wakes the agent when the
+contributor confirms ([when the contributor confirms](workbench.md#when-the-contributor-confirms));
+the closeout (certify and report) is then the agent's to do, not the page's.
 Continue the code review while answers are pending. Record explanation readiness
 separately from defect severity: `not required`, `pending`, or `complete`, with
 the base/head, totals, exclusions, covered areas, answer location, and unresolved

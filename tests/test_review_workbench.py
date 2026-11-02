@@ -610,6 +610,63 @@ class WorkbenchTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "already have feedback"):
             self.request_review()
 
+    def test_agent_wakes_when_the_contributor_confirms(self):
+        self.save()
+        self.request_review()
+        self.assertIsNone(self.app.wait(-1, 0, "confirmation"))
+        self.app.feedback(self.feedback())
+        # A reference alone is not a confirmation, and a watch is not a task.
+        self.assertIsNone(self.app.wait(-1, 0, "confirmation"))
+        self.assertEqual(self.app.snapshot()["reviewer"], "offline")
+        s = self.app.snapshot()
+        self.app.reflect(
+            {
+                "identity": s["identity"],
+                "revision": s["revision"],
+                "feedback_digest": s["feedback_digest"],
+                "grade": "got",
+                "correction": "",
+            }
+        )
+        woken = self.app.wait(-1, 0, "confirmation")
+        self.assertEqual(woken["status"], "explanation_complete")
+        self.assertEqual(woken["reflection"]["grade"], "got")
+        self.assertEqual(self.app.snapshot()["reviewer"], "offline")
+        # Only a confirmation newer than the one already handled wakes it again.
+        self.assertIsNone(self.app.wait(woken["revision"], 0, "confirmation"))
+        with self.assertRaisesRegex(ValueError, "submission or a confirmation"):
+            self.app.wait(-1, 0, "finish")
+
+    def test_wait_cli_reports_a_confirmation_or_stays_pending(self):
+        self.save()
+
+        def wait():
+            return subprocess.run(
+                [sys.executable, str(HELPER), "wait", "--for", "confirmation"]
+                + ["--bundle", str(self.root), "--questions", str(self.questions)]
+                + ["--timeout", "0"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+        self.assertEqual(wait().returncode, 2)
+        self.request_review()
+        self.app.feedback(self.feedback())
+        s = self.app.snapshot()
+        self.app.reflect(
+            {
+                "identity": s["identity"],
+                "revision": s["revision"],
+                "feedback_digest": s["feedback_digest"],
+                "grade": "got",
+                "correction": "",
+            }
+        )
+        done = wait()
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(json.loads(done.stdout)["status"], "explanation_complete")
+
     def test_changed_questions_refused_in_running_session(self):
         self.save()
         self.questions.write_text(

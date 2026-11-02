@@ -512,24 +512,38 @@ class Workbench:
             self.presence_path,
         )
 
-    def wait(self, after, timeout):
+    def wait(self, after, timeout, event="submission"):
+        """Block until the page needs the agent, or `timeout` seconds pass.
+
+        `submission` is the contributor asking for a reference; the agent is
+        shown as waiting for it. `confirmation` is the contributor confirming
+        their self-assessment, which leaves the agent the closeout to do
+        (certify, then report); it is a watch rather than a task, so it does not
+        claim the agent is waiting on the page.
+        """
+        if event not in ("submission", "confirmation"):
+            raise ValueError("Wait for a submission or a confirmation")
         deadline = time.monotonic() + timeout
-        self.presence("waiting", timeout + 2)
+        task = event == "submission"
+        if task:
+            self.presence("waiting", timeout + 2)
         try:
             while True:
                 snapshot = self.snapshot()
-                if (
-                    snapshot["revision"] > after
-                    and snapshot["status"] == "awaiting_review"
+                if snapshot["revision"] > after and snapshot["status"] == (
+                    "awaiting_review" if task else "explanation_complete"
                 ):
-                    self.presence("reading", 120)
+                    if task:
+                        self.presence("reading", 120)
                     return snapshot
                 if time.monotonic() >= deadline:
-                    self.presence("offline", 0)
+                    if task:
+                        self.presence("offline", 0)
                     return None
                 time.sleep(min(0.25, max(0, deadline - time.monotonic())))
         except BaseException:
-            self.presence("offline", 0)
+            if task:
+                self.presence("offline", 0)
             raise
 
     def feedback(self, feedback, *, request=None, replace=False):
@@ -874,7 +888,14 @@ def main():
         "--after",
         type=int,
         default=-1,
-        help="Wait for a submission newer than this revision",
+        help="Wait for an event newer than this revision",
+    )
+    parser.add_argument(
+        "--for",
+        dest="event",
+        choices=["submission", "confirmation"],
+        default="submission",
+        help="wait: what to wake for; a confirmation means the contributor confirmed",
     )
     parser.add_argument(
         "--timeout",
@@ -933,7 +954,7 @@ def main():
         elif args.command == "wait":
             if not 0 <= args.timeout <= 60:
                 parser.error("--timeout must be between 0 and 60")
-            result = workbench.wait(args.after, args.timeout)
+            result = workbench.wait(args.after, args.timeout, args.event)
             if result is None:
                 print(
                     json.dumps(

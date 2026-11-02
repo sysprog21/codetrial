@@ -163,6 +163,32 @@ request. A browser lets a script close only a window the script opened, so the
 tab may stay; the page then says it is safe to close. The saved explanation and
 confirmation are not touched, and starting the server again reopens them.
 
+## When the contributor confirms
+
+Confirming the self-assessment is the moment the agent has work to do: read the
+reflection, fold it into the report, certify, and tell the contributor the
+next step. The page cannot start a chat turn, so the agent watches for it. Right
+after giving the URL, start the watch in the background (the harness wakes the
+agent when it exits), in either reviewer mode, since a watch does not claim the
+agent is waiting on the page:
+
+```sh
+until python3 .claude/skills/codetrial-review/workbench.py wait --for confirmation \
+    --bundle "$bundle" --questions "$bundle/questions.json" \
+    --after -1 --timeout 55 > "$bundle/confirmation.json"; do
+  [ $? -eq 2 ] || break
+done
+```
+
+Exit 0 leaves the confirmed snapshot in `$bundle/confirmation.json`: the answers, the
+reference, and `reflection` with the grade and any correction. Exit 1 is an
+error to report. On waking, read `workbench.py basis`, record the grade and
+correction in the experience report, run `review-lifecycle.py finish`, and say
+what the certificate covers. Never answer for the contributor, and never treat a
+`partly` or `missed` grade as a failure: it is their own account. A later
+confirmation of changed answers has a higher revision; pass it as `--after` to
+watch for that one.
+
 ## Managed reviewer lifecycle
 
 `--reviewer codex` keeps `review-worker.py` running inside the server process.
