@@ -1155,3 +1155,58 @@ test(
     );
   },
 );
+
+test(
+  "a diff that fails to load can be retried and then opens the workspace",
+  { timeout: 30000 },
+  async (t) => {
+    if (!browser) return t.skip("playwright chromium unavailable");
+    const { url } = await start(t);
+    const page = await browser.newPage();
+    t.after(() => page.close());
+    let failures = 1;
+    await page.route("**/api/diff", (route) =>
+      failures-- > 0 ? route.abort() : route.continue(),
+    );
+    await page.goto(url);
+    await page.locator("#retry").waitFor({ state: "visible" });
+    assert.equal(await page.locator("#workspace").isVisible(), false);
+    await page.locator("#retry").click();
+    await page.locator("#workspace").waitFor({ state: "visible" });
+    await page.locator("#diff .row").first().waitFor();
+  },
+);
+
+test(
+  "every line of a multi-line quote is marked as the passage asked about",
+  { timeout: 30000 },
+  async (t) => {
+    if (!browser) return t.skip("playwright chromium unavailable");
+    const patch = modified(
+      "src/example.rs",
+      "@@ -1,3 +1,3 @@\n keep\n-old_one\n+new_one\n-old_two\n+new_two\n",
+    );
+    const { page } = await start(
+      t,
+      [
+        {
+          id: "multi",
+          path: "src/example.rs",
+          prompt: "Why were these two lines changed together?",
+          quote: "+new_one\n-old_two",
+        },
+      ],
+      false,
+      patch,
+      [{ path: "src/example.rs", additions: 2, deletions: 2 }],
+    );
+    await page.locator("#diff .row.asked").first().waitFor();
+    const marked = await page
+      .locator("#diff .row.asked .code")
+      .allTextContents();
+    assert.deepEqual(
+      marked.map((x) => x.trim()),
+      ["new_one", "old_two"],
+    );
+  },
+);

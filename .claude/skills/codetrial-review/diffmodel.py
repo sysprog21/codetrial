@@ -689,7 +689,11 @@ def check(files, problems, manifest_files=None, complete=True):
         known = {f["path"]: f for f in manifest_files if isinstance(f, dict)}
         for item in files:
             entry = known.get(item["path"])
-            if not entry or item["binary"]:
+            # The patch pairs a renamed file with its old name and counts only
+            # what changed; the manifest, read without rename detection, lists
+            # the old file as wholly removed and the new one as wholly added.
+            # The counts are not comparable, so they are not compared.
+            if not entry or item["binary"] or item["status"] == "renamed":
                 continue
             for key in ("additions", "deletions"):
                 if isinstance(entry.get(key), int) and entry[key] != item[key]:
@@ -698,7 +702,9 @@ def check(files, problems, manifest_files=None, complete=True):
                         f"the diff has {item[key]}"
                     )
         if complete:
-            shown = {item["path"] for item in files}
+            shown = {item["path"] for item in files} | {
+                item["old_path"] for item in files if item["status"] == "renamed"
+            }
             for path in sorted(known):
                 if path not in shown:
                     out.append(f"{path}: listed in the manifest, absent from the diff")

@@ -337,15 +337,7 @@ def retry(pending, api):
                     state = json.loads(explanation.read_text())
                 except (OSError, ValueError):
                     state = {}
-                if not isinstance(state, dict):
-                    state = {}
-                feedback = state.get("feedback") or {}
-                answer_hash = hashlib.sha256(
-                    json.dumps(state.get("answers", {}), sort_keys=True).encode()
-                ).hexdigest()
-                if (state.get("reflection") or {}).get(
-                    "answer_digest"
-                ) == answer_hash and feedback.get("answer_digest") == answer_hash:
+                if explained(state):
                     result = subprocess.run(
                         [
                             sys.executable,
@@ -379,6 +371,29 @@ def retry(pending, api):
                     )
         print(json.dumps(dict(receipt, pending=str(pending))))
         return 0
+
+
+def explained(state):
+    """Whether the explanation holds feedback and a reflection for its current answers.
+
+    Whatever is in the file, a malformed one is "not explained" and not a crash:
+    this runs after the review's receipt and marker are written.
+    """
+    if not isinstance(state, dict):
+        return False
+    feedback = state.get("feedback")
+    reflection = state.get("reflection")
+    if not isinstance(feedback, dict) or not isinstance(reflection, dict):
+        return False
+    try:
+        answers = json.dumps(state.get("answers", {}), sort_keys=True)
+    except (TypeError, ValueError):
+        return False
+    digest = hashlib.sha256(answers.encode()).hexdigest()
+    return (
+        reflection.get("answer_digest") == digest
+        and feedback.get("answer_digest") == digest
+    )
 
 
 def main(argv=None):

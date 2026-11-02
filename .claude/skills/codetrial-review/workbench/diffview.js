@@ -35,6 +35,20 @@ function wordsIn(text, spans, className) {
   return code;
 }
 
+// Whether a row is the passage a question quotes. A one-line quote may be part
+// of a line; a quote of several lines marks each row that is one of its lines,
+// compared whole, since a short fragment would otherwise match everywhere.
+function asks(line, quote) {
+  const pieces = quote.split("\n");
+  if (pieces.length === 1)
+    return line.t.includes(quote) || (SIGN[line.k] + line.t).includes(quote);
+  const own = line.t.trim();
+  return (
+    own !== "" &&
+    pieces.some((piece) => piece.replace(/^[ +-]/, "").trim() === own)
+  );
+}
+
 export class DiffView {
   constructor({ root, notice, summary, position }) {
     this.root = root;
@@ -290,10 +304,7 @@ export class DiffView {
   decorate(row, line, quote) {
     if (line.m) row.classList.add("moved");
     if (line.ws) row.classList.add("ws");
-    if (
-      quote &&
-      (line.t.includes(quote) || (SIGN[line.k] + line.t).includes(quote))
-    ) {
+    if (quote && asks(line, quote)) {
       row.classList.add("asked");
       row.append(el("span", "tag", "asked about"));
     }

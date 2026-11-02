@@ -1041,6 +1041,13 @@ class WorkbenchTest(unittest.TestCase):
         # The hint still leaves out what the question already says.
         self.assertEqual(u.check(text, question, patch)["anchors"], ("budget",))
 
+    def test_a_changed_line_that_starts_with_two_plus_signs_is_still_a_line(self):
+        u = workbench.load_understanding()
+        patch = "--- a/x.c\n+++ b/x.c\n@@ -1 +1 @@\n-old_name\n+++counter_value\n"
+        names = u.identifiers(patch)
+        self.assertIn("counter_value", names)
+        self.assertNotIn("x", names)
+
     def test_the_snapshot_does_not_carry_the_checks(self):
         # They depend on the whole patch and nothing polls for them.
         self.assertNotIn("checks", self.app.snapshot())

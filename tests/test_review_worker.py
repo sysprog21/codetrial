@@ -282,6 +282,52 @@ Path(sys.argv[sys.argv.index('--output-last-message')+1]).write_text(json.dumps(
         self.assertEqual(evidence["folded"]["moved_lines"], 8)
         self.assertEqual(evidence["folded"]["whitespace_lines"], 2)
 
+    def test_the_asked_file_keeps_the_whole_budget_before_anything_is_set_aside(self):
+        def block(name, count, header):
+            return (
+                f"diff --git a/{name} b/{name}\n--- a/{name}\n+++ b/{name}\n"
+                f"@@ -0,0 +1,{count} @@\n" + "".join(header(i) for i in range(count))
+            )
+
+        diff = block("core.py", 20000, lambda i: f"+core line {i}\n") + block(
+            "other.py", 9000, lambda i: "+other\n"
+        )
+        (self.bundle / "pr.diff").write_text(diff)
+        manifest = json.loads((self.bundle / "manifest.json").read_text())
+        manifest["files"] = [
+            {"path": "core.py", "additions": 20000, "deletions": 0},
+            {"path": "other.py", "additions": 9000, "deletions": 0},
+        ]
+        (self.bundle / "manifest.json").write_text(json.dumps(manifest))
+        self.questions.write_text(
+            json.dumps(
+                [
+                    {
+                        "id": "core",
+                        "path": "core.py",
+                        "prompt": "What does the core file do?",
+                        "quote": "core line 7",
+                    }
+                ]
+            )
+        )
+        self.app = workbench.Workbench(self.bundle, self.questions)
+        self.app.revoke = lambda: None
+        self.submit(
+            "It numbers the core lines one by one so each can be told apart later."
+        )
+        self.start()
+        self.until(lambda: self.app.snapshot()["status"] == "reflection_needed")
+        prompt = next(self.root.glob("prompt-*")).read_text()
+        evidence = json.loads(prompt[prompt.index('{"head"') :])
+        size = len(evidence["diff"].encode())
+        self.assertLessEqual(size, 200000)
+        # Nearly all of the budget went to the file that was asked about.
+        core_bytes = len(evidence["diff"].split("diff --git a/other.py")[0].encode())
+        # The old order set 3000 bytes aside first; now it has the whole room.
+        self.assertGreater(core_bytes, 199000)
+        self.assertIn("core.py", evidence["files_first_lines_only"])
+
     def test_transient_session_read_failure_does_not_repeat_the_cli_call(self):
         self.mode("hold")
         self.submit()

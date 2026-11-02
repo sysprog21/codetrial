@@ -258,9 +258,9 @@ class Reviewer:
         core = next((e for e in entries if e[4]), None)
         rest = [e for e in entries if not e[4]]
         large = [e for e in rest if len(e[1].encode()) > 4 * OPENING]
-        pool = OPENING * len(large)
         # A count line is about 100 bytes; keep room for one per file.
-        room = limit - 150 * len(entries) - pool
+        room = limit - 150 * len(entries)
+        pool = 0
         parts, condensed, opening, counted = {}, [], [], []
 
         def changed_only(text):
@@ -278,12 +278,18 @@ class Reviewer:
             return shown + f"# ... {hidden} more changed lines not shown\n"
 
         if core:
+            # First, with all of the room: the passage asked about is why the
+            # reviewer was called, and must not be cut for what comes after it.
             if len(core[1].encode()) <= room:
                 parts[id(core)] = core[1]
             else:
                 parts[id(core)] = start_of(core[1], room)
                 opening.append(core[0])
             room -= len(parts[id(core)].encode())
+        # Then an allowance for the opening lines of the large files, out of
+        # what is left, so a large new file is not reduced to a count.
+        pool = min(OPENING * len(large), room // 2)
+        room -= pool
         for entry in sorted(rest, key=lambda e: len(e[1].encode())):
             name, text, added, deleted, _ = entry
             if len(text.encode()) <= room:

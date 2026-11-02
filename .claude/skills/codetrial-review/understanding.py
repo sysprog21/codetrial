@@ -123,7 +123,7 @@ def identifiers(patch, quote=""):
     """
     count = Counter()
     for line in patch.splitlines():
-        if line[:1] in "+-" and line[:3] not in ("+++", "---"):
+        if line[:1] in "+-" and not line.startswith(("+++ ", "--- ")):
             count.update(IDENT.findall(line[1:]))
     quoted = set(IDENT.findall(quote))
     return tuple(

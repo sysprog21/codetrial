@@ -435,6 +435,9 @@ async function loadSession() {
       pollingBlocked = false;
       return;
     }
+    // Before the session is kept: if the diff cannot be loaded, Retry must
+    // start over here and not find a session it believes is already shown.
+    const model = await api("/api/diff");
     session = next;
     answers = { ...next.answers };
     const focus = next.questions[0];
@@ -466,7 +469,7 @@ async function loadSession() {
       );
     $("coverage-note").textContent = notes.join(" ");
     $("coverage-note").hidden = !notes.length;
-    diffView.setModel(await api("/api/diff"));
+    diffView.setModel(model);
     $("loading").hidden = true;
     $("workspace").hidden = false;
     $("error").hidden = true;

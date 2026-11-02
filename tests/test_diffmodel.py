@@ -553,6 +553,31 @@ class RealGitTests(unittest.TestCase):
         renamed = {tuple(pair) for n in notes for pair in n["renames"]}
         self.assertIn(("compute", "combine"), renamed)
 
+    def test_a_renamed_and_edited_file_does_not_make_the_reading_look_wrong(self):
+        self.git("init", "-q", "-b", "main")
+        (self.repo / "old.txt").write_text("".join(f"line {n}\n" for n in range(30)))
+        self.git("add", ".")
+        self.git("commit", "-qm", "base")
+        (self.repo / "old.txt").rename(self.repo / "new.txt")
+        (self.repo / "new.txt").write_text(
+            "".join(f"line {n}\n" for n in range(30) if n != 5) + "extra\n"
+        )
+        self.git("add", "-A")
+        diff = self.git("diff", "--cached", "--find-renames=50%")
+        # What a manifest holds when it is read without rename detection.
+        manifest = []
+        for row in self.git(
+            "diff", "--cached", "--no-renames", "--numstat"
+        ).splitlines():
+            added, deleted, path = row.split("\t", 2)
+            manifest.append(
+                {"path": path, "additions": int(added), "deletions": int(deleted)}
+            )
+        self.assertEqual(sorted(m["path"] for m in manifest), ["new.txt", "old.txt"])
+        result = dm.reading(diff, manifest)
+        self.assertEqual(result["problems"], [])
+        self.assertEqual(result["files"][0]["status"], "renamed")
+
 
 if __name__ == "__main__":
     unittest.main()

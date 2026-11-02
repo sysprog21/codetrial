@@ -136,7 +136,7 @@ answer. `understanding.py` holds the rules, all deterministic, with no model
 call:
 
 - **Short:** a sendable core answer has at least 12 words, counting each CJK
-  character as one. "I don't know" is always acceptable.
+  character as one. "I don't know" is acceptable however short, though not as a lead-in to the question pasted back.
 - **Copied:** eight plain words in a row (twelve CJK characters) that appear in
   the question, its quoted passage or the file's patch are refused at send.
   Text inside `backticks` is not counted, so quoting a line is fine.
@@ -266,9 +266,11 @@ python3 .claude/skills/codetrial-review/workbench.py feedback \
 ```
 
 `$request_id` is the `request_id` from the `wait` result being answered. The
-command refuses it once the contributor has retried or changed the answers, and
-refuses a second reference for the same request, so a delayed reply cannot
-replace newer feedback or revoke a completed reflection.
+command refuses it once the contributor has retried or changed the answers, so
+a reply to a superseded request cannot replace newer feedback. Within the
+request being answered the agent may refine its reference, which replaces the
+earlier one and so clears a reflection already recorded against it; the managed
+worker never replaces one.
 
 The command refuses hashes for different code, questions or answers. It returns
 the current revision for the next wait. The web page checks for feedback every

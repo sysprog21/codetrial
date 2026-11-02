@@ -258,8 +258,9 @@ mark.del {
   background: color-mix(in srgb, var(--sub) 14%, transparent);
   box-shadow: inset 3px 0 0 var(--sub);
 }
-.ws {
-  opacity: 0.6;
+.ws .code,
+.ws .num {
+  color: var(--sub);
 }
 .ws .code {
   text-decoration: underline dotted;
