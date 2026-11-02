@@ -233,7 +233,7 @@ END {
 
     # A subject names the change and cannot also carry the reason for it, which
     # is what a reviewer and a later bisect need.
-    for (first = 2; first <= count && !nonblank(line[first]); first++)
+    for (first = 2; first <= count && (!nonblank(line[first]) || low[first] ~ /^(change-id|rechained):/); first++)
         ;
     if (first > count)
         complain("a body is required: say what changed and why")
@@ -258,7 +258,7 @@ END {
 
     # Reading from the bottom, since the last line is the one that stands where
     # the closing reference goes.
-    for (last = count; last > 0 && !nonblank(line[last]); last--)
+    for (last = count; last > 0 && (!nonblank(line[last]) || low[last] ~ /^(change-id|rechained):/); last--)
         ;
     if (last > 1 && reference(low[last]))
         complain("end with Close #N when this finishes the issue, or move the reference into the description; an issue too large for one change is split into sub-issues")
@@ -266,7 +266,7 @@ END {
     # Not an error: long bodies exist in this history. Still worth saying once,
     # because the house shape is a premise and its trade, not a retelling. A
     # paragraph break is a run of blank lines between two lines of text.
-    for (i = first + 1; i <= count; i++)
+    for (i = first + 1; i <= last; i++)
         if (nonblank(line[i]) && !nonblank(line[i - 1]))
             gaps++
     if (gaps > 1)

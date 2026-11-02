@@ -82,6 +82,7 @@ message()
 mkdir -p "$work/repo/scripts" || exit 1
 cp "$ROOT"/scripts/git-*.sh "$ROOT/scripts/git-commit-msg.awk" \
     "$ROOT/scripts/check-commit-log.sh" "$ROOT/scripts/check-secrets.py" \
+    "$ROOT/scripts/check-interactive-review.py" "$ROOT/scripts/hashchain.py" \
     "$ROOT/scripts/install-git-hooks.sh" "$ROOT/scripts/indent.sh" \
     "$work/repo/scripts/" || exit 1
 for config in .editorconfig .shellcheckrc; do
@@ -882,12 +883,13 @@ push_main()
         | "$hooks/pre-push" "$1" "$2"
 }
 
-# A topic head the review skill has not recorded is pushed with a note, never
-# refused; one it recorded is pushed without. A checkout without the skill, as
-# every push above, gets no note at all.
+# A small topic head without a recorded review is pushed with a note; one it
+# recorded is pushed without. A checkout without the skill or an upstream review
+# policy, as every push above, gets no note at all.
 absent "no note without the review skill" "$work/last.out" "no review on record"
 mkdir -p .claude/skills/codetrial-review "$(git rev-parse --git-common-dir)/codetrial-review"
 : > .claude/skills/codetrial-review/SKILL.md
+cp "$ROOT/.claude/skills/codetrial-review/commit-sizes.py" .claude/skills/codetrial-review/
 git commit -q --allow-empty -m "Change the topic further" \
     -m "A head nobody has reviewed yet, pushed to the same topic branch."
 expect 0 "an unreviewed topic head is pushed" git push -q fork HEAD:refs/heads/topic

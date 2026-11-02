@@ -208,6 +208,61 @@ jobs:
           git rev-list "$BASE_SHA..HEAD" | python3 scripts/check-secrets.py --commits
           git rev-list --no-merges "$BASE_SHA..HEAD" | ./scripts/check-commit-log.sh
 
+      - name: Verify the Change-Id hashchain
+        if: >-
+          matrix.lane == 'portable' &&
+          (github.event_name == 'pull_request' || github.event_name == 'push' || github.event_name == 'merge_group')
+        env:
+          CHAIN_TIP: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
+          CHAIN_POLICY_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+          CHAIN_BOOTSTRAP_HEAD: ${{ vars.CODETRIAL_HASHCHAIN_BOOTSTRAP_HEAD }}
+        run: |
+          set -eu
+          export GIT_NO_REPLACE_OBJECTS=1 GIT_TERMINAL_PROMPT=0
+          bootstrap=b6eb8ba9bfbb14ff8d8a7dee920d29590ee89f25
+          policy_ref=${CHAIN_POLICY_REF:-$bootstrap}
+          if [ "$policy_ref" = 0000000000000000000000000000000000000000 ]; then
+            policy_ref=$bootstrap
+          fi
+          if ! git cat-file -e "$policy_ref^{commit}" 2>/dev/null; then
+            echo "The policy commit $policy_ref is not in this checkout (a force-push or rewritten branch drops the previous tip)." >&2
+            echo "Push the branch again from a descendant of the base, or re-run on the pull request." >&2
+            exit 1
+          fi
+          verifier=$(mktemp)
+          trap 'rm -f "$verifier"' EXIT
+          if git cat-file -e "$policy_ref:scripts/hashchain-base" 2>/dev/null; then
+            anchor=$(git show "$policy_ref:scripts/hashchain-base")
+            git show "$policy_ref:scripts/hashchain.py" > "$verifier"
+          else
+            # Always execute the externally approved source, even when GitHub
+            # wraps that PR head in a new merge commit for main or the queue.
+            if ! printf '%s\n' "${CHAIN_BOOTSTRAP_HEAD:-}" | grep -Eq '^[0-9a-f]{40}$'; then
+              echo 'Hashchain bootstrap requires maintainer approval of an exact full head SHA.' >&2
+              exit 1
+            fi
+            if [ "$CHAIN_BOOTSTRAP_HEAD" != "$CHAIN_TIP" ]; then
+              parents=$(git show -s --format=%P "$CHAIN_TIP")
+              if [ "$parents" != "$policy_ref $CHAIN_BOOTSTRAP_HEAD" ]; then
+                echo 'Hashchain bootstrap requires maintainer approval of this exact head or its clean integration.' >&2
+                exit 1
+              fi
+              for path in scripts/hashchain.py scripts/hashchain-base; do
+                if [ "$(git rev-parse "$CHAIN_TIP:$path")" != "$(git rev-parse "$CHAIN_BOOTSTRAP_HEAD:$path")" ]; then
+                  echo 'Hashchain bootstrap integration changed the approved verifier or policy.' >&2
+                  exit 1
+                fi
+              done
+            fi
+            anchor=$bootstrap
+            if [ "$(git show "$CHAIN_BOOTSTRAP_HEAD:scripts/hashchain-base")" != "$anchor" ]; then
+              echo 'Hashchain bootstrap policy must retain the fixed initial anchor.' >&2
+              exit 1
+            fi
+            git show "$CHAIN_BOOTSTRAP_HEAD:scripts/hashchain.py" > "$verifier"
+          fi
+          python3 "$verifier" verify --tip "$CHAIN_TIP" --anchor "$anchor"
+
       - name: Reclaim runner disk
         if: matrix.lane == 'rust'
         uses: ./.github/actions/reclaim-disk
