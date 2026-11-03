@@ -152,6 +152,9 @@ cleanup()
     if [ "${BROWSER_CHECK_FLOOR_LOG:-}" ]; then
         echo "Floor diagnostics retained at $BROWSER_CHECK_FLOOR_LOG" >&2
     fi
+    if [ "${BROWSER_CHECK_LATENCY_LOG:-}" ]; then
+        echo "Latency diagnostics retained at $BROWSER_CHECK_LATENCY_LOG" >&2
+    fi
     rm -r "$TMP" 2> /dev/null || true
     exit "$cleanup_status"
 }
@@ -340,11 +343,15 @@ fi
 if [ "$BROWSER_CHECK_AGENT" = rust ] || [ "$BROWSER_CHECK_AGENT" = dispatch ]; then
     # Outside TMP: failure and signal cleanup must preserve early observations.
     BROWSER_CHECK_FLOOR_LOG=$(mktemp "${TMPDIR:-/tmp}/codetrial-floor.XXXXXX")
-    export BROWSER_CHECK_FLOOR_LOG
-    # Only a server this script launches writes SERVER_LOG.
-    if [ -z "${CODETRIAL_WEB_URL:-}" ]; then
-        node "$ROOT/scripts/floor-capture.cjs" "$SERVER_LOG" "$BROWSER_CHECK_FLOOR_LOG" "$TMP/floor.done" &
+    BROWSER_CHECK_LATENCY_LOG=$(mktemp "${TMPDIR:-/tmp}/codetrial-latency.XXXXXX")
+    export BROWSER_CHECK_FLOOR_LOG BROWSER_CHECK_LATENCY_LOG
+    # Dispatched agents log to this server; a Rust-mode agent has its own pipes.
+    if [ "$BROWSER_CHECK_AGENT" = dispatch ] && [ -z "${CODETRIAL_WEB_URL:-}" ]; then
+        node "$ROOT/scripts/floor-capture.cjs" "$SERVER_LOG" "$BROWSER_CHECK_FLOOR_LOG" "$TMP/floor.done" "$BROWSER_CHECK_LATENCY_LOG" &
         FLOOR_CAPTURE_PID=$!
+    elif [ "$BROWSER_CHECK_AGENT" = dispatch ]; then
+        printf '%s\n' 'codetrial capture_incomplete family=floor reason=external-server-log-unavailable' >> "$BROWSER_CHECK_FLOOR_LOG"
+        printf '%s\n' 'codetrial capture_incomplete family=latency reason=external-server-log-unavailable' >> "$BROWSER_CHECK_LATENCY_LOG"
     fi
 fi
 

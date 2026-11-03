@@ -19,6 +19,9 @@ pub(super) enum Event {
 #[derive(Debug, PartialEq, Eq)]
 pub(super) struct Record {
     pub seq: u64,
+    pub opened_at: Instant,
+    pub resolved_at: Option<Instant>,
+    pub activity_end_at: Option<Instant>,
     pub kind: &'static str,
     pub outcome: &'static str,
     pub gap_ms: Option<u128>,
@@ -76,10 +79,13 @@ pub(super) struct FloorTracker {
 }
 
 impl FloorTracker {
-    fn record(&mut self, kind: &'static str) -> Record {
+    fn record(&mut self, kind: &'static str, now: Instant) -> Record {
         self.sequence += 1;
         Record {
             seq: self.sequence,
+            opened_at: now,
+            resolved_at: None,
+            activity_end_at: None,
             kind,
             outcome: "unresolved",
             gap_ms: None,
@@ -124,6 +130,7 @@ impl FloorTracker {
                 if let Some(mut pause) = self.pause.take() {
                     if pause.record.outcome == "unresolved" {
                         pause.record.outcome = "continue";
+                        pause.record.resolved_at = Some(now);
                         pause.record.gap_ms = ms_since(now, pause.start);
                     } else if pause
                         .audio
@@ -141,7 +148,7 @@ impl FloorTracker {
                     emit(overlap.record);
                 }
                 if generating || !ahead.is_zero() {
-                    let mut record = self.record("overlap");
+                    let mut record = self.record("overlap", now);
                     record.playout_ahead_ms = Some(ahead.as_millis());
                     self.overlap = Some(Overlap {
                         record,
@@ -156,6 +163,7 @@ impl FloorTracker {
                     && overlap.ended.is_none()
                 {
                     overlap.ended = Some(now);
+                    overlap.record.activity_end_at = Some(now);
                     overlap.record.overlap_ms = ms_since(now, overlap.start);
                 }
                 self.finish_overlap(emit);
@@ -171,7 +179,7 @@ impl FloorTracker {
                 if let Some(pause) = self.pause.take() {
                     emit(pause.record);
                 }
-                let record = self.record("pause");
+                let record = self.record("pause", now);
                 self.pause = Some(Pause {
                     record,
                     start: now,
@@ -185,6 +193,7 @@ impl FloorTracker {
                 if let Some(pause) = &mut self.pause {
                     if first_output && pause.record.outcome == "unresolved" {
                         pause.record.outcome = "respond";
+                        pause.record.resolved_at = Some(now);
                         pause.record.gap_ms = ms_since(now, pause.start);
                     }
                     // `get_or_insert` keeps the generation's first chunk.
@@ -198,6 +207,7 @@ impl FloorTracker {
                     && overlap.record.outcome == "unresolved"
                 {
                     overlap.record.outcome = "interrupted";
+                    overlap.record.resolved_at = Some(now);
                 }
                 self.finish_overlap(emit);
             }
@@ -220,6 +230,7 @@ impl FloorTracker {
                     && overlap.record.outcome == "unresolved"
                 {
                     overlap.record.outcome = "continued";
+                    overlap.record.resolved_at = Some(now);
                     overlap.drained = Some(now);
                 }
                 self.finish_overlap(emit);
@@ -229,6 +240,7 @@ impl FloorTracker {
                     self.active = false;
                     if let Some(mut overlap) = self.overlap.take() {
                         overlap.record.outcome = "unresolved";
+                        overlap.record.resolved_at = None;
                         overlap.record.overlap_ms = None;
                         emit(overlap.record);
                     }
@@ -242,6 +254,7 @@ impl FloorTracker {
                 }
                 if let Some(mut overlap) = self.overlap.take() {
                     overlap.record.outcome = "unresolved";
+                    overlap.record.resolved_at = None;
                     emit(overlap.record);
                 }
             }

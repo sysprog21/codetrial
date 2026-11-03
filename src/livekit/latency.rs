@@ -242,6 +242,7 @@ pub(super) struct ReplyLatency {
     /// Wall-clock milliseconds at the anchor, `None` if the system clock reads
     /// before the epoch.
     start_unix_ms: Option<u64>,
+    anchor_uncertainty_ms: u64,
     /// The last whole minute a clock sample was logged for.
     sampled: u64,
     /// The last whole 30 second period a task sample was logged for.
@@ -386,6 +387,33 @@ impl ReplyLatency {
         self.anchor.map(|anchor| offset_ms(now, anchor))
     }
 
+    /// A fresh wall/monotonic pair for joining local harness observations.
+    /// Sampling delay and whole-millisecond rounding are uncertainty, not
+    /// drift.
+    pub(super) fn observation_clock(&self) -> Value {
+        let before = Instant::now();
+        let unix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .map(crate::agent::saturating_ms);
+        self.observation_clock_at(before, unix, Instant::now())
+    }
+
+    fn observation_clock_at(&self, before: Instant, unix: Option<u64>, after: Instant) -> Value {
+        let sampling = after.checked_duration_since(before);
+        let uncertainty = self.start_unix_ms.zip(unix).and(sampling).map(|duration| {
+            self.anchor_uncertainty_ms
+                .saturating_add(crate::agent::saturating_ms(duration))
+                .saturating_add(2)
+        });
+        json!({
+            "start_unix_ms": self.start_unix_ms,
+            "emitted_unix_ms": unix,
+            "emitted_ms": self.interview_ms(before),
+            "clock_uncertainty_ms": uncertainty,
+        })
+    }
+
     /// Starts a replacement episode and ties it to the reply still owed, which
     /// keeps its origin, start and number across the swap. Returns the episode
     /// number and that reply's obligation, if any.
@@ -414,10 +442,13 @@ impl ReplyLatency {
     /// every sample so a log cut short or joined from two files still knows it.
     pub(super) fn anchor(&mut self, started: Instant) -> String {
         self.anchor = Some(started);
+        let sampling = Instant::now();
         self.start_unix_ms = std::time::SystemTime::now()
             .checked_sub(started.elapsed())
             .and_then(|at| at.duration_since(std::time::UNIX_EPOCH).ok())
             .map(crate::agent::saturating_ms);
+        self.anchor_uncertainty_ms =
+            crate::agent::saturating_ms(sampling.elapsed()).saturating_add(2);
         self.sampled = 0;
         self.task_sampled = 0;
         self.clock_line(0, 0)
@@ -938,7 +969,63 @@ impl ReplyLatency {
         Some(self.record("audio_accepted", now, Outcome::Open))
     }
 
+    /// Unlike a reply trace, gate invalidation exists even with no output.
+    fn gate_observation(&self, stage: &str, started: Instant, finished: Instant) -> Value {
+        json!({
+            "event": "gate_boundary", "version": 1,
+            "pid": std::process::id(), "room": self.room,
+            "session": self.session, "socket": self.socket,
+            "turn": self.trace.as_ref().map(|trace| trace.turn),
+            "stage": stage, "interview_ms": self.interview_ms(started),
+            "event_end_ms": self.interview_ms(finished),
+            "clock": self.observation_clock(),
+        })
+    }
+
+    /// Observations do not settle or replace the reply latency trace.
+    pub(super) fn closing(&self, started: Instant, finished: Instant) {
+        self.gate_observation_to("closing", started, finished, &mut std::io::stderr().lock());
+    }
+
+    pub(super) fn closing_requested(&self, started: Instant, finished: Instant) {
+        self.gate_observation_to(
+            "close_requested",
+            started,
+            finished,
+            &mut std::io::stderr().lock(),
+        );
+    }
+
+    fn gate_observation_to(
+        &self,
+        stage: &str,
+        started: Instant,
+        finished: Instant,
+        output: &mut impl std::io::Write,
+    ) {
+        let line = format!(
+            "codetrial replay_gate {}\n",
+            self.gate_observation(stage, started, finished)
+        );
+        output
+            .write_all(line.as_bytes())
+            .expect("failed to write replay gate observation");
+    }
+
     pub(super) fn boundary(&mut self, boundary: Boundary, now: Instant) -> Option<Value> {
+        self.boundary_to(boundary, now, &mut std::io::stderr().lock())
+    }
+
+    fn boundary_to(
+        &mut self,
+        boundary: Boundary,
+        now: Instant,
+        output: &mut impl std::io::Write,
+    ) -> Option<Value> {
+        // `now` is when the provider event arrived. A queued boundary can be
+        // handled after a later tool acknowledgement, so the observation also
+        // spans the time it took effect.
+        self.gate_observation_to(boundary.label(), now, Instant::now().max(now), output);
         if matches!(boundary, Boundary::Held) {
             self.voice_ended = false;
             self.voice_started = false;
@@ -1036,6 +1123,7 @@ impl ReplyLatency {
             "tool_handler_ms": trace.tool_handler_ms,
             "context_tokens": self.context_tokens,
             "interview_ms": self.interview_ms(now),
+            "clock": self.observation_clock(),
             "obligation": owed.then_some(trace.turn),
             "obligation_outcome": owed.then(|| outcome.label()),
             "owed_start_interview_ms": self.interview_ms(trace.start).filter(|_| owed),

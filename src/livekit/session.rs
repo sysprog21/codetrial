@@ -13,7 +13,13 @@
 //! send them and go out from the parent, through [`send_model_text`], which is
 //! here because counting them is this half's job.
 
+mod floor;
+mod observations;
 mod recovery;
+
+use floor::write_floor;
+pub(super) use floor::{observe_floor, reconcile_floor};
+use observations::{HintCounters, ToolTiming, execute_timed_tool_batch, known_tool_name};
 
 use recovery::log_socket_pressure;
 pub(super) use recovery::{
@@ -673,21 +679,6 @@ pub(super) fn accept_gemini_event(
     }
 }
 
-/// A declared tool's name, never the model's text for an undeclared one.
-fn known_tool_name(name: &str) -> &'static str {
-    [
-        TOOL_READ_EDITOR,
-        TOOL_READ_BOARD,
-        TOOL_READ_CONVERSATION,
-        TOOL_LOG_HINT,
-        TOOL_RECORD_FRAMEWORK_EVIDENCE,
-        TOOL_END_INTERVIEW,
-    ]
-    .into_iter()
-    .find(|tool| *tool == name)
-    .unwrap_or("unknown")
-}
-
 /// Provider milestones are when the message arrived, not when the room loop
 /// got to it, so a busy loop is not charged to Gemini.
 fn received_at(gemini: &GeminiLiveSession) -> Instant {
@@ -1045,6 +1036,7 @@ async fn on_tool_calls(
     let timed = !context.state.interviewer_silenced() && !context.activity.socket.discarding_output;
     let reviewed_revision = context.activity.substantive_revision_at_last_review;
     let tool_started = Instant::now();
+    let hints_before = HintCounters::capture(context.state);
     let answers = execute_timed_tool_batch(
         context.state,
         context.activity,
@@ -1091,23 +1083,19 @@ async fn on_tool_calls(
     // Gemini resumes the moment the responses land, so serializing them again
     // for the lines below waits until after the send.
     if !context.activity.socket.discarding_output && !context.state.interviewer_silenced() {
-        let batch_ms = crate::agent::saturating_ms(tool_started.elapsed());
-        let mut timing =
-            context
-                .activity
-                .latency
-                .tool_response(Instant::now(), batch_ms, sent.is_ok());
-        timing["tool_batch_ms"] = batch_ms.into();
-        timing["tool_execute_ms"] = tool_execute_ms.into();
-        timing["board_resend_ms"] = board_resend_ms.into();
-        timing["tool_send_ms"] = tool_send_ms.into();
-        timing["tool_count"] = answers.len().into();
-        timing["tool_names"] = answers
-            .iter()
-            .map(|(call, _)| known_tool_name(&call.name))
-            .collect::<Vec<_>>()
-            .into();
-        timing["sent"] = sent.is_ok().into();
+        let timing = observations::tool_timing(
+            context.activity,
+            context.state,
+            &answers,
+            hints_before,
+            ToolTiming {
+                batch_ms: crate::agent::saturating_ms(tool_started.elapsed()),
+                execute_ms: tool_execute_ms,
+                board_ms: board_resend_ms,
+                send_ms: tool_send_ms,
+                sent: sent.is_ok(),
+            },
+        );
         latency::log(&timing);
     }
     for (call, response) in &answers {
@@ -1376,64 +1364,6 @@ async fn on_input_transcript(
         context.transcripts.publish(room, prepared.segment);
     }
     Ok(())
-}
-
-/// Most events emit nothing, and some arrive per audio chunk or per loop step,
-/// so the clock is only read when a record is written.
-pub(super) fn observe_floor(
-    room: &str,
-    activity: &mut RuntimeActivity,
-    state: &RuntimeState,
-    event: super::floor::Event,
-) {
-    write_floor(
-        room,
-        activity,
-        || log_clock(state),
-        event,
-        &mut std::io::stderr().lock(),
-    );
-}
-
-fn write_floor(
-    room: &str,
-    activity: &mut RuntimeActivity,
-    clock: impl Fn() -> String,
-    event: super::floor::Event,
-    output: &mut impl std::io::Write,
-) {
-    let session = activity.live_session_id;
-    let socket = activity.live_socket;
-    // Read once, so every record one event emits carries the same `at`.
-    let mut at = None;
-    activity
-        .floor_tracker
-        .observe(event, Instant::now(), &mut |record| {
-            let at = at.get_or_insert_with(&clock);
-            writeln!(output, "{}", record.log_line(room, session, socket, at))
-                .expect("failed to write floor observation");
-        });
-}
-
-pub(super) fn reconcile_floor(
-    room: &str,
-    activity: &mut RuntimeActivity,
-    clock: impl Fn() -> String,
-    playing: bool,
-    output: &mut impl std::io::Write,
-) {
-    if !activity.candidate_voice_active {
-        write_floor(
-            room,
-            activity,
-            &clock,
-            super::floor::Event::ActivityLost,
-            output,
-        );
-    }
-    if !activity.generating && !playing {
-        write_floor(room, activity, &clock, super::floor::Event::Drained, output);
-    }
 }
 
 fn context_floor(
@@ -1949,21 +1879,6 @@ fn agent_state_attributes(
     attributes
 }
 
-fn execute_timed_tool_batch(
-    state: &mut RuntimeState,
-    activity: &mut RuntimeActivity,
-    calls: Vec<GeminiFunctionCall>,
-    reviewed_revision: u64,
-    timed: bool,
-) -> Vec<(GeminiFunctionCall, serde_json::Value)> {
-    execute_tool_batch_observed(state, calls, reviewed_revision, |started, finished| {
-        if timed {
-            activity.turn_timing.note_tool_request(started);
-            activity.turn_timing.note_tool_execution(started, finished);
-        }
-    })
-}
-
 /// Public so the behaviour check in `tests/interview_behavior.rs` answers a
 /// text model's tool calls with this dispatch rather than a copy of it.
 pub fn execute_tool_call(state: &mut RuntimeState, call: &GeminiFunctionCall) -> serde_json::Value {
@@ -2007,14 +1922,14 @@ pub(super) fn execute_tool_batch(
     calls: Vec<GeminiFunctionCall>,
     reviewed_revision: u64,
 ) -> Vec<(GeminiFunctionCall, serde_json::Value)> {
-    execute_tool_batch_observed(state, calls, reviewed_revision, |_, _| {})
+    execute_tool_batch_observed(state, calls, reviewed_revision, |_, _, _| {})
 }
 
 fn execute_tool_batch_observed(
     state: &mut RuntimeState,
     calls: Vec<GeminiFunctionCall>,
     reviewed_revision: u64,
-    mut observe: impl FnMut(Instant, Instant),
+    mut observe: impl FnMut(Instant, Instant, bool),
 ) -> Vec<(GeminiFunctionCall, serde_json::Value)> {
     let review_changed = editor_review_allowed(state)
         && state.code != state.code_shown
@@ -2033,13 +1948,18 @@ fn execute_tool_batch_observed(
         .enumerate()
         .map(|(index, call)| {
             let started = Instant::now();
+            let was_requested = state.end_requested;
             let response = execute_tool_call_with_continuity(
                 state,
                 &call,
                 Some(index) == last_continuity,
                 Some(index) == last_framework,
             );
-            observe(started, Instant::now());
+            observe(
+                started,
+                Instant::now(),
+                !was_requested && state.end_requested,
+            );
             (call, response)
         })
         .collect::<Vec<_>>();

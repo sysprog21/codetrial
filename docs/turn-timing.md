@@ -186,26 +186,90 @@ logged. Activity is eligible only with a candidate audio track, outside a
 thinking hold and discarded output. PCM levels and transcripts cannot open
 records.
 
+### Opening and resolution clocks
+
+Floor lines append `opened_ms`, `resolved_ms`, `activity_end_ms`, `emitted_ms`,
+`emitted_unix_ms`, `start_unix_ms`, `clock_uncertainty_ms` and process `pid`. Event offsets use
+the same anchored monotonic clock as latency records. Missing anchors stay
+`unknown`; the runtime state's coarse display clock is never a substitute.
+`resolved_ms` is set once when the outcome leaves unresolved, not when a
+buffered record emits. For an overlap, `activity_end_ms` records candidate END
+separately: END may precede or follow interruption/drain. Reset/lost activity
+that turns an unended overlap back into unresolved clears its resolution.
+These fields do not alter any observation outcome, flag or interview action.
+
+The emission clock pairs a fresh wall reading with monotonic sampling bounds.
+`clock_uncertainty_ms` includes the original anchor's sampling duration, the
+current sample's duration and whole-millisecond rounding. It does not bound
+wall-clock steps/slew, network, provider, browser scheduling or handler lag. A consumer must retain
+its own injection bracket and uncertainty, verify anchor identity and clock
+drift, and reject ambiguous or out-of-window attribution. Emission order and
+max emitted sequence remain insufficient for joining an injection to a record.
+
+Tool-response latency records include allowlisted `accepted_tool_names`,
+`hint_given` and `closing`, separate from `sent`. `closing` observes the existing
+end-requested or ended state after the batch; it does not end the session. Accepted means no tool error, not that a
+response was delivered. `hint_given` means this batch advanced an authored hint
+rung or recorded a volunteered hint; withheld/exhausted requests cannot supply
+hint context merely because their tool response has no error. It establishes
+server tool context, never the content or audibility of a generated phrase.
+
+`codetrial replay_gate` JSON lines carry `event=gate_boundary`, version 1,
+room/process/session/socket identity, optional turn, stage, event `interview_ms`
+and an emission `clock` sample. `event_end_ms` is the upper bound of the
+observed transition. For an ordinary provider boundary, `interview_ms` is when
+the event arrived and `event_end_ms` is when the room loop handled it, so a
+boundary queued behind a tool send spans that wait; only records without the
+field have equal endpoints. A boundary may also appear as a latency record of
+the same stage, and a consumer treats the pair as one event.
+A `close_requested` observation brackets the tool call that first requests an
+end, before any asynchronous response/board work. A `closing` observation
+brackets the control reduction that first ends the session, before farewell or
+report work. These observations leave reply traces intact. A consumer must
+retain the interval rather than assigning a delayed transition to its emission
+time. Missing interval fields on older ordinary boundaries mean their original
+single event offset. Each invocation of the latency boundary handler
+emits one, even without an open reply trace: accepted turn completion or
+interruption, hold, and socket replacement cannot silently leave an old tool
+gate eligible. Provider events rejected by existing acceptance, hold or discard
+guards do not create new boundaries; the hold/replacement that invalidated
+context is already authoritative. These diagnostics change neither provider
+acceptance nor the room's state transitions.
+
 ### Retaining browser-check evidence
 
-For Rust and dispatch modes, `scripts/browser-check.sh` creates a private
-`codetrial-floor.*` file outside its temporary server directory and prints its
-path during cleanup. `BROWSER_CHECK_FLOOR_LOG` is an internal handoff to the
-harness, not a caller-selected destination. The Node harness captures each
-complete floor line before trimming its stderr buffer. A separate follower
-reads dispatched-agent diagnostics from server byte zero, and uses a completion
-marker to drain the server log after server teardown before the temporary
-directory is deleted. Each line is appended with one synchronous write and is
-not fsynced, so it survives a killed process but not power loss. On group
-signals the follower waits for the completion marker, with a five-second
-fallback; if its parent disappears it drains once and exits instead of polling
-forever. Lines split across reads are joined; oversized lines and unrelated
-output are excluded. Review and remove retained artifacts when no longer
-needed. These diagnostics contain identifiers but no interview content.
+For Rust and dispatch modes, `scripts/browser-check.sh` creates private
+`codetrial-floor.*` and `codetrial-latency.*` files outside its temporary server
+directory and prints both paths during cleanup. `BROWSER_CHECK_FLOOR_LOG` and
+`BROWSER_CHECK_LATENCY_LOG` are internal handoffs, not caller-selected paths.
+The Node harness retains complete floor and latency lines before trimming its
+stderr tail. The latency file also keeps `interview clock:`, `replacement start:`,
+`replacement end:` and `codetrial replay_gate` lines. In dispatch mode a single follower reads server
+diagnostics from byte zero and uses a completion marker to drain the server log
+after teardown before the temporary directory is deleted. Rust mode captures
+its own agent's pipes instead, including their final close after group shutdown.
 
-`BROWSER_CHECK_CAPTURE`, when provided, includes `floorLogPath`, a snapshot of
-record fields (including socket and sequence ids), and barge replay
-state/timestamp metadata. Refused injections record an exclusion category and
+Each retained line is appended with one synchronous write and is not fsynced:
+it survives a killed process but not power loss. Each pipe has a separate UTF-8
+line buffer; complete lines are capped at 4,096 bytes including the newline.
+Unrelated output is excluded. Oversized, unterminated, malformed UTF-8 or
+unframed diagnostics leave a content-free `codetrial capture_incomplete` marker
+in the relevant file, with its family and reason. A pipe error, failed write,
+missed drain deadline or observed source-file replacement/shrink also leaves
+incomplete evidence or a nonzero harness exit. An observational judge must
+classify these as incomplete, never passing evidence; the legacy barge smoke
+still checks only for its measured interrupted overlap. No dropped stderr
+content is copied into a marker. Dispatch against an external server marks
+both artifacts unavailable because this runner cannot follow that server's log.
+
+On group signals the dispatched follower waits for the completion marker with
+a five-second fallback; if its parent disappears it drains once and exits.
+Review and remove retained artifacts when no longer needed. These diagnostics
+contain identifiers but no interview content.
+
+`BROWSER_CHECK_CAPTURE`, when provided, includes `floorLogPath`, `latencyLogPath`
+and a snapshot of floor record fields (including socket and sequence ids), plus
+barge replay state/timestamp metadata. Refused injections record an exclusion category and
 observed state, so a misaligned trial stays distinct from a provider failure.
 Files survive failed and interrupted runs. Abrupt process termination cannot
 synthesize terminal records for still-open provider observations; missing END
@@ -220,6 +284,9 @@ for its room in the durable file; transcript order alone cannot pass the smoke.
 This proves neither hint/tool-state alignment nor physical audibility. H-3/TT-2
 still need separately digested WAV and headerless 16 kHz mono s16le PCM
 fixtures, a replay pilot and explicit exclusion counts for misaligned trials.
+The [observational replay contract](observational-replay.md) defines the named
+fixture format and offline validator; its transport and evidence requirements
+remain prerequisites for that pilot.
 
 ## Continuity gaps
 

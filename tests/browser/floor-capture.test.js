@@ -8,7 +8,7 @@ import { createRequire } from "node:module";
 import { until, withBackstop } from "./wait.js";
 const require = createRequire(import.meta.url);
 const {
-  FloorCapture,
+  DiagnosticCapture,
   assertInterruptedOverlap,
   readFloorRecords,
 } = require("../../scripts/floor-capture.cjs");
@@ -30,7 +30,7 @@ const persisted = (target) =>
 
 test("split lines survive rolling-buffer overflow and exclude other output", (t) => {
   const { target } = fixture(t);
-  const capture = new FloorCapture(target);
+  const capture = new DiagnosticCapture(target);
   capture.push(Buffer.from(line.slice(0, 15)));
   capture.push(Buffer.from(line.slice(15)));
   capture.push("x".repeat(20000) + "\nprivate unrelated output\n");
@@ -180,5 +180,8 @@ test("orphaned follower exits when its shell parent disappears", async (t) => {
   });
   parent.kill("SIGKILL");
   await withBackstop(closed, "the orphaned follower to release its pipes");
-  assert.equal(fs.readFileSync(target, "utf8"), line);
+  assert.equal(
+    fs.readFileSync(target, "utf8"),
+    line + "codetrial capture_incomplete family=floor reason=parent-lost\n",
+  );
 });

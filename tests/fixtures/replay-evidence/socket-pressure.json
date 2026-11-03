@@ -1,0 +1,38 @@
+[
+  {
+    "blocked_ms_max": 0,
+    "blocked_ms_total": 0,
+    "blocked_sends": 0,
+    "capacity": 256,
+    "consumed": 0,
+    "end": "replacement",
+    "event": "socket_pressure",
+    "interview_ms": 1200,
+    "occupancy_high_water": 1,
+    "pid": 42,
+    "reader_end": "stopped",
+    "received": 1,
+    "room": "test-room",
+    "session": 7,
+    "socket": 1,
+    "version": 2
+  },
+  {
+    "blocked_ms_max": 0,
+    "blocked_ms_total": 0,
+    "blocked_sends": 0,
+    "capacity": 256,
+    "consumed": 0,
+    "end": "terminal",
+    "event": "socket_pressure",
+    "interview_ms": 2500,
+    "occupancy_high_water": 0,
+    "pid": 42,
+    "reader_end": "stopped",
+    "received": 0,
+    "room": "test-room",
+    "session": 7,
+    "socket": 2,
+    "version": 2
+  }
+]

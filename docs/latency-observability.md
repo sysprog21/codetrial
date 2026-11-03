@@ -500,6 +500,20 @@ still has the anchor. `elapsed_ms` and every `interview_ms` read the same clock,
 which a socket replacement does not reset, so a long harness can verify the
 full duration from the last sample.
 
+#### Emission clock samples
+
+Each new `reply_latency` record also carries a `clock` object containing
+`start_unix_ms`, `emitted_unix_ms`, `emitted_ms` and `clock_uncertainty_ms`.
+These additive fields keep the existing record version. The wall time is
+sampled afresh, bracketed by monotonic reads; uncertainty includes the anchor
+sample, current sampling and millisecond rounding. An absent wall reading or
+anchor remains null, never zero. The event's `interview_ms` is distinct from
+the emission sample: a provider event may have waited in the handler's queue.
+These samples support detecting wall-clock drift in a short replay without
+waiting for a minute clock line; they do not measure browser or network delay.
+The [floor observation contract](turn-timing.md#opening-and-resolution-clocks)
+defines the additional floor times and tool-gate invalidation diagnostics.
+
 #### Microphone dequeue gaps
 
 Each `interview clock:` line also carries `mic_gap_max_ms=`,

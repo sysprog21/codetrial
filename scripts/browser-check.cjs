@@ -19,10 +19,12 @@ const fs = require("fs");
 const { mediaProbeSource, assertJimAudio } = require("./media-probe.cjs");
 const { installBargeReplay } = require("./barge-replay.cjs");
 const {
-  FloorCapture,
+  captureDiagnosticStream,
+  drainDiagnosticStreams,
   assertInterruptedOverlap,
   readFloorRecords,
 } = require("./floor-capture.cjs");
+const { cleanupBrowserCheck } = require("./browser-check-cleanup.cjs");
 const http = require("http");
 const { spawn } = require("child_process");
 const {
@@ -79,6 +81,7 @@ const {
 } = require("./soak-judge.cjs");
 
 const floorLogPath = process.env.BROWSER_CHECK_FLOOR_LOG || null;
+const latencyLogPath = process.env.BROWSER_CHECK_LATENCY_LOG || null;
 
 // Written before the run can fail, so an aborted run still points at its
 // retained floor log.
@@ -91,6 +94,7 @@ function writeIncompleteCapture(fields) {
         flow: process.env.BROWSER_CHECK_FLOW,
         status: "incomplete",
         floorLogPath,
+        latencyLogPath,
         ...(soakSummary ? { soak: soakSummary } : {}),
         ...fields,
       },
@@ -1255,6 +1259,7 @@ async function isolateRustAgent(
   let rustAgent;
   let compilerExplorerMock;
   let agentDone = false;
+  const diagnosticStreams = [];
 
   // Before a browser or an agent exists: a run launched by
   // scripts/interview-run-budget.py joins its budget here, and a manifest the
@@ -1291,7 +1296,10 @@ async function isolateRustAgent(
         console.error("run budget launcher is gone; stopping the check");
         // The agent is detached, so neither this exit nor the shell reaches
         // it, and the launcher that would have reaped it is the one that died.
-        await stopAgentGroup(rustAgent, 1500, true);
+        await stopAgentGroup(rustAgent, 1500, true).catch(() =>
+          console.error("agent stop failed during launcher cleanup"),
+        );
+        await drainDiagnosticStreams(diagnosticStreams, 1500).catch(() => {});
         const closing = browser ? browser.close().catch(() => {}) : null;
         await Promise.race([closing, new Promise((r) => setTimeout(r, 2000))]);
         process.exit(4);
@@ -1346,6 +1354,7 @@ async function isolateRustAgent(
     process.exit(1);
   }
 
+  let operationFailed = false;
   try {
     const page = await browser.newPage();
     let bargeReplay = null;
@@ -1540,11 +1549,13 @@ async function isolateRustAgent(
         },
       );
       for (const stream of [rustAgent.stdout, rustAgent.stderr]) {
-        const streamCapture = floorLogPath
-          ? new FloorCapture(floorLogPath)
-          : null;
+        diagnosticStreams.push(
+          captureDiagnosticStream(stream, {
+            floor: floorLogPath,
+            latency: latencyLogPath,
+          }),
+        );
         stream.on("data", (chunk) => {
-          streamCapture?.push(chunk);
           const text = redact(chunk);
           if (
             text.includes(
@@ -1555,7 +1566,6 @@ async function isolateRustAgent(
           agentOutput.push(text);
           while (agentOutput.join("").length > 12000) agentOutput.shift();
         });
-        stream.once("close", () => streamCapture?.close());
       }
       agentFailure = new Promise((_, reject) => {
         rustAgent.once("exit", (code, signal) => {
@@ -3290,6 +3300,7 @@ PatternLexicon.prototype.search = function(word) {
                 agentAfterCandidate,
                 rustAgentParticipants,
                 floorLogPath,
+                latencyLogPath,
                 floorRecords: floorLogPath
                   ? readFloorRecords(floorLogPath)
                   : [],
@@ -3347,14 +3358,18 @@ PatternLexicon.prototype.search = function(word) {
       throw error;
     });
     agentDone = true;
+  } catch (error) {
+    operationFailed = true;
+    throw error;
   } finally {
     agentDone = true;
-    await stopAgentGroup(rustAgent, 5000, false);
-    if (compilerExplorerMock)
-      await new Promise((resolve) =>
-        compilerExplorerMock.server.close(resolve),
-      );
-    await browser.close();
+    await cleanupBrowserCheck({
+      stopAgent: () => stopAgentGroup(rustAgent, 5000, false),
+      streams: diagnosticStreams,
+      browser,
+      compilerExplorerMock,
+      operationFailed,
+    });
   }
 })().catch((error) => {
   // Redacted like every other error path in this file. This one is the last
