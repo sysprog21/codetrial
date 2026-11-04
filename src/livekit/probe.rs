@@ -20,6 +20,11 @@
 //! frame that arrives next, so the hold starts within about one frame (10 ms)
 //! of being asked for.
 
+pub(super) mod acquisition;
+
+#[path = "../../tests/unit/livekit/probe/serving.rs"]
+mod serving;
+
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;

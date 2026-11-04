@@ -2194,11 +2194,11 @@ fn binary_web_reads_deployment_keys_from_the_config_file() {
             .to_string()
     };
 
-    // Every phase of the startup path: assembled in `web_server_config`,
-    // `prepare` and `finish` (src/launch.rs), bound in `run_web` (src/main.rs)
-    // and served by `serve`, all from the config file, never the environment.
+    // Every phase of the startup path, in src/launch.rs and src/main.rs, takes
+    // its deployment from the operator's config file, never the environment.
     assert!(body("web_server_config").contains("trusted_proxy_hops(values)"));
-    let phases = "run_web prepare finish local_agent_config web_server_config serve";
+    let phases = "run_web prepare finish local_agent_config web_server_config \
+                  serve serve_with run";
     for name in phases.split(' ') {
         assert!(!body(name).contains("std::env::var"), "{name}");
     }

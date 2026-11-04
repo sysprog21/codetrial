@@ -465,16 +465,27 @@ pub fn extend_pool(
         eprintln!("{warning}");
     }
 
-    // Said once, at startup, in rotation order. Every provider question asked
-    // of a running server so far has been answerable only by reading the config
-    // directory and the argv back to itself and guessing which won.
-    if !pool.providers.is_empty() {
-        let (summary, warnings) = crate::config::pool_summary(&pool.providers);
-        eprintln!("{summary}");
-        for warning in warnings {
-            eprintln!("WARNING: {warning}");
-        }
+    for line in pool_report(&pool.providers) {
+        eprintln!("{line}");
     }
+}
+
+/// What startup says about the pool, in rotation order, and nothing for an
+/// empty one. Every provider question asked of a running server so far has been
+/// answerable only by reading the config directory and the argv back to itself
+/// and guessing which won.
+fn pool_report(providers: &[crate::config::Provider]) -> Vec<String> {
+    if providers.is_empty() {
+        return Vec::new();
+    }
+    let (summary, warnings) = crate::config::pool_summary(providers);
+    std::iter::once(summary)
+        .chain(
+            warnings
+                .into_iter()
+                .map(|warning| format!("WARNING: {warning}")),
+        )
+        .collect()
 }
 
 /// Refuses to start on a database that will not migrate, before anything is
@@ -939,14 +950,25 @@ pub fn local_agent_config(
     Ok(agent_config)
 }
 
+/// How long a stopping server may wait on what it still holds.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Bounds {
+    /// Open connections holding the shutdown up once it has begun (`None`
+    /// waits for them): a client holding a half-sent request would otherwise
+    /// keep a fixture from ever reporting.
+    pub drain: Option<std::time::Duration>,
+    /// Admitted rooms and the reports they are still writing, after the last
+    /// connection has gone and nothing new can be admitted (`None` does not
+    /// wait, and ends them when the runtime drops).
+    pub settle: Option<std::time::Duration>,
+}
+
 /// Serves the web service, and the local interviewer when there is an agent
 /// config, until `shutdown` resolves and the connections in flight have
-/// finished. `codetrial web` passes a future that never resolves; a fixture
-/// passes its stop signal. `drain` bounds how long open connections may hold
-/// the shutdown up once it has begun (`None` waits for them): a client holding
-/// a half-sent request would otherwise keep a fixture from ever reporting. The
-/// listener must already be non-blocking. The runtime is dropped before this
-/// returns, which ends any room task still running.
+/// finished. `codetrial web` passes a future that never resolves and no
+/// bounds; a fixture passes its stop signal and bounds. The listener must
+/// already be non-blocking. The runtime is dropped before this returns, which
+/// ends any room task still running.
 pub fn serve(
     listener: std::net::TcpListener,
     config: WebServerConfig,
@@ -954,42 +976,109 @@ pub fn serve(
     agent_config: Option<crate::config::AgentConfig>,
     max_concurrent: usize,
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
-    drain: Option<std::time::Duration>,
+    bounds: Bounds,
 ) -> Result<(), String> {
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should start");
-    runtime
-        .block_on(async {
-            let listener = tokio::net::TcpListener::from_std(listener)?;
-            let dispatcher = agent_config.map(|config| {
-                std::sync::Arc::new(crate::dispatch::LocalDispatcher {
-                    config,
-                    runtime: tokio::runtime::Handle::current(),
-                    state: std::sync::Arc::default(),
-                    max_concurrent,
-                }) as std::sync::Arc<dyn crate::web::RoomDispatcher>
-            });
-            let (begun, shutting_down) = tokio::sync::oneshot::channel::<()>();
-            let served = axum::serve(
-                listener,
-                crate::web::web_service_with_setup(config, dispatcher, setup),
-            )
-            .with_graceful_shutdown(async move {
-                shutdown.await;
-                let _ = begun.send(());
-            });
-            let overdue = async {
-                match (shutting_down.await, drain) {
-                    (Ok(()), Some(bound)) => tokio::time::sleep(bound).await,
-                    _ => std::future::pending().await,
-                }
-            };
-            tokio::select! {
-                result = served => result,
-                () = overdue => Err(std::io::Error::new(
-                    std::io::ErrorKind::TimedOut,
-                    "connections were still open when the shutdown bound passed",
-                )),
-            }
-        })
-        .map_err(|error| format!("web server failed: {error}"))
+    let dispatcher = agent_config.map(|config| {
+        std::sync::Arc::new(crate::dispatch::LocalDispatcher {
+            config,
+            runtime: runtime.handle().clone(),
+            state: std::sync::Arc::default(),
+            max_concurrent,
+        }) as std::sync::Arc<dyn crate::web::RoomDispatcher>
+    });
+    runtime.block_on(run(listener, config, setup, dispatcher, shutdown, bounds))
 }
+
+/// `serve` with the dispatcher supplied, for a caller that has its own.
+pub fn serve_with(
+    listener: std::net::TcpListener,
+    config: WebServerConfig,
+    setup: Option<crate::web::SetupContext>,
+    dispatcher: Option<std::sync::Arc<dyn crate::web::RoomDispatcher>>,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+    bounds: Bounds,
+) -> Result<(), String> {
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should start");
+    runtime.block_on(run(listener, config, setup, dispatcher, shutdown, bounds))
+}
+
+async fn run(
+    listener: std::net::TcpListener,
+    config: WebServerConfig,
+    setup: Option<crate::web::SetupContext>,
+    dispatcher: Option<std::sync::Arc<dyn crate::web::RoomDispatcher>>,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+    bounds: Bounds,
+) -> Result<(), String> {
+    let listener = tokio::net::TcpListener::from_std(listener)
+        .map_err(|error| format!("web server failed: {error}"))?;
+    let watched = dispatcher.clone();
+    let closing = dispatcher.clone();
+    let (begun, shutting_down) = tokio::sync::oneshot::channel::<()>();
+    let served = axum::serve(
+        listener,
+        crate::web::web_service_with_setup(config, dispatcher, setup),
+    )
+    .with_graceful_shutdown(async move {
+        shutdown.await;
+
+        // Closing the listener does not end requests already in flight, and one
+        // of them could still admit a room while the settle wait below is
+        // looking at an idle dispatcher.
+        if let Some(dispatcher) = closing {
+            dispatcher.close_admission();
+        }
+        let _ = begun.send(());
+    });
+    let overdue = async {
+        match (shutting_down.await, bounds.drain) {
+            (Ok(()), Some(bound)) => tokio::time::sleep(bound).await,
+            _ => std::future::pending().await,
+        }
+    };
+    let served = tokio::select! {
+        result = served => result,
+        () = overdue => Err(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "connections were still open when the shutdown bound passed",
+        )),
+    }
+    .map_err(|error| format!("web server failed: {error}"));
+
+    // Nothing new is admitted now. Whatever was is allowed to finish, report
+    // included, before the runtime drops and ends it.
+    match (bounds.settle, watched) {
+        (Some(limit), Some(dispatcher)) if !settled(&*dispatcher, limit).await => {
+            Err(unfinished(served))
+        }
+        _ => served,
+    }
+}
+
+/// Whether the dispatcher went idle within `limit`.
+async fn settled(dispatcher: &dyn crate::web::RoomDispatcher, limit: std::time::Duration) -> bool {
+    let began = tokio::time::Instant::now();
+    while !dispatcher.is_idle() {
+        if began.elapsed() >= limit {
+            return false;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    true
+}
+
+/// The error of a stop that found rooms or reports still running at the settle
+/// bound: that, and the shutdown's own error as well when it had one, since a
+/// drain timeout must not hide that evidence was cut off.
+fn unfinished(served: Result<(), String>) -> String {
+    const UNFINISHED: &str = "rooms or reports were still running when the settle bound passed";
+    match served {
+        Ok(()) => UNFINISHED.into(),
+        Err(error) => format!("{error}; {UNFINISHED}"),
+    }
+}
+
+#[cfg(test)]
+#[path = "../tests/unit/launch.rs"]
+mod tests;

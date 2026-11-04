@@ -1,4 +1,7 @@
-//! Content-free tool context for the observational replay harness.
+//! Production tool telemetry stays content-free; cfg(test) acquisition
+//! separately
+//! captures private authored-fixture answers before subsequent asynchronous
+//! work.
 use std::time::Instant;
 
 use serde_json::Value;
@@ -32,8 +35,9 @@ pub(super) fn execute_timed_tool_batch(
     calls: Vec<GeminiFunctionCall>,
     reviewed_revision: u64,
     timed: bool,
+    #[cfg(test)] ticket: &mut Option<super::super::probe::acquisition::Ticket>,
 ) -> Vec<(GeminiFunctionCall, Value)> {
-    super::execute_tool_batch_observed(
+    let answers = super::execute_tool_batch_observed(
         state,
         calls,
         reviewed_revision,
@@ -46,7 +50,12 @@ pub(super) fn execute_timed_tool_batch(
                 activity.latency.closing_requested(started, finished);
             }
         },
-    )
+    );
+    #[cfg(test)]
+    {
+        *ticket = super::super::probe::acquisition::observe(&activity.latency, &answers);
+    }
+    answers
 }
 
 pub(super) struct HintCounters {

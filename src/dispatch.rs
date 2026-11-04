@@ -21,6 +21,9 @@ pub struct DispatchState {
     /// Whose each reserved room is and whether they have arrived, so a page
     /// that gives up its start can end the wait it began and nobody else's.
     starts: HashMap<String, Start>,
+    /// Set once by `close_admission`: no new room is admitted after it, under
+    /// the same lock that decides every admission and `is_idle`.
+    closed: bool,
 }
 
 struct Start {
@@ -65,6 +68,55 @@ pub struct LocalDispatcher {
     pub max_concurrent: usize,
 }
 
+/// Test-only observer of the assignment boundary: told each room the dispatcher
+/// admits as new, after admission and before its task is spawned, so a fixture
+/// can name the room it will see without choosing the name. It changes no
+/// dispatch behavior.
+#[cfg(test)]
+pub(crate) type AssignmentHook = Arc<dyn Fn(&str) + Send + Sync>;
+#[cfg(test)]
+static ASSIGNED: Mutex<Option<AssignmentHook>> = Mutex::new(None);
+
+#[cfg(test)]
+pub(crate) fn set_assignment_hook(hook: Option<AssignmentHook>) {
+    *ASSIGNED.lock().unwrap_or_else(|error| error.into_inner()) = hook;
+}
+
+/// Whether `hook` is the one installed. Compares the allocations, not the
+/// vtables.
+#[cfg(test)]
+pub(crate) fn assignment_hook_is(hook: &AssignmentHook) -> bool {
+    ASSIGNED
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .as_ref()
+        .is_some_and(|now| std::ptr::addr_eq(Arc::as_ptr(now), Arc::as_ptr(hook)))
+}
+
+/// Removes `hook` only if it is still the installed one, so a teardown never
+/// clears a successor's.
+#[cfg(test)]
+pub(crate) fn clear_assignment_hook(hook: &AssignmentHook) {
+    let mut slot = ASSIGNED.lock().unwrap_or_else(|error| error.into_inner());
+    if slot
+        .as_ref()
+        .is_some_and(|now| std::ptr::addr_eq(Arc::as_ptr(now), Arc::as_ptr(hook)))
+    {
+        *slot = None;
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn notify_assigned(room: &str) {
+    let hook = ASSIGNED
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .clone();
+    if let Some(hook) = hook {
+        hook(room);
+    }
+}
+
 impl RoomDispatcher for LocalDispatcher {
     /// A room stays in `live` from admission until its task ends, so one whose
     /// report is still being written counts too.
@@ -75,6 +127,13 @@ impl RoomDispatcher for LocalDispatcher {
 
     fn supports_guest_admission(&self) -> bool {
         true
+    }
+
+    fn close_admission(&self) {
+        self.state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .closed = true;
     }
 
     fn candidate_video(&self) -> Option<bool> {
@@ -162,9 +221,15 @@ impl LocalDispatcher {
                 eprintln!("codetrial dispatch_refused room={room_name} reason=finalizing");
                 return Err(DispatchRefusal::Finalizing);
             }
+            Reservation::Closed => {
+                eprintln!("codetrial dispatch_refused room={room_name} reason=closed");
+                return Err(DispatchRefusal::Stopping);
+            }
             Reservation::New(slot) => slot,
         };
         let config = agent_config_for(&self.config, provider);
+        #[cfg(test)]
+        notify_assigned(&slot.room_name);
 
         // Spawned, not awaited: this runs on the request path, and the task
         // outlives the response by the length of the interview or attempt.
@@ -262,6 +327,7 @@ enum Reservation {
     Full { limit: usize, guest_cap: bool },
     GuestRoomInUse,
     Finalizing,
+    Closed,
 }
 
 impl LocalDispatcher {
@@ -298,6 +364,10 @@ impl LocalDispatcher {
             } else {
                 Reservation::Finalizing
             };
+        }
+
+        if state.closed {
+            return Reservation::Closed;
         }
 
         if state.live.len() >= self.max_concurrent {

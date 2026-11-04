@@ -512,7 +512,11 @@ completed interviews awaiting recovery; admission still refuses excess
 starts rather than exceeding this bound. A fixed local room refuses a new
 start while its existing agent is finalizing or awaiting report recovery, as
 `dispatch_refused ... reason=finalizing` rather than `at_capacity`; it cannot
-reuse that agent as an interviewer for another candidate. Provider projects are
+reuse that agent as an interviewer for another candidate. A server that has
+begun to stop refuses every start that would admit a new room as
+`reason=closed`, and the candidate is told it is shutting down; admitted rooms
+keep running, and a start for a room still being assessed joins it; a live
+room otherwise gets the refusal it had before the stop. Provider projects are
 rotated and their LiveKit connection-minute quota is refreshed in the
 background, and known-exhausted projects are skipped.
 

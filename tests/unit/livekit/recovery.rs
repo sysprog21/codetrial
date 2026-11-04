@@ -487,3 +487,5 @@ fn a_stream_end_or_a_new_stream_breaks_the_gap_and_replayed_frames_are_not_deque
 }
 
 include!("recovery_parts/report_generation_cardinality.rs");
+
+include!("recovery_parts/acquisition_tool_sends.rs");

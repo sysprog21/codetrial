@@ -1015,3 +1015,139 @@ fn the_local_interviewer_needs_a_gemini_key_and_a_valid_config() {
     assert!(error.contains("GEMINI_CONTEXT"), "{error}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A dispatcher that says whether an interview is still running or writing its
+/// report, notes that admission was closed, and starts nothing.
+struct Busy {
+    busy: std::sync::atomic::AtomicBool,
+    closed: std::sync::atomic::AtomicBool,
+}
+
+impl codetrial::web::RoomDispatcher for Busy {
+    fn ensure_agent(
+        &self,
+        _: &str,
+        _: &codetrial::config::Provider,
+        _: codetrial::web::AgentJob,
+    ) -> Result<(), codetrial::web::DispatchRefusal> {
+        Ok(())
+    }
+
+    fn is_idle(&self) -> bool {
+        !self.busy.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    fn close_admission(&self) {
+        self.closed.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// Serves with a stop that has already happened and a dispatcher that is busy
+/// for `busy_for` (`None`: forever), and returns how the run ended, how long it
+/// took and whether admission had been closed.
+fn run_stopped(
+    label: &str,
+    busy_for: Option<std::time::Duration>,
+    settle: Option<std::time::Duration>,
+) -> (Result<(), String>, std::time::Duration, bool) {
+    let (dir, options) = launch_fixture(label);
+    let values = livekit_values(&dir);
+    let prepared = super::prepare(&values, &options).unwrap();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let bound = listener.local_addr().unwrap();
+    let (config, setup) = super::finish(
+        prepared.config,
+        &values,
+        &options,
+        bound,
+        super::LaunchedBy::Parent,
+    )
+    .unwrap();
+    let dispatcher = std::sync::Arc::new(Busy {
+        busy: std::sync::atomic::AtomicBool::new(true),
+        closed: std::sync::atomic::AtomicBool::new(false),
+    });
+    if let Some(after) = busy_for {
+        let dispatcher = std::sync::Arc::clone(&dispatcher);
+        std::thread::spawn(move || {
+            std::thread::sleep(after);
+            dispatcher
+                .busy
+                .store(false, std::sync::atomic::Ordering::SeqCst);
+        });
+    }
+    let serving = std::sync::Arc::clone(&dispatcher);
+    let began = std::time::Instant::now();
+
+    // On its own thread with a deadline, so a bound that stops working fails
+    // this test instead of hanging the suite.
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = done.send(super::serve_with(
+            listener,
+            config,
+            setup,
+            Some(serving),
+            async {},
+            super::Bounds {
+                drain: None,
+                settle,
+            },
+        ));
+    });
+    let result = finished
+        .recv_timeout(std::time::Duration::from_secs(30))
+        .expect("serve_with returned within its bounds");
+    let elapsed = began.elapsed();
+    let _ = std::fs::remove_dir_all(&dir);
+    let closed = dispatcher.closed.load(std::sync::atomic::Ordering::SeqCst);
+    (result, elapsed, closed)
+}
+
+#[test]
+fn a_stopping_server_waits_for_its_rooms_and_reports_to_finish() {
+    let (result, elapsed, closed) = run_stopped(
+        "settle-waits",
+        Some(std::time::Duration::from_millis(600)),
+        Some(std::time::Duration::from_secs(20)),
+    );
+    result.unwrap();
+    assert!(
+        closed,
+        "nothing new is admitted once the shutdown has begun"
+    );
+    assert!(
+        elapsed >= std::time::Duration::from_millis(500),
+        "{elapsed:?}"
+    );
+}
+
+#[test]
+fn rooms_still_running_at_the_settle_bound_are_reported_not_hidden() {
+    let (result, elapsed, closed) = run_stopped(
+        "settle-bound",
+        None,
+        Some(std::time::Duration::from_millis(300)),
+    );
+    assert!(closed);
+    let error = result.unwrap_err();
+    assert!(error.contains("settle bound"), "{error}");
+    // It waited out the bound, and no longer.
+    assert!(
+        elapsed >= std::time::Duration::from_millis(250),
+        "{elapsed:?}"
+    );
+    assert!(elapsed < std::time::Duration::from_secs(10), "{elapsed:?}");
+}
+
+#[test]
+fn without_a_settle_bound_the_product_stops_without_waiting() {
+    let (result, elapsed, closed) = run_stopped("settle-none", None, None);
+    assert!(
+        closed,
+        "the product closes admission as its shutdown begins too"
+    );
+    result.unwrap();
+    assert!(elapsed < std::time::Duration::from_secs(5), "{elapsed:?}");
+}

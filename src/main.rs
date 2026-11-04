@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use codetrial::config::{AgentConfig, DEFAULT_WEB_ADDR, is_production};
 use codetrial::launch::{
-    CliOptions, LaunchedBy, Reachable, cold_start_config_path, config_dir,
+    Bounds, CliOptions, LaunchedBy, Reachable, cold_start_config_path, config_dir,
     data_dir_config_from_environment, environment_and_flags, extend_pool, finish, load_values,
     local_agent_config, nonempty, prepare, primary_config_path, production_secret_refusal,
     reachable_from_elsewhere, serve, value_or,
@@ -14,7 +14,7 @@ use codetrial::launch::{
     DEFAULT_SESSION_SECRET, SESSION_SECRET_FILE, account_db_path, allowed_hosts, apply_options,
     data_dir_session_secret, environment, guest_mode_enabled, guest_mode_recording_conflict,
     published_secret_refusal, recording_can_deliver, recording_needs_verified_identity,
-    relaxed_for_local_use, task_mode_allowed, task_mode_enabled, task_mode_refusal,
+    relaxed_for_local_use, serve_with, task_mode_allowed, task_mode_enabled, task_mode_refusal,
     web_server_config,
 };
 
@@ -346,7 +346,7 @@ fn run_web(options: CliOptions) -> Result<(), String> {
         agent_config,
         max_concurrent,
         std::future::pending(),
-        None,
+        Bounds::default(),
     )
 }
 

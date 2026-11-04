@@ -363,8 +363,8 @@ async fn a_concurrent_burst_never_overbooks_and_released_capacity_returns() {
                 Reservation::GuestRoomInUse => {
                     panic!("signed-in reservations must not hit the guest room limit")
                 }
-                Reservation::Existing | Reservation::Finalizing => {
-                    panic!("burst ids are unique")
+                Reservation::Existing | Reservation::Finalizing | Reservation::Closed => {
+                    panic!("burst ids are unique and the dispatcher is open")
                 }
             }
         }));
@@ -942,4 +942,80 @@ async fn a_released_start_gives_its_consent_and_slot_back() {
     assert!(dispatcher.state.lock().unwrap().live.is_empty());
     assert!(dispatcher.state.lock().unwrap().starts.is_empty());
     drop(accounts);
+}
+
+/// Closing is part of the one admission decision, so after it no way of
+/// starting a room gets in, while a room already admitted is still served and
+/// still counts as live until it ends.
+#[tokio::test]
+async fn a_closed_dispatcher_admits_no_new_room_but_keeps_the_ones_it_has() {
+    let dispatcher = release_dispatcher(8);
+    let provider = Provider {
+        id: crate::config::PRIMARY_PROVIDER_ID.to_string(),
+        url: "wss://primary.example".to_string(),
+        api_key: "primary-key".to_string(),
+        api_secret: "primary-secret".to_string(),
+        google_api_keys: Vec::new(),
+    };
+    let admitted = started(&dispatcher, "interview-before-close", false, "candidate");
+    assert!(!dispatcher.is_idle());
+
+    dispatcher.close_admission();
+
+    assert!(matches!(
+        dispatcher.reserve_with_kind("interview-after-close", false),
+        Reservation::Closed
+    ));
+    assert!(matches!(
+        dispatcher.reserve_with_kind("guest-after-close", true),
+        Reservation::Closed
+    ));
+    assert_eq!(
+        dispatcher.ensure_agent("interview-via-ensure", &provider, AgentJob::Interview),
+        Err(DispatchRefusal::Stopping)
+    );
+    assert_eq!(
+        dispatcher.ensure_guest_agent("guest-via-ensure", &provider, "candidate"),
+        Err(DispatchRefusal::Stopping)
+    );
+    assert_eq!(
+        dispatcher.ensure_agent_with_no_show_release("no-show", &provider, "candidate", None),
+        Err(DispatchRefusal::Stopping)
+    );
+    // The room that was admitted is still the dispatcher's, and still live.
+    assert!(matches!(
+        dispatcher.reserve_with_kind("interview-before-close", false),
+        Reservation::Existing
+    ));
+    assert!(!dispatcher.is_idle());
+    drop(admitted);
+    assert!(dispatcher.is_idle());
+    assert_eq!(
+        dispatcher.state.lock().unwrap().live.len(),
+        0,
+        "refusals left no room behind"
+    );
+}
+
+#[test]
+fn a_dispatcher_with_nothing_to_close_ignores_the_request() {
+    struct Plain;
+    impl RoomDispatcher for Plain {
+        fn ensure_agent(&self, _: &str, _: &Provider, _: AgentJob) -> Result<(), DispatchRefusal> {
+            Ok(())
+        }
+    }
+    let provider = Provider {
+        id: crate::config::PRIMARY_PROVIDER_ID.to_string(),
+        url: "wss://primary.example".to_string(),
+        api_key: "primary-key".to_string(),
+        api_secret: "primary-secret".to_string(),
+        google_api_keys: Vec::new(),
+    };
+    let plain = Plain;
+    plain.close_admission();
+    assert_eq!(
+        plain.ensure_agent("room", &provider, AgentJob::Interview),
+        Ok(())
+    );
 }

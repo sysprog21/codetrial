@@ -632,6 +632,9 @@ async fn dispatch_or_release_consent(
         super::DispatchRefusal::Finalizing => {
             "This room is still finishing the previous interview's report. Try again in a few minutes."
         }
+        super::DispatchRefusal::Stopping => {
+            "The server is shutting down and is not starting new interviews. Try again later."
+        }
     };
 
     Some(json_response(
