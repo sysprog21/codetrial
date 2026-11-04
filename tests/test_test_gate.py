@@ -1,6 +1,7 @@
 """Exercise CI lane selection without executing the expensive gate commands."""
 
 import importlib.util
+import json
 import os
 import re
 import shlex
@@ -110,6 +111,11 @@ class TestGateLanes(unittest.TestCase):
             source = source.replace(old, new)
         # Keep the real dispatch and failure aggregation; substitute only the
         # gate payload so the test needs neither compilers nor downloaded assets.
+        # Probes are not the tree's verdict, so the run must not leave a receipt.
+        self.assertEqual(source.count("write_receipt()\n{\n"), 1)
+        source = source.replace(
+            "write_receipt()\n{\n", "write_receipt()\n{\n    return 0\n"
+        )
         self.assertEqual(source.count('if "$@"; then'), 1)
         source = source.replace('if "$@"; then', 'if probe "$name"; then')
         source = source.replace(
@@ -188,6 +194,24 @@ gate()
                 ["sh", "-c", script], capture_output=True, text=True, check=True
             )
         return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+    def test_probe_runs_leave_no_gate_receipt(self):
+        # A run with substituted gates is not the tree's verdict; a receipt from
+        # it would tell scripts/agent-closeout-check.py a pass nothing earned.
+        folder = Path(
+            subprocess.run(
+                ["git", "rev-parse", "--git-common-dir"],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+        )
+        folder = ROOT / folder / "codetrial-review" / "gate-receipts"
+        before = {p.name: p.read_text() for p in folder.glob("*.json")}
+        self.run_lane("rust")
+        self.run_lane("portable", fail="fmt")
+        self.assertEqual(before, {p.name: p.read_text() for p in folder.glob("*.json")})
 
     def test_parallel_lanes_cover_the_default_gate(self):
         names = list(lanes())
@@ -956,6 +980,102 @@ printf 'python:%s\\n' "$*" >> "$CALLS"
         self.assertEqual(result.returncode, 2)
         self.assertEqual(gates, [])
         self.assertIn("usage:", result.stderr)
+
+
+def function_source(name):
+    """A whole shell function of scripts/test.sh, as the gate defines it."""
+    return f"{name}()\n{{\n{function_body(name)}\n}}\n"
+
+
+class GateHelperTests(unittest.TestCase):
+    """The receipt writer and the exclusion notice, run as the gate defines them."""
+
+    env = {
+        **os.environ,
+        "GIT_CONFIG_GLOBAL": "/dev/null",
+        "GIT_CONFIG_SYSTEM": "/dev/null",
+    }
+
+    def sh(self, script, cwd):
+        return subprocess.run(
+            ["sh", "-c", script], cwd=cwd, capture_output=True, text=True, env=self.env
+        )
+
+    def repo(self, files=None):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        for name, body in (files or {}).items():
+            (root / name).parent.mkdir(parents=True, exist_ok=True)
+            (root / name).write_text(body)
+        commit = "git -c user.name=t -c user.email=t@t commit -q"
+        done = self.sh(
+            f"git init -q -b main . && git add -A && {commit} --allow-empty -m x", root
+        )
+        self.assertEqual(done.returncode, 0, done.stderr)
+        return root
+
+    def write_receipt(self, root, verdict, failed="", tree="T1", skipped=""):
+        script = (
+            f'ROOT={shlex.quote(str(root))}; lane=portable; failed="{failed}"; receipt_tree={tree}; '
+            f'skipped="{skipped}"; {function_source("write_receipt")}\nwrite_receipt {verdict}'
+        )
+        done = self.sh(script, root)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        return root / ".git/codetrial-review/gate-receipts/portable.json"
+
+    def test_a_pass_and_a_failure_are_recorded_with_the_start_tree(self):
+        root = self.repo()
+        won = json.loads(
+            self.write_receipt(root, "true", skipped="\n  a\n  b").read_text()
+        )
+        self.assertEqual(
+            (won["lane"], won["passed"], won["failed"], won["skipped"], won["tree"]),
+            ("portable", True, "", 2, "T1"),
+        )
+        lost = json.loads(
+            self.write_receipt(root, "false", failed=" fmt clippy").read_text()
+        )
+        self.assertEqual((lost["passed"], lost["failed"]), (False, "fmt clippy"))
+
+    def test_no_tree_means_no_receipt(self):
+        root = self.repo()
+        path = self.write_receipt(root, "true", tree="")
+        self.assertFalse(path.exists())
+
+    def exclusions(self, base, head):
+        def config(entries):
+            body = "".join(f'    "{e}",\n' for e in entries)
+            return f"# EXCLUSIONS: {len(entries)}\nx = [\n{body}]\n"
+
+        origin = self.repo({".cargo/mutants.toml": config(base)})
+        clone = Path(tempfile.mkdtemp(dir=origin.parent))
+        self.addCleanup(shutil.rmtree, clone, True)
+        self.assertEqual(
+            self.sh(f"git clone -q {shlex.quote(str(origin))} c", clone).returncode, 0
+        )
+        (clone / "c/.cargo/mutants.toml").write_text(config(head))
+        script = f"ROOT={shlex.quote(str(clone / 'c'))}; {function_source('mutants_exclusions')}\nmutants_exclusions"
+        return self.sh(script, clone / "c")
+
+    def test_an_added_exclusion_is_named_and_the_run_still_passes(self):
+        done = self.exclusions(["a"], ["a", "b"])
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("stops the mutation gate judging", done.stderr)
+        self.assertIn('"b"', done.stderr)
+        self.assertNotIn('"a"', done.stderr)
+
+    def test_a_removed_or_unchanged_list_prints_nothing(self):
+        for base, head in ((["a", "b"], ["a"]), (["a"], ["a"])):
+            done = self.exclusions(base, head)
+            self.assertEqual((done.returncode, done.stderr), (0, ""), (base, head))
+
+    def test_a_count_that_disagrees_with_the_list_still_fails(self):
+        root = self.repo(
+            {".cargo/mutants.toml": '# EXCLUSIONS: 2\nx = [\n    "a",\n]\n'}
+        )
+        script = f"ROOT={shlex.quote(str(root))}; {function_source('mutants_exclusions')}\nmutants_exclusions"
+        self.assertEqual(self.sh(script, root).returncode, 1)
 
 
 class BuildHooksTests(unittest.TestCase):

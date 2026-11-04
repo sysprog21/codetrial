@@ -265,6 +265,43 @@
     ]
   },
   {
+    "q": "i have to fix a bug in the replay gate selection, what order should i go in: test first, how small should the edit be, and when do i stop",
+    "expect": [
+      "codetrial-change"
+    ]
+  },
+  {
+    "q": "my second fix for the flaky reconnect test failed the same gate as the first, how should i step back instead of trying a third patch",
+    "expect": [
+      "codetrial-change"
+    ]
+  },
+  {
+    "q": "the task was only to rename a field but i noticed i could also read config/codetrial.env.local to check the key, is that in scope for what i was asked",
+    "expect": [
+      "codetrial-change"
+    ]
+  },
+  {
+    "q": "where should the regression test for this new data-channel field go and which test.sh lane runs it",
+    "expect": [
+      "codetrial-verify",
+      "codetrial-web"
+    ]
+  },
+  {
+    "q": "the commit-msg hook rejected my commit body, how do I word the message",
+    "expect": [
+      "codetrial-conventions"
+    ]
+  },
+  {
+    "q": "clippy flags a needless borrow in src/agent/session.rs, how should I fix it the way this tree writes Rust",
+    "expect": [
+      "codetrial-rust"
+    ]
+  },
+  {
     "q": "explain big-o of quicksort vs mergesort for my coding interview prep",
     "expect": []
   },

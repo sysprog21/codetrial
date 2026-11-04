@@ -19,6 +19,11 @@ esac
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 
+# The tree this run judges, taken before any gate runs: an edit made while a
+# long run is in progress then fails to match the receipt, instead of being
+# stamped as what the run saw. Empty outside a git work tree.
+receipt_tree=$("$ROOT/scripts/tree-fingerprint.sh" 2> /dev/null) || receipt_tree=
+
 # The gate needs Python 3.11 for the Rust checker's standard-library TOML
 # parser. A distribution's python3 can be older than that while a newer one sits
 # beside it, and running the old one fails every Python gate on the interpreter
@@ -468,6 +473,25 @@ mutants_exclusions()
     fi
     declared=$(sed -n 's/^# EXCLUSIONS: \([0-9][0-9]*\)$/\1/p' "$config")
     actual=$(grep -c '^    "' "$config")
+
+    # Against the base the list only grows, so name what this change added: the
+    # count above agrees with itself, and a reviewer reads entries, not totals.
+    # A notice, not a failure; removing an entry never prints one.
+    for base in refs/remotes/upstream/main refs/remotes/origin/main; do
+        git -C "$ROOT" cat-file -e "$base:.cargo/mutants.toml" 2> /dev/null || continue
+        added=$({
+            git -C "$ROOT" show "$base:.cargo/mutants.toml" | sed 's/^    "/base: "/'
+            sed 's/^    "/head: "/' "$config"
+        } | awk '
+            /^base: "/ { seen[substr($0, 7)] = 1; next }
+            /^head: "/ && !(substr($0, 7) in seen) { print "  " substr($0, 7) }
+        ')
+        if [ -n "$added" ]; then
+            echo "this change stops the mutation gate judging:" >&2
+            printf '%s\n' "$added" >&2
+        fi
+        break
+    done
     if [ "$declared" = "$actual" ]; then
         return 0
     fi
@@ -636,6 +660,7 @@ gate review-worker-tests unittest_gate --jobs 1 "$ROOT/tests/test_review_worker.
 gate interactive-review-hook-tests unittest_gate "$ROOT/tests/test_interactive_review_hook.py"
 gate hashchain-tests unittest_gate "$ROOT/tests/test_hashchain.py"
 gate agent-guard-tests unittest_gate "$ROOT/tests/test_agent_guard.py"
+gate agent-workflow-hooks-tests unittest_gate "$ROOT/tests/test_agent_workflow_hooks.py"
 gate diffmodel-tests unittest_gate "$ROOT/tests/test_diffmodel.py"
 gate --lane browser browser-tests browser_tests static
 gate test-timing node "$ROOT/scripts/check-test-timing.mjs"
@@ -732,7 +757,29 @@ gate report-parity-fixtures env REPORT_PARITY_CHECK_VALIDATE_FIXTURES_ONLY=1 sh 
     fi
 }
 
+# A receipt names the lane, the verdict and the tree it was run on, so a claim
+# that "the gate passed" can be matched to the tree it is about instead of being
+# taken on trust: a closeout (experience-close.sh) and the Stop hook
+# (scripts/agent-closeout-check.py) read it. One file per lane, overwritten by
+# the next run, kept in the clone's git directory where it is never committed. A
+# tree that cannot be fingerprinted writes none. Skipped checks are counted, not
+# hidden: a run that skipped something is a weaker receipt.
+write_receipt()
+{
+    [ -n "$receipt_tree" ] || return 0
+    dir=$(cd "$ROOT" && git rev-parse --git-common-dir 2> /dev/null) || return 0
+    case "$dir" in /*) ;; *) dir=$ROOT/$dir ;; esac
+    dir=$dir/codetrial-review/gate-receipts
+    mkdir -p "$dir" 2> /dev/null || return 0
+    skips=$(printf '%s\n' "$skipped" | grep -c '[^[:space:]]')
+    printf '{"lane":"%s","passed":%s,"failed":"%s","skipped":%s,"tree":"%s","time":"%s"}\n' \
+        "$lane" "$1" "${failed# }" "$skips" "$receipt_tree" \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$dir/$lane.json" 2> /dev/null || true
+}
+
 [ -z "$failed" ] || {
+    write_receipt false
     echo "failed gates:$failed" >&2
     exit 1
 }
+write_receipt true

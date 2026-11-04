@@ -107,6 +107,7 @@ git rev-parse --verify --quiet "$review_policy^{commit}" > /dev/null 2>&1 \
     || review_policy=
 review_path=.claude/skills/codetrial-review/SKILL.md
 note=
+test_note=
 
 while read -r local_ref local_sha remote_ref remote_sha; do
     [ -n "${local_ref:-}" ] || continue
@@ -233,6 +234,19 @@ while read -r local_ref local_sha remote_ref remote_sha; do
                 note="Note: $(git rev-parse --short "$local_sha") has no review on record;"
                 note="$note in Claude Code, /codetrial-review checks it before a pull request does."
             fi
+
+            # A fix with no test beside it is the habit codetrial-change asks an
+            # agent to break, and CONTRIBUTING.md keeps test bodies under
+            # tests/. Advisory: a refactor that pins behavior already covered,
+            # or a comment-only edit, legitimately has none.
+            if [ -z "$test_note" ] && [ -n "$review_policy" ]; then
+                changed=$(git diff --name-only "$review_policy...$local_sha" 2> /dev/null) || changed=
+                if printf '%s\n' "$changed" | grep -q '^src/.*[.]rs$' \
+                    && ! printf '%s\n' "$changed" | grep -q '^tests/'; then
+                    test_note="Note: $local_ref changes src/ and nothing under tests/;"
+                    test_note="$test_note write the failing test first (codetrial-change), or say why none fits in the PR."
+                fi
+            fi
             ;;
     esac
 done << EOF
@@ -242,5 +256,6 @@ EOF
 # Said once the whole push is judged, so a push refused over another ref does
 # not also advise a review of a head that is not going anywhere.
 [ "$failed" -ne 0 ] || [ -z "$note" ] || echo "$note" >&2
+[ "$failed" -ne 0 ] || [ -z "$test_note" ] || echo "$test_note" >&2
 
 exit "$failed"

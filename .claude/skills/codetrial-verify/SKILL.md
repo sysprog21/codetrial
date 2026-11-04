@@ -5,6 +5,9 @@ description: How a CodeTrial change is validated - scripts/test.sh as the creden
 
 # Validating a CodeTrial change
 
+The order of work around the gate, test first and small steps, is
+[codetrial-change](../codetrial-change/SKILL.md); this skill is the gate itself.
+
 One gate needs no credentials and is the thing to run:
 
 ```sh

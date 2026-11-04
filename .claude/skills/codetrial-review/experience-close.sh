@@ -43,6 +43,12 @@ jq -se 'length == 1 and (.[0] | type == "object"
     echo "experience-close.sh: $fields must state outcome (complete|incomplete), skills_used and coverage" >&2
     exit 2
 }
+
+# Say whether a gate receipt backs a claim that the tree passed. Disclosure
+# only: the report is recorded either way, and the wording of its coverage stays
+# the invocation's own.
+checker=$(dirname "$0")/../../../scripts/agent-closeout-check.py
+[ ! -f "$checker" ] || python3 "$checker" --receipts >&2 || true
 memory=${EXPERIENCE_MEMORY:-$(dirname "$0")/memory.py}
 mkdir -p "$scratch"
 report=$(mktemp "$scratch/experience.XXXXXX")
