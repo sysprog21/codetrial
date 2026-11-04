@@ -643,6 +643,7 @@ gate gap-state-tests unittest_gate "$ROOT/tests/test_check_gap_state.py"
 # like any other, against a fake gh and a scratch repository.
 gate skill-refs "$PYTHON" "$ROOT/scripts/check-skill-refs.py"
 gate skill-scripts-tests unittest_gate "$ROOT/tests/test_skill_scripts.py"
+gate review-ledger-tests unittest_gate "$ROOT/tests/test_review_ledger.py"
 
 # These cases patch the shared subprocess module, including authentication
 # errors.

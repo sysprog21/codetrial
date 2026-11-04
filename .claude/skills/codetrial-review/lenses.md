@@ -105,7 +105,10 @@ lens decides what is looked for, not how bad it is.
   data derived from stored records, say how an existing installation
   invalidates or rebuilds it. Report each boundary with its invariant, the
   ones with no defect included.
-- **tests**: a new branch no test reaches; a test that cannot fail (a refusal
+- **tests**: read the tests the diff touches before the code, removed,
+  skipped (`#[ignore]`, `test.skip`, `xfail`) or loosened ones first, since a
+  test that stopped asking is the cheapest way to a green gate; then a new
+  branch no test reaches; a test that cannot fail (a refusal
   asserted against a double scripted to refuse, a value compared against one
   the function under test computed, a source regex instead of driving the
   page); a test that asserts before the state it reads has settled; a suite
