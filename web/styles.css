@@ -1199,12 +1199,13 @@ p {
 }
 
 /* Compact: a window or an editor panel too narrow for a floating avatar to
-   decorate rather than cover code. interview.js decides, for both, so this is
-   the one place that says what compact looks like. The AVATAR goes, not the
-   stage: captions are the accessible transcript of what Jim is saying, and
-   hiding the whole stage took them away from exactly the narrow windows most
-   likely to need them. What is left is one floating card in the bottom
-   corner, clear of the toolbar, with the turn line and captions inside it. */
+   decorate rather than cover code, or an expanded Example drawing.
+   interview.js decides, for all three, so this is the one place that says
+   what compact looks like. The AVATAR goes, not the stage: captions are the
+   accessible transcript of what Jim is saying, and hiding the whole stage
+   took them away from exactly the narrow windows most likely to need them.
+   What is left is one floating card in the bottom corner, clear of the
+   toolbar, with the turn line and captions inside it. */
 .jim-stage.compact .jim-avatar,
 .jim-stage.compact .hide-avatar {
   display: none;
@@ -1921,9 +1922,51 @@ p {
   display: block;
   width: 100%;
   min-width: 32rem;
-  aspect-ratio: 1600 / 1000;
+  --board-ratio: 1.6;
+  aspect-ratio: var(--board-ratio);
   cursor: crosshair;
   touch-action: none;
+}
+
+/* The whole board at once, over the editor panel only: the sidebar's turn
+   and mute controls stay where the candidate can reach them. The canvas takes
+   the largest 16:10 box the pane leaves between its toolbar and status line,
+   so the whole canvas shows without scrolling. */
+.example-board[data-expanded] .example-pane {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  background: var(--surface);
+  visibility: visible;
+}
+
+/* What the pane covers is hidden, which takes it out of the tab order and the
+   accessibility tree, the board's own summary included, or Shift+Tab walks
+   into a code editor nobody can see. The sidebar is outside the panel. */
+.editor-panel:has(.example-board[data-expanded]) > * {
+  visibility: hidden;
+}
+
+.example-board[data-expanded] .example-surface {
+  flex: 1;
+  background: none;
+  container-type: size;
+}
+
+.example-board[data-expanded] .example-surface canvas {
+  width: min(100cqw, 100cqh * var(--board-ratio));
+  min-width: 0;
+  margin: 0 auto;
+}
+
+/* The expanded pane is laid over the panel, which would scroll it on a short
+   screen. */
+.editor-panel:has(.example-board[data-expanded]) {
+  position: relative;
+  overflow: hidden;
 }
 
 .editor-panel[data-example-drawing="true"] .editor-stack {

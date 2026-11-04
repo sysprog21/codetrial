@@ -1403,7 +1403,11 @@ function bindEvents() {
       editorOptions,
       mac,
       testPanel: {
-        run: runTests,
+        // An expanded Example drawing covers the drawer the results land in,
+        // so it gives the drawer back first, or nothing runs.
+        run: () => {
+          if (exampleBoard?.shrink() !== false) runTests();
+        },
         execution: () => editorOptions.execution,
         closed: codingClosed,
       },
@@ -5347,24 +5351,38 @@ function testDrawerBounds() {
 /// Takes the avatar off a panel too narrow to carry it, or a window, leaving
 /// the captions. The window's width alone stopped being enough to tell once
 /// the sidebar could be widened: at 1280px the editor can be 592px with the
-/// avatar still over it. One class for both, so the stylesheet says what
-/// compact looks like once, and the avatar's own width observer pauses and
-/// resumes its drawing from the result.
+/// avatar still over it. An expanded Example drawing takes the panel's room
+/// the same way, so Jim's captions stay over a corner of the board. One class
+/// for all three, so the stylesheet says what compact looks like once, and
+/// the avatar's own width observer pauses and resumes its drawing from the
+/// result.
 function compactJimStageBesideNarrowPanel(panel) {
   const narrowWindow = matchMedia(JIM_STAGE_NARROW_WINDOW);
+  const example = document.querySelector("#example-board");
   const fit = () => {
     const rem = Number.parseFloat(
       getComputedStyle(document.documentElement).fontSize,
     );
-    nodes.jimStage.classList.toggle(
-      "compact",
+    const compact =
       narrowWindow.matches ||
-        panel.getBoundingClientRect().width < JIM_AVATAR_PANEL_MIN_REM * rem,
-    );
+      panel.getBoundingClientRect().width < JIM_AVATAR_PANEL_MIN_REM * rem ||
+      example?.hasAttribute("data-expanded") === true;
+    nodes.jimStage.classList.toggle("compact", compact);
+    // Hide avatar goes with the avatar, so focus left on it moves to the
+    // stage, as when an automatic turn-off hides the button.
+    if (compact && document.activeElement === nodes.hideAvatar)
+      nodes.jimStage.focus({ preventScroll: true });
   };
   if (window.ResizeObserver) new window.ResizeObserver(fit).observe(panel);
   else window.addEventListener("resize", fit);
   narrowWindow.addEventListener("change", fit);
+  // A whiteboard interview has removed the editor panel by now, and the board
+  // inside it, so there is no board to watch.
+  if (example)
+    new MutationObserver(fit).observe(example, {
+      attributes: true,
+      attributeFilter: ["data-expanded"],
+    });
   fit();
 }
 
