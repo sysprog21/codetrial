@@ -20,7 +20,11 @@ redesign the page.
   an error. Pending work shows feedback and blocks a duplicate submission; a
   status change is announced without taking focus; an empty result does not look
   like an unfinished load; error text names a next step.
-- Layout: narrow widths, zoom, long labels and reduced motion.
+- Layout: narrow widths, zoom, long labels and reduced motion. Ask what a
+  pointer or finger would hit (`document.elementFromPoint` at the control's
+  centre) rather than where its rect says it is: a parent's `overflow` clips a
+  menu without moving its box, and a sticky header or on-screen keyboard covers
+  a control that still reports a visible position.
 
 The CodeTrial transitions to walk when the change touches them: lobby account
 and history loading, microphone and camera preflight, entering the interview,
