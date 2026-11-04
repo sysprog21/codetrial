@@ -131,10 +131,15 @@ pub(crate) async fn login_handler(
         percent_encode_component(github_oauth_scope(state.config.recording.is_some()))
     );
 
-    let return_path = query_pairs(request.uri().query().unwrap_or(""))
-        .get("returnTo")
-        .and_then(|path| super::tasks::task_return_path(path))
-        .unwrap_or_else(|| "/".to_owned());
+    let query = query_pairs(request.uri().query().unwrap_or(""));
+    let return_path = if query.get("next").is_some_and(|next| next == "peer-join") {
+        "/peer-lobby".to_owned()
+    } else {
+        query
+            .get("returnTo")
+            .and_then(|path| super::tasks::task_return_path(path))
+            .unwrap_or_else(|| "/".to_owned())
+    };
     (
         StatusCode::FOUND,
         [(header::LOCATION, location)],
@@ -311,7 +316,13 @@ async fn callback_response(state: AppState, request: Request<Body>) -> Response 
                 .strip_prefix(&format!("{state_token}:"))
                 .map(str::to_owned)
         })
-        .and_then(|path| super::tasks::task_return_path(&path))
+        .and_then(|path| {
+            if path == "/peer-lobby" {
+                Some(path)
+            } else {
+                super::tasks::task_return_path(&path)
+            }
+        })
         .unwrap_or_else(|| "/".to_owned());
     let session = match sign_in(&state, accounts, &access_token).await {
         Ok(session) => session,
@@ -554,37 +565,43 @@ pub(crate) async fn session_handler(
             StatusCode::OK,
             super::tasks::with_built_in_task(
                 &state,
-                json!({
-                    "signedIn": true,
-                    "identityVerified": user.identity_verified,
+                with_peer_flags(
+                    &state,
+                    json!({
+                        "signedIn": true,
+                        "identityVerified": user.identity_verified,
 
-                    // Task mode admits only a login GitHub vouched for; the
-                    // task page asks before the learner types a PIN.
-                    "githubSignedIn": user.github_id.is_some(),
-                    "loginRequired": login_required,
-                    "guestModeAvailable": state.guest_mode_available(),
-                    "deviceLogin": device_client_id(&state.config).is_some(),
-                    "maxDurationMin": max_duration_min,
-                    "candidateVideo": candidate_video,
-                    "user": {
-                        "login": user.login,
-                        "avatarUrl": user.avatar_url
-                    }
-                }),
+                        // Task mode admits only a login GitHub vouched for; the
+                        // task page asks before the learner types a PIN.
+                        "githubSignedIn": user.github_id.is_some(),
+                        "loginRequired": login_required,
+                        "guestModeAvailable": state.guest_mode_available(),
+                        "deviceLogin": device_client_id(&state.config).is_some(),
+                        "maxDurationMin": max_duration_min,
+                        "candidateVideo": candidate_video,
+                        "user": {
+                            "login": user.login,
+                            "avatarUrl": user.avatar_url
+                        }
+                    }),
+                ),
             ),
         ),
         Ok(None) => json_response(
             StatusCode::OK,
             super::tasks::with_built_in_task(
                 &state,
-                json!({
-                    "signedIn": false,
-                    "loginRequired": login_required,
-                    "guestModeAvailable": state.guest_mode_available(),
-                    "deviceLogin": device_client_id(&state.config).is_some(),
-                    "maxDurationMin": max_duration_min,
-                    "candidateVideo": candidate_video,
-                }),
+                with_peer_flags(
+                    &state,
+                    json!({
+                        "signedIn": false,
+                        "loginRequired": login_required,
+                        "guestModeAvailable": state.guest_mode_available(),
+                        "deviceLogin": device_client_id(&state.config).is_some(),
+                        "maxDurationMin": max_duration_min,
+                        "candidateVideo": candidate_video,
+                    }),
+                ),
             ),
         ),
         Err(_) => json_response(
@@ -929,3 +946,21 @@ pub(crate) fn session_cookie(session_id: &str, secret: &str, secure: bool) -> St
 #[cfg(test)]
 #[path = "../../tests/unit/web/auth.rs"]
 mod tests;
+
+/// Which peer-interview features this deployment offers, merged flat into the
+/// session reply.
+fn with_peer_flags(state: &AppState, mut session: Value) -> Value {
+    session["peerEnabled"] = json!(state.config.peer.is_some());
+    // A session needs two rounds inside the hard limit, so one round gets half.
+    session["peerMaxRoundMinutes"] =
+        json!(state.config.peer.as_ref().map(|p| p.hard_max_minutes / 2));
+    session["peerObserverAvailable"] = json!(state.config.peer_observer.is_some());
+    session["peerAudioAvailable"] = json!(
+        state
+            .config
+            .peer_observer
+            .as_ref()
+            .is_some_and(|config| config.audio_dir.is_some())
+    );
+    session
+}

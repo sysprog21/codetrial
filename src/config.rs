@@ -2,6 +2,14 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::path::Path;
 
+mod peer_observer;
+pub use peer_observer::{
+    MAX_CAPTURE_SECONDS, PeerObserverConfig, load_peer_observer, peer_audio_storage_is_private,
+};
+
+mod peer;
+pub use peer::{PeerConfig, load_peer};
+
 mod providers;
 pub use providers::{
     PRIMARY_PROVIDER_ID, PROVIDER_ORDER_KEY, Provider, ProviderPool, discover_providers,

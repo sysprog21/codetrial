@@ -5,6 +5,7 @@ pub mod delivery;
 pub mod dispatch;
 pub mod gemini;
 pub mod livekit;
+mod peer_audio;
 pub mod recording;
 pub mod runtime;
 pub mod tasks;

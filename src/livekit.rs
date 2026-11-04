@@ -138,7 +138,7 @@ use rooms::{evict_duplicate_agent, isolate_local_agent};
 // credentials a Setup form was given, and it names it through this module.
 pub(crate) use rooms::validate_livekit_credentials;
 
-pub(crate) use room_service::create_interview_room;
+pub(crate) use room_service::{create_interview_room, create_peer_waiting_room, delete_room};
 
 // The test module reaches every item of these two through `use super::*`, so
 // the hub keeps the globs instead of a list that grows with each test.

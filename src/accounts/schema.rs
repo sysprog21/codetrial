@@ -5,7 +5,7 @@ use std::path::Path;
 /// Bumped whenever a migration is added below. SQLite carries it in the file
 /// header, so an existing database announces which migrations it has already
 /// run instead of quietly keeping an old shape behind `IF NOT EXISTS`.
-pub const ACCOUNT_SCHEMA_VERSION: i64 = 11;
+pub const ACCOUNT_SCHEMA_VERSION: i64 = 14;
 
 /// Migrations in order, each one taking the database from index `n` to `n + 1`.
 /// Append, never edit: an entry that has already run somewhere will not run
@@ -22,6 +22,13 @@ const ACCOUNT_MIGRATIONS: &[&str] = &[
     CREATE_DELIVERY_QUEUE,
     INDEX_RECORDINGS_BY_ROOM,
     ALLOW_BOARD_REPLAY_EVENTS,
+    include_str!("peer/schema.sql"),
+    include_str!("peer/discovery.sql"),
+    concat!(
+        include_str!("peer/observer.sql"),
+        "\n",
+        include_str!("../peer_audio/schema.sql")
+    ),
 ];
 
 pub fn initialize_account_database(path: &Path) -> rusqlite::Result<()> {
@@ -524,3 +531,7 @@ const INDEX_REPORTS_BY_USER: &str = "
 #[cfg(test)]
 #[path = "../../tests/unit/accounts/schema.migration_tests.rs"]
 mod migration_tests;
+
+#[cfg(test)]
+#[path = "../../tests/unit/accounts/peer_migration.rs"]
+mod peer_migration_tests;

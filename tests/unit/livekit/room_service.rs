@@ -419,3 +419,75 @@ fn a_fractional_timeout_rounds_up_to_whole_seconds() {
     assert_eq!(ceil(Duration::ZERO), 0);
     assert_eq!(ceil(Duration::from_secs(u64::MAX)), u32::MAX);
 }
+
+#[tokio::test]
+async fn a_peer_waiting_room_has_space_for_two_members_and_a_silent_observer() {
+    let service = RoomService::start(200, "{}").await;
+    create_peer_waiting_room(
+        &service.url,
+        STUB_API_KEY,
+        STUB_API_SECRET,
+        "peer-waiting",
+        NOW,
+        120,
+    )
+    .await
+    .unwrap();
+    let requests = service.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].path, "/twirp/livekit.RoomService/CreateRoom");
+    assert_eq!(
+        requests[0].body,
+        serde_json::json!({
+            "name":"peer-waiting", "empty_timeout":600, "departure_timeout":150,
+            "max_participants":3,
+        })
+    );
+    let grant = verified_video_grant(requests[0].bearer.as_deref().unwrap()).unwrap();
+    assert_eq!(grant, serde_json::json!({"roomCreate":true}));
+
+    let service = RoomService::start(200, "{}").await;
+    create_peer_waiting_room(
+        &service.url,
+        STUB_API_KEY,
+        STUB_API_SECRET,
+        "peer-waiting",
+        NOW,
+        300,
+    )
+    .await
+    .unwrap();
+    assert_eq!(service.requests()[0].body["departure_timeout"], 330);
+}
+
+#[tokio::test]
+async fn peer_waiting_room_provisioning_reuses_idempotent_bounded_transport() {
+    for (status, reply) in [(409, "conflict"), (400, r#"{"code":"already_exists"}"#)] {
+        let service = RoomService::start(status, reply).await;
+        create_peer_waiting_room(
+            &service.url,
+            STUB_API_KEY,
+            STUB_API_SECRET,
+            "peer-waiting",
+            NOW,
+            120,
+        )
+        .await
+        .unwrap();
+        assert_eq!(service.requests().len(), 1);
+    }
+    let service = RoomService::start(401, r#"{"code":"unauthenticated"}"#).await;
+    let error = create_peer_waiting_room(
+        &service.url,
+        STUB_API_KEY,
+        STUB_API_SECRET,
+        "peer-waiting",
+        NOW,
+        120,
+    )
+    .await
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("CreateRoom"));
+    assert_eq!(service.requests().len(), 1);
+}

@@ -130,7 +130,7 @@ async fn account_routes_record_interviewee_github_login() {
         session.json::<Value>().await.unwrap(),
         json!({"signedIn": false, "loginRequired": true,
                 "guestModeAvailable": true, "deviceLogin": false, "maxDurationMin": MAX_DURATION_MIN,
-                "candidateVideo": null})
+                "peerEnabled": false, "peerMaxRoundMinutes": null, "peerObserverAvailable": false, "peerAudioAvailable": false, "candidateVideo": null})
     );
 
     let signed_in = client
@@ -330,7 +330,7 @@ async fn an_unmigratable_account_database_refuses_rather_than_disabling_login() 
         session,
         json!({"signedIn": false, "loginRequired": true,
                 "guestModeAvailable": false, "deviceLogin": false, "maxDurationMin": MAX_DURATION_MIN,
-                "candidateVideo": null}),
+                "peerEnabled": false, "peerMaxRoundMinutes": null, "peerObserverAvailable": false, "peerAudioAvailable": false, "candidateVideo": null}),
         "a database this binary cannot migrate still requires a login"
     );
 
@@ -372,7 +372,7 @@ async fn an_unopenable_account_database_refuses_rather_than_disabling_login() {
         session,
         json!({"signedIn": false, "loginRequired": true,
                 "guestModeAvailable": false, "deviceLogin": false, "maxDurationMin": MAX_DURATION_MIN,
-                "candidateVideo": null}),
+                "peerEnabled": false, "peerMaxRoundMinutes": null, "peerObserverAvailable": false, "peerAudioAvailable": false, "candidateVideo": null}),
         "a broken database still requires a login; it cannot serve one"
     );
 
@@ -429,7 +429,7 @@ async fn an_unopenable_account_database_refuses_rather_than_disabling_login() {
             "loginRequired": false,
             "guestModeAvailable": true, "deviceLogin": false,
             "maxDurationMin": MAX_DURATION_MIN,
-            "candidateVideo": null
+            "peerEnabled": false, "peerMaxRoundMinutes": null, "peerObserverAvailable": false, "peerAudioAvailable": false, "candidateVideo": null
         }),
         "nothing to sign in to, and the lobby has to be told so"
     );
@@ -1085,7 +1085,7 @@ async fn account_reports_are_scoped_to_the_signed_in_user() {
         signed_out,
         json!({"signedIn": false, "loginRequired": true,
                 "guestModeAvailable": true, "deviceLogin": false, "maxDurationMin": MAX_DURATION_MIN,
-                "candidateVideo": null}),
+                "peerEnabled": false, "peerMaxRoundMinutes": null, "peerObserverAvailable": false, "peerAudioAvailable": false, "candidateVideo": null}),
         "accounts exist here, so the browser has to know to demand a sign-in"
     );
 

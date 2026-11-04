@@ -1,6 +1,9 @@
 mod side_calls;
 use side_calls::side_call_once;
 
+mod peer;
+pub(crate) use peer::generate_peer_content;
+
 use std::io;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;

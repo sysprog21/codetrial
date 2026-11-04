@@ -120,7 +120,7 @@ impl GeminiKeys {
         })
     }
 
-    fn new(keys: Vec<String>) -> Self {
+    pub(crate) fn new(keys: Vec<String>) -> Self {
         Self {
             keys,
             current: Mutex::new(Selection::default()),

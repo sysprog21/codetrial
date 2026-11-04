@@ -529,3 +529,67 @@ fn hs256_matches_rfc4231_and_independent_key_length_cases() {
         assert!(!verify_hs256(&key, "payload", &truncated));
     }
 }
+
+#[test]
+fn peer_tokens_are_short_lived_and_cannot_administer_rooms() {
+    let token = codetrial::token::livekit_peer_token(LivekitTokenInput {
+        api_key: KEY,
+        api_secret: SECRET,
+        name: "Partner",
+        identity: "opaque",
+        room: "peer-room",
+        metadata: "",
+        now_seconds: NOW,
+        agent: true,
+    })
+    .unwrap();
+    assert_eq!(
+        livekit_join_from_token(KEY, SECRET, &token, NOW + 299).unwrap(),
+        ("peer-room".into(), "opaque".into())
+    );
+    assert_eq!(
+        livekit_join_from_token(KEY, SECRET, &token, NOW + 300),
+        Err(WebhookRejection::Expired)
+    );
+    let claims = claims_of(&token);
+    assert_eq!(claims["exp"], NOW + 300);
+    assert_eq!(claims["nbf"], NOW);
+    assert_eq!(claims["sub"], "opaque");
+    assert_eq!(claims["video"]["room"], "peer-room");
+    assert_eq!(claims["video"]["agent"], false);
+    assert_eq!(claims["video"]["canUpdateOwnMetadata"], false);
+    for grant in ["roomAdmin", "roomCreate", "roomRecord"] {
+        assert!(claims["video"].get(grant).is_none());
+    }
+    assert!(claims.get("kind").is_none());
+    assert!(
+        codetrial::token::livekit_peer_token(LivekitTokenInput {
+            api_key: KEY,
+            api_secret: SECRET,
+            name: "Partner",
+            identity: "opaque",
+            room: "peer-room",
+            metadata: "",
+            now_seconds: u64::MAX,
+            agent: false,
+        })
+        .is_err()
+    );
+}
+
+#[test]
+fn peer_observer_token_cannot_publish_any_room_content() {
+    let token =
+        codetrial::token::livekit_peer_observer_token(KEY, SECRET, "observer", "peer-room", NOW)
+            .unwrap();
+    let claims = claims_of(&token);
+    assert_eq!(claims["kind"], "agent");
+    assert_eq!(
+        claims["video"],
+        json!({"room":"peer-room","roomJoin":true,"canPublish":false,"canSubscribe":true,"canPublishData":false,"canUpdateOwnMetadata":false,"agent":true})
+    );
+    assert_eq!(
+        livekit_join_from_token(KEY, SECRET, &token, NOW).unwrap(),
+        ("peer-room".into(), "observer".into())
+    );
+}

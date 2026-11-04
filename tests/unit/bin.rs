@@ -843,3 +843,88 @@ fn task_mode_runs_only_on_a_private_server_that_neither_records_nor_shares_a_roo
         assert!(!super::task_mode_allowed(reachable, fixed_room, recording));
     }
 }
+
+#[test]
+fn peer_mode_requires_both_oauth_credentials() {
+    assert!(super::peer_needs_oauth(false, false).is_ok());
+    assert!(super::peer_needs_oauth(false, true).is_ok());
+    assert!(super::peer_needs_oauth(true, true).is_ok());
+    assert!(
+        super::peer_needs_oauth(true, false)
+            .unwrap_err()
+            .contains("GITHUB_CLIENT_ID")
+    );
+    let pool = codetrial::config::ProviderPool {
+        providers: vec![provider(codetrial::config::PRIMARY_PROVIDER_ID)],
+    };
+    let enabled = super::web_server_config(
+        &values(&[
+            ("CODETRIAL_PEER_ENABLED", "true"),
+            ("GITHUB_CLIENT_ID", "client"),
+            ("GITHUB_CLIENT_SECRET", "secret"),
+            ("GOOGLE_API_KEY", "test-key"),
+        ]),
+        pool.clone(),
+        false,
+        &super::CliOptions::default(),
+    )
+    .unwrap();
+    assert!(enabled.peer.is_some());
+    for credentials in [
+        vec![],
+        vec![("GITHUB_CLIENT_ID", "client")],
+        vec![("GITHUB_CLIENT_SECRET", "secret")],
+    ] {
+        let mut settings = values(&credentials);
+        settings.insert("CODETRIAL_PEER_ENABLED".into(), "true".into());
+        assert!(
+            super::web_server_config(
+                &settings,
+                pool.clone(),
+                false,
+                &super::CliOptions::default()
+            )
+            .unwrap_err()
+            .contains("GITHUB_CLIENT_ID")
+        );
+    }
+}
+
+#[test]
+fn peer_mode_requires_observer_credentials_only_when_enabled() {
+    assert!(
+        super::main_peer::observer_config(&values(&[]), false)
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        super::main_peer::observer_config(&values(&[]), true)
+            .unwrap_err()
+            .contains("GOOGLE_API_KEY")
+    );
+    assert!(
+        super::main_peer::observer_config(&values(&[("GOOGLE_API_KEY", "test-key")]), true)
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[test]
+fn peer_observer_rejects_sessions_longer_than_its_two_hour_capture() {
+    let long = values(&[
+        ("GOOGLE_API_KEY", "test-key"),
+        ("CODETRIAL_PEER_ENABLED", "true"),
+        ("CODETRIAL_PEER_HARD_MAX_MINUTES", "150"),
+    ]);
+    assert!(
+        super::main_peer::observer_config(&long, true)
+            .unwrap_err()
+            .contains("at most 120")
+    );
+    let limit = values(&[
+        ("GOOGLE_API_KEY", "test-key"),
+        ("CODETRIAL_PEER_ENABLED", "true"),
+        ("CODETRIAL_PEER_HARD_MAX_MINUTES", "120"),
+    ]);
+    assert!(super::main_peer::observer_config(&limit, true).is_ok());
+}

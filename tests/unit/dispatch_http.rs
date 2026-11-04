@@ -242,6 +242,8 @@ impl Probe {
             trusted_proxy_hops: 1,
             allowed_hosts: Vec::new(),
             recording: None,
+            peer: None,
+            peer_observer: None,
             pool: crate::config::ProviderPool {
                 providers: vec![provider],
             },

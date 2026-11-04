@@ -21,6 +21,7 @@ mod assets;
 mod auth;
 mod consent;
 mod interviews;
+mod peer;
 mod policy;
 mod pool;
 mod recordings;
@@ -45,6 +46,11 @@ pub use auth::login_config;
 pub use interviews::REPLAY_RATE_LIMIT;
 use pool::{ProviderQuota, spawn_provider_quota_refresher};
 pub use recordings::READ_RATE_LIMIT;
+
+/// Peer-interview requests allowed per member per window, and the heavier
+/// snapshot saves.
+const PEER_RATE_LIMIT: u32 = 120;
+const PEER_SNAPSHOT_RATE_LIMIT: u32 = 30;
 pub use setup::{config_from_values, setup_service};
 pub use setup_edit::SetupContext;
 pub use token::{TOKEN_RATE_LIMIT, TokenConfig, TokenResponse, token_response};
@@ -55,6 +61,12 @@ pub const MAX_BODY_BYTES: usize = 8 * 1024;
 /// The browser bounds each field (`sanitizeReport` in `web/lib.js`); this is
 /// the ceiling that makes those bounds sufficient whatever the text is.
 pub const MAX_REPORT_BYTES: usize = 64 * 1024;
+/// Ceilings above the largest body validation accepts, counting JSON escapes at
+/// six bytes a character: a body validation would accept must not meet a 413.
+/// A snapshot holds up to 48 KiB of code and 100 test cases of up to ~16 KiB of
+/// text each, about 1.7 MB before escapes.
+pub const MAX_PEER_SNAPSHOT_BYTES: usize = 2 * 1024 * 1024;
+pub const MAX_PEER_FEEDBACK_BYTES: usize = 256 * 1024;
 /// A webhook body is not a session request. `egress_ended` carries the room,
 /// the egress request that produced it, and every file result with its own
 /// location and byte counts, and a body over the limit is answered `413` and
@@ -100,6 +112,9 @@ pub struct WebServerConfig {
     /// deployment that has not provisioned the resources in
     /// `docs/recording-contract.md`.
     pub recording: Option<crate::config::RecordingConfig>,
+    /// Peer practice is opt-in and requires verified GitHub accounts.
+    pub peer: Option<crate::config::PeerConfig>,
+    pub peer_observer: Option<crate::config::PeerObserverConfig>,
     /// Every LiveKit project this server can hand a candidate to, primary
     /// first. The single source: the primary used to be stored here and again
     /// in three flat fields, which cost a fallback chain at every read and a
@@ -168,6 +183,8 @@ impl fmt::Debug for WebServerConfig {
             trusted_proxy_hops,
             allowed_hosts,
             recording,
+            peer,
+            peer_observer,
             pool,
             probe_provider_quota,
             update_check_commit,
@@ -198,6 +215,8 @@ impl fmt::Debug for WebServerConfig {
             .field("trusted_proxy_hops", trusted_proxy_hops)
             .field("allowed_hosts", allowed_hosts)
             .field("recording", recording)
+            .field("peer", peer)
+            .field("peer_observer", peer_observer)
             .field("pool", pool)
             .field("probe_provider_quota", probe_provider_quota)
             .field("update_check_commit", update_check_commit)
@@ -266,6 +285,9 @@ pub(crate) struct AppState {
     /// blast radius of one request nor who may ask: it bounds how often, which
     /// is the one of the three nothing else covered.
     read_limit: TokenRateLimit<i64>,
+    peer_limit: TokenRateLimit<i64>,
+    peer_snapshot_limit: TokenRateLimit<i64>,
+    peer_observers: Arc<peer::observer::PeerObservers>,
 
     /// Which provider the next room goes to. Relaxed because nothing depends on
     /// the order two concurrent requests observe, only that they observe
@@ -428,11 +450,20 @@ pub(crate) fn spawn_session_sweeper(accounts: Arc<Accounts>) -> BackgroundTasks 
 /// without connect info answers every token request with a 500. Callers go
 /// through [`web_service`].
 pub(crate) fn web_router(
-    config: WebServerConfig,
+    mut config: WebServerConfig,
     dispatcher: Option<Arc<dyn RoomDispatcher>>,
     recorder: Option<crate::recording::Recorder>,
     setup: Option<Arc<SetupContext>>,
 ) -> Router {
+    if config
+        .peer_observer
+        .as_ref()
+        .is_some_and(|observer| observer.validate_audio_storage(&config.web_dir).is_err())
+        && let Some(observer) = &mut config.peer_observer
+    {
+        observer.audio_dir = None;
+        eprintln!("peer audio storage is publicly served or unavailable; refusing audio capture");
+    }
     let login = login_config(&config);
     let accounts_required = login.is_some();
 
@@ -483,6 +514,24 @@ pub(crate) fn web_router(
         provider_quota.clone(),
         config.pool.clone(),
     ));
+    if config.peer.is_some()
+        && let Some(accounts) = &accounts
+    {
+        background.absorb(peer::spawn_sweeper(
+            Arc::clone(accounts),
+            config.pool.clone(),
+        ));
+        background.absorb(peer::observer::spawn_retention(Arc::clone(accounts)));
+    }
+    if let (Some(accounts), Some(dir)) = (
+        &accounts,
+        config
+            .peer_observer
+            .as_ref()
+            .and_then(|observer| observer.audio_dir.clone()),
+    ) {
+        background.absorb(peer::spawn_audio_retention(Arc::clone(accounts), dir));
+    }
     let router = Router::new()
         .route("/healthz", get(|| async { "ok\n" }))
         .route("/api/token", post(token_handler))
@@ -553,11 +602,18 @@ pub(crate) fn web_router(
                 .delete(delete_reports_handler),
         )
         .route("/api/reports/{id}", delete(delete_report_handler))
-        .fallback(web_static_handler)
-        .layer(axum::middleware::from_fn_with_state(
-            security_header_state(&config),
-            security_headers,
-        ));
+        .fallback(web_static_handler);
+
+    let router = if config.peer.is_some() {
+        router.merge(peer::routes())
+    } else {
+        router
+    };
+
+    let router = router.layer(axum::middleware::from_fn_with_state(
+        security_header_state(&config),
+        security_headers,
+    ));
 
     // Only when there is a list, so a deployment that names no host pays
     // nothing per request for a check that would pass everything.
@@ -597,6 +653,9 @@ pub(crate) fn web_router(
             login_limit: TokenRateLimit::with_limit(token::TOKEN_RATE_LIMIT),
             replay_limit: TokenRateLimit::with_limit(interviews::REPLAY_RATE_LIMIT),
             read_limit: TokenRateLimit::with_limit(recordings::READ_RATE_LIMIT),
+            peer_limit: TokenRateLimit::with_limit(PEER_RATE_LIMIT),
+            peer_snapshot_limit: TokenRateLimit::with_limit(PEER_SNAPSHOT_RATE_LIMIT),
+            peer_observers: Arc::new(peer::observer::PeerObservers::new()),
             provider_counter: Arc::new(AtomicUsize::new(0)),
             provider_quota,
             background: Arc::new(background),

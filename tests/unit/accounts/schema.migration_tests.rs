@@ -177,110 +177,9 @@ fn set_user_version(path: &Path, version: i64) {
         .unwrap();
 }
 
-/// Puts a database back into the shape it had at `version`, rather than
-/// only rewinding the counter.
-///
-/// Rewinding alone was enough while every migration was idempotent, and
-/// stopped being enough the moment one added a column: replaying
-/// `ALTER TABLE ... ADD COLUMN` against a table that already has it fails
-/// with `duplicate column name`. That failure is the fixture's, not the
-/// migration's, so the fixture is what has to build an honest old database.
-///
-/// It was raised as a production idempotency flaw and is not one. `migrate`
-/// runs only the entries after `PRAGMA user_version` and stamps the new
-/// version inside the same `IMMEDIATE` transaction, so a migration runs
-/// once or not at all; a database at version 3 holding version 4's columns
-/// is a state only this helper can produce. Guarding the `ALTER` with a
-/// `pragma_table_info` check would be defending against it.
-///
-/// `DROP COLUMN` needs SQLite 3.35, which the bundled build has and which
-/// production never needs. That asymmetry is the price of the fixture and
-/// is worth naming.
-fn rewind_to(path: &Path, version: i64) {
-    let connection = rusqlite::Connection::open(path).unwrap();
-
-    // Newest first: `recordings` has foreign keys into `interviews`, so
-    // dropping them the other way round would leave a table pointing at one
-    // that is gone.
-    if version < 11 {
-        // Rebuilt under the list version 10 had, rows and all, so the upgrade
-        // has something to carry across.
-        connection
-            .execute_batch(
-                "CREATE TABLE replay_events_old AS SELECT * FROM replay_events;
-                 DROP TABLE replay_events;
-                 CREATE TABLE replay_events (
-                     interview_id TEXT NOT NULL REFERENCES interviews(id) ON DELETE CASCADE,
-                     seq INTEGER NOT NULL,
-                     kind TEXT NOT NULL,
-                     at INTEGER NOT NULL,
-                     payload TEXT NOT NULL,
-                     bytes INTEGER NOT NULL,
-                     received_at INTEGER NOT NULL,
-                     PRIMARY KEY (interview_id, seq),
-                     CHECK (seq >= 0),
-                     CHECK (at >= 0),
-                     CHECK (bytes >= 0),
-                     CHECK (kind IN ('transcript', 'editor', 'tests', 'stage', 'avatar', 'lifecycle'))
-                 );
-                 INSERT INTO replay_events SELECT * FROM replay_events_old;
-                 DROP TABLE replay_events_old;
-                 CREATE INDEX replay_events_by_interview_and_kind
-                     ON replay_events(interview_id, kind, seq);",
-            )
-            .unwrap();
-    }
-    if version < 10 {
-        connection
-            .execute_batch("DROP INDEX IF EXISTS recordings_by_room;")
-            .unwrap();
-    }
-    if version < 9 {
-        connection
-            .execute_batch("DROP TABLE IF EXISTS delivery_queue;")
-            .unwrap();
-    }
-    if version < 8 {
-        connection
-            .execute_batch(
-                "DROP TABLE IF EXISTS replay_events;
-                 ALTER TABLE recordings DROP COLUMN quota_exceeded;",
-            )
-            .unwrap();
-    }
-    if version < 7 {
-        connection
-            .execute_batch(
-                "DROP TABLE IF EXISTS recording_events;
-                 ALTER TABLE recordings DROP COLUMN stopped_at;",
-            )
-            .unwrap();
-    }
-    if version < 6 {
-        connection
-            .execute_batch(
-                "DROP TABLE IF EXISTS recordings;
-                 DROP INDEX IF EXISTS interviews_account_and_id;",
-            )
-            .unwrap();
-    }
-    if version < 5 {
-        connection
-            .execute_batch("DROP TABLE IF EXISTS interviews;")
-            .unwrap();
-    }
-    if version < 4 {
-        connection
-            .execute_batch(
-                "ALTER TABLE users DROP COLUMN email;
-                 ALTER TABLE users DROP COLUMN email_verified;",
-            )
-            .unwrap();
-    }
-    connection
-        .execute_batch(&format!("PRAGMA user_version = {version}"))
-        .unwrap();
-}
+#[path = "schema_rewind.rs"]
+mod rewind;
+use rewind::rewind_to;
 
 fn tables(path: &Path) -> Vec<String> {
     let connection = rusqlite::Connection::open(path).unwrap();
@@ -845,28 +744,6 @@ fn an_existing_database_gains_the_recordings_table_on_upgrade() {
         .unwrap();
 }
 
-#[test]
-fn a_fresh_database_runs_every_migration_and_records_the_version() {
-    let path = scratch("fresh");
-
-    initialize_account_database(&path).unwrap();
-
-    assert_eq!(user_version(&path), ACCOUNT_SCHEMA_VERSION);
-    assert_eq!(
-        tables(&path),
-        vec![
-            "delivery_queue",
-            "interviews",
-            "recording_events",
-            "recordings",
-            "replay_events",
-            "reports",
-            "sessions",
-            "users"
-        ]
-    );
-}
-
 /// The case that matters when a second migration is appended: startup runs
 /// this on every boot, so it has to be a no-op against a database that is
 /// already current, and it has to leave the rows alone.
@@ -1023,11 +900,6 @@ fn an_existing_database_gains_the_report_index_on_upgrade() {
     let session = sign_in(&path, "early-candidate");
     assert!(user_id_for(&accounts_at(&path), &session) > 0);
     // Rewind to the shape a v1 binary left behind.
-    let connection = rusqlite::Connection::open(&path).unwrap();
-    connection
-        .execute_batch("DROP INDEX IF EXISTS reports_by_user")
-        .unwrap();
-    drop(connection);
     rewind_to(&path, 1);
     assert!(!index_names(&path).contains(&"reports_by_user".to_string()));
 

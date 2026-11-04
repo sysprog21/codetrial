@@ -35,6 +35,8 @@ fn config_with(ids: &[&str]) -> WebServerConfig {
         trusted_proxy_hops: 0,
         allowed_hosts: Vec::new(),
         recording: None,
+        peer: None,
+        peer_observer: None,
         probe_provider_quota: false,
         update_check_commit: None,
         provision_rooms: false,

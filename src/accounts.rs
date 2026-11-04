@@ -3,6 +3,7 @@
 //! modules.
 
 pub mod interviews;
+pub(crate) mod peer;
 pub mod reports;
 pub mod schema;
 pub mod sessions;
