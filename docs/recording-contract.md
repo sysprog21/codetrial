@@ -1481,3 +1481,40 @@ production, record here the date checked, the pricing page used, the
 per-interview estimate for LiveKit Cloud transcoding/egress plus GCS plus
 Drive, and who approved it. LiveKit Cloud's included 60 transcode-minutes are a
 test budget, not a production allowance.
+
+
+## Reciprocal audio artifacts
+
+Reciprocal practice uses a separate opt-in audio path described in
+[the reciprocal runbook](peer-interviews.md). It does not use this document's
+single-candidate recording consent, email delivery, GCS staging or Shared Drive
+permissions. No cloud recording resource is provisioned by this change.
+
+Both fixed GitHub-verified members explicitly confirm the same immutable
+`saveTranscript` and `saveAudio` choices plus the silent-observer notice before
+capture. Saving audio is offered only with a configured private
+`CODETRIAL_PEER_AUDIO_DIR`; Unix directories require 0700 and files use 0600.
+Only the two members may read a completed WAV. Neither an invite nor presence
+in the authenticated roster is recording consent. The observer cannot publish
+tracks and starts capture only once the real round is active.
+
+The WAV has two 16 kHz PCM channels, one per fixed member identity, aligned by
+capture timestamp. A session is bounded to two hours when audio saving is
+configured. Partial files are removed when their writer is dropped. Completed
+artifacts expire 24 hours after completion; HTTP reads enforce expiry before
+background deletion. Deletion retries retain a durable pending marker.
+
+Either member may stop/delete the shared audio copy. The endpoint first blocks
+new reads and future ready transitions, then waits for the observer to close
+its writer and unlinks saved and partial files. A late capture finish cannot
+resurrect the record. Already downloaded copies cannot be recalled. Deleting
+saved audio does not cancel the separately agreed temporary AI transcription
+and end-only suggestions; session termination stops the interview.
+
+Transcripts are separately selectable and withdrawable. When not selected,
+raw text exists only in bounded observer memory until the same session's
+suggestions finish. Raw audio is never written by the recorder without audio
+saving. Suggestions can remain for 24 hours regardless of these two raw saving
+choices, but do not retain verbatim transcript evidence when text saving was
+not selected. A process restart can lose unselected evidence and must not
+fabricate or regenerate it from another session.

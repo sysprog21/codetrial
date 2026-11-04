@@ -411,6 +411,7 @@ recorded rather than left implicit. See
 | [Avatar contract](docs/avatar-contract.md) | Renderer behavior, asset limits, privacy, accessibility |
 | [Provider pooling](docs/providers.md) | Spreading rooms over several LiveKit projects |
 | [Recording contract](docs/recording-contract.md) | Provisioning, consent, delivery, retention, operations |
+| [Peer interviews](docs/peer-interviews.md) | Two-person practice, configuration, rollout and staging check |
 | [Google Meet manual check](docs/meet-tab-audio-manual-check.md) | Verifying tab-audio presentation |
 | [Response window manual check](docs/integrity-response-window-check.md) | Reading a real replay's windows as a person would |
 | [LiveKit troubleshooting](docs/livekit-connection-troubleshooting.md) | Telling four connection failures apart |
