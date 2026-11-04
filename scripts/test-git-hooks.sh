@@ -899,6 +899,30 @@ git commit -q --allow-empty -m "Change the topic once more" \
 git rev-parse HEAD >> "$(git rev-parse --git-common-dir)/codetrial-review/reviewed"
 expect 0 "a reviewed topic head is pushed" git push -q fork HEAD:refs/heads/topic
 absent "a reviewed head gets no note" "$work/last.out" "no review on record"
+
+# A change to src/ with nothing under tests/ is pushed with a note, and a test
+# added to the same branch clears it. The fixture commits a Rust file through
+# the pre-commit hook, which needs the formatters; without them the case is
+# skipped rather than judged on a push of the old head.
+mkdir -p src tests
+printf '// a change with no test beside it\n' > src/untested.rs
+git add src/untested.rs
+if git commit -q -m "Change a source file with no test" \
+    -m "The branch touches src/ and nothing under tests/ yet." > /dev/null 2>&1; then
+    git rev-parse HEAD >> "$(git rev-parse --git-common-dir)/codetrial-review/reviewed"
+    expect 0 "a src change without a test is pushed" git push -q fork HEAD:refs/heads/topic
+    contains "the push notes the missing test" "$work/last.out" "nothing under tests/"
+    printf 'a test for it\n' > tests/untested.txt
+    git add tests/untested.txt
+    git commit -q -m "Add the test for that change" \
+        -m "The same branch now carries a file under tests/."
+    git rev-parse HEAD >> "$(git rev-parse --git-common-dir)/codetrial-review/reviewed"
+    expect 0 "the same branch with its test is pushed" git push -q fork HEAD:refs/heads/topic
+    absent "a branch with a test gets no test note" "$work/last.out" "nothing under tests/"
+else
+    git reset -q --hard HEAD
+    echo "  SKIP    src note: the pre-commit formatters are not installed"
+fi
 git commit -q --allow-empty -m "Change the topic for the note cases" \
     -m "An unreviewed head for the pushes that must not get a note."
 
