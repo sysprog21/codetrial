@@ -431,7 +431,6 @@ web/            Static browser application
 problem-bank/   Problem and judge source of truth
 config/         Env file templates and per-provider credentials
 docs/           Contracts and operational notes
-examples/       Standalone measurement probes built against the crate
 scripts/        Build, verification, and integration checks
 vendor/         Patched third-party crates
 tests/          Rust and browser tests

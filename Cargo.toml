@@ -138,12 +138,6 @@ tokio = { version = "1.54.1", features = ["test-util"] }
 # line; the SDK already depends on this crate.
 log = "0.4.34"
 
-# The audio probe matches onsets to pulses, and `cargo test` builds an
-# example's tests without running them unless asked to.
-[[example]]
-name = "audio-latency"
-test = true
-
 # scripts/hook-check holds every `cargo build` to the git hooks being in
 # effect; its build.rs says why it is a member of its own. `vendor/` holds path
 # dependencies, not members, and `desktop/` is a crate of its own with its own

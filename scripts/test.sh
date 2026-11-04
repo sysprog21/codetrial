@@ -628,7 +628,6 @@ gate test-gate-tests unittest_gate "$ROOT/tests/test_test_gate.py"
 gate mutants-plan-tests unittest_gate "$ROOT/tests/test_mutants_plan.py"
 gate mutants-install-tests unittest_gate "$ROOT/tests/test_mutants_install.py"
 gate latency-tests unittest_gate "$ROOT/tests/test_analyze_latency.py"
-gate audio-latency-tests unittest_gate "$ROOT/tests/test_audio_latency_report.py"
 gate interview-behavior-script-tests unittest_gate "$ROOT/tests/test_interview_behavior_script.py"
 gate wait-for-server-tests unittest_gate "$ROOT/tests/test_wait_for_server.py"
 
