@@ -50,6 +50,10 @@ owns no rule of those; open the owner when a step names one.
   Rust diff; a surviving mutant is an untested behavior, not noise. Adding to
   `.cargo/mutants.toml` is the direction `docs/development.md` warns against,
   and `scripts/test.sh` names each entry a change adds.
+- **Change the document that states the behavior in the same commit.** A
+  contract in `docs/` or a skill that names what the change alters is edited
+  with it ([working docs](../codetrial-conventions/SKILL.md#working-docs-at-the-repo-root)
+  leave when finished).
 - **Delete dead code and duplicates the change exposed.** Only those the change
   touched; a sweep of unrelated code is a different pull request.
 - **Refactor in three moves:** pin current behavior with a test, change the
@@ -124,10 +128,11 @@ the report, as a check, not as a source for it. Local experience is a lead to re
 
 ## Reference synthesis
 
-Two reference projects under externals inform this skill. That directory is
+Three reference projects under externals inform this skill. That directory is
 untracked and absent from most clones, so nothing here depends on opening it.
 
 | Reference | Adopted here | Deliberately not adopted |
 |---|---|---|
 | ub-mode | Work, then right, then practice; failing test first; subtract first; attack a shared premise; action log; small ordered commits | `crapper`, `dryer` and `mutator` as required tools (the gate is `./scripts/test.sh` plus CI's `cargo-mutants`); pushing to the main line (a pull request is the path); a `how:` line in a commit body |
+| codereview | A rendering or state machine built once and consumed by every surface; the spec changes in the same commit as the behavior | An end-to-end recording store and per-test coverage as prerequisites; a spec file and an open-work list at the repo root |
 | agentic-workflow-integrity | Anomaly is not malice, so judge an action against the task; a learned baseline can be poisoned, so the fixed guard and CI stay the baseline; failed results stay in the report | A learned trace baseline or live gate: the project's own replay blocked every harmful event but also falsely blocked benign ones (precision 0.200 with its oracle judge, 0.214 with its LLM judge) |
