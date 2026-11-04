@@ -410,6 +410,32 @@ test("the shortcut does nothing while the media preflight is still up", async (t
   }
 });
 
+test("the shortcut runs nothing while Example drawing is expanded, and runs again once it shrinks", async (t) => {
+  const ctx = await interviewPage(t, { params: { exampleDrawing: "1" } });
+  if (!ctx) return;
+  const { page, errors } = ctx;
+  try {
+    await runButtonReady(page);
+    await page.locator("#example-board").evaluate((node) => (node.open = true));
+    await page.getByRole("button", { name: "Expand drawing" }).click();
+    await page.keyboard.press("ControlOrMeta+Enter");
+    // Taken, so it presses nothing else, and runs nothing while the board
+    // covers the results.
+    assert.equal(await runs(page), 0);
+    assert.equal(await enterDefaultPrevented(page), true);
+    await page.getByRole("button", { name: "Shrink drawing" }).click();
+    await page.keyboard.press("ControlOrMeta+Enter");
+    assert.equal(await runs(page), 1);
+    assert.deepEqual(
+      errors,
+      [],
+      `the shortcut threw in the browser: ${errors[0]}`,
+    );
+  } finally {
+    await page.close();
+  }
+});
+
 test("the shortcut does nothing once the interview has ended", async (t) => {
   const ctx = await interviewPage(t, { clock: true });
   if (!ctx) return;

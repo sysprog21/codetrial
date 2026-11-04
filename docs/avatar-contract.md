@@ -305,8 +305,10 @@ drawing tools at the board) stay visible at every width the avatar is shown. The
 stylesheet's `4.25rem` is only the fallback before that first measurement. The
 stage takes no pointer events, so it can never swallow a click meant for the
 editor; the Hide avatar button and the captions re-enable them for themselves.
-Below 1200px wide the avatar and its button are hidden rather than allowed to
-cover code, and the captions move to the bottom corner.
+Below 1200px wide, beside an editor panel too narrow for the avatar, or over an
+expanded Example drawing, the avatar and its button are hidden rather than
+allowed to cover code or the drawing, and the captions move to the bottom
+corner.
 
 Every VRM loads in a T-pose and the format ships no idle animation, so
 `loadVrm` drops the upper arms once at load. This is model-independent: without
@@ -447,7 +449,8 @@ button; if the button held focus, focus moves to the stage, since the box that
 would have held a note is removed.
 
 The render loop stops scheduling frames while the document is hidden, the stage
-is narrower than the breakpoint, or the preflight overlay covers it. It starts
+is compact (below the breakpoint, beside a narrow editor panel, or over an
+expanded Example drawing), or the preflight overlay covers it. It starts
 again on `visibilitychange`, when a `ResizeObserver` on the mount sees it widen,
 and when the page reports the preflight closed (`setStageCovered(false)`). The
 stage is `inert` while covered, so nothing on it can be reached by keyboard
