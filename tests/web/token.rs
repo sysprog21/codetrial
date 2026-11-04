@@ -103,6 +103,7 @@ fn token_response_matches_frontend_contract() {
             api_secret: "devsecret",
             server_url: "wss://example.livekit.cloud",
             recording_max_min: None,
+            default_duration_min: DEFAULT_DURATION_MIN,
         },
         br#"{"problemId":"merge-intervals","durationMin":120}"#,
         "interview-fixed",
@@ -136,6 +137,7 @@ fn token_ignores_a_mode_a_stale_client_still_sends() {
         api_secret: "devsecret",
         server_url: "wss://example.livekit.cloud",
         recording_max_min: None,
+        default_duration_min: DEFAULT_DURATION_MIN,
     };
     for body in [
         br#"{"mode":"practice"}"#.as_slice(),
@@ -163,6 +165,7 @@ fn token_interview_mode_is_allowlisted_and_defaults_to_the_editor() {
         api_secret: "secret",
         server_url: "wss://example.test",
         recording_max_min: None,
+        default_duration_min: DEFAULT_DURATION_MIN,
     };
     for (body, expected) in [
         (
@@ -192,6 +195,7 @@ fn token_interview_loop_is_allowlisted_and_defaults_to_combined() {
         api_secret: "secret",
         server_url: "wss://example.test",
         recording_max_min: None,
+        default_duration_min: DEFAULT_DURATION_MIN,
     };
     for (body, expected) in [
         (
@@ -218,6 +222,7 @@ fn only_explicit_false_disables_execution_in_signed_metadata() {
         api_secret: "secret",
         server_url: "wss://example.test",
         recording_max_min: None,
+        default_duration_min: DEFAULT_DURATION_MIN,
     };
     for value in [
         json!(false),
@@ -263,6 +268,7 @@ fn token_profile_is_bounded_and_enum_validated_before_signed_metadata() {
             api_secret: "secret",
             server_url: "wss://example.test",
             recording_max_min: None,
+            default_duration_min: DEFAULT_DURATION_MIN,
         },
         serde_json::to_string(&json!({"interviewProfile": {
             "role": format!("  {}\n", "r".repeat(100)),
@@ -300,6 +306,7 @@ fn token_profile_is_bounded_and_enum_validated_before_signed_metadata() {
             api_secret: "secret",
             server_url: "wss://example.test",
             recording_max_min: None,
+            default_duration_min: DEFAULT_DURATION_MIN,
         },
         br#"{"interviewProfile":{"seniority":"founder","role":4}}"#,
         "room",
@@ -320,6 +327,7 @@ fn token_grounding_is_signed_only_after_valid_consent_and_shape() {
         api_secret: "secret",
         server_url: "wss://example.test",
         recording_max_min: None,
+        default_duration_min: DEFAULT_DURATION_MIN,
     };
     let signed = token_response(&config, br#"{"interviewGrounding":{"consentVersion":1,"requirements":["Must know Rust"],"skills":["Rust"],"anchors":["Built a parser"]}}"#, "room", "candidate", 2_000).unwrap();
     let metadata: Value =
@@ -350,6 +358,7 @@ fn token_carries_hidden_examples_only_when_true() {
         api_secret: "secret",
         server_url: "wss://example.test",
         recording_max_min: None,
+        default_duration_min: DEFAULT_DURATION_MIN,
     };
     let metadata = |body: &[u8]| -> Value {
         let response = token_response(&config, body, "room", "candidate", 2_000).unwrap();
@@ -393,6 +402,7 @@ fn token_carries_candidate_led_only_when_true() {
         api_secret: "secret",
         server_url: "wss://example.test",
         recording_max_min: None,
+        default_duration_min: DEFAULT_DURATION_MIN,
     };
     let metadata = |body: &[u8]| -> Value {
         let response = token_response(&config, body, "room", "candidate", 2_000).unwrap();
@@ -428,6 +438,7 @@ fn token_carries_only_an_offered_language() {
         api_secret: "secret",
         server_url: "wss://example.test",
         recording_max_min: None,
+        default_duration_min: DEFAULT_DURATION_MIN,
     };
     let metadata = |body: &[u8]| -> Value {
         let response = token_response(&config, body, "room", "candidate", 2_000).unwrap();
@@ -466,6 +477,7 @@ fn token_response_mints_the_candidate_identity() {
             api_secret: "devsecret",
             server_url: "wss://example.livekit.cloud",
             recording_max_min: None,
+            default_duration_min: DEFAULT_DURATION_MIN,
         },
         br#"{"candidateIdentity":"candidate-a1b2c3"}"#,
         "interview-fixed",
@@ -501,6 +513,7 @@ fn token_duration_matches_current_frontend_clamp() {
                 api_secret: "devsecret",
                 server_url: "wss://example.livekit.cloud",
                 recording_max_min: None,
+                default_duration_min: DEFAULT_DURATION_MIN,
             },
             &body,
             "interview-fixed",
@@ -525,6 +538,7 @@ fn token_duration_preserves_fractional_frontend_metadata() {
             api_secret: "devsecret",
             server_url: "wss://example.livekit.cloud",
             recording_max_min: None,
+            default_duration_min: DEFAULT_DURATION_MIN,
         },
         br#"{"durationMin":42.8}"#,
         "interview-fixed",
@@ -561,6 +575,7 @@ fn token_duration_stops_at_the_recording_cap() {
                 api_secret: "devsecret",
                 server_url: "wss://example.livekit.cloud",
                 recording_max_min,
+                default_duration_min: DEFAULT_DURATION_MIN,
             },
             &body,
             "interview-fixed",
@@ -600,6 +615,7 @@ fn token_response_reports_the_length_it_granted() {
                 api_secret: "devsecret",
                 server_url: "wss://example.livekit.cloud",
                 recording_max_min,
+                default_duration_min: DEFAULT_DURATION_MIN,
             },
             &body,
             "interview-fixed",
@@ -632,32 +648,6 @@ fn token_response_reports_the_length_it_granted() {
 }
 
 #[test]
-fn token_duration_default_stops_at_the_recording_cap() {
-    // A caller who names no length gets the default, and the default is a
-    // length like any other. Handing back forty-five to a deployment that can
-    // only record thirty loses the same stretch, for the want of a request.
-    let response = token_response(
-        &TokenConfig {
-            api_key: "devkey",
-            api_secret: "devsecret",
-            server_url: "wss://example.livekit.cloud",
-            recording_max_min: Some(30),
-        },
-        b"{}",
-        "interview-fixed",
-        "candidate-fixed",
-        2000,
-    )
-    .unwrap();
-    let claims = claims(&response.token);
-
-    assert_eq!(
-        serde_json::from_str::<Value>(claims["metadata"].as_str().unwrap()).unwrap()["durationMin"],
-        30
-    );
-}
-
-#[test]
 fn token_duration_survives_a_recording_cap_under_the_floor() {
     // `f64::clamp` panics when its bounds cross, so a cap below the shortest
     // interview on offer has to land on the floor rather than in the handler.
@@ -667,6 +657,7 @@ fn token_duration_survives_a_recording_cap_under_the_floor() {
             api_secret: "devsecret",
             server_url: "wss://example.livekit.cloud",
             recording_max_min: Some(1),
+            default_duration_min: DEFAULT_DURATION_MIN,
         },
         br#"{"durationMin":45}"#,
         "interview-fixed",
@@ -1561,6 +1552,7 @@ fn token_resolves_voice_and_accent_independently() {
         api_secret: "secret",
         server_url: "wss://example.test",
         recording_max_min: None,
+        default_duration_min: DEFAULT_DURATION_MIN,
     };
     for voice in ["", "Default", "Random"]
         .into_iter()

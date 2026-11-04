@@ -3295,6 +3295,218 @@ lobbyTest(
   },
 );
 
+for (const [configured, medium, easy] of [
+  // The operator's own length replaces the built-in forty-five.
+  [30, "30", "30"],
+  [60, "60", "30"],
+  // Not a button: the nearest one is selected rather than none.
+  [20, "30", "30"],
+  [75, "60", "30"],
+]) {
+  lobbyTest(
+    `an operator default of ${configured} minutes preselects ${medium}, or ${easy} for Easy`,
+    async (page) => {
+      session.defaultDurationMin = configured;
+      const state = await lobby(page);
+      assert.equal(state.duration, medium);
+
+      await setLevel(page, "Easy", true);
+      await setLevel(page, "Medium", false);
+      assert.equal((await snapshot(page)).duration, easy);
+    },
+  );
+}
+
+lobbyTest(
+  "a restored lobby suggests again after a level was ticked by hand",
+  async (page) => {
+    session.defaultDurationMin = 40;
+    session.maxDurationMin = 40;
+    await lobby(page);
+    // Ticking a level by hand skips the history-based suggestion on restore,
+    // so only the session can move the length now.
+    await setLevel(page, "Hard", true);
+    await setLevel(page, "Medium", false);
+    assert.equal((await snapshot(page)).duration, "30");
+
+    session.maxDurationMin = 60;
+    await page.evaluate(() =>
+      window.dispatchEvent(
+        new PageTransitionEvent("pageshow", { persisted: true }),
+      ),
+    );
+    await page.waitForFunction(
+      () =>
+        document.querySelector("[data-duration].selected")?.dataset.duration ===
+        "45",
+    );
+  },
+);
+
+lobbyTest(
+  "a restored lobby leaves a length the candidate chose when the ceiling moves",
+  async (page) => {
+    session.maxDurationMin = 45;
+    await lobby(page);
+    await page.click('[data-duration="30"]');
+
+    session.maxDurationMin = 90;
+    await page.evaluate(() =>
+      window.dispatchEvent(
+        new PageTransitionEvent("pageshow", { persisted: true }),
+      ),
+    );
+    // The 60 button comes back only once the restored lobby has read the new
+    // ceiling, so the length below is checked after the session answered.
+    await page.waitForFunction(
+      () => !document.querySelector('[data-duration="60"]').disabled,
+    );
+    assert.equal((await snapshot(page)).duration, "30");
+  },
+);
+
+/// The session answers after the candidate has already acted, which is where
+/// "left alone" has to hold: the latch is set before the default arrives.
+const heldSession = async (page) => {
+  let release;
+  holdSession = new Promise((resolve) => (release = resolve));
+  const requested = page.waitForRequest(
+    (request) => new URL(request.url()).pathname === "/api/session",
+  );
+  await page.goto(`${base}/`, { waitUntil: "domcontentloaded" });
+  await requested;
+  return async () => {
+    release();
+    await page.waitForFunction(
+      () => document.querySelector("#recommendation").textContent !== "",
+    );
+  };
+};
+
+lobbyTest(
+  "an operator default does not overwrite a length chosen before the session answers",
+  async (page) => {
+    session.defaultDurationMin = 30;
+    const answer = await heldSession(page);
+    await page.click('[data-duration="60"]');
+    await answer();
+    assert.equal((await snapshot(page)).duration, "60");
+  },
+);
+
+lobbyTest(
+  "an operator default does not replace a remembered length",
+  async (page) => {
+    session.defaultDurationMin = 60;
+    await page.addInitScript(
+      ([key, value]) => localStorage.setItem(key, value),
+      ["codetrial.interviewSettings", JSON.stringify({ durationMin: 45 })],
+    );
+    assert.equal((await lobby(page)).duration, "45");
+  },
+);
+
+lobbyTest(
+  "an operator default above the recording cap is moved down to the cap",
+  async (page) => {
+    // The server never sends this pair, since it holds the default to the cap
+    // itself; this is the lobby's own guard.
+    session.defaultDurationMin = 60;
+    session.maxDurationMin = 45;
+    assert.equal((await lobby(page)).duration, "45");
+  },
+);
+
+lobbyTest(
+  "an operator default does not overrule a problem picked before the session answers",
+  async (page) => {
+    session.defaultDurationMin = 60;
+    const answer = await heldSession(page);
+    // Programmatic, because the picker is closed and the card is hidden.
+    await page.evaluate(() =>
+      document.querySelector('[data-problem][data-difficulty="Easy"]').click(),
+    );
+    await answer();
+    assert.equal(
+      (await snapshot(page)).duration,
+      "30",
+      "the checkboxes still say Medium, which would suggest the operator's 60",
+    );
+  },
+);
+
+lobbyTest(
+  "a start pressed before the session answers leaves the length to the server",
+  async (page) => {
+    session.defaultDurationMin = 60;
+    let release;
+    holdSession = new Promise((resolve) => (release = resolve));
+    const requested = page.waitForRequest(
+      (request) => new URL(request.url()).pathname === "/api/session",
+    );
+    await page.goto(`${base}/`, { waitUntil: "domcontentloaded" });
+    await requested;
+    // Programmatic, because the picker is closed and the card is hidden.
+    await page.evaluate(() =>
+      document
+        .querySelector('[data-problem][data-difficulty="Medium"]')
+        .click(),
+    );
+    await page.click("#start");
+    release();
+
+    // The markup's 45 is not the operator's length, so it must not ship.
+    await page.waitForURL(/\/interview/);
+    assert.equal(new URL(page.url()).searchParams.has("duration"), false);
+  },
+);
+
+lobbyTest(
+  "a start pressed before the session answers sends a length the lobby changed",
+  async (page) => {
+    session.defaultDurationMin = 60;
+    let release;
+    holdSession = new Promise((resolve) => (release = resolve));
+    const requested = page.waitForRequest(
+      (request) => new URL(request.url()).pathname === "/api/session",
+    );
+    await page.goto(`${base}/`, { waitUntil: "domcontentloaded" });
+    await requested;
+    // An Easy problem makes the row say 30, which the candidate saw, so the
+    // server must grant 30 and not the 60 it would pick for a request that
+    // names nothing.
+    await page.evaluate(() =>
+      document.querySelector('[data-problem][data-difficulty="Easy"]').click(),
+    );
+    await page.click("#start");
+    release();
+
+    await page.waitForURL(/\/interview/);
+    assert.equal(new URL(page.url()).searchParams.get("duration"), "30");
+  },
+);
+
+lobbyTest(
+  "a start after the session failed sends the length the row shows",
+  async (page) => {
+    // The failed read re-arms Start. The lobby no longer waits for an answer, so
+    // the 45 on screen is what the candidate sees, and it goes in the URL.
+    session = null;
+    failing = new Set(["/api/session"]);
+    await page.goto(`${base}/`, { waitUntil: "domcontentloaded" });
+    await awaitReady(page);
+    await page.evaluate(() =>
+      document
+        .querySelector('[data-problem][data-difficulty="Medium"]')
+        .click(),
+    );
+    await page.click("#start");
+
+    await page.waitForURL(/\/interview/);
+    assert.equal(new URL(page.url()).searchParams.get("duration"), "45");
+  },
+);
+
 lobbyTest(
   "the recommendation does not move once it is on screen",
   async (page) => {

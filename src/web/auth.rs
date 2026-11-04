@@ -551,8 +551,10 @@ pub(crate) async fn session_handler(
     // The lobby offers lengths this deployment may not be able to record, and
     // only the server knows the recording cap. Answered on both branches
     // because the duration row is live before anyone signs in.
-    let max_duration_min =
-        super::token::duration_ceiling(state.config.recording.as_ref().map(|it| it.max_minutes));
+    let recording_max_minutes = state.config.recording.as_ref().map(|it| it.max_minutes);
+    let max_duration_min = super::token::duration_ceiling(recording_max_minutes);
+    let default_duration_min =
+        super::token::default_duration(state.config.default_duration_min, recording_max_minutes);
 
     // Null on the web half of a split deployment, where the lobby keeps its
     // billing notice hidden rather than describe an agent it cannot see.
@@ -578,6 +580,7 @@ pub(crate) async fn session_handler(
                         "guestModeAvailable": state.guest_mode_available(),
                         "deviceLogin": device_client_id(&state.config).is_some(),
                         "maxDurationMin": max_duration_min,
+                        "defaultDurationMin": default_duration_min,
                         "candidateVideo": candidate_video,
                         "user": {
                             "login": user.login,
@@ -599,6 +602,7 @@ pub(crate) async fn session_handler(
                         "guestModeAvailable": state.guest_mode_available(),
                         "deviceLogin": device_client_id(&state.config).is_some(),
                         "maxDurationMin": max_duration_min,
+                        "defaultDurationMin": default_duration_min,
                         "candidateVideo": candidate_video,
                     }),
                 ),
