@@ -1029,30 +1029,6 @@ fn binary_reads_a_config_file_beside_the_executable() {
     );
 }
 
-/// Every mode that reads configuration refuses without a file, and says which
-/// file it wanted. One test over the modes rather than one test each: the
-/// assertion is the same sentence three times, and a mode added to MODES that
-/// forgets this belongs in this list rather than in a fourth copy.
-///
-/// `web` is not here: a missing config is a cold start for it, covered by
-/// `binary_web_serves_a_setup_page_when_no_config_exists`.
-#[test]
-fn binary_modes_that_read_configuration_require_a_primary_config_file() {
-    for args in [
-        &["run-livekit", "interview-fixed"][..],
-        &["check-gemini"][..],
-    ] {
-        let (code, stdout, stderr) = run_cli_args(args);
-
-        assert_eq!(code, 1, "{args:?}: {stderr}");
-        assert!(stdout.is_empty(), "{args:?}: {stdout}");
-        assert!(
-            stderr.contains("required configuration file is missing"),
-            "{args:?}: {stderr}"
-        );
-    }
-}
-
 /// `--config` alone still leaves zero positionals but skips the cold-start
 /// path, so the credentials refusal proves `web` was picked, not
 /// `run-livekit`/`check-gemini`.
@@ -3169,3 +3145,6 @@ fn a_server_told_to_follow_its_stdin_exits_when_it_closes() {
 
 #[path = "cli/setup_save.rs"]
 mod setup_save;
+
+#[path = "cli/agent_modes.rs"]
+mod agent_modes;

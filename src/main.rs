@@ -607,6 +607,13 @@ fn load_agent_config(options: &CliOptions) -> Result<AgentConfig, String> {
     let values = load_values(options)?;
     let production = is_production(&values);
     let provider_order = value_or(&values, codetrial::config::PROVIDER_ORDER_KEY, "");
+
+    // Said here and not in `load_from_pairs`, which `codetrial web` also calls
+    // after it has printed the same warning. A number that is no number is
+    // refused by `load_from_pairs` itself.
+    if let Ok((_, Some(warning))) = codetrial::config::configured_duration(&values) {
+        eprintln!("{warning}");
+    }
     let mut config =
         codetrial::config::load_from_pairs(values).map_err(|error| error.to_string())?;
     extend_pool(
