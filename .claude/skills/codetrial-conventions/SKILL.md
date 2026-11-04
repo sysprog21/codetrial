@@ -20,6 +20,9 @@ left here is the agent's half: the calibration this tree's own log gives, which
 repository `gh` is pointed at, how drafted text reaches it, and what needs the
 user's approval first.
 
+The order to work in, and what an agent leaves alone without being asked, is
+[codetrial-change](../codetrial-change/SKILL.md).
+
 ## Commit messages
 
 Before the first commit in a clone, run `make hooks`. It is safe to repeat, and

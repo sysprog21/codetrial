@@ -493,7 +493,8 @@ instead is layer three things, each closing a different gap:
 - **`scripts/agent-guard.py`**, registered in `.claude/settings.json` as a
   Claude Code `PreToolUse` hook, refuses an agent's shell command that skips
   the hooks (`--no-verify`, `core.hooksPath`, `commit-tree`, `update-ref`,
-  editing `.git/hooks` or a hook script). It stops an agent that follows its
+  editing `.git/hooks` or a hook script) and a shell reader pointed at a
+  per-developer credential file, a glob over them or the directory itself under `config/`. It stops an agent that follows its
   permissions from doing it by habit or to get past an error; it does not stop
   a determined one, and it does not cover another agent runner, which should be
   given the same rule in its own configuration.
@@ -724,6 +725,20 @@ HEAD accept `If-None-Match: *`, tag lists, repeated header fields, and weak or
 strong spellings of the same tag. A matching asset returns a bodyless 304 with
 its cache policy, ETag when available, and `Vary: accept-encoding`. Unknown or
 stale tags return the current representation.
+
+## Agent working method
+
+`.claude/skills/codetrial-change/SKILL.md` is the order an agent works in on a
+change (failing test first, smallest edit, root cause, small ordered commits)
+and the limits it keeps inside the task it was given. It restates no gate; the
+gate is `scripts/test.sh`, and the layers that hold when an agent does not
+follow it are under "What cannot be enforced locally".
+
+The skill's "What is automated" table names the hooks and checks behind it and
+what each cannot see. Gate receipts, one file per lane with the verdict, skipped
+count and `scripts/tree-fingerprint.sh` of the tree, live under
+`.git/codetrial-review/gate-receipts/`. A receipt shows that a run happened on
+this tree, not that it was complete; CI recomputes the verdict.
 
 ## Review memory and the review skill
 
