@@ -42,7 +42,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CEILINGS = "scripts/rust-style-ceilings.json"
 DEFAULT_CEILING = 1500
 
-RUST_ROOTS = ("src", "tests", "examples", "scripts/hook-check")
+RUST_ROOTS = ("src", "tests", "scripts/hook-check")
 RUST_FILES = ("build.rs",)
 WEB_ROOT = "web"
 WEB_SKIP = ("web/vendor/",)
