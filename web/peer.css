@@ -1,0 +1,254 @@
+.peer-lobby {
+  max-width: 72rem;
+}
+.peer-card {
+  margin-block: 1.5rem;
+  padding: 1.5rem;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+.peer-card h2 {
+  margin-top: 0;
+  font-size: 1.25rem;
+}
+.peer-settings {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1rem;
+  align-items: end;
+}
+.peer-settings label,
+.peer-card label {
+  display: grid;
+  gap: 0.5rem;
+  color: var(--sub);
+  font-size: 0.875rem;
+}
+.peer-settings select,
+.peer-settings input,
+.peer-card input,
+.peer-card textarea,
+.peer-card select {
+  width: 100%;
+  min-height: 2.75rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--step-surface);
+  color: var(--ink);
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-sm);
+  font: inherit;
+  box-sizing: border-box;
+}
+.peer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-block: 1rem;
+}
+.peer-actions button,
+.peer-settings button,
+.peer-toolbar button,
+.peer-card button {
+  min-height: 2.75rem;
+  padding: 0.5rem 1rem;
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-sm);
+  background: var(--inset-surface);
+  color: var(--ink);
+  font: inherit;
+  cursor: pointer;
+}
+.peer-actions button:hover,
+.peer-settings button:hover,
+.peer-toolbar button:hover,
+.peer-card button:hover {
+  background: var(--selected-surface);
+}
+.peer-actions button:disabled,
+.peer-toolbar button:disabled,
+.peer-card button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+#peer-available {
+  background: var(--accent-fill);
+  color: var(--on-accent);
+  border-color: var(--accent-fill);
+}
+#peer-available:not(:disabled):hover {
+  background: var(--accent-deep);
+}
+.peer-lobby a,
+.peer-shell a {
+  color: var(--accent-ink);
+}
+.peer-shell {
+  padding: 1.5rem;
+  max-width: 110rem;
+  margin: auto;
+}
+.peer-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1rem;
+  padding-block: 0.5rem;
+}
+.peer-toolbar h1 {
+  font-size: 1.25rem;
+  margin-right: auto;
+}
+.peer-grid {
+  display: grid;
+  grid-template-columns: minmax(18rem, 0.8fr) minmax(0, 1.6fr);
+  gap: 1.5rem;
+}
+.peer-grid > * {
+  min-width: 0;
+}
+.peer-workspace {
+  min-width: 0;
+}
+.peer-workspace .editor-stack {
+  min-height: 28rem;
+  height: min(60vh, 45rem);
+}
+.peer-workspace .editor-stack textarea {
+  min-height: 100%;
+}
+.peer-results {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  max-height: 18rem;
+  overflow: auto;
+}
+.peer-guide {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.peer-feedback {
+  display: grid;
+  gap: 1rem;
+}
+.peer-feedback fieldset {
+  display: grid;
+  grid-template-columns: 1fr 2fr 2fr;
+  gap: 0.75rem;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  padding: 1rem;
+}
+.peer-feedback legend {
+  color: var(--ink);
+}
+.peer-card textarea {
+  min-height: 6rem;
+  resize: vertical;
+}
+#peer-error {
+  color: var(--sub);
+}
+#peer-error[data-tone="error"] {
+  color: var(--danger-ink);
+}
+#peer-invite-link {
+  font-family: var(--font-mono);
+}
+@media (max-width: 800px) {
+  .peer-settings {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .peer-grid {
+    grid-template-columns: 1fr;
+  }
+  .peer-shell {
+    padding: 1rem;
+  }
+  .peer-feedback fieldset {
+    grid-template-columns: 1fr;
+  }
+}
+@media (max-width: 480px) {
+  .peer-settings {
+    grid-template-columns: 1fr;
+  }
+}
+.peer-workspace #editor {
+  width: calc(100% - var(--editor-gutter));
+  min-width: 0;
+}
+.peer-card .peer-consent {
+  display: flex;
+  align-items: start;
+  gap: 0.75rem;
+  margin-block: 1rem;
+  color: var(--ink);
+}
+.peer-card .peer-consent input {
+  width: 1.25rem;
+  min-height: 1.25rem;
+  flex: 0 0 1.25rem;
+  accent-color: var(--accent-fill);
+}
+.peer-roster {
+  display: grid;
+  gap: 1rem;
+  padding: 0;
+  list-style: none;
+}
+.peer-roster li {
+  padding: 1rem;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-md);
+  background: var(--step-surface);
+}
+.peer-roster li button {
+  margin: 0.25rem 0.5rem 0.25rem 0;
+}
+
+/* The settings form is a grid of fields; its checkboxes, notes and actions
+   each take a full row instead of landing in a stray cell. */
+.peer-settings > .peer-consent,
+.peer-settings > p {
+  grid-column: 1 / -1;
+  margin-block: 0;
+}
+.peer-settings > .peer-actions {
+  grid-column: 1 / -1;
+  margin-block: 0;
+}
+.peer-feedback-read {
+  display: grid;
+  gap: 0.25rem 1rem;
+  grid-template-columns: minmax(8rem, 1fr) 3fr;
+  margin: 0;
+}
+.peer-feedback-read dt {
+  color: var(--sub);
+  text-transform: capitalize;
+}
+.peer-feedback-read dd {
+  margin: 0 0 0.75rem;
+}
+.peer-feedback-read dd p {
+  margin: 0.25rem 0 0;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 480px) {
+  .peer-feedback-read {
+    grid-template-columns: 1fr;
+  }
+}
+#peer-session-list {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+#peer-requests:empty::before {
+  content: "No join requests right now.";
+  color: var(--sub);
+}

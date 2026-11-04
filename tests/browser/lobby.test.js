@@ -10095,3 +10095,31 @@ lobbyTest(
     assert.equal(await link.getAttribute("href"), "/setup");
   },
 );
+
+lobbyTest(
+  "the peer practice link shows only for a signed-in, verified member on a server that enables it",
+  async (page) => {
+    const user = { login: "candidate" };
+    const cases = [
+      [{ peerEnabled: true, identityVerified: true }, true],
+      [{ peerEnabled: true, user: { ...user, identityVerified: true } }, true],
+      [{ peerEnabled: false, identityVerified: true }, false],
+      [{ identityVerified: true }, false],
+      [{ peerEnabled: true, identityVerified: false }, false],
+      [{ peerEnabled: true }, false],
+      [{ signedIn: false, peerEnabled: true, identityVerified: true }, false],
+    ];
+    for (const [extra, shown] of cases) {
+      session = { signedIn: true, user, ...extra };
+      await lobby(page);
+      await reaches(page, () =>
+        document.querySelector("#account-status").textContent.trim(),
+      );
+      assert.equal(
+        await page.locator("#peer-practice").isVisible(),
+        shown,
+        JSON.stringify(extra),
+      );
+    }
+  },
+);
