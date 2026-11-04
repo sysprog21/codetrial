@@ -12,6 +12,12 @@ to hide a verb, building a commit by hand with commit-tree or update-ref, and
 rewriting a hook or the script behind one. Those are the ways a commit or push
 avoids the Change-Id and the review check on this machine.
 
+It also refuses to read a per-developer credential file under config/ (a
+`codetrial.env.<name>` other than the checked-in `.example`), a glob over them,
+or the directory itself, with a shell reader such as cat, grep or cp. Tools that consume those files, `make check` and the
+scripts that load them, are unaffected: it is the agent displaying a secret in
+its own transcript that is refused.
+
 The command line is parsed, not searched: shell quoting, `git -C`/`-c` global
 options, option abbreviations, `sh -c`, `eval`, `xargs`, command substitution
 and heredocs that feed a shell are all read. What it does not read is code in
@@ -25,6 +31,8 @@ size of the change. See docs/development.md, "What cannot be enforced locally".
 """
 
 import json
+import os
+import posixpath
 import re
 import shlex
 import sys
@@ -57,6 +65,29 @@ COMMIT_VALUES = {
 READS = {
     "--get", "--get-all", "--get-regexp", "--get-urlmatch", "--unset", "--unset-all",
     "--remove-section", "--list", "-l", "--show-origin", "--show-scope", "--name-only",
+}  # fmt: skip
+CREDENTIAL_FILE = re.compile(r"(^|/)config/[^/]*\.env\.(?!example$)[^/]+$")
+# A glob or the directory itself reaches the same files, and a recursive reader
+# prints them: `grep -r KEY config`, `cat config/*.local`.
+CREDENTIAL_REACH = re.compile(r"(?!.*\.example$)(^|/)config/[^/]*[*?\[][^/]*$")
+CREDENTIAL_READ = (
+    "reads a credential file under config/, which would put a secret in the transcript"
+)
+READERS = {
+    "cat", "tac", "less", "more", "head", "tail", "grep", "egrep", "fgrep", "rg",
+    "ag", "awk", "sed", "cut", "sort", "uniq", "tr", "od", "xxd", "hexdump",
+    "strings", "base64", "bat", "cp", "mv", "scp", "rsync",
+    "nl", "paste", "diff", "cmp", "jq", "tar", "zip", "zcat", "dd", "find",
+}  # fmt: skip
+# The last operand of these is where the data goes, not what is read, so a copy
+# that creates a credential file (the README's setup step) is not a read.
+TO_LAST = {"cp", "mv", "scp", "rsync"}
+# Searchers that can be asked for names or counts instead of lines (`rg --files
+# config`, `grep -rl KEY config`), which reveal no secret.
+SEARCHERS = {"grep", "egrep", "fgrep", "rg", "ag"}
+VALUE_OPTIONS = {"-e", "-f", "-m", "-A", "-B", "-C", "-g", "--regexp", "--file"}
+NAME_FLAGS = {
+    "--files", "--files-with-matches", "--files-without-match", "--count", "--quiet",
 }  # fmt: skip
 HOOK_FILE = re.compile(r"(^|/)\.git/hooks(/|$)|(^|/)scripts/git-[^/]+$")
 WRITERS = {"rm", "mv", "cp", "ln", "chmod", "tee", "truncate", "install", "dd"}
@@ -135,13 +166,21 @@ def lines(text):
     return out
 
 
+def standalone(line, at):
+    """A brace that is a word of its own groups commands; `x.{a,b}` and `${v}` do not."""
+    edge = " \t;&|(){}"
+    return (at == 0 or line[at - 1] in edge) and (
+        at + 1 == len(line) or line[at + 1] in edge
+    )
+
+
 def simple_commands(text):
     """Split on ; & | and newlines outside quotes, and add every nested command."""
     for line in lines(text):
         for found in SUBSTITUTION.findall(line):
             yield from simple_commands(found[0] or found[1])
         parts, current, quote = [], "", None
-        for char in line:
+        for at, char in enumerate(line):
             if quote:
                 current += char
                 if char == quote:
@@ -149,7 +188,7 @@ def simple_commands(text):
             elif char in "'\"":
                 quote = char
                 current += char
-            elif char in ";&|(){}":
+            elif char in ";&|()" or (char in "{}" and standalone(line, at)):
                 parts.append(current)
                 current = ""
             else:
@@ -306,11 +345,13 @@ def reason(command):
     if not tokens:
         return None
     program = tokens[0].lstrip("\\").rsplit("/", 1)[-1]
+    if redirects_into_hooks(command):
+        return HOOKS_CHANGE
+    if redirects_from_credential(command) or reads_credential(program, tokens):
+        return CREDENTIAL_READ
     for script in nested_scripts(program, tokens):
         for inner in simple_commands(script):
-            found = reason(inner) or (
-                HOOKS_CHANGE if redirects_into_hooks(inner) else None
-            )
+            found = reason(inner)
             if found:
                 return found
     if program == "make" and "uninstall-hooks" in tokens:
@@ -344,13 +385,93 @@ def reason(command):
     return None
 
 
-def redirects_into_hooks(command):
-    """`> path` or `>> path` where the path is a hook or the script behind one."""
-    for found in re.finditer(r""">>?\s*(?:"([^"]*)"|'([^']*)'|(\S+))""", command):
-        path = found.group(1) or found.group(2) or found.group(3) or ""
-        if HOOK_FILE.search(path):
+def reads_credential(program, tokens):
+    """Whether a reader is pointed at a credential file, named or as `x=path`.
+
+    A program that loads the file for its own use (`source`, `node script file`)
+    is not in READERS: what is refused is putting the contents in the transcript.
+    It reads the operands as written: a relative path after `cd config`, or
+    output substituted in by `$(...)`, is not followed.
+    """
+    if program not in READERS:
+        return False
+    if program in SEARCHERS and names_only(program, tokens[1:]):
+        return False
+    operands, targeted = [], False
+    args = iter(tokens[1:])
+    for token in args:
+        if program in TO_LAST and token in ("-t", "--target-directory"):
+            targeted = next(args, None) is not None
+        elif program in TO_LAST and token.startswith("--target-directory="):
+            targeted = True
+        elif token.startswith("--") and "=" in token:
+            operands.append(token.split("=", 1)[1])  # `grep --file=config/...`
+        elif not token.startswith("-"):
+            operands.append(token)
+    if program == "find" and not {"-exec", "-execdir", "-ok", "-okdir"} & set(tokens):
+        return False  # without an action find prints names, not contents
+    if program in TO_LAST and not targeted:
+        operands = operands[:-1]
+    return any(reaches_credentials(t.split("=", 1)[-1]) for t in operands)
+
+
+def reaches_credentials(path):
+    """Whether a path names, globs or is the directory of the credential files."""
+    path = posixpath.normpath(path)
+    if CREDENTIAL_FILE.search(path) or CREDENTIAL_REACH.search(path):
+        return True
+    # The directory itself is only this repository's `config`, not `.git/config`
+    # or `src/config`: a recursive reader on it prints every file inside.
+    if path == "config":
+        return True
+    try:
+        here = os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
+    except OSError:  # the working directory was deleted: fail to the lexical rule
+        return False
+    return path == posixpath.join(here, "config")
+
+
+def names_only(program, args):
+    """Whether a search prints file names or counts, never the matching lines.
+
+    `-L` lists files without a match for grep, but is `--follow` for rg and ag,
+    which still print matching lines. Only options count: the scan stops at `--`
+    and skips the pattern an option such as `-e` takes, so `grep -e -c file` is
+    a search for "-c".
+    """
+    letters = set("lLqc") if program in ("grep", "egrep", "fgrep") else set("lqc")
+    args = iter(args)
+    for arg in args:
+        if arg == "--":
+            return False
+        if arg in VALUE_OPTIONS:
+            next(args, None)
+        elif arg in NAME_FLAGS or (
+            re.fullmatch(r"-[A-Za-z]+", arg) and set(arg[1:]) & letters
+        ):
             return True
     return False
+
+
+def redirect_targets(command, operator):
+    """The paths a command redirects to (`>`, `>>`) or from (`<`)."""
+    pattern = r""">>?\s*(?:"([^"]*)"|'([^']*)'|(\S+))"""
+    if operator == "<":
+        pattern = r"""(?<!<)<(?![<(&])\s*(?:"([^"]*)"|'([^']*)'|(\S+))"""
+    for found in re.finditer(pattern, command):
+        yield found.group(1) or found.group(2) or found.group(3) or ""
+
+
+def redirects_into_hooks(command):
+    """`> path` or `>> path` where the path is a hook or the script behind one."""
+    return any(HOOK_FILE.search(t) for t in redirect_targets(command, ">"))
+
+
+def redirects_from_credential(command):
+    """`< path` taking a credential file as input."""
+    return "config" in command and any(
+        reaches_credentials(t) for t in redirect_targets(command, "<")
+    )
 
 
 def main():
@@ -363,17 +484,17 @@ def main():
     text = (call.get("tool_input") or {}).get("command", "")
     for command in simple_commands(text):
         why = reason(command)
-        if not why and redirects_into_hooks(command):
-            why = HOOKS_CHANGE
         if why:
-            print(
-                f"Blocked: this command {why}.\n"
-                "The hooks generate the Change-Id and check the interactive "
+            hint = (
+                "Name the variable you need to see set or unset, not its value, "
+                "or ask the user to run the command themselves."
+                if why == CREDENTIAL_READ
+                else "The hooks generate the Change-Id and check the interactive "
                 "review; CI checks both again, so skipping them here only moves "
                 "the failure. Fix what the hook reports, or ask the user to run "
-                "the command themselves if it really is needed.",
-                file=sys.stderr,
+                "the command themselves if it really is needed."
             )
+            print(f"Blocked: this command {why}.\n{hint}", file=sys.stderr)
             return 2
     return 0
 
