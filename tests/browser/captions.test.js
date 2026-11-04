@@ -757,16 +757,9 @@ test("only changed editor text dismisses Jim", async (t) => {
     codeByLanguage: { javascript: "" },
   };
 
-  const binding = functionBody(read("web/interview.js"), "bindEvents");
-  const start = binding.indexOf('nodes.editor.addEventListener("input",');
-  const end = binding.indexOf(
-    '\n  nodes.report.addEventListener("click"',
-    start,
-  );
-  assert.ok(start >= 0, "the editor input listener must exist");
-  assert.ok(end > start, "the listener boundary must exist");
-
-  new Function("scope", `with (scope) { ${binding.slice(start, end)} }`)({
+  const binding =
+    functionBody(read("web/interview.js"), "workspaceEdited") + "\n}";
+  input = new Function("scope", `with (scope) { return (${binding}); }`)({
     nodes,
     state,
     dismissCaptions: captions.dismissCaptions,

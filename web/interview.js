@@ -1,4 +1,19 @@
 import {
+  mountWorkspace,
+  firstWorkspaceRunnerStatus,
+  renderWorkspaceResults,
+  renderWorkspaceStatus,
+  setWorkspaceResultsOpen,
+  paintWorkspace,
+  applyWorkspaceFontSize,
+  applyWorkspaceTheme,
+  applyWorkspaceWrap,
+  resolveWorkspaceTheme,
+  syncWorkspaceScroll,
+  EDITOR_FONT_SIZES,
+  DEFAULT_EDITOR_FONT_SIZE,
+} from "./workspace.js";
+import {
   previousAssignment,
   rememberAssignment,
   resetAssignments,
@@ -30,8 +45,6 @@ import {
   preflightReadiness,
   videoTrackReady,
 } from "./audio-check.js";
-import { highlight } from "./highlight.js";
-import { indentGuides } from "./indent-guides.js";
 import { parseSyntax, prepareLanguage } from "./syntax-parser.js";
 import { tokenize } from "./tokenizer.js";
 import { editorOptionsFromParams } from "./editor-options.js";
@@ -46,20 +59,6 @@ import {
   createBoardPainter,
   createPointerGate,
 } from "./whiteboard.js";
-import {
-  indentNewline,
-  indentSelection,
-  insertBracketPair,
-  isBracketOpenerKeystroke,
-  isBracketCloserKeystroke,
-  typeOverCloser,
-  isBackspaceKeystroke,
-  deleteEmptyPair,
-  matchingBrackets,
-  moveSelectedText,
-  isToggleCommentKeystroke,
-  toggleLineComment,
-} from "./editor.js";
 import { createDevicePool, openMicrophone } from "./devices.js";
 import { createAudioInput } from "./audio-input.js";
 import {
@@ -80,8 +79,6 @@ import {
   reportMarkup,
   mountFinalCodeCopy,
   reportSaveStatus,
-  resultsMarkup,
-  runnerStatusMarkup,
 } from "./render.js";
 import { loadOriginalProblem } from "./report-original-problem.js";
 import {
@@ -256,8 +253,7 @@ let pendingLanguagePublish = null;
 /// it. That threw, and because `init` is async the throw became a rejected
 /// promise nobody saw: `bindEvents` never ran, and the audio check sat on a
 /// disabled button until the browser test timed out.
-let paintedLineCount = 0;
-let paintedEditor = null;
+const editorPaintState = { lines: 0, editor: null, frame: null };
 // Keep only the current buffer's ranges; caret-only repaints need no parse.
 let editorTokenCache = null;
 // Languages whose grammar has loaded, so a parse that returns nothing ran out
@@ -268,7 +264,6 @@ let editorParseRetry = null;
 // Set when a retry overran too, so further edits to a buffer too large for the
 // budget do not each pay for a second parse; cleared by a parse that finishes.
 let editorParseSlow = false;
-let editorPaintFrame = null;
 // The agent reads the editor once per 2s watch tick, so publishing every
 // keystroke sends ~10x more full-buffer packets than anyone consumes.
 const CODE_PUBLISH_DEBOUNCE_MS = 300;
@@ -303,8 +298,6 @@ const JIM_STAGE_NARROW_WINDOW = "(max-width: 1200px)";
 /// In rem. A fixed ladder rather than a free number, so a stored value is
 /// either one of these or ignored, and every size the page can show is one the
 /// browser check has seen keep the three editor layers in line.
-const EDITOR_FONT_SIZES = ["0.75", "0.875", "1", "1.125", "1.25", "1.5"];
-const DEFAULT_EDITOR_FONT_SIZE = "0.875";
 
 /// In px, between the editor toolbar's bottom and the top of Jim's stage.
 const JIM_STAGE_TOOLBAR_GAP_PX = 6;
@@ -1201,35 +1194,6 @@ function bindEvents() {
   nodes.skipReport.addEventListener("click", () => void skipReport());
   nodes.forceReport.addEventListener("click", showReport);
   nodes.leaveRoom.addEventListener("click", leaveRoom);
-  nodes.run.addEventListener("click", runTests);
-  // Cmd+Enter or Ctrl+Enter runs the tests from anywhere but another text
-  // field. Those keep the chord, since on some platforms it types a line break
-  // there, as in the report's STAR answers. The button's disabled state is the
-  // guard, but the button stays enabled during the media preflight and after
-  // the interview ends, so those are checked here. Everywhere else the chord
-  // is taken, so it never types a newline into the code or presses the
-  // focused button.
-  document.addEventListener("keydown", (event) => {
-    // Some input methods end composition before its confirming keydown. The
-    // legacy IME code remains 229 even when isComposing is already false.
-    if (
-      event.key !== "Enter" ||
-      !(event.metaKey || event.ctrlKey) ||
-      event.shiftKey ||
-      event.altKey ||
-      event.isComposing ||
-      event.keyCode === 229
-    )
-      return;
-    if (
-      event.target !== nodes.editor &&
-      event.target.matches?.("textarea, input:not([type=checkbox])")
-    )
-      return;
-    event.preventDefault();
-    if (event.repeat || !editorOptions.execution) return;
-    if (nodes.audioCheck.hidden && !codingClosed()) nodes.run.click();
-  });
   nodes.candidateCaseAdd.addEventListener("click", () => {
     if (state.candidateCaseEdit) {
       void saveCandidateCaseEdit();
@@ -1318,12 +1282,7 @@ function bindEvents() {
       nodes.resultsFilter.hidden
     )
       return;
-    nodes.resultsContent.innerHTML = resultsMarkup(
-      state.latestSummary,
-      state.testStatus,
-      nodes.hidePassedTests.checked,
-      diagnosticContext(state.latestSummary, state.latestRunSnapshot),
-    ).body;
+    renderResults(state.latestSummary, true);
   });
   nodes.resultsContent.addEventListener("click", (event) => {
     const location = event.target.closest("[data-diagnostic-line]");
@@ -1379,297 +1338,111 @@ function bindEvents() {
   matchMedia("(prefers-color-scheme: light)").addEventListener("change", () =>
     applyEditorTheme(nodes.editorStack.dataset.theme),
   );
-  nodes.editor.addEventListener("dragstart", () => {
-    finishEditorComposition();
-    editorHistory.breakGroup();
-    editorDrag = {
-      before: editorSnapshot(nodes.editor),
-      localDrop: false,
-      moving: false,
-    };
-  });
-  nodes.editor.addEventListener("drop", () => {
-    if (editorDrag) editorDrag.localDrop = true;
-  });
-  nodes.editor.addEventListener("dragend", finishEditorDrag);
-  nodes.editor.addEventListener("scroll", syncEditorScroll);
-  document.addEventListener("selectionchange", () => {
-    if (document.activeElement === nodes.editor) {
-      // Keep input-only history repairs at the latest selection, without
-      // accepting text that a native history action has already changed.
-      if (observedEditor?.value === nodes.editor.value)
-        observedEditor = editorSnapshot(nodes.editor);
-      scheduleEditorPaint();
-    }
-  });
-  nodes.editor.addEventListener("focus", () => paintEditor());
-  nodes.editor.addEventListener("blur", () => {
-    finishEditorComposition();
-    editorHistory.breakGroup();
-    paintEditor(false);
-  });
-  nodes.editor.addEventListener("pointerdown", () =>
-    editorHistory.breakGroup(),
-  );
-  nodes.editor.addEventListener("compositionstart", () => {
-    finishEditorComposition();
-    editorHistory.breakGroup();
-    editorComposition = editorSnapshot(nodes.editor);
-  });
-  nodes.editor.addEventListener("compositionend", () => {
-    // Some engines send the committed input after compositionend. Include it
-    // before closing the transaction, rather than recording its text twice.
-    compositionTimer = setTimeout(finishEditorComposition, 0);
-  });
-  // Tab indents, so it cannot also move focus. Escape arms the next Tab to do
-  // that instead, or a candidate driving the page from the keyboard is stuck
-  // in the textarea with no way out.
-  let tabLeavesEditor = false;
-  // Escape arms only the keyboard's next move. A click in the editor is the
-  // candidate editing again, and a blur means they left some other way, so
-  // neither may leave the next Tab armed.
-  for (const type of ["pointerdown", "blur"]) {
-    nodes.editor.addEventListener(type, () => {
-      tabLeavesEditor = false;
-    });
-  }
-  nodes.editor.addEventListener("keydown", (event) => {
-    const key = /^[\x20-\x7e]$/.test(event.key)
-      ? event.key.toLowerCase()
-      : event.key.length === 1
-        ? event.code?.replace(/^Key/, "").toLowerCase()
-        : event.key;
-    const historyKey =
-      (mac
-        ? event.metaKey && !event.ctrlKey
-        : event.ctrlKey && !event.metaKey) &&
-      !event.altKey &&
-      (key === "z" || (!mac && key === "y" && !event.shiftKey));
-    if (historyKey) {
-      // Let the input method handle its own candidate text until it commits.
-      if (event.isComposing || event.keyCode === 229) return;
-      event.preventDefault();
-      if (!nodes.editor.disabled && !nodes.editor.readOnly)
-        restoreEditorHistory(key === "y" || event.shiftKey);
-      return;
-    }
-    if (
-      [
-        "ArrowLeft",
-        "ArrowRight",
-        "ArrowUp",
-        "ArrowDown",
-        "Home",
-        "End",
-        "PageUp",
-        "PageDown",
-      ].includes(event.key)
-    )
-      editorHistory.breakGroup();
-    if (event.key === "Escape") {
-      tabLeavesEditor = true;
-      return;
-    }
-    // A modifier's own keydown must not disarm it. Shift fires one of its own
-    // before Tab does, so without this Escape then Shift+Tab outdents instead
-    // of moving focus backwards, and reverse tab order has no way out at all.
-    if (["Shift", "Control", "Alt", "Meta"].includes(event.key)) return;
-    const indents = event.key === "Tab" && !tabLeavesEditor;
-    tabLeavesEditor = false;
-    if (isToggleCommentKeystroke(event)) {
-      const toggled = toggleLineComment(
-        nodes.editor.value,
-        nodes.editor.selectionStart,
-        nodes.editor.selectionEnd,
-        state.language,
-      );
-      if (!toggled) return;
-      event.preventDefault();
-      // A held chord repeats. Each repeat would flip the block back, and leave
-      // an undo step of its own behind.
-      if (!event.repeat) applyEditorEdit(toggled);
-      return;
-    }
-    if (!indents) return;
-    event.preventDefault();
-    applyEditorEdit(
-      indentSelection(
-        nodes.editor.value,
-        nodes.editor.selectionStart,
-        nodes.editor.selectionEnd,
-        event.shiftKey,
-      ),
-    );
-  });
-  nodes.editor.addEventListener("beforeinput", (event) => {
-    if (["historyUndo", "historyRedo"].includes(event.inputType)) {
-      if (event.isComposing) return;
-      if (event.cancelable) {
-        event.preventDefault();
-        if (!nodes.editor.disabled && !nodes.editor.readOnly)
-          restoreEditorHistory(event.inputType === "historyRedo");
-      } else if (!nodes.editor.disabled && !nodes.editor.readOnly) {
-        // selectionchange may still be queued when this action starts.
-        observedEditor = editorSnapshot(nodes.editor);
-      }
-      return;
-    }
-    // Keep the buffer unchanged until the browser supplies the drop position.
-    // Native deleteByDrag can also remove an unselected trailing newline.
-    if (editorDrag?.localDrop && event.cancelable) {
-      if (event.inputType === "deleteByDrag") {
-        event.preventDefault();
-        editorDrag.moving = true;
-        return;
-      }
-      if (event.inputType === "insertFromDrop" && editorDrag.moving) {
-        event.preventDefault();
-        const before = editorDrag.before;
-        const next = moveSelectedText(
-          before.value,
-          before.start,
-          before.end,
-          nodes.editor.selectionStart,
-        );
-        editorDrag = null;
-        nodes.editor.setSelectionRange(
-          before.start,
-          before.end,
-          before.direction,
-        );
-        applyEditorEdit(next);
-        return;
-      }
-    }
-    if (!applyingProgrammaticEdit && !editorComposition) {
-      pendingEditorEdit = {
-        before: editorSnapshot(nodes.editor),
-        type: event.inputType,
-        data: event.data,
-      };
-    }
-    if (applyingProgrammaticEdit || event.isComposing || !event.cancelable)
-      return;
-    if (event.inputType === "insertLineBreak") {
-      if (!editorOptions.autoIndent) return;
-      event.preventDefault();
-      applyEditorEdit(
-        indentNewline(
-          nodes.editor.value,
-          nodes.editor.selectionStart,
-          nodes.editor.selectionEnd,
-          state.language,
-        ),
-      );
-      return;
-    }
-    if (!editorOptions.autoClose) return;
-    if (isBracketOpenerKeystroke(event)) {
-      const pair = insertBracketPair(
-        nodes.editor.value,
-        nodes.editor.selectionStart,
-        nodes.editor.selectionEnd,
-        event.data,
-        state.language,
-      );
-      if (!pair) return;
-      event.preventDefault();
-      applyEditorEdit(pair);
-      return;
-    }
-    if (isBracketCloserKeystroke(event)) {
-      const skip = typeOverCloser(
-        nodes.editor.value,
-        nodes.editor.selectionStart,
-        nodes.editor.selectionEnd,
-        event.data,
-        state.language,
-      );
-      if (!skip) return;
-      event.preventDefault();
-      applyEditorEdit(skip);
-      return;
-    }
-    if (isBackspaceKeystroke(event)) {
-      const removal = deleteEmptyPair(
-        nodes.editor.value,
-        nodes.editor.selectionStart,
-        nodes.editor.selectionEnd,
-        state.language,
-      );
-      if (!removal) return;
-      event.preventDefault();
-      applyEditorEdit(removal);
-    }
-  });
-  nodes.editor.addEventListener("input", (event) => {
-    if (!replayingEditorHistory && !applyingProgrammaticEdit) {
-      if (
-        !event.isComposing &&
-        ["historyUndo", "historyRedo"].includes(event.inputType)
-      ) {
-        // Non-cancelable native edits can notify only after writing. Discard
-        // that result and replay the current language's edit.
-        restoreEditorHistory(event.inputType === "historyRedo", true);
-        return;
-      }
-      if (!editorComposition && !editorDrag) {
-        const before = pendingEditorEdit?.before || observedEditor;
-        const after = editorSnapshot(nodes.editor);
-        const type = pendingEditorEdit?.type;
-        const grouping =
-          before?.start === before?.end &&
-          ((type === "insertText" &&
-            pendingEditorEdit.data?.length === 1 &&
-            !/\s/.test(pendingEditorEdit.data)) ||
-            ["deleteContentBackward", "deleteContentForward"].includes(type))
-            ? type
-            : null;
-        if (before) editorHistory.record(before, after, grouping);
-        observedEditor = after;
-        pendingEditorEdit = null;
-      }
-    }
-    languageChoiceCommitted = true;
-    // Only a changed code buffer counts as the candidate's response.
-    if (nodes.editor.value !== state.codeByLanguage[state.language]) {
-      dismissCaptions();
-    }
-    drawingTurn?.reset();
-    // Before the buffer below is taken, because this sends the tab as it
-    // arrived. Typing inside the switch's own debounce window cancels it
-    // otherwise, and the single packet that survives carries the switch and the
-    // typing together: the agent reads a packet that changes the language as
-    // the tab arriving with its starter, which is nobody's work, so the first
-    // thing typed into a freshly picked tab was filed as part of the template
-    // and became the buffer every later edit was measured against.
-    //
-    // Only a keystroke flushes it, so clicking through three tabs still
-    // coalesces into one packet. The click that gets a confirmation spoken is
-    // the one the candidate stayed on.
-    flushPendingLanguagePublish();
-    state.codeByLanguage[state.language] = nodes.editor.value;
-    scheduleEditorPaint();
-    clearTimeout(codePublishTimer);
-    // The flush itself, not a copy of its publish. The copy sent the edit and
-    // left it out of the editor replay, so only an edit some flush overtook
-    // inside its window was ever recorded, and a recording showed the starter
-    // beside test results for a buffer it never contained.
-    codePublishTimer = setTimeout(
-      flushPendingEditorPublish,
-      CODE_PUBLISH_DEBOUNCE_MS,
-    );
+  mountWorkspace({
+    nodes,
+    controller: {
+      get editorDrag() {
+        return editorDrag;
+      },
+      set editorDrag(value) {
+        editorDrag = value;
+      },
+      get observedEditor() {
+        return observedEditor;
+      },
+      set observedEditor(value) {
+        observedEditor = value;
+      },
+      get editorComposition() {
+        return editorComposition;
+      },
+      set editorComposition(value) {
+        editorComposition = value;
+      },
+      get compositionTimer() {
+        return compositionTimer;
+      },
+      set compositionTimer(value) {
+        compositionTimer = value;
+      },
+      get pendingEditorEdit() {
+        return pendingEditorEdit;
+      },
+      set pendingEditorEdit(value) {
+        pendingEditorEdit = value;
+      },
+      get applyingProgrammaticEdit() {
+        return applyingProgrammaticEdit;
+      },
+      set applyingProgrammaticEdit(value) {
+        applyingProgrammaticEdit = value;
+      },
+      get replayingEditorHistory() {
+        return replayingEditorHistory;
+      },
+      set replayingEditorHistory(value) {
+        replayingEditorHistory = value;
+      },
+      finishEditorComposition,
+      editorHistory,
+      finishEditorDrag,
+      syncEditorScroll,
+      scheduleEditorPaint,
+      paintEditor,
+      restoreEditorHistory,
+      applyEditorEdit,
+      editorOptions,
+      mac,
+      testPanel: {
+        run: runTests,
+        execution: () => editorOptions.execution,
+        closed: codingClosed,
+      },
+      get language() {
+        return state.language;
+      },
+      onEdit: workspaceEdited,
+    },
   });
   nodes.report.addEventListener("click", (event) => {
     if (event.target.closest("#done")) leaveRoom();
     if (event.target.closest("#download-report")) void downloadReport();
   });
-  // Below the report listener on purpose: captions.test.js evaluates the source
-  // from the first `nodes.editor` input listener to that one on its own, so a
-  // listener that reads this module's state cannot sit inside that span.
   nodes.editor.addEventListener("input", () => {
     clearRestoreStatus();
   });
+}
+
+function workspaceEdited() {
+  languageChoiceCommitted = true;
+  // Only a changed code buffer counts as the candidate's response.
+  if (nodes.editor.value !== state.codeByLanguage[state.language]) {
+    dismissCaptions();
+  }
+  drawingTurn?.reset();
+  // Before the buffer below is taken, because this sends the tab as it
+  // arrived. Typing inside the switch's own debounce window cancels it
+  // otherwise, and the single packet that survives carries the switch and the
+  // typing together: the agent reads a packet that changes the language as
+  // the tab arriving with its starter, which is nobody's work, so the first
+  // thing typed into a freshly picked tab was filed as part of the template
+  // and became the buffer every later edit was measured against.
+  //
+  // Only a keystroke flushes it, so clicking through three tabs still
+  // coalesces into one packet. The click that gets a confirmation spoken is
+  // the one the candidate stayed on.
+  flushPendingLanguagePublish();
+  state.codeByLanguage[state.language] = nodes.editor.value;
+  scheduleEditorPaint();
+  clearTimeout(codePublishTimer);
+  // The flush itself, not a copy of its publish. The copy sent the edit and
+  // left it out of the editor replay, so only an edit some flush overtook
+  // inside its window was ever recorded, and a recording showed the starter
+  // beside test results for a buffer it never contained.
+  codePublishTimer = setTimeout(
+    flushPendingEditorPublish,
+    CODE_PUBLISH_DEBOUNCE_MS,
+  );
 }
 
 /// True when nobody is signed in, in which case the candidate is sent back to
@@ -3349,7 +3122,7 @@ function setLanguage(language) {
         if (state.language !== language) return;
         // Replace fallback ranges when the grammar finishes loading.
         editorTokenCache = null;
-        paintedEditor = null;
+        editorPaintState.editor = null;
         paintEditor();
       })
       .catch(() => {});
@@ -3950,8 +3723,7 @@ function applyThinking(thinking) {
 /// chevron is drawn from aria-expanded, so a run that opens the results turns
 /// it too.
 function setResultsOpen(open) {
-  nodes.resultsBody.hidden = !open;
-  nodes.resultsToggle.setAttribute("aria-expanded", String(open));
+  setWorkspaceResultsOpen(nodes, open);
 }
 
 async function runTests() {
@@ -4392,29 +4164,21 @@ function updateRunAvailability() {
 }
 
 function firstRunnerStatus(language) {
-  if (language === "python") return "booting";
-  if (COMPILED_LANGUAGES.includes(language)) return "compiling";
-  return "running";
+  return firstWorkspaceRunnerStatus(language);
 }
 
 function setTestStatus(status) {
   state.testStatus = status;
-  nodes.resultsLabel.textContent = "Test results";
-  nodes.resultsFilter.hidden = true;
-  nodes.resultsContent.innerHTML = runnerStatusMarkup(status);
+  renderWorkspaceStatus(nodes, status);
 }
 
-function renderResults(summary) {
-  const { label, body } = resultsMarkup(
-    summary,
-    state.testStatus,
-    nodes.hidePassedTests.checked,
-    diagnosticContext(summary, state.latestRunSnapshot),
-  );
-  nodes.resultsLabel.textContent = label;
-  nodes.resultsFilter.hidden =
-    Boolean(summary.setupError) || !summary.cases.length;
-  nodes.resultsContent.innerHTML = body;
+function renderResults(summary, contentOnly = false) {
+  renderWorkspaceResults(nodes, summary, {
+    status: state.testStatus,
+    hidePassed: nodes.hidePassedTests.checked,
+    diagnostics: diagnosticContext(summary, state.latestRunSnapshot),
+    contentOnly,
+  });
 }
 
 function diagnosticContext(summary, snapshot) {
@@ -5397,7 +5161,7 @@ function editorTokens(code, language) {
           return;
         editorParseRetry = { code, language };
         editorTokenCache = null;
-        paintedEditor = null;
+        editorPaintState.editor = null;
         paintEditor();
       });
     }
@@ -5408,9 +5172,9 @@ function editorTokens(code, language) {
 // Input and selectionchange can arrive in the same frame. Read the latest
 // buffer once at paint time, rather than parse every intermediate edit.
 function scheduleEditorPaint() {
-  if (editorPaintFrame !== null) return;
-  editorPaintFrame = requestAnimationFrame(() => {
-    editorPaintFrame = null;
+  if (editorPaintState.frame !== null) return;
+  editorPaintState.frame = requestAnimationFrame(() => {
+    editorPaintState.frame = null;
     paintEditor();
   });
 }
@@ -5418,9 +5182,7 @@ function scheduleEditorPaint() {
 /// The overlay and the gutter do not scroll on their own; they follow the
 /// textarea.
 function syncEditorScroll() {
-  nodes.editorHighlight.scrollTop = nodes.editor.scrollTop;
-  nodes.editorHighlight.scrollLeft = nodes.editor.scrollLeft;
-  nodes.editorLines.scrollTop = nodes.editor.scrollTop;
+  syncWorkspaceScroll(nodes);
 }
 
 /// Repaints the syntax layer and the gutter behind the textarea.
@@ -5430,71 +5192,17 @@ function syncEditorScroll() {
 /// candidate does and none of it changes the numbers down the side.
 ///
 function paintEditor(showMatch = document.activeElement === nodes.editor) {
-  // Focus, blur and language switches paint immediately and supersede queued
-  // input, so a stale callback cannot repaint after focus leaves the editor.
-  if (editorPaintFrame !== null) {
-    cancelAnimationFrame(editorPaintFrame);
-    editorPaintFrame = null;
-  }
-  const code = currentCode();
-
-  const currentActiveLine =
-    showMatch && nodes.editor.selectionStart === nodes.editor.selectionEnd
-      ? code.slice(0, nodes.editor.selectionStart).split("\n").length - 1
-      : -1;
-  if (currentActiveLine >= 0) {
-    nodes.editorStack?.style.setProperty(
-      "--active-line",
-      String(currentActiveLine),
-    );
-  } else {
-    nodes.editorStack?.style.removeProperty("--active-line");
-  }
-
-  const brackets =
-    editorOptions.highlight && showMatch
-      ? matchingBrackets(
-          code,
-          nodes.editor.selectionStart,
-          nodes.editor.selectionEnd,
-          state.language,
-          editorTokens,
-        )
-      : null;
-  if (
-    paintedEditor?.code === code &&
-    paintedEditor.language === state.language &&
-    paintedEditor.brackets?.[0] === brackets?.[0] &&
-    paintedEditor.brackets?.[1] === brackets?.[1]
-  )
-    return;
-  paintedEditor = { code, language: state.language, brackets };
-  if (editorOptions.highlight) {
-    const classified = editorTokens(code, state.language);
-    // Kept with the tokens they are measured from, so a caret move that only
-    // shifts the bracket match reuses the guides instead of measuring again.
-    classified.guides ??= indentGuides(code, classified.tokens);
-    nodes.editorHighlight.firstElementChild.innerHTML = highlight(
-      code,
-      state.language,
-      brackets,
-      classified.tokens,
-      classified.guides,
-    );
-  }
-  const lines = code.split("\n").length;
-  if (lines !== paintedLineCount) {
-    paintedLineCount = lines;
-    nodes.editorLines.textContent = Array.from(
-      { length: lines },
-      (_, index) => index + 1,
-    ).join("\n");
-  }
-  // The paint is deferred to the next frame, and a scroll event can run
-  // before it: Enter at the bottom of a long buffer scrolls the textarea
-  // while the layers still hold the old text, so their scrollTop clamps to the
-  // old height and every row sits one above its code until the next scroll.
-  syncEditorScroll();
+  paintWorkspace(
+    {
+      nodes,
+      code: currentCode(),
+      language: state.language,
+      options: editorOptions,
+      tokens: editorTokens,
+      cache: editorPaintState,
+    },
+    showMatch,
+  );
 }
 
 /// Sets one custom property that the textarea, the highlight overlay and the
@@ -5502,19 +5210,7 @@ function paintEditor(showMatch = document.activeElement === nodes.editor) {
 /// them disagreeing for a frame, or for good if one were missed, and the caret
 /// then sits apart from the glyphs it edits.
 function applyEditorFontSize(stored) {
-  const size = EDITOR_FONT_SIZES.includes(stored)
-    ? stored
-    : DEFAULT_EDITOR_FONT_SIZE;
-  nodes.editorStack.style.setProperty("--editor-font-size", `${size}rem`);
-  const index = EDITOR_FONT_SIZES.indexOf(size);
-  // aria-disabled rather than disabled: disabling the button just pressed
-  // drops keyboard focus to <body>, and the click handler already ignores a
-  // step past either end.
-  nodes.editorFontSmaller.setAttribute("aria-disabled", String(index === 0));
-  nodes.editorFontLarger.setAttribute(
-    "aria-disabled",
-    String(index === EDITOR_FONT_SIZES.length - 1),
-  );
+  applyWorkspaceFontSize(nodes, stored);
 }
 
 /// Sets data-theme only for an explicit choice; the CSS media query in
@@ -5524,34 +5220,15 @@ function applyEditorFontSize(stored) {
 /// toggle's own label is cosmetic, so it still reads matchMedia once here
 /// rather than subscribing to its change event.
 function resolveEditorTheme(stored) {
-  return stored === "light" || stored === "dark"
-    ? stored
-    : matchMedia("(prefers-color-scheme: light)").matches
-      ? "light"
-      : "dark";
+  return resolveWorkspaceTheme(stored);
 }
 
 function applyEditorTheme(stored) {
-  if (stored === "light" || stored === "dark") {
-    nodes.editorStack.dataset.theme = stored;
-  } else {
-    delete nodes.editorStack.dataset.theme;
-  }
-  const theme = resolveEditorTheme(stored);
-  // A fixed name with aria-pressed reporting state, rather than a name that
-  // itself changes: the latter had light mode announce as "Dark mode,
-  // pressed", since the label named the action while aria-pressed named the
-  // state.
-  nodes.editorThemeToggle.setAttribute(
-    "aria-pressed",
-    String(theme === "light"),
-  );
+  applyWorkspaceTheme(nodes, stored);
 }
 
 function applyEditorWrap(stored) {
-  const on = stored === "1";
-  nodes.editorStack.classList.toggle("wrap", on);
-  nodes.editorWrapToggle.setAttribute("aria-pressed", String(on));
+  applyWorkspaceWrap(nodes, stored);
 }
 /// How wide the sidebar may be, in pixels, for the window as it is now: no
 /// narrower than it was before it could be resized, no wider than half the

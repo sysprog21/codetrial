@@ -470,9 +470,7 @@ test("typing into a freshly picked tab sends the switch before the keystroke", (
   // codeByLanguage with the live editor on its first line, so a flush below
   // that reads the buffer the keystroke produced rather than the one the tab
   // arrived with.
-  const handler = script.slice(
-    script.indexOf('nodes.editor.addEventListener("input"'),
-  );
+  const handler = functionBody(script, "workspaceEdited");
   const flushAt = handler.indexOf("flushPendingLanguagePublish()");
   const captureAt = handler.indexOf(
     "state.codeByLanguage[state.language] = nodes.editor.value;",
@@ -526,17 +524,24 @@ test("a queued switch leaves as a switch whoever asks for the flush", () => {
 });
 
 test("the gutter is rebuilt only when the line count moves", () => {
-  const paint = functionBody(read("interview.js"), "paintEditor");
+  const paint = functionBody(read("workspace.js"), "paintWorkspace");
 
   // One read of the buffer, not two: the highlight pass and the line count both
   // work from it.
-  assert.equal((paint.match(/currentCode\(\)/g) || []).length, 1);
+  assert.equal(
+    (
+      functionBody(read("interview.js"), "paintEditor").match(
+        /currentCode\(\)/g,
+      ) || []
+    ).length,
+    1,
+  );
 
   // And the numbers down the side are only rewritten when they would differ.
   // Typing inside a line is most of what a candidate does and none of it moves
   // them, so the common keystroke costs one highlight and nothing else.
-  assert.match(paint, /if \(lines !== paintedLineCount\)/);
-  assert.match(paint, /paintedLineCount = lines/);
+  assert.match(paint, /if \(lines !== cache\.lines\)/);
+  assert.match(paint, /cache\.lines = lines/);
 });
 
 test("the module state the first paint reads exists before init paints", () => {
@@ -586,7 +591,7 @@ test("the module state the first paint reads exists before init paints", () => {
     .map(([name]) => name)
     .filter((name) => topLevel.has(name));
   assert.ok(
-    reads.includes("paintedLineCount"),
+    reads.includes("editorPaintState"),
     "the check sees what paintEditor reads",
   );
   for (const name of new Set(reads)) {
