@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_isolation as isolation;
 use futures_util::{SinkExt, StreamExt};
 use tokio_tungstenite::tungstenite::Message;
 
@@ -412,14 +413,39 @@ async fn a_tick_recovers_when_long_quiet_or_a_failed_request_leaves_the_watchdog
 
 #[tokio::test]
 async fn a_failed_listening_note_keeps_the_cold_brief_due_and_never_arms_the_tick() {
+    let name = format!(
+        "{}::a_failed_listening_note_keeps_the_cold_brief_due_and_never_arms_the_tick",
+        module_path!().split_once("::").unwrap().1
+    );
+    if isolation::isolated_checked(
+        &name,
+        "CODETRIAL_HANDOFF_LISTENING_NOTE_TEST",
+        false,
+        |_| {},
+    ) {
+        return;
+    }
     let mut fixture = TickFixture::new(1500, 10).await;
     let listener = tokio::net::TcpSocket::new_v4().unwrap();
     listener.set_recv_buffer_size(1024).unwrap();
+    let listener_recv = listener.recv_buffer_size().unwrap();
+    assert!((1..=16_384).contains(&listener_recv), "{listener_recv}");
     listener.bind("127.0.0.1:0".parse().unwrap()).unwrap();
     let listener = listener.listen(1).unwrap();
     fixture.endpoint = format!("ws://{}/", listener.local_addr().unwrap());
+    let registration = GeminiLiveSession::loopback_send_limit_for_test(&format!(
+        "{}?key=sequence-test-key",
+        fixture.endpoint
+    ))
+    .unwrap();
     let peer = tokio::spawn(async move {
         let (socket, _) = listener.accept().await.unwrap();
+        let accepted_recv = {
+            let socket_ref = socket2::SockRef::from(&socket);
+            socket_ref.set_recv_buffer_size(1024).unwrap();
+            socket_ref.recv_buffer_size().unwrap()
+        };
+        assert!((1..=16_384).contains(&accepted_recv), "{accepted_recv}");
         let mut socket = tokio_tungstenite::accept_async(socket).await.unwrap();
         let setup = socket.next().await.unwrap().unwrap();
         assert!(
@@ -439,10 +465,11 @@ async fn a_failed_listening_note_keeps_the_cold_brief_due_and_never_arms_the_tic
     fixture
         .replace_speech(session::SpeechHandoff {
             checkpoint_after: Instant::now(),
-            transcript_fragments: vec!["x".repeat(32 * 1024 * 1024)],
+            transcript_fragments: vec!["x".repeat(128 * 1024)],
             discarded: 0,
         })
         .await;
+    let sender_buffers = registration.sender_buffers();
     assert!(fixture.turn.state.needs_cold_brief);
     assert!(fixture.turn.activity.owes_prompt());
     assert_eq!(fixture.turn.activity.prompt_text.as_deref(), Some(OWED));
@@ -456,6 +483,10 @@ async fn a_failed_listening_note_keeps_the_cold_brief_due_and_never_arms_the_tic
         .await
         .unwrap()
         .unwrap();
+    let (before, connected) = sender_buffers.expect("the replacement must use the bounded socket");
+    assert!((1..=16_384).contains(&before), "{before}");
+    assert!((1..=16_384).contains(&connected), "{connected}");
+    drop(registration);
 }
 
 #[test]

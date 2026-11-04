@@ -25,10 +25,15 @@ pub(crate) async fn generate_report_with_keys(
     rounds: crate::agent::ReportRounds,
     run: ReportRun<'_>,
 ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
+    #[cfg(test)]
+    let url = tests::scoped_report_endpoint(run.scope)
+        .unwrap_or_else(|| gemini_generate_content_url(model));
+    #[cfg(not(test))]
+    let url = gemini_generate_content_url(model);
     generate_report_with_keys_at(
         ReportCalls {
             keys,
-            url: gemini_generate_content_url(model),
+            url,
             material,
             communication_assessed: rounds.communication_assessed(),
             budget: ReportCallBudget::new(),

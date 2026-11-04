@@ -225,12 +225,13 @@ answers each request on the control topic, `report_retry` with status
 `accepted` or `early` (with the seconds still to wait, which does not spend the
 regeneration), and announces `closed` at expiry or when no key can ever answer;
 a duplicate request during
-regeneration gets no answer. The browser waits at most 145 seconds from its
-request or the acceptance, whichever came last, so neither a reconnect nor a
-lost answer cuts off a regeneration still in progress. The terminal failure
-determines eligibility, so a transient burst followed by a schema failure
-regenerates as a schema failure. Reloads and process restarts cannot recover
-the inputs.
+regeneration gets no answer. The browser waits at most 175 seconds from its
+request or the acceptance, whichever came last. This covers the configured
+generation deadline, one final rejoin grace and every delivery attempt. This
+browser bound does not bound arbitrary SDK publish or host scheduling stalls.
+The terminal failure determines eligibility, so a transient burst followed by
+a schema failure regenerates as a schema failure. Reloads and process
+restarts cannot recover the inputs.
 
 Every report packet, provisional, regenerated or final, is delivered the same
 way. The agent publishes those same bytes at most three times, each with a

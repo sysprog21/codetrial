@@ -1,3 +1,5 @@
+use crate::test_isolation as isolation;
+
 use super::super::tests::{fake_recording_socket, hold_turn, test_output_audio};
 use super::*;
 use crate::config::load_from_pairs;
@@ -19,98 +21,7 @@ fn isolated_checked_with_loopback(
     check: impl FnOnce(&std::process::Output),
 ) -> bool {
     let name = format!("livekit::recovery::tests::{name}");
-    if std::env::var("CODETRIAL_RECOVERY_TEST").as_deref() == Ok(&name) {
-        return false;
-    }
-    let guard = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    guard.set_nonblocking(true).unwrap();
-    let proxy = format!("http://{}", guard.local_addr().unwrap());
-    let mut command = std::process::Command::new(std::env::current_exe().unwrap());
-    command
-        .args(["--exact", &name, "--nocapture"])
-        .env("CODETRIAL_RECOVERY_TEST", &name)
-        .env("NO_PROXY", if loopback_http { "127.0.0.1" } else { "" })
-        .env("no_proxy", if loopback_http { "127.0.0.1" } else { "" })
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-    for key in [
-        "HTTPS_PROXY",
-        "https_proxy",
-        "HTTP_PROXY",
-        "http_proxy",
-        "ALL_PROXY",
-        "all_proxy",
-    ] {
-        command.env(key, &proxy);
-    }
-    let mut child = command.spawn().unwrap();
-
-    // Drained while the child runs: a child that writes more than a pipe holds
-    // (64 KiB on Linux) blocks in its write, and polling only for its exit then
-    // reads that block as a hang.
-    let drain = |stream: Option<Box<dyn std::io::Read + Send>>| {
-        std::thread::spawn(move || {
-            let mut bytes = Vec::new();
-            if let Some(mut stream) = stream {
-                let _ = stream.read_to_end(&mut bytes);
-            }
-            bytes
-        })
-    };
-    let stdout = drain(
-        child
-            .stdout
-            .take()
-            .map(|pipe| Box::new(pipe) as Box<dyn std::io::Read + Send>),
-    );
-    let stderr = drain(
-        child
-            .stderr
-            .take()
-            .map(|pipe| Box::new(pipe) as Box<dyn std::io::Read + Send>),
-    );
-    let started = Instant::now();
-    let status = loop {
-        if let Some(status) = child.try_wait().unwrap() {
-            break status;
-        }
-        if started.elapsed() > Duration::from_secs(20) {
-            child.kill().unwrap();
-            child.wait().unwrap();
-            panic!(
-                "recovery child timed out: {}",
-                String::from_utf8_lossy(&stderr.join().unwrap())
-            );
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    };
-    let output = std::process::Output {
-        status,
-        stdout: stdout.join().unwrap(),
-        stderr: stderr.join().unwrap(),
-    };
-    assert_eq!(
-        guard.accept().unwrap_err().kind(),
-        std::io::ErrorKind::WouldBlock,
-        "the recovery test must not contact an external provider"
-    );
-    assert!(
-        output.status.success(),
-        "{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout.lines().any(|line| line == "running 1 test")
-            && stdout.lines().any(|line| {
-                line.starts_with("test result: ok. 1 passed; 0 failed; 0 ignored;")
-            }),
-        "isolated child must execute exactly one passing test: {name}\n{stdout}"
-    );
-    check(&output);
-    true
+    isolation::isolated_checked(&name, "CODETRIAL_RECOVERY_TEST", loopback_http, check)
 }
 
 #[test]
@@ -278,7 +189,14 @@ impl Rig {
     }
 
     async fn run(&mut self) -> ControlFlow<()> {
-        let boot = crate::runtime::bootstrap(&self.config, "recovery-test", Some("two-sum"), 45);
+        tokio::time::timeout(Duration::from_secs(10), self.run_result())
+            .await
+            .expect("the real room recovery must be bounded in the test")
+            .unwrap()
+    }
+
+    async fn run_result(&mut self) -> Result<ControlFlow<()>, Error> {
+        let boot = crate::runtime::bootstrap(&self.config, self.room.name(), Some("two-sum"), 45);
         let interview = InterviewContext {
             config: &self.config,
             keys: &self.keys,
@@ -291,7 +209,7 @@ impl Rig {
         };
         let prefix = self.prefix;
         let speech = self.speech.take();
-        tokio::time::timeout(Duration::from_secs(10), async {
+        async {
             let mut context = self.turn.context(
                 &mut self.output,
                 &mut self.gemini,
@@ -314,22 +232,22 @@ impl Rig {
             } else {
                 on_gemini_event(&self.room, &mut context, None, &mut self.loops, interview).await
             }
-        })
+        }
         .await
-        .expect("the real room recovery must be bounded in the test")
-        .unwrap()
+    }
+
+    /// Joins the old socket's peer and returns every frame it received.
+    async fn old_frames(&mut self) -> Vec<serde_json::Value> {
+        self.gemini.shutdown().await.unwrap();
+        tokio::time::timeout(Duration::from_secs(2), self.old.take().unwrap())
+            .await
+            .unwrap()
+            .unwrap()
     }
 
     async fn finish(mut self) {
-        self.gemini.shutdown().await.unwrap();
-        assert_eq!(
-            tokio::time::timeout(Duration::from_secs(2), self.old.take().unwrap())
-                .await
-                .unwrap()
-                .unwrap()
-                .len(),
-            self.expected_old_messages
-        );
+        let frames = self.old_frames().await;
+        assert_eq!(frames.len(), self.expected_old_messages);
     }
 }
 
@@ -567,3 +485,5 @@ fn a_stream_end_or_a_new_stream_breaks_the_gap_and_replayed_frames_are_not_deque
     assert!(after.contains("mic_gap_max_ms=20 "), "{after}");
     assert!(after.contains("mic_gap_over_1s=0 "), "{after}");
 }
+
+include!("recovery_parts/report_generation_cardinality.rs");

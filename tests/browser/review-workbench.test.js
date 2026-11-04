@@ -33,7 +33,26 @@ async function start(
   manifestFiles = null,
 ) {
   const bundle = mkdtempSync(join(tmpdir(), "codetrial-workbench-test-"));
-  t.after(() => rmSync(bundle, { recursive: true, force: true }));
+  const writers = [];
+  const own = (child) => {
+    const closed = new Promise((resolve) => child.once("close", resolve));
+    writers.push({ child, closed });
+    return child;
+  };
+  let page;
+  t.after(async () => {
+    try {
+      await page?.close();
+    } finally {
+      for (const { child, closed } of writers.reverse()) {
+        if (child.pid && child.exitCode === null && child.signalCode === null)
+          child.kill();
+        await closed;
+      }
+      // The reviewer can write presence files until these processes close.
+      rmSync(bundle, { recursive: true, force: true });
+    }
+  });
   const files = ["src/example.rs", "tests/example.rs"];
   writeFileSync(
     join(bundle, "manifest.json"),
@@ -85,30 +104,24 @@ Path(sys.argv[sys.argv.index('--output-last-message')+1]).write_text(json.dumps(
     env.PATH = `${bin}:${env.PATH}`;
     args.push("--reviewer", "codex");
   }
-  const server = spawn(python, [helper, "serve", "--port", "0", ...args], {
-    cwd: root,
-    env,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  t.after(async () => {
-    if (server.exitCode === null) {
-      const exited = once(server, "exit");
-      server.kill();
-      await exited;
-    }
-  });
+  const server = own(
+    spawn(python, [helper, "serve", "--port", "0", ...args], {
+      cwd: root,
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+    }),
+  );
   const lines = createInterface({ input: server.stdout });
   const [url] = await once(lines, "line", { signal: t.signal });
   lines.close();
-  const page = await browser.newPage();
-  t.after(() => page.close());
+  page = await browser.newPage();
   await page.goto(url);
   await page.locator("#workspace").waitFor({ state: "visible" });
   const inspect = () =>
     JSON.parse(
       execFileSync(python, [helper, "inspect", ...args], { encoding: "utf8" }),
     );
-  return { bundle, args, page, url, inspect, files, server };
+  return { bundle, args, page, url, inspect, files, server, own };
 }
 
 test(
@@ -116,7 +129,7 @@ test(
   { timeout: 30000 },
   async (t) => {
     if (!browser) return t.skip("playwright chromium unavailable");
-    const { page, args, bundle, inspect } = await start(t);
+    const { page, args, bundle, inspect, own } = await start(t);
     await page.getByText(/Commit threshold reached .*at least 200/).waitFor();
     assert.equal(inspect().total, 4);
     assert.equal(await page.locator("#answers-form textarea").count(), 1);
@@ -134,18 +147,17 @@ test(
     await page.getByText("Saved on this computer", { exact: true }).waitFor();
     const saved = inspect();
     assert.equal(saved.status, "ready_to_send");
-    const waiting = spawn(python, [
-      helper,
-      "wait",
-      ...args,
-      "--after",
-      String(saved.revision),
-      "--timeout",
-      "10",
-    ]);
-    t.after(() => {
-      if (waiting.exitCode === null) waiting.kill();
-    });
+    const waiting = own(
+      spawn(python, [
+        helper,
+        "wait",
+        ...args,
+        "--after",
+        String(saved.revision),
+        "--timeout",
+        "10",
+      ]),
+    );
     let received = "";
     waiting.stdout.on("data", (chunk) => {
       received += chunk;

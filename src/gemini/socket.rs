@@ -28,6 +28,11 @@ pub(super) async fn connect(url: &str) -> Result<Socket, BoxError> {
     let connector = Some(Connector::Rustls(
         std::sync::Arc::clone(crate::tls_config()),
     ));
+    #[cfg(test)]
+    if let Some(stream) = loopback::connect(url).await? {
+        let (socket, _) = client_async_tls_with_config(request, stream, None, connector).await?;
+        return Ok(socket);
+    }
     let Some(proxy) = proxy_for(request.uri(), &Matcher::from_env()) else {
         let (socket, _) = connect_async_tls_with_config(request, None, false, connector).await?;
         return Ok(socket);
@@ -73,3 +78,7 @@ async fn tunnel(proxy: &Intercept, target: &Uri) -> Result<TcpStream, BoxError> 
 #[cfg(test)]
 #[path = "../../tests/unit/gemini/socket.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "socket/loopback.rs"]
+pub(super) mod loopback;

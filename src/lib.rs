@@ -12,6 +12,10 @@ pub mod tasks;
 pub mod token;
 pub mod web;
 
+#[cfg(test)]
+#[path = "../tests/unit/isolation.rs"]
+mod test_isolation;
+
 /// Lives here rather than in one of the modules because `accounts` stamps rows
 /// with it and `web` stamps tokens with it, and neither should have to depend
 /// on the other for a clock.

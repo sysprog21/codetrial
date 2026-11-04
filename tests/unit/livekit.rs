@@ -3537,7 +3537,7 @@ fn audio_chunk() -> GeminiEvent {
 
 /// The text a fake socket was sent: a cold briefing goes out as realtime
 /// input, a resumed one as client content.
-fn sent_text(sent: &serde_json::Value) -> &str {
+pub(super) fn sent_text(sent: &serde_json::Value) -> &str {
     sent["realtimeInput"]["text"]
         .as_str()
         .or_else(|| sent["clientContent"]["turns"][0]["parts"][0]["text"].as_str())

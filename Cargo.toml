@@ -128,6 +128,8 @@ windows-permissions = "0.2.4"
 # Independent implementations verify production signatures and digest fixtures.
 hmac = "0.13.0"
 sha2 = "0.11.1"
+# Borrowed socket inspection for real loopback transport fixtures.
+socket2 = "0.6.5"
 livekit-protocol = "0.8.2"
 # LiveKit's transport, reached directly to check the vendored proxy path.
 livekit-net = "0.1.4"

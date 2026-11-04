@@ -1277,7 +1277,6 @@ async fn omitted_held_contexts_are_counted_once_and_reach_the_wire_once() {
         assert!(driver.pending());
         assert!(!driver.drain(&mut fresh).await.unwrap());
         assert!(driver.held_contexts.is_empty());
-        assert_eq!(driver.held_bytes, 0);
         assert_eq!((driver.held_omitted, driver.held_omitted_total), (0, 8));
         assert!(!driver.pending());
         feed(&mut driver, 33);

@@ -1,7 +1,4 @@
-//! The `tests` module of `src/gemini.rs`, which declares this file by path.
-//! Everything here reaches into `src/gemini.rs` through `super`, so it is a
-//! unit
-//! test and not an integration test: private items are in scope.
+//! Unit tests declared by src/gemini.rs, with its private items in scope.
 
 use super::*;
 use crate::config::load_from_pairs;
@@ -4999,3 +4996,5 @@ fn every_failing_path_is_named_before_a_second_error_on_one() {
 }
 
 include!("gemini_parts/tool_policy_and_reader_pressure.rs");
+
+include!("gemini_parts/scoped_report_endpoint.rs");

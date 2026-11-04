@@ -2,7 +2,7 @@ export const reportRecoveryLimits = Object.freeze({
   expiresInSeconds: 300,
   retryAfterSeconds: 30,
   quotaRetryAfterSeconds: 60,
-  retryWaitSeconds: 145,
+  retryWaitSeconds: 175,
   // The agent announces the end of its window. This page's clock starts when
   // the offer arrives, later than the agent's, so it waits a little past it
   // for that word and falls back on its own only when the word never comes.
@@ -61,8 +61,8 @@ export function createReportRecovery({
     report = null;
     ready = false;
   }
-  // The agent gives regeneration its own 125-second deadline, and the report
-  // it produces may take every delivery attempt to arrive.
+  // The agent gives regeneration its own 125-second deadline. A ready report
+  // can wait through the rejoin grace and still need every delivery attempt.
   function waitForReport() {
     if (wait) timers.clearTimeout(wait);
     wait = timers.setTimeout(

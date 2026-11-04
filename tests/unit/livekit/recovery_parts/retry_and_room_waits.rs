@@ -1126,14 +1126,25 @@ impl WriteSite {
     }
 }
 
-fn write_site_usage(output: &std::process::Output, drain: &str, rows: usize) {
+fn write_site_usage(
+    output: &std::process::Output,
+    drain: &str,
+    rows: usize,
+    reference: Option<&str>,
+) {
     let stderr = String::from_utf8_lossy(&output.stderr);
     let usage = stderr
         .lines()
         .filter(|line| line.starts_with("codetrial live_turn_usage "))
         .collect::<Vec<_>>();
-    assert_eq!(usage.len(), rows * 2);
-    for pair in usage.as_chunks::<2>().0 {
+    let total_rows = rows + usize::from(reference.is_some());
+    assert_eq!(usage.len(), total_rows * 2);
+    for (index, pair) in usage.as_chunks::<2>().0.iter().enumerate() {
+        let drain = if index == 0 {
+            reference.unwrap_or(drain)
+        } else {
+            drain
+        };
         for (line, socket, cause, prompt, event) in
             [(pair[0], 1, "tool", 11, 1), (pair[1], 2, drain, 29, 2)]
         {
@@ -1155,6 +1166,6 @@ fn write_site_usage(output: &std::process::Output, drain: &str, rows: usize) {
             .lines()
             .filter(|line| line.starts_with("recovery ingress: "))
             .count(),
-        rows
+        total_rows
     );
 }

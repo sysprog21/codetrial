@@ -1067,6 +1067,8 @@ async fn prefix_terminal_matrix_preserves_received_evidence_before_any_restart()
     ) {
         return;
     }
+    const LISTENING_CONTEXT: &str =
+        "[SYSTEM EVENT] The candidate continues speaking. Keep listening; no reply is requested.";
     let mut rows = 0;
     for phase in PREFIX_PHASES {
         for cause in PREFIX_STOPS {
@@ -1126,7 +1128,7 @@ async fn prefix_terminal_matrix_preserves_received_evidence_before_any_restart()
                         let note: serde_json::Value =
                             serde_json::from_str(note.to_text().unwrap()).unwrap();
                         assert_eq!(note["clientContent"]["turnComplete"], false);
-                        assert!(note.to_string().contains("Keep listening"));
+                        assert_eq!(super::super::tests::sent_text(&note), LISTENING_CONTEXT);
                         messages.push(note);
                     }
                 }
@@ -1282,6 +1284,15 @@ async fn prefix_terminal_matrix_preserves_received_evidence_before_any_restart()
             assert_eq!(
                 rig.turn.state.evidence_ledger.metrics.turn_prompt_count,
                 u32::from(phase.transcribed())
+            );
+            assert_eq!(
+                rig.turn.state.evidence_ledger.metrics.turn_prompt_bytes,
+                if phase.transcribed() {
+                    u64::try_from(LISTENING_CONTEXT.len()).unwrap()
+                } else {
+                    0
+                },
+                "{phase:?} {cause:?}"
             );
             assert_eq!(
                 rig.turn

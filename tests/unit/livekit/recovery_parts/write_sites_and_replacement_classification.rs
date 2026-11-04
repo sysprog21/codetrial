@@ -21,8 +21,14 @@ async fn write_site_terminal_matrix(site: WriteSite, physical: bool, after: bool
     } else {
         &PREFIX_STOPS
     };
+    let needs_reference = !physical && !after && site != WriteSite::BoardImage;
+    let reference = needs_reference.then_some((true, OpenStop::End));
+    let cases = reference
+        .into_iter()
+        .chain(causes.iter().map(|&cause| (after, cause)));
+    let mut reference_bytes = None;
     let mut rows = 0;
-    for &cause in causes {
+    for (index, (after, cause)) in cases.enumerate() {
         let resumed = site == WriteSite::SilentEditor;
         let mut rig = Rig::with_old_checkpoint("ws://127.0.0.1:9/".into(), Some(11), resumed).await;
         rig.gemini.input_cause = Some("tool");
@@ -332,6 +338,10 @@ async fn write_site_terminal_matrix(site: WriteSite, physical: bool, after: bool
                 .is_err()
         );
         assert!(rig.loops.recovery_writes.is_empty());
+        let constructed = (
+            rig.turn.state.evidence_ledger.metrics.turn_prompt_count,
+            rig.turn.state.evidence_ledger.metrics.turn_prompt_bytes,
+        );
         rig.finish().await;
         finish.send(()).unwrap();
         let (messages, received) = server.await.unwrap();
@@ -343,9 +353,41 @@ async fn write_site_terminal_matrix(site: WriteSite, physical: bool, after: bool
             expected_before,
             "no write after the targeted one may reach the wire: {site:?} {cause:?}"
         );
+        let expected: Option<u32> = match site {
+            WriteSite::Brief | WriteSite::ListeningBrief => Some(1),
+            WriteSite::HeldContext | WriteSite::SilentEditor => Some(2),
+            WriteSite::HeldAction => Some(3),
+            WriteSite::BoardImage => None,
+        };
+        if let Some(expected) = expected {
+            assert_eq!(constructed.0, expected, "{site:?} {cause:?} after={after}");
+            let delivered: u64 = messages
+                .iter()
+                .map(|message| {
+                    u64::try_from(super::super::tests::sent_text(message).len()).unwrap()
+                })
+                .sum();
+
+            // The reference shares this fixture and sums both clock and body.
+            // Cancellation must retain the same full charge, not just more
+            // bytes than the earlier writes delivered.
+            if after {
+                assert_eq!(constructed.1, delivered, "{site:?} {cause:?}");
+                if needs_reference && index == 0 {
+                    reference_bytes = Some(delivered);
+                }
+            } else {
+                assert_eq!(
+                    constructed.1,
+                    reference_bytes.expect("the matching completed write ran first"),
+                    "{site:?} {cause:?} retains the full constructed input"
+                );
+                assert!(constructed.1 > delivered, "{site:?} {cause:?}");
+            }
+        }
         rows += 1;
     }
-    assert_eq!(rows, causes.len());
+    assert_eq!(rows, causes.len() + usize::from(needs_reference));
 }
 
 macro_rules! write_site_test {
@@ -367,7 +409,11 @@ macro_rules! write_site_test {
             } else {
                 $site.drain_cause()
             };
-            if isolated_checked(stringify!($name), |out| write_site_usage(out, drain, rows)) {
+            let reference = (!$physical && !$after && $site != WriteSite::BoardImage)
+                .then_some($site.after_cause());
+            if isolated_checked(stringify!($name), |out| {
+                write_site_usage(out, drain, rows, reference);
+            }) {
                 return;
             }
             write_site_terminal_matrix($site, $physical, $after).await;
@@ -1243,15 +1289,6 @@ impl Rig {
         )
         .await
         .unwrap();
-    }
-
-    /// Joins the old socket's peer and returns every frame it received.
-    async fn old_frames(&mut self) -> Vec<serde_json::Value> {
-        self.gemini.shutdown().await.unwrap();
-        tokio::time::timeout(Duration::from_secs(2), self.old.take().unwrap())
-            .await
-            .unwrap()
-            .unwrap()
     }
 }
 

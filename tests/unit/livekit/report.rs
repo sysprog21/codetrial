@@ -1621,11 +1621,12 @@ fn recovery_offer_matches_browser_limits_and_generation_deadline() {
         limits["quotaRetryAfterSeconds"]
     );
 
-    // The regenerated report goes through the same receipt wait, so a page that
-    // stops waiting before every attempt could land drops one in flight.
+    // Generation can finish while the candidate is away; a return within the
+    // grace must still leave every receipt attempt time to land.
     let delivery = DELIVERY_WAIT * DELIVERY_ATTEMPTS as u32;
     assert!(
-        limits["retryWaitSeconds"].as_u64().unwrap() > (REPORT_TIMEOUT + delivery).as_secs() + 3
+        limits["retryWaitSeconds"].as_u64().unwrap()
+            > (REPORT_TIMEOUT + REJOIN_GRACE + delivery).as_secs() + 3
     );
 }
 
@@ -2011,47 +2012,18 @@ fn only_the_candidate_coming_and_going_moves_a_recovery_wait() {
     }
 }
 
-/// Drives a recovery wait from a script of events, each sent after its delay.
-async fn scripted_recovery(
-    script: Vec<(u64, RecoveryEvent)>,
-    generation: impl std::future::Future<Output = GeneratedReport>,
-    readiness: Readiness,
-) -> (Option<GeneratedReport>, Vec<RecoveryNotice>) {
-    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    let mut fixture = RecoveryFixture::new(rx);
-    let sender = async move {
-        for (delay, event) in script {
-            tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
-            let _ = tx.send(event);
-        }
-        tx
-    };
-    let (result, _tx) = tokio::join!(
-        recover_report(
-            &mut fixture,
-            None,
-            generation,
-            REPORT_RECOVERY_WINDOW,
-            std::time::Duration::ZERO,
-            tokio::time::Instant::now(),
-            move || readiness,
-        ),
-        sender,
-    );
-    (result, fixture.1)
-}
+include!("report/scripted_recovery.rs");
 
 /// A full LiveKit rejoin looks like the candidate leaving and coming back. An
 /// accepted regeneration keeps running through it, and the report it returns
 /// while they are away waits for them instead of going into an empty room.
 #[tokio::test(start_paused = true)]
 async fn a_rejoin_within_the_grace_keeps_an_accepted_regeneration() {
-    let started = tokio::time::Instant::now();
     let generation = async {
         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
         Ok(Ok(serde_json::json!({"result": "complete"})))
     };
-    let (result, notices) = scripted_recovery(
+    let (result, notices, returned_at) = timed_scripted_recovery(
         vec![
             (0, RecoveryEvent::Retry),
             (1, RecoveryEvent::Away),
@@ -2063,7 +2035,7 @@ async fn a_rejoin_within_the_grace_keeps_an_accepted_regeneration() {
     .await;
     assert_eq!(result.unwrap().unwrap().unwrap()["result"], "complete");
     assert_eq!(notices, [RecoveryNotice::Accepted]);
-    assert!(started.elapsed() >= std::time::Duration::from_secs(20));
+    assert_eq!(returned_at, std::time::Duration::from_secs(20));
 }
 
 /// Gone past the grace is gone, before a retry or during the regeneration.
