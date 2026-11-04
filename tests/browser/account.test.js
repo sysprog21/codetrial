@@ -225,7 +225,7 @@ test("the lobby offers an editor or a whiteboard and carries the choice into the
   );
   assertIncludesCompact(
     interview,
-    "durationMin, interviewId, interviewLoop, interviewMode: mode, ...(!whiteboard ? { language: state.language } : {}), interviewProfile, ...(interviewGrounding",
+    "...(namedDuration ? { durationMin } : {}), interviewId, interviewLoop, interviewMode: mode, ...(!whiteboard ? { language: state.language } : {}), interviewProfile, ...(interviewGrounding",
   );
   assertIncludesCompact(
     interview,

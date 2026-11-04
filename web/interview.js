@@ -354,15 +354,18 @@ let languages = [];
 // A delayed judge may make the requested C tab available after the first
 // paint. Do not switch to it after the candidate has chosen a tab or edited.
 let languageChoiceCommitted = false;
+/// Whole minutes, as the agent reads them from the room metadata.
+const named = Math.trunc(Number(params.get("duration")));
+/// Whether the URL named a usable length, which `?duration=`, `?duration=abc`,
+/// `?duration=30abc`, `?duration=Infinity`, `0` and `-5` do not: decided once,
+/// here, for the token request and for the round plan alike.
+const namedDuration = Number.isFinite(named) && named > 0;
 /// What the lobby asked for, until `/api/token` says what it got. The range
-/// here mirrors the server's own and is the fallback for a URL that arrives
-/// without passing through the lobby; the answer below is what the interview
-/// actually runs on.
-let durationMin = clamp(
-  Number.parseInt(params.get("duration") || "45", 10) || 45,
-  10,
-  90,
-);
+/// here mirrors the server's own, and 45 is only the length shown until the
+/// answer lands for a URL that arrives without passing through the lobby: such
+/// a request names no length, so the server's configured default decides. The
+/// answer below is what the interview actually runs on.
+let durationMin = namedDuration ? clamp(named, 10, 90) : 45;
 const interviewLoop = codingLoop(params.get("loop"));
 /// Whether this interview is held at a whiteboard rather than in the editor.
 ///
@@ -457,8 +460,8 @@ let codingMinutes = durationMin - behavioralMinutes;
 /// round split and the saved report describing an interview nobody is having.
 ///
 /// An answer that is missing or unusable leaves the request in place: the page
-/// still runs, on the length the URL named, exactly as it did before the
-/// server sent this.
+/// still runs, on the length shown so far (the URL's, else the provisional 45),
+/// exactly as it did before the server sent this.
 function applyGrantedDuration(granted) {
   if (typeof granted !== "number" || !Number.isFinite(granted) || granted <= 0)
     return;
@@ -467,7 +470,7 @@ function applyGrantedDuration(granted) {
     interviewLoop === "coding_behavioral" ? Math.min(8, durationMin) : 0;
   codingMinutes = durationMin - behavioralMinutes;
   // The budget is on screen by now: `bindEvents` wrote it during setup, from
-  // the length the URL asked for. Leaving it there would put the old number in
+  // the length shown so far. Leaving it there would put the old number in
   // front of the candidate for the whole interview.
   renderRoundPlan();
 }
@@ -1189,7 +1192,14 @@ function bindEvents() {
   nodes.jimMute.addEventListener("click", () => jimVolume.toggleMute());
   nodes.jimVolumeReset.addEventListener("click", () => jimVolume.reset());
   renderJimVolume();
-  renderRoundPlan();
+  // A URL that names no length gets the server's default, so the plan waits for
+  // `/api/session` rather than show 45 minutes and then jump to the real one.
+  if (namedDuration) renderRoundPlan();
+  else
+    void sessionPromise.then((session) => {
+      applyGrantedDuration(session?.defaultDurationMin);
+      renderRoundPlan();
+    });
   nodes.problemTab.addEventListener("click", () => selectTab("problem"));
   nodes.transcriptTab.addEventListener("click", () => selectTab("transcript"));
   nodes.mic.addEventListener("click", toggleMicrophone);
@@ -2002,7 +2012,7 @@ async function connect(preflight, presenting = false) {
               ...(previous ? { previousAssignment: previous } : {}),
             }
           : { problemId: problem.page }),
-        durationMin,
+        ...(namedDuration ? { durationMin } : {}),
         interviewId,
         interviewLoop,
         interviewMode: mode,

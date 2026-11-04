@@ -11,7 +11,7 @@ mod peer;
 
 pub use peer::{PeerServices, peer_services};
 
-use crate::config::{DEFAULT_DURATION_MIN, DEFAULT_ROOM_PREFIX, DEFAULT_WEB_DIR};
+use crate::config::{DEFAULT_ROOM_PREFIX, DEFAULT_WEB_DIR};
 use crate::web::WebServerConfig;
 
 /// One installation keeps its config file and its account database together in
@@ -61,9 +61,9 @@ pub fn web_server_config(
     // sees the pool the server will actually serve, and before the listener
     // does any work: a half-configured recording block is a startup failure,
     // never a surprise at the moment a candidate's interview ends.
-    let recording =
-        crate::config::load_recording(values, &pool, interview_duration_min(values), production)
-            .map_err(|error| error.to_string())?;
+    let (default_duration_min, _) = duration_setting(values)?;
+    let recording = crate::config::load_recording(values, &pool, default_duration_min, production)
+        .map_err(|error| error.to_string())?;
     recording_needs_verified_identity(
         recording.is_some(),
         nonempty(values, "GITHUB_CLIENT_ID").is_some()
@@ -104,6 +104,7 @@ pub fn web_server_config(
         allowed_hosts: allowed_hosts(values)?,
         compiler_explorer_enabled: compiler_explorer_enabled(values),
         guest_mode_enabled: guest_mode_enabled(values),
+        default_duration_min,
         recording,
         peer_observer,
         peer,
@@ -565,13 +566,13 @@ pub fn recording_needs_verified_identity(recording: bool, oauth: bool) -> Result
     Ok(())
 }
 
-/// The configured interview length, which is what a recording's maximum
-/// duration has to clear. Read here rather than through `load_from_pairs`
-/// because `codetrial web` deliberately runs without a full agent config.
-fn interview_duration_min(values: &BTreeMap<String, String>) -> u32 {
-    nonempty(values, "CODETRIAL_DURATION_MIN")
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(DEFAULT_DURATION_MIN)
+/// The configured interview length, held to the range the endpoints offer,
+/// which is what a recording's maximum duration has to clear, and what to say
+/// when it is not used as written. Read here rather than through
+/// `load_from_pairs`, because `codetrial web` deliberately runs without a full
+/// agent config. Text that is no number is an error, as for the agent.
+fn duration_setting(values: &BTreeMap<String, String>) -> Result<(u32, Option<String>), String> {
+    crate::config::configured_duration(values.get("CODETRIAL_DURATION_MIN").map(String::as_str))
 }
 
 /// `CODETRIAL_ALLOWED_HOSTS`, a comma-separated list of `Host` values.
@@ -841,6 +842,10 @@ pub fn prepare(
     let max_concurrent = read_max_concurrent(values);
 
     let production = crate::config::is_production(values);
+
+    if let Some(warning) = duration_setting(values)?.1 {
+        eprintln!("{warning}");
+    }
     let pool = web_provider_pool(values, options, production)?;
 
     let config = web_server_config(values, pool, production, options)?;

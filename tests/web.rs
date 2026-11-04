@@ -143,6 +143,7 @@ fn web_config() -> WebServerConfig {
         production: false,
         compiler_explorer_enabled: true,
         guest_mode_enabled: true,
+        default_duration_min: DEFAULT_DURATION_MIN,
         trusted_proxy_hops: 0,
         allowed_hosts: Vec::new(),
         recording: None,
@@ -1401,6 +1402,9 @@ async fn spawn_counting_quota_stub(
 
 #[path = "web/token.rs"]
 mod token;
+
+#[path = "web/token_default.rs"]
+mod token_default;
 
 #[path = "web/policy.rs"]
 mod policy;

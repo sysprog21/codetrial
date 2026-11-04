@@ -85,14 +85,97 @@ fn the_launch_reads_its_cap_length_and_compiler_switch_from_the_values() {
         5
     );
     assert_eq!(
-        interview_duration_min(&values(&[("CODETRIAL_DURATION_MIN", "45")])),
+        duration_setting(&values(&[("CODETRIAL_DURATION_MIN", "45")]))
+            .unwrap()
+            .0,
         45
     );
-    assert_eq!(interview_duration_min(&values(&[])), DEFAULT_DURATION_MIN);
+    assert_eq!(
+        duration_setting(&values(&[])).unwrap().0,
+        crate::config::DEFAULT_DURATION_MIN
+    );
     for (value, enabled) in [("true", true), ("false", false)] {
         assert_eq!(
             compiler_explorer_enabled(&values(&[("CODETRIAL_COMPILER_EXPLORER_ENABLED", value)])),
             enabled
+        );
+    }
+}
+
+/// The length a launch runs on and what the operator is told about it come from
+/// one function, so the number in a warning is the one the server uses, and the
+/// recording check sees the same clamped length the endpoints grant.
+#[test]
+fn a_duration_setting_is_read_once_and_named_when_not_used_as_written() {
+    let values = |pairs: &[(&str, &str)]| -> BTreeMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    };
+    let read = |value: &str| {
+        let pairs = values(&[("CODETRIAL_DURATION_MIN", value)]);
+        duration_setting(&pairs)
+    };
+    let agent = |value: &str| {
+        crate::config::load_from_pairs([
+            ("LIVEKIT_URL", "wss://primary.example"),
+            ("LIVEKIT_API_KEY", "primary-key"),
+            ("LIVEKIT_API_SECRET", "primary-secret"),
+            ("GOOGLE_API_KEY", "primary-google"),
+            ("CODETRIAL_DURATION_MIN", value),
+        ])
+    };
+    let unset = values(&[]);
+    assert_eq!(
+        duration_setting(&unset),
+        Ok((crate::config::DEFAULT_DURATION_MIN, None))
+    );
+    for (value, used) in [("", 45), ("  ", 45), ("10", 10), (" 60 ", 60), ("90", 90)] {
+        assert_eq!(read(value), Ok((used, None)), "{value:?}");
+    }
+    for (value, used) in [
+        ("-30", 10),
+        ("0", 10),
+        ("5", 10),
+        ("91", 90),
+        ("120", 90),
+        ("500", 90),
+        ("4294967296", 90),
+        ("99999999999999999999", 90),
+        ("-99999999999999999999", 10),
+        ("+99999999999999999999", 90),
+    ] {
+        let (length, said) = read(value).unwrap();
+        assert_eq!(length, used, "{value:?}");
+        let said = said.unwrap_or_else(|| panic!("{value:?} was accepted silently"));
+        assert!(said.contains(value), "{said}");
+        assert!(said.ends_with(&format!("read as {used}")), "{said}");
+
+        // The agent path (`check-gemini`, `run-livekit`) reads the same length.
+        assert_eq!(
+            agent(value).unwrap().default_duration_min,
+            used,
+            "{value:?}"
+        );
+    }
+
+    // Text that is no number is refused on both paths, since reading `3O` as
+    // the built-in 45 would quietly run the wrong length on a host nobody
+    // watches.
+    for value in ["3O", "30min", "45.5", "abc", "-", "+", "1e2"] {
+        let error = read(value).expect_err(value);
+        assert!(error.contains("CODETRIAL_DURATION_MIN"), "{error}");
+        assert!(error.contains(value), "{error}");
+        let refused = agent(value)
+            .err()
+            .unwrap_or_else(|| panic!("{value:?} was accepted by the agent"));
+        assert!(
+            refused
+                .invalid_entries
+                .iter()
+                .any(|entry| entry.contains("CODETRIAL_DURATION_MIN")),
+            "{value:?}: {refused}"
         );
     }
 }
