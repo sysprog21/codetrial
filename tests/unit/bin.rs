@@ -847,12 +847,12 @@ fn task_mode_runs_only_on_a_private_server_that_neither_records_nor_shares_a_roo
 #[test]
 fn peer_is_offered_once_oauth_and_observer_keys_exist() {
     let oauth = |settings: &[(&str, &str)]| {
-        super::main_peer::peer_services(&values(settings), true).unwrap()
+        codetrial::launch::peer_services(&values(settings), true).unwrap()
     };
     assert!(oauth(&[]).is_none());
     assert!(oauth(&[("GOOGLE_API_KEY", "test-key")]).is_some());
     assert!(
-        super::main_peer::peer_services(&values(&[("GOOGLE_API_KEY", "test-key")]), false)
+        codetrial::launch::peer_services(&values(&[("GOOGLE_API_KEY", "test-key")]), false)
             .unwrap()
             .is_none()
     );
@@ -899,7 +899,7 @@ fn peer_observer_rejects_sessions_longer_than_its_two_hour_capture() {
         ("CODETRIAL_PEER_HARD_MAX_MINUTES", "150"),
     ]);
     assert!(
-        super::main_peer::peer_services(&long, true)
+        codetrial::launch::peer_services(&long, true)
             .unwrap_err()
             .contains("at most 120")
     );
@@ -907,5 +907,111 @@ fn peer_observer_rejects_sessions_longer_than_its_two_hour_capture() {
         ("GOOGLE_API_KEY", "test-key"),
         ("CODETRIAL_PEER_HARD_MAX_MINUTES", "120"),
     ]);
-    assert!(super::main_peer::peer_services(&limit, true).is_ok());
+    assert!(codetrial::launch::peer_services(&limit, true).is_ok());
+}
+
+/// A folder with an empty config file in it and values pointing the account
+/// database into it, so `prepare` touches nothing outside the test.
+fn launch_fixture(label: &str) -> (std::path::PathBuf, super::CliOptions) {
+    let dir = std::env::temp_dir().join(format!(
+        "codetrial-bin-launch-{label}-{}-{}",
+        std::process::id(),
+        codetrial::current_epoch_millis()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let config = dir.join("codetrial.env.local");
+    std::fs::write(&config, "").unwrap();
+    let options = super::CliOptions {
+        config_path: Some(config.display().to_string()),
+        ..Default::default()
+    };
+    (dir, options)
+}
+
+fn livekit_values(dir: &std::path::Path) -> super::BTreeMap<String, String> {
+    let db = dir.join("accounts.db").display().to_string();
+    values(&[
+        ("LIVEKIT_URL", "wss://primary.example"),
+        ("LIVEKIT_API_KEY", "primary-key"),
+        ("LIVEKIT_API_SECRET", "primary-secret"),
+        ("CODETRIAL_DB_PATH", &db),
+    ])
+}
+
+#[test]
+fn prepare_builds_the_server_config_and_opens_the_account_database() {
+    let (dir, options) = launch_fixture("prepare");
+    let prepared = super::prepare(&livekit_values(&dir), &options).unwrap();
+    assert_eq!(prepared.config.pool.providers.len(), 1);
+    assert!(prepared.max_concurrent > 0);
+    assert!(dir.join("accounts.db").is_file(), "the database is opened");
+    assert!(
+        prepared.config.tasks.is_none(),
+        "task mode waits for the bind"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn prepare_refuses_a_launch_without_livekit_credentials() {
+    let (dir, options) = launch_fixture("prepare-missing");
+    let error = super::prepare(&values(&[]), &options).err().unwrap();
+    assert!(
+        error.contains("missing required LiveKit credentials"),
+        "{error}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn finish_refuses_the_published_secret_on_a_public_address() {
+    let (dir, options) = launch_fixture("finish-public");
+    let values = livekit_values(&dir);
+    let prepared = super::prepare(&values, &options).unwrap();
+    let refusal = super::finish(
+        prepared.config,
+        &values,
+        &options,
+        addr("203.0.113.9:3000"),
+        super::LaunchedBy::Operator,
+    )
+    .err()
+    .unwrap();
+    assert!(!refusal.is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn finish_offers_a_launchers_child_no_setup_page_and_no_task_mode() {
+    let (dir, options) = launch_fixture("finish-child");
+    let mut values = livekit_values(&dir);
+    values.insert(
+        "SESSION_SECRET".into(),
+        "a-real-secret-for-this-test-only-0123".into(),
+    );
+    let prepared = super::prepare(&values, &options).unwrap();
+    let (config, setup) = super::finish(
+        prepared.config,
+        &values,
+        &options,
+        addr("127.0.0.1:3000"),
+        super::LaunchedBy::Parent,
+    )
+    .unwrap();
+    assert!(setup.is_none(), "a child has no terminal anyone reads");
+    assert!(config.tasks.is_none(), "task mode was not asked for");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn the_local_interviewer_needs_a_gemini_key_and_a_valid_config() {
+    let (dir, _) = launch_fixture("agent");
+    let mut values = livekit_values(&dir);
+    assert!(super::local_agent_config(values.clone()).unwrap().is_none());
+    values.insert("GOOGLE_API_KEY".into(), "google-key".into());
+    assert!(super::local_agent_config(values.clone()).unwrap().is_some());
+    values.insert("GEMINI_CONTEXT_TRIGGER_TOKENS".into(), "1000".into());
+    let error = super::local_agent_config(values).err().unwrap();
+    assert!(error.contains("GEMINI_CONTEXT"), "{error}");
+    let _ = std::fs::remove_dir_all(&dir);
 }

@@ -4,6 +4,7 @@ pub mod config;
 pub mod delivery;
 pub mod dispatch;
 pub mod gemini;
+pub mod launch;
 pub mod livekit;
 mod peer_audio;
 pub mod recording;

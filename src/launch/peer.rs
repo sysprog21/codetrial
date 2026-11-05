@@ -1,14 +1,14 @@
 //! Startup rules for reciprocal practice, offered once its prerequisites exist.
-use codetrial::config::{
+use crate::config::{
     MAX_CAPTURE_SECONDS, PeerConfig, PeerObserverConfig, load_peer, load_peer_observer,
 };
 use std::collections::BTreeMap;
 
-pub(super) type PeerServices = Option<(PeerConfig, PeerObserverConfig)>;
+pub type PeerServices = Option<(PeerConfig, PeerObserverConfig)>;
 
 /// Reciprocal practice needs GitHub sign-in for member identity and the Google
 /// keys for the silent observer. Without either it is simply not offered.
-pub(super) fn peer_services(
+pub fn peer_services(
     values: &BTreeMap<String, String>,
     oauth: bool,
 ) -> Result<PeerServices, String> {
