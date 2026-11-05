@@ -195,10 +195,21 @@ locks held across await and `mem::forget` are explicit denials too.
 `unsafe` count at zero — `forbid` rather than `deny`, so a local `#[allow]`
 cannot reintroduce it. `scripts/check-rust-style.py` holds what a lint cannot
 ask: that this table stays strict, that no `allow` or bare `#[ignore]` appears,
-that no marker or CJK text lands in Rust or `web/`, and that no file passes the
-line ceiling in `scripts/rust-style-ceilings.json`, which `--ratchet` only
-lowers. The rules and the lints left off on purpose are in the Rust profile of
-codetrial-improve, `.claude/skills/codetrial-improve/rust.md`.
+that no marker or CJK text lands in Rust or `web/`, and that no file passes its
+Git-derived line ceiling. By default, a file may not exceed 1500 lines or its
+committed size at the same path in HEAD, whichever is larger. Without Git
+every file gets the 1500-line limit and the explicit baseline below cannot be
+read, so a source archive fails this gate; run it from a clone. The gate passes
+`--baseline origin/main`: larger files present in both the baseline and HEAD
+are limited by their smallest size across those two trees and every reachable
+commit in `origin/main..HEAD`, with a floor of 1500. Committed shrinking
+automatically ratchets the limit; new or renamed paths get 1500, and deletion
+retires an allowance. An explicit baseline requires resolvable HEAD and
+baseline refs, common history and a complete, non-shallow repository; missing
+history fails locally and in CI. Diverged refs are supported, but the branch
+must still satisfy any smaller baseline limit. The rules and the lints left
+off on purpose are in the Rust profile of codetrial-improve,
+`.claude/skills/codetrial-improve/rust.md`.
 
 The compiler those lints run on is pinned in `rust-toolchain.toml`, so a new
 Rust release cannot fail an unchanged tree: Dependabot proposes each bump as

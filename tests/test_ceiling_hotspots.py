@@ -1,7 +1,6 @@
 """The hotspot ranking orders files by commits times lines, inside the window."""
 
 import importlib.util
-import json
 import os
 import subprocess
 import sys
@@ -15,6 +14,9 @@ SPEC = importlib.util.spec_from_file_location("ceiling_hotspots", SCRIPT)
 
 # A commit far outside any window the tests ask for.
 LONG_AGO = "2001-01-01T00:00:00 +0000"
+
+# The style checker's default ceiling; only files above it are ranked by default.
+OVER = 1501
 
 
 def run(*args):
@@ -75,11 +77,6 @@ class Hotspots(unittest.TestCase):
             path.write_text("x\n" * lines)
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "change", date=date)
-
-    def ceilings(self, entries):
-        path = self.repo / "scripts/rust-style-ceilings.json"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(entries))
 
     def test_score_is_commits_times_lines_and_orders_the_table(self):
         self.commit({"src/big.rs": 10, "src/busy.rs": 5, "src/idle.rs": 100})
@@ -162,29 +159,31 @@ class Hotspots(unittest.TestCase):
         self.assertEqual(rows, {"web/big.js": None})
 
     def test_cli_prints_one_table_per_directory_with_the_revision(self):
-        self.commit({"src/a.rs": 3, "tests/t.rs": 2})
-        self.ceilings({"src/a.rs": 3, "tests/t.rs": 2})
+        self.commit({"src/a.rs": OVER, "tests/t.rs": OVER + 1})
         done = run("--repo", str(self.repo))
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertIn("# history at ", done.stdout)
         self.assertIn("## src/ (1 files)", done.stdout)
         self.assertIn("## tests/ (1 files)", done.stdout)
 
-    def test_a_ceiling_for_a_missing_file_is_reported_and_skipped(self):
-        self.commit({"src/a.rs": 3})
-        self.ceilings({"src/a.rs": 3, "src/gone.rs": 9})
+    def test_a_file_at_the_default_ceiling_is_not_ranked(self):
+        self.commit({"src/a.rs": OVER, "src/small.rs": OVER - 1, "web/a.js": OVER})
         done = run("--repo", str(self.repo))
         self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertIn("skipped src/gone.rs", done.stderr)
-        self.assertNotIn("src/gone.rs", done.stdout)
+        self.assertIn("src/a.rs", done.stdout)
+        self.assertNotIn("src/small.rs", done.stdout)
+        self.assertNotIn("web/a.js", done.stdout)
 
-    def test_a_ceilings_file_of_the_wrong_shape_exits_two(self):
-        self.commit({"src/a.rs": 3})
-        for shape in ([1, 2], {"src/a.rs": "3"}, {"src/a.rs": True}):
-            self.ceilings(shape)
-            done = run("--repo", str(self.repo))
-            self.assertEqual(done.returncode, 2, (shape, done.stderr))
-            self.assertIn("not a map of path to line ceiling", done.stderr)
+    def test_the_ceiling_is_the_committed_size_not_the_working_one(self):
+        self.commit({"src/a.rs": OVER + 9})
+        (self.repo / "src/a.rs").write_text("x\n" * (OVER + 20))
+        (self.repo / "src/new.rs").write_text("x\n" * OVER)
+        done = run("--repo", str(self.repo))
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(
+            row_of(done.stdout, "src/a.rs")[1:3], [str(OVER + 20), str(OVER + 9)]
+        )
+        self.assertEqual(row_of(done.stdout, "src/new.rs")[1:3], [str(OVER), "1500"])
 
     def test_cli_under_shows_a_dash_where_no_ceiling_exists(self):
         self.commit({"web/big.js": 20})
@@ -195,13 +194,13 @@ class Hotspots(unittest.TestCase):
         )
 
     def test_a_file_with_no_commit_in_the_window_scores_zero(self):
-        self.commit({"src/a.rs": 4}, date=LONG_AGO)
-        self.ceilings({"src/a.rs": 4})
+        self.commit({"src/a.rs": OVER}, date=LONG_AGO)
         done = run("--repo", str(self.repo), "--since", "30.days")
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertIn("since 30.days", done.stdout)
         self.assertEqual(
-            row_of(done.stdout, "src/a.rs"), ["src/a.rs", "4", "4", "0", "0"]
+            row_of(done.stdout, "src/a.rs"),
+            ["src/a.rs", str(OVER), str(OVER), "0", "0"],
         )
 
     def test_under_with_nothing_to_list_exits_two(self):
@@ -216,23 +215,19 @@ class Hotspots(unittest.TestCase):
         self.assertEqual(done.returncode, 2)
         self.assertIn("ceiling-hotspots:", done.stderr)
 
-    def test_the_real_tree_lists_every_recorded_ceiling_that_exists(self):
-        recorded = json.loads((ROOT / "scripts/rust-style-ceilings.json").read_text())
-        present = [name for name in recorded if (ROOT / name).is_file()]
+    def test_the_real_tree_lists_every_file_over_the_default_ceiling(self):
+        mod = self.mod.STYLE
+        over = [
+            n for n, lines in mod.sizes(ROOT).items() if lines > mod.DEFAULT_CEILING
+        ]
         done = run("--repo", str(ROOT))
         self.assertEqual(done.returncode, 0, done.stderr)
         listed = [
             line.split()[0]
             for line in done.stdout.splitlines()
-            if line.split() and line.split()[0] in recorded
+            if line.split() and line.split()[0] in over
         ]
-        self.assertEqual(sorted(listed), sorted(present))
-        # The gate fails any file above its entry, so a row over its ceiling
-        # would mean this script counts lines differently from the gate.
-        for line in done.stdout.splitlines():
-            cells = line.split()
-            if cells and cells[0] in recorded:
-                self.assertLessEqual(int(cells[1]), int(cells[2]), cells[0])
+        self.assertEqual(sorted(listed), sorted(over))
 
 
 if __name__ == "__main__":

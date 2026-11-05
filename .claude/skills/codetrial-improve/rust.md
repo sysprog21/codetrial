@@ -54,17 +54,27 @@ through `clippy.toml`.
 
 ## File size
 
-New Rust files stay within 1500 lines. Existing larger files are recorded in
-`scripts/rust-style-ceilings.json` and may only shrink: after splitting one by
-responsibility, run `scripts/check-rust-style.py --ratchet` to lower its entry.
-`scripts/ceiling-hotspots.py` ranks them by churn times size, as one input to
-choosing which to split first. Count a file's mutants before splitting it with
-`cargo mutants --list -f <file> | wc -l`; `make mutants` downloads a compiler
-first. Never raise an entry to land a change; a new module is the answer. The
-gate passes `--baseline origin/main`, so a raised entry or a new exemption fails
-against what main records, and under CI a baseline ref that was not fetched
-fails too, so a shallow checkout cannot skip it. Test bodies live under
-`tests/unit/` and answer to the same ceiling.
+New Rust files stay within 1500 lines. By default, the checker derives each
+limit from the committed file at the same path in HEAD, with a floor of 1500;
+working files may shrink freely but larger files may not grow. Without Git
+every file gets 1500 and the gate's baseline cannot be read, so a source
+archive fails the gate; run it from a clone.
+`scripts/ceiling-hotspots.py` ranks the larger files by churn times size, as
+one input to choosing which to split first. Count a file's mutants before
+splitting it with `cargo mutants --list -f <file> | wc -l`; `make mutants`
+downloads a compiler first.
+
+The gate passes `--baseline origin/main`. For a larger file present in both
+that baseline and HEAD, its limit is the smallest size across those two trees
+and every reachable committed version at that path in `origin/main..HEAD`,
+with a floor of 1500. All reachable commits count, including merged history.
+A committed shrink automatically ratchets the limit; a new or renamed path
+gets 1500, and deletion retires the allowance. Split a large file by
+responsibility rather than grow it. An explicit baseline requires resolvable
+HEAD and baseline refs, common history and a complete, non-shallow
+repository; an error fails locally and in CI. Diverged refs are supported,
+but the branch must still satisfy any smaller baseline limit. Test bodies
+live under `tests/unit/` and answer to the same ceiling.
 
 ### Splitting a file
 
@@ -106,9 +116,9 @@ What splitting `src/agent/prompts.rs` (3944 lines, six modules under
    fn name`) fails with "is still defined here" in `cargo test --lib` and not in
    clippy, and a source digest that hashes the old file (the report evaluation's
    identity) stops covering the code that left it.
-7. **Run `scripts/check-rust-style.py --ratchet`** so the old entry leaves
-   `scripts/rust-style-ceilings.json`, then clippy at `-D warnings`, then
-   `./scripts/test.sh rust`.
+7. **Commit the split, then run clippy** at `-D warnings` and
+   `./scripts/test.sh rust`. The old file's limit drops to its committed size
+   on its own; there is no table to update.
 
 A comment added to a file that sits exactly at its ceiling fails the checker, so
 a note for a ceilinged file goes here or in the split, not in the file.
@@ -188,7 +198,7 @@ in [recipes/rust.md](recipes/rust.md).
 cargo fmt
 cargo clippy --locked --workspace --all-targets
 cargo doc --locked --workspace --no-deps
-python3 scripts/check-rust-style.py
+python3 scripts/check-rust-style.py --baseline origin/main
 python3 scripts/check-rust-style.py --workspace
 cargo test --locked <one filter>
 ```
