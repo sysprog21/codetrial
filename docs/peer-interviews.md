@@ -42,18 +42,19 @@ same fixed membership, consent, audio readiness and two-round controls.
 
 ## Configuration
 
-Enable `CODETRIAL_PEER_ENABLED` alongside a LiveKit provider, the account
-session secret, database, `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, and
-`GOOGLE_API_KEY` or `GOOGLE_API_KEYS`. Startup refuses enabled reciprocal mode
-without both OAuth app credentials and the silent observer's Google keys.
+Reciprocal practice is offered like any other feature once its prerequisites
+exist: a LiveKit provider, the account session secret, database,
+`GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, and `GOOGLE_API_KEY` or
+`GOOGLE_API_KEYS`. Without both OAuth app credentials or the silent observer's
+Google keys it is simply not offered, and the session reply reports it as
+unavailable.
 OAuth identity is sufficient: a verified email address is not required.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `CODETRIAL_PEER_ENABLED` | off | Enable reciprocal practice |
 | `CODETRIAL_PEER_MAX_SESSIONS` | 8 | Shared cap for waiting rooms and bound sessions |
 | `CODETRIAL_PEER_ROUND_MINUTES` | 25 | Default round length |
-| `CODETRIAL_PEER_HARD_MAX_MINUTES` | 90 | Cutoff from round 1's actual start |
+| `CODETRIAL_PEER_HARD_MAX_MINUTES` | 90 | Cutoff from round 1's actual start; must cover two rounds |
 | `CODETRIAL_PEER_INVITE_TTL_DAYS` | 7 | Private invite lifetime, capped at 14 days |
 | `CODETRIAL_PEER_RECONNECT_GRACE_SECONDS` | 120 | Heartbeat presence grace |
 | `CODETRIAL_PEER_AUDIO_DIR` | unset | Opt in to private local audio artifacts |
@@ -118,10 +119,9 @@ continues. Advice is generated from partner speech, so a partner can influence
 the wording of the suggestions you receive; they are shown as plain text only.
 
 Choosing neither raw saving option does not delete the ordinary workspace
-snapshots, submitted human feedback, session metadata or technical AI
-suggestions. Those are kept for 30 days after a session was created, and only
-once it is complete or cancelled and its room and any audio file are cleaned
-up; an hourly worker then deletes the session with its members, rounds,
+snapshots, submitted human feedback or session metadata. Those are kept for
+30 days after a session was created, and only once it is complete or cancelled
+and its room and any audio file are cleaned up; an hourly worker then deletes the session with its members, rounds,
 snapshots and feedback. Finished lobby entries and pairing requests go on the
 same schedule. The record of which problems a member has seen is kept so
 that later practice does not repeat them. The consent notice states this
@@ -167,7 +167,7 @@ zero-based round indices. Recovery requests to `writer` carry `previousLease`
 for an atomic comparison. Snapshot writes carry a lease, `expectedRevision`,
 language, code, tests and final flag; the code limit is 48 KiB of UTF-8, and
 the server keeps only the runner's known test fields, cutting long text. Body
-ceilings (1 MiB for a snapshot, 256 KiB for feedback) sit above anything those
+ceilings (2 MiB for a snapshot, 256 KiB for feedback) sit above anything those
 limits accept, counting JSON escapes. Writes have a separate 30/minute
 per-account bucket. Feedback keeps only the rubric fields, each text field at
 most 1,500 bytes. Draft human feedback remains private until both members

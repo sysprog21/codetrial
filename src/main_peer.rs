@@ -1,33 +1,24 @@
-//! Startup validation for the opt-in reciprocal interview service.
-use codetrial::config::{PeerObserverConfig, load_peer_observer};
+//! Startup rules for reciprocal practice, offered once its prerequisites exist.
+use codetrial::config::{
+    MAX_CAPTURE_SECONDS, PeerConfig, PeerObserverConfig, load_peer, load_peer_observer,
+};
 use std::collections::BTreeMap;
 
-pub(super) fn peer_needs_oauth(peer: bool, oauth: bool) -> Result<(), String> {
-    if peer && !oauth {
-        return Err(
-            "CODETRIAL_PEER_ENABLED=true needs GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET".into(),
-        );
-    }
-    Ok(())
-}
+pub(super) type PeerServices = Option<(PeerConfig, PeerObserverConfig)>;
 
-pub(super) fn observer_config(
+/// Reciprocal practice needs GitHub sign-in for member identity and the Google
+/// keys for the silent observer. Without either it is simply not offered.
+pub(super) fn peer_services(
     values: &BTreeMap<String, String>,
-    enabled: bool,
-) -> Result<Option<PeerObserverConfig>, String> {
-    if !enabled {
+    oauth: bool,
+) -> Result<PeerServices, String> {
+    let peer = load_peer(values).map_err(|error| error.to_string())?;
+    let observer = load_peer_observer(values)?;
+    let (true, Some(observer)) = (oauth, observer) else {
         return Ok(None);
-    }
-    let config = load_peer_observer(values)?;
-    if config.is_some()
-        && codetrial::config::load_peer(values)
-            .map_err(|error| error.to_string())?
-            .is_some_and(|peer| peer.hard_max_minutes > 120)
-    {
+    };
+    if u64::from(peer.hard_max_minutes) > MAX_CAPTURE_SECONDS / 60 {
         return Err("CODETRIAL_PEER_HARD_MAX_MINUTES must be at most 120 because the silent observer captures at most two hours".into());
     }
-    if config.is_none() {
-        return Err("CODETRIAL_PEER_ENABLED=true needs GOOGLE_API_KEY or GOOGLE_API_KEYS for the silent observer and post-session advice".into());
-    }
-    Ok(config)
+    Ok(Some((peer, observer)))
 }

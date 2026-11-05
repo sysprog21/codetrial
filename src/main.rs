@@ -1,5 +1,4 @@
 mod main_peer;
-use main_peer::peer_needs_oauth;
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -325,12 +324,12 @@ fn web_server_config(
             && nonempty(values, "GITHUB_CLIENT_SECRET").is_some(),
     )?;
     recording_can_deliver(recording.as_ref())?;
-    let peer = codetrial::config::load_peer(values).map_err(|error| error.to_string())?;
-    peer_needs_oauth(
-        peer.is_some(),
+    let (peer, peer_observer) = main_peer::peer_services(
+        values,
         nonempty(values, "GITHUB_CLIENT_ID").is_some()
             && nonempty(values, "GITHUB_CLIENT_SECRET").is_some(),
-    )?;
+    )?
+    .unzip();
 
     let config = WebServerConfig {
         tasks: None,
@@ -360,7 +359,7 @@ fn web_server_config(
         compiler_explorer_enabled: compiler_explorer_enabled(values),
         guest_mode_enabled: guest_mode_enabled(values),
         recording,
-        peer_observer: main_peer::observer_config(values, peer.is_some())?,
+        peer_observer,
         peer,
         pool,
         probe_provider_quota: true,

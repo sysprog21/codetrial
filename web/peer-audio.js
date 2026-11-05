@@ -63,6 +63,7 @@ export function createPeerAudio({
       next.on(sdk.RoomEvent.TrackUnsubscribed, drop);
       next.on(sdk.RoomEvent.Disconnected, () => {
         if (room === next) {
+          room = null;
           clearRemote();
           onDisconnect();
         }
@@ -101,7 +102,7 @@ export function createPeerAudio({
   };
 }
 
-/// Serialises microphone toggles: each click flips the last requested state, so
+/// Serializes microphone toggles: each click flips the last requested state, so
 /// clicks made while the SDK call is pending cannot cancel each other out.
 export function createMuteToggle({ mute, onChange, onError }) {
   let applied = false;
