@@ -45,9 +45,16 @@ import {
   preflightReadiness,
   videoTrackReady,
 } from "./audio-check.js";
+import { bufferIndent } from "./indent-guides.js";
+import { followingIndent, lineIndentUnit } from "./editor.js";
 import { parseSyntax, prepareLanguage } from "./syntax-parser.js";
 import { tokenize } from "./tokenizer.js";
-import { editorOptionsFromParams } from "./editor-options.js";
+import {
+  DEFAULT_INDENT,
+  editorOptionsFromParams,
+  INDENT_UNITS,
+  indentFromParams,
+} from "./editor-options.js";
 import { attachSplitter } from "./splitter.js";
 import {
   BOARD_WIDTH,
@@ -315,6 +322,7 @@ const replayVersion = globalThis.CODETRIAL_REPLAY_VERSION || 1;
 
 const params = new URLSearchParams(window.location.search);
 const editorOptions = editorOptionsFromParams(params);
+const indentUnit = INDENT_UNITS[indentFromParams(params)];
 const strict = params.get("selection") === "strict";
 // Start this independent request while the problem data is loading. It has to
 // settle rather than reject: nothing awaits it until init() reaches the sign-in
@@ -1402,6 +1410,7 @@ function bindEvents() {
         return state.language;
       },
       onEdit: workspaceEdited,
+      indentFor,
     },
   });
   nodes.report.addEventListener("click", (event) => {
@@ -5123,6 +5132,59 @@ function isCurrentAgent(participant) {
 function setAgentStateLabel(label, ready = false) {
   nodes.agentState.textContent = label;
   nodes.agentState.closest(".agent-pill")?.classList.toggle("ready", ready);
+}
+
+// The space width each language's starter is written in, measured once from
+// the problem itself. A constant cannot drift with Tab, undo, Restore, a paste
+// or a language switch the way a measurement of the live buffer did.
+const starterIndents = new Map();
+
+function starterIndent(language) {
+  if (!starterIndents.has(language)) {
+    const starter = problem?.starterCode?.[language];
+    // With every syntax-aware feature off the tokenizer is never run; without
+    // tokens only comment continuations go unrecognized, and their one-column
+    // step does not vote anyway.
+    const syntax =
+      editorOptions.autoIndent ||
+      editorOptions.highlight ||
+      editorOptions.autoClose;
+    starterIndents.set(
+      language,
+      starter === undefined
+        ? null
+        : bufferIndent(
+            starter,
+            syntax ? tokenize(starter, language).tokens : [],
+          ),
+    );
+  }
+  return starterIndents.get(language);
+}
+
+/// One level for Tab, or for Enter on the caret's line. The default four
+/// spaces is `main`'s editor unchanged. Under another choice, a starter with
+/// an indented block sets one width for the buffer: lines with no indentation
+/// take it too, so Tab on a blank line of a four-space Python starter steps
+/// by four and never puts a tab beside its spaces. The choice applies only
+/// where the starter measured nothing. A tab-indented line keeps tabs, and
+/// Enter at the end of a line whose block already has a body matches it.
+function indentFor(enter = false) {
+  if (indentUnit === INDENT_UNITS[DEFAULT_INDENT]) return indentUnit;
+  const value = nodes.editor.value;
+  const at = nodes.editor.selectionStart;
+  // Only a collapsed caret with nothing after it on the line opens the block
+  // below; otherwise that line is not this Enter's body.
+  const lineEnd = value.indexOf("\n", at);
+  const restOfLine = value.slice(at, lineEnd === -1 ? undefined : lineEnd);
+  const body =
+    enter && at === nodes.editor.selectionEnd && !restOfLine.trim()
+      ? followingIndent(value, at, state.language)
+      : null;
+  if (body) return body;
+  const starter = starterIndent(state.language);
+  const indent = { unit: starter ?? indentUnit, spaces: starter ?? undefined };
+  return enter ? lineIndentUnit(value, at, indent.unit, indent.spaces) : indent;
 }
 
 function editorTokens(code, language) {

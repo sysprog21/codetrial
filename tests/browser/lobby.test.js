@@ -663,6 +663,24 @@ lobbyTest(
 );
 
 lobbyTest(
+  "the indentation choice survives reloads and travels with the problem",
+  async (page) => {
+    await lobby(page);
+    const indent = page.getByRole("combobox", { name: "Indentation" });
+    assert.equal(await indent.inputValue(), "4");
+    await indent.selectOption("2");
+    await lobby(page);
+    assert.equal(await indent.inputValue(), "2");
+    await page.locator('[data-mode="whiteboard"]').click();
+    assert.equal(await indent.isDisabled(), true);
+    await page.locator('[data-mode="coding"]').click();
+    await page.click("#start");
+    await page.waitForURL(/\/interview/);
+    assert.equal(new URL(page.url()).searchParams.get("editorIndent"), "2");
+  },
+);
+
+lobbyTest(
   "editor options are captured before the start waits for login",
   async (page) => {
     session = { signedIn: false, loginRequired: true };

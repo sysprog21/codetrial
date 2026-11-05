@@ -2,9 +2,14 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   editorOptionsFromParams,
+  INDENT_UNITS,
+  indentFromParams,
   loadEditorOptions,
+  loadIndent,
   saveEditorOptions,
+  saveIndent,
   setEditorOptions,
+  setIndent,
 } from "../../web/editor-options.js";
 import { memoryStorage } from "./source.js";
 
@@ -96,4 +101,69 @@ test("refused preference storage preserves defaults and does not throw", () => {
     saveEditorOptions({ ...defaults, autoClose: false }, storage),
   );
   assert.doesNotThrow(() => saveEditorOptions(defaults, storage));
+});
+
+test("the indentation choice round-trips and four spaces leaves no parameter", () => {
+  assert.equal(indentFromParams(new URLSearchParams("problem=example")), "4");
+  for (const name of ["2", "4", "tab"]) {
+    const params = new URLSearchParams("problem=example");
+    setIndent(params, name);
+    assert.equal(indentFromParams(params), name);
+    assert.equal(params.get("problem"), "example");
+    assert.equal(params.has("editorIndent"), name !== "4", name);
+  }
+  assert.deepEqual(INDENT_UNITS, { 2: "  ", 4: "    ", tab: "\t" });
+});
+
+test("an unknown indentation falls back to four spaces", () => {
+  for (const value of ["", "3", "8", "Tab", "\t", "toString", "__proto__"])
+    assert.equal(
+      indentFromParams(new URLSearchParams({ editorIndent: value })),
+      "4",
+      value,
+    );
+  const params = new URLSearchParams("editorIndent=2");
+  setIndent(params, "3");
+  assert.equal(params.has("editorIndent"), false);
+});
+
+test("the indentation choice survives a reload apart from the other options", () => {
+  const storage = memoryStorage();
+  assert.equal(loadIndent(storage), "4");
+  saveIndent("tab", storage);
+  saveEditorOptions(
+    { ...loadEditorOptions(storage), highlight: false },
+    storage,
+  );
+  assert.equal(loadIndent(storage), "tab");
+  saveIndent("4", storage);
+  assert.equal(loadIndent(storage), "4");
+  assert.equal(loadEditorOptions(storage).highlight, false);
+});
+
+test("only a known indentation is stored, and refused storage keeps four", () => {
+  const storage = memoryStorage();
+  saveIndent("tab", storage);
+  for (const value of ["3", "Tab", "\t", "__proto__", undefined]) {
+    saveIndent(value, storage);
+    assert.equal(
+      storage.getItem("codetrial:editorIndent"),
+      null,
+      String(value),
+    );
+  }
+  const refused = {
+    getItem() {
+      throw new Error("storage blocked");
+    },
+    setItem() {
+      throw new Error("storage blocked");
+    },
+    removeItem() {
+      throw new Error("storage blocked");
+    },
+  };
+  assert.equal(loadIndent(refused), "4");
+  assert.doesNotThrow(() => saveIndent("2", refused));
+  assert.doesNotThrow(() => saveIndent("4", refused));
 });

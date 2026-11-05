@@ -2,7 +2,11 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { highlight } from "../../web/highlight.js";
-import { detectWidth, indentGuides } from "../../web/indent-guides.js";
+import {
+  bufferIndent,
+  detectWidth,
+  indentGuides,
+} from "../../web/indent-guides.js";
 import { tokenize } from "../../web/tokenizer.js";
 
 const textOf = (html) =>
@@ -191,4 +195,42 @@ test("a blank line is never narrower than its own whitespace", () => {
 
 test("a trailing newline keeps the final empty row", () => {
   assert.ok(paint("x\n").endsWith("\n\n"));
+});
+
+const indentOf = (code, language = "javascript") =>
+  bufferIndent(code, tokenize(code, language).tokens);
+
+// The editor takes a starter's space width from this, and the candidate's
+// choice where it measures nothing: a width of four must not fall back the
+// way the guides' default does, or a starter with no block could never take
+// the choice.
+test("a starter's space width is one level as it writes it, or none", () => {
+  assert.equal(indentOf("", "python"), null);
+  assert.equal(indentOf("x = 1\ny = 2", "python"), null);
+  assert.equal(
+    indentOf("class Solution:\n    def f(self):\n        pass", "python"),
+    "    ",
+  );
+  assert.equal(indentOf("function f() {\n  return 1;\n}"), "  ");
+  // Tab-indented lines do not vote: the editor gives them tabs line by line.
+  assert.equal(indentOf("function f() {\n\treturn 1;\n}"), null);
+  assert.equal(
+    indentOf("function f() {\n  if (a) {\n    x();\n  }\n\ty();\n  z();\n}"),
+    "  ",
+  );
+  // A doc comment's ` * ` lines do not make a JavaScript starter
+  // one-column-indented.
+  assert.equal(
+    indentOf("/**\n * @param {number} n\n */\nfunction f(n) {\n  return n;\n}"),
+    "  ",
+  );
+  // A mostly tabbed file can still hold a two-space function, and that
+  // function's own width is what is measured.
+  assert.equal(
+    indentOf(
+      "def a():\n\tif x:\n\t\tpass\n\tif y:\n\t\tpass\n\ndef b():\n  if z:\n    w()\n",
+      "python",
+    ),
+    "  ",
+  );
 });

@@ -63,17 +63,28 @@ const guide = (text) => `<span class="indent-guide">${text}</span>`;
 /// it is alignment rather than a block. A tie takes the smaller width, because
 /// a level drawn twice is easier to read past than a level not drawn at all.
 export function detectWidth(lines, tokens) {
+  return votedWidth(lines, tokens) ?? FALLBACK_WIDTH;
+}
+
+/// The voted step, or null when no line votes: a buffer with no indented block
+/// has no width of its own.
+function votedWidth(lines, tokens, spacesOnly = false) {
   const votes = new Map();
   const continues = continuations(lines, tokens);
   let previous = null;
   for (const [index, { whitespace, blank }] of lines.entries()) {
     if (blank || continues[index]) continue;
+    // A tab-indented line breaks the run, so its steps vote for nothing.
+    if (spacesOnly && whitespace.startsWith("\t")) {
+      previous = null;
+      continue;
+    }
     const columns = columnsOf(whitespace);
     const step = columns - (previous ?? columns);
     if (step >= 2 && step <= 8) votes.set(step, (votes.get(step) ?? 0) + 1);
     previous = columns;
   }
-  let width = FALLBACK_WIDTH;
+  let width = null;
   let best = 0;
   for (const [step, count] of votes) {
     if (count > best || (count === best && step < width)) {
@@ -82,6 +93,24 @@ export function detectWidth(lines, tokens) {
     }
   }
   return width;
+}
+
+const linesOf = (code) => {
+  let offset = 0;
+  return code.split("\n").map((line) => {
+    const whitespace = line.match(/^[ \t]*/)[0];
+    const start = offset;
+    offset += line.length + 1;
+    return { start, whitespace, blank: whitespace.length === line.length };
+  });
+};
+
+/// One level as the code's space-indented lines write it, measured over those
+/// lines alone so a tab-indented block in the same code does not vote. Null
+/// when no space-indented block is there to measure.
+export function bufferIndent(code, tokens) {
+  const width = votedWidth(linesOf(code), tokens, true);
+  return width === null ? null : " ".repeat(width);
 }
 
 /// Returns the guides for `code` as runs for highlight(): one per line that
@@ -100,13 +129,7 @@ export function detectWidth(lines, tokens) {
 /// whitespace stops short of its last guide's column gets spaces added; they
 /// end a line with nothing after them, so no character that follows moves.
 export function indentGuides(code, tokens) {
-  let offset = 0;
-  const lines = code.split("\n").map((line) => {
-    const whitespace = line.match(/^[ \t]*/)[0];
-    const start = offset;
-    offset += line.length + 1;
-    return { start, whitespace, blank: whitespace.length === line.length };
-  });
+  const lines = linesOf(code);
   const width = detectWidth(lines, tokens);
   const continues = continuations(lines, tokens);
   lines.forEach((entry, index) => {
