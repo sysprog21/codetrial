@@ -8137,6 +8137,715 @@ for (const account of [false, true]) {
 }
 
 lobbyTest(
+  "saved session setups restore session controls without touching the problem or context",
+  async (page) => {
+    await lobby(page);
+    await page.click("details.interview-context summary");
+    await page.fill("#profile-role", "Platform engineer");
+    await page.click('[data-duration="30"]');
+    await page.click('[data-loop="coding_only"]');
+    await page.locator("#enable-example-drawing").check();
+    await page.locator("#enable-candidate-led").check();
+    await page.locator('[name="editor-option"][value="highlight"]').uncheck();
+    await page.locator('[name="editor-option"][value="autoClose"]').uncheck();
+    await page.click('[data-mode="whiteboard"]');
+
+    await page.click("#open-session-presets");
+    await page.click("#save-session-preset");
+    await page.fill("#session-preset-name", "Quick whiteboard");
+    await page
+      .locator("#session-preset-form")
+      .getByRole("button", {
+        name: "Save",
+        exact: true,
+      })
+      .click();
+    await page
+      .locator("#session-preset-status")
+      .getByText("Saved Quick whiteboard.")
+      .waitFor();
+    assert.deepEqual(
+      await page.evaluate(() =>
+        JSON.parse(localStorage.getItem("codetrial.sessionPresets")),
+      ),
+      [
+        {
+          name: "Quick whiteboard",
+          settings: {
+            durationMin: 30,
+            interviewLoop: "coding_only",
+            interviewMode: "whiteboard",
+            exampleDrawing: true,
+            candidateLed: true,
+            editorOptions: {
+              highlight: false,
+              execution: true,
+              autoIndent: true,
+              autoClose: false,
+              monospace: true,
+            },
+          },
+        },
+      ],
+    );
+    await page.evaluate(() => {
+      const presets = JSON.parse(
+        localStorage.getItem("codetrial.sessionPresets"),
+      );
+      delete presets[0].settings.exampleDrawing;
+      delete presets[0].settings.candidateLed;
+      delete presets[0].settings.editorOptions.execution;
+      localStorage.setItem("codetrial.sessionPresets", JSON.stringify(presets));
+    });
+    await page.click("#close-session-presets");
+
+    await page.click('[data-duration="60"]');
+    await page.click('[data-loop="coding_behavioral"]');
+    await page.click('[data-mode="coding"]');
+    await page.locator("#enable-example-drawing").uncheck();
+    await page.locator("#enable-candidate-led").uncheck();
+    await page.locator('[name="editor-option"][value="highlight"]').check();
+    await page.locator('[name="editor-option"][value="execution"]').check();
+    await page.locator('[name="editor-option"][value="autoClose"]').check();
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await awaitReady(page);
+    await page.locator("#enable-example-drawing").check();
+    await page.locator("#enable-candidate-led").check();
+    await openTopicFilter(page);
+    await page.selectOption("#problem-topic", "Array");
+    const beforeSwitch = await snapshot(page);
+    await page.click("details.interview-context summary");
+    await page.fill("#profile-role", "Platform engineer");
+    await page.click("#open-session-presets");
+    await page.selectOption("#session-preset", "Quick whiteboard");
+
+    const afterSwitch = await snapshot(page);
+    assert.equal(afterSwitch.card, beforeSwitch.card);
+    assert.deepEqual(afterSwitch.levels, beforeSwitch.levels);
+    assert.equal(await page.locator("#problem-topic").inputValue(), "Array");
+    assert.equal(afterSwitch.duration, "30");
+    assert.equal(await page.inputValue("#profile-role"), "Platform engineer");
+    assert.equal(
+      await page
+        .locator('[data-loop="coding_only"]')
+        .getAttribute("aria-pressed"),
+      "true",
+    );
+    assert.equal(
+      await page
+        .locator('[data-mode="whiteboard"]')
+        .getAttribute("aria-pressed"),
+      "true",
+    );
+    assert.equal(await page.isChecked("#enable-example-drawing"), true);
+    assert.equal(await page.isChecked("#enable-candidate-led"), true);
+    assert.equal(
+      await page.isChecked('[name="editor-option"][value="highlight"]'),
+      false,
+    );
+    assert.equal(
+      await page.isChecked('[name="editor-option"][value="execution"]'),
+      true,
+    );
+    assert.equal(
+      await page.isChecked('[name="editor-option"][value="autoClose"]'),
+      false,
+    );
+    assert.equal(
+      await page.locator("#session-preset-status").textContent(),
+      "Applied Quick whiteboard.",
+    );
+  },
+);
+
+lobbyTest(
+  "saved setups ignore unavailable fields without duplicating the record",
+  async (page) => {
+    await page.addInitScript(() =>
+      localStorage.setItem(
+        "codetrial.sessionPresets",
+        JSON.stringify([
+          null,
+          { name: "", settings: {} },
+          {
+            name: "Legacy setup",
+            revision: 2,
+            settings: {
+              durationMin: [30],
+              interviewLoop: "coding_only",
+              interviewMode: ["whiteboard"],
+              futureControl: "keep me",
+              editorOptions: { highlight: false },
+            },
+          },
+        ]),
+      ),
+    );
+    await lobby(page);
+    await page.click('[data-duration="60"]');
+    await page.click("#open-session-presets");
+    assert.equal(await page.locator("#session-preset option").count(), 2);
+    await page.selectOption("#session-preset", "Legacy setup");
+    assert.equal(
+      await page.locator('[data-duration="60"]').getAttribute("aria-pressed"),
+      "true",
+    );
+    assert.equal(
+      await page
+        .locator('[data-loop="coding_only"]')
+        .getAttribute("aria-pressed"),
+      "true",
+    );
+    assert.equal(
+      await page.locator('[data-mode="coding"]').getAttribute("aria-pressed"),
+      "true",
+    );
+    assert.equal(
+      await page.isChecked('[name="editor-option"][value="highlight"]'),
+      false,
+    );
+
+    await page.click("#save-session-preset");
+    assert.equal(await page.inputValue("#session-preset-name"), "Legacy setup");
+    await page
+      .locator("#session-preset-form")
+      .getByRole("button", { name: "Save", exact: true })
+      .click();
+    await page
+      .locator("#session-preset-status")
+      .getByText("Saved Legacy setup.")
+      .waitFor();
+    const stored = await page.evaluate(() =>
+      JSON.parse(localStorage.getItem("codetrial.sessionPresets")),
+    );
+    assert.equal(stored.length, 3);
+    assert.equal(stored[0], null);
+    assert.deepEqual(stored[1], { name: "", settings: {} });
+    assert.equal(stored[2].name, "Legacy setup");
+    assert.equal(stored[2].settings.durationMin, 60);
+    assert.equal(stored[2].settings.interviewMode, "coding");
+  },
+);
+
+lobbyTest(
+  "an invalid setup candidate is not written to browser storage",
+  async (page) => {
+    await lobby(page);
+    await page.click("#open-session-presets");
+    await page.click("#save-session-preset");
+    await page
+      .locator("#session-preset-name")
+      .evaluate((input) => input.removeAttribute("maxlength"));
+    await page.fill("#session-preset-name", "x".repeat(41));
+    await page
+      .locator("#session-preset-form")
+      .getByRole("button", { name: "Save", exact: true })
+      .click();
+
+    await page
+      .locator("#session-preset-status")
+      .getByText("This browser could not save the setup.")
+      .waitFor();
+    assert.equal(
+      await page.evaluate(() =>
+        localStorage.getItem("codetrial.sessionPresets"),
+      ),
+      null,
+    );
+  },
+);
+
+lobbyTest(
+  "a saved setup can be selected again after the lobby settings change",
+  async (page) => {
+    await lobby(page);
+    await page.click("#open-session-presets");
+    await page.click("#save-session-preset");
+    await page.fill("#session-preset-name", "Quick coding");
+    await page
+      .locator("#session-preset-form")
+      .getByRole("button", { name: "Save", exact: true })
+      .click();
+    await page.click("#close-session-presets");
+    await page.click('[data-duration="30"]');
+
+    await page.click("#open-session-presets");
+    assert.equal(await page.inputValue("#session-preset"), "");
+    assert.equal(
+      await page.locator("#delete-session-preset").isDisabled(),
+      true,
+    );
+    assert.equal(
+      await page
+        .locator("#delete-session-preset")
+        .evaluate((button) => getComputedStyle(button).opacity),
+      "0.6",
+    );
+    await page.selectOption("#session-preset", "Quick coding");
+
+    assert.equal(
+      await page.locator('[data-duration="45"]').getAttribute("aria-pressed"),
+      "true",
+    );
+    assert.equal(
+      await page.locator("#session-preset-status").textContent(),
+      "Applied Quick coding.",
+    );
+  },
+);
+
+lobbyTest(
+  "saved session setups merge changes from another tab",
+  async (page) => {
+    const second = await page.context().newPage();
+    await lobby(page);
+    await lobby(second);
+
+    const save = async (target, name) => {
+      await target.click("#open-session-presets");
+      await target.click("#save-session-preset");
+      await target.fill("#session-preset-name", name);
+      await target
+        .locator("#session-preset-form")
+        .getByRole("button", { name: "Save", exact: true })
+        .click();
+      await target
+        .locator("#session-preset-status")
+        .getByText(`Saved ${name}.`)
+        .waitFor();
+      await target.click("#close-session-presets");
+    };
+
+    await save(page, "First tab");
+    await save(second, "Second tab");
+    assert.deepEqual(
+      await page.evaluate(() =>
+        JSON.parse(localStorage.getItem("codetrial.sessionPresets")).map(
+          ({ name }) => name,
+        ),
+      ),
+      ["First tab", "Second tab"],
+    );
+    await page.click("#open-session-presets");
+    await page.selectOption("#session-preset", "First tab");
+    await page.click("#delete-session-preset");
+    await page
+      .locator("#session-preset-status")
+      .getByText("Deleted First tab.")
+      .waitFor();
+    await second.waitForFunction(
+      () => document.querySelectorAll("#session-preset option").length === 2,
+    );
+    assert.deepEqual(
+      await second.evaluate(() =>
+        JSON.parse(localStorage.getItem("codetrial.sessionPresets")).map(
+          ({ name }) => name,
+        ),
+      ),
+      ["Second tab"],
+    );
+  },
+);
+
+lobbyTest(
+  "simultaneous session setup saves do not overwrite another tab",
+  async (page) => {
+    const second = await page.context().newPage();
+    await lobby(page);
+    await lobby(second);
+
+    for (const [target, name] of [
+      [page, "First tab"],
+      [second, "Second tab"],
+    ]) {
+      await target.click("#open-session-presets");
+      await target.click("#save-session-preset");
+      await target.fill("#session-preset-name", name);
+    }
+    const arm = (target, own, other) =>
+      target.evaluate(
+        ({ own, other }) => {
+          const originalGet = Storage.prototype.getItem;
+          const originalSet = Storage.prototype.setItem;
+          let armed = true;
+          Storage.prototype.getItem = function (key) {
+            if (key !== "codetrial.sessionPresets" || !armed)
+              return originalGet.call(this, key);
+            armed = false;
+            const snapshot = originalGet.call(this, key);
+            originalSet.call(this, `preset-read-${own}`, "ready");
+            const deadline = performance.now() + 5_000;
+            while (
+              originalGet.call(this, `preset-read-${other}`) !== "ready" &&
+              performance.now() < deadline
+            );
+            return snapshot;
+          };
+        },
+        { own, other },
+      );
+    await Promise.all([
+      arm(page, "first", "second"),
+      arm(second, "second", "first"),
+    ]);
+
+    const submit = (target) =>
+      target
+        .locator("#session-preset-form")
+        .getByRole("button", { name: "Save", exact: true })
+        .click();
+    await Promise.all([submit(page), submit(second)]);
+    await second
+      .locator("#session-preset-status")
+      .getByText("Saved Second tab.")
+      .waitFor();
+
+    assert.deepEqual(
+      await second.evaluate(() =>
+        JSON.parse(localStorage.getItem("codetrial.sessionPresets"))
+          .map(({ name }) => name)
+          .sort(),
+      ),
+      ["First tab", "Second tab"],
+    );
+  },
+);
+
+lobbyTest(
+  "saved setups do not require IndexedDB without Web Locks",
+  async (page) => {
+    await page.addInitScript(() => {
+      Object.defineProperty(Navigator.prototype, "locks", {
+        configurable: true,
+        get: () => undefined,
+      });
+      IDBFactory.prototype.open = () => {
+        throw new DOMException("blocked", "SecurityError");
+      };
+    });
+    await lobby(page);
+    await page.click("#open-session-presets");
+    await page.click("#save-session-preset");
+    await page.fill("#session-preset-name", "Unlocked setup");
+    await page
+      .locator("#session-preset-form")
+      .getByRole("button", { name: "Save", exact: true })
+      .click();
+    await page
+      .locator("#session-preset-status")
+      .getByText("Saved Unlocked setup.")
+      .waitFor();
+  },
+);
+
+lobbyTest(
+  "a server limit below the offered lengths does not corrupt a saved setup",
+  async (page) => {
+    session.maxDurationMin = 10;
+    await lobby(page);
+    await page.click("#open-session-presets");
+    await page.click("#save-session-preset");
+    await page.fill("#session-preset-name", "Limited setup");
+    await page
+      .locator("#session-preset-form")
+      .getByRole("button", { name: "Save", exact: true })
+      .click();
+    await page
+      .locator("#session-preset-status")
+      .getByText("Saved Limited setup.")
+      .waitFor();
+    assert.ok(
+      [30, 45, 60].includes(
+        await page.evaluate(
+          () =>
+            JSON.parse(localStorage.getItem("codetrial.sessionPresets"))[0]
+              .settings.durationMin,
+        ),
+      ),
+    );
+
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await awaitReady(page);
+    await page.click("#open-session-presets");
+    assert.deepEqual(await page.locator("#session-preset").inputValue(), "");
+    assert.deepEqual(
+      await page.locator("#session-preset option").allTextContents(),
+      ["Choose a saved setup", "Limited setup"],
+    );
+    await page.selectOption("#session-preset", "Limited setup");
+    assert.equal((await snapshot(page)).duration, null);
+    assert.match(
+      await page.locator("#duration-note").textContent(),
+      /10 minutes/,
+    );
+  },
+);
+
+lobbyTest(
+  "malformed saved setup storage stays unchanged when saving fails",
+  async (page) => {
+    await lobby(page);
+    for (const value of ["{", JSON.stringify({ presets: [] })]) {
+      await page.evaluate(
+        ([key, stored]) => localStorage.setItem(key, stored),
+        ["codetrial.sessionPresets", value],
+      );
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await awaitReady(page);
+      await page.click("#open-session-presets");
+      assert.equal(await page.locator("#session-preset").isHidden(), true);
+      assert.equal(
+        await page.locator("#save-session-preset").isEnabled(),
+        true,
+      );
+      await page.click("#save-session-preset");
+      await page.fill("#session-preset-name", "Do not overwrite");
+      await page
+        .locator("#session-preset-form")
+        .getByRole("button", { name: "Save", exact: true })
+        .click();
+      await page
+        .locator("#session-preset-status")
+        .getByText("This browser could not save the setup.")
+        .waitFor();
+      assert.equal(
+        await page.evaluate(() =>
+          localStorage.getItem("codetrial.sessionPresets"),
+        ),
+        value,
+      );
+      await page.click("#close-session-presets");
+    }
+  },
+);
+
+lobbyTest("last-used settings reject non-scalar choices", async (page) => {
+  await page.addInitScript(() =>
+    localStorage.setItem(
+      "codetrial.interviewSettings",
+      JSON.stringify({
+        durationMin: "30",
+        interviewLoop: ["coding_only"],
+        interviewMode: ["whiteboard"],
+      }),
+    ),
+  );
+  await lobby(page);
+  assert.equal(
+    await page.locator('[data-duration="45"]').getAttribute("aria-pressed"),
+    "true",
+  );
+  assert.equal(
+    await page
+      .locator('[data-loop="coding_behavioral"]')
+      .getAttribute("aria-pressed"),
+    "true",
+  );
+  assert.equal(
+    await page.locator('[data-mode="coding"]').getAttribute("aria-pressed"),
+    "true",
+  );
+});
+
+lobbyTest(
+  "saved session setups survive unavailable browser storage",
+  async (page) => {
+    await page.addInitScript(() =>
+      localStorage.setItem(
+        "codetrial.sessionPresets",
+        JSON.stringify([
+          {
+            name: "Kept setup",
+            settings: {
+              durationMin: 45,
+              interviewLoop: "coding_behavioral",
+              interviewMode: "coding",
+              exampleDrawing: false,
+              candidateLed: false,
+              editorOptions: {},
+            },
+          },
+        ]),
+      ),
+    );
+    await lobby(page);
+    await page.click("#open-session-presets");
+    await page.evaluate(() => {
+      window.presetOriginalGetItem = Storage.prototype.getItem;
+      window.presetOriginalSetItem = Storage.prototype.setItem;
+      Storage.prototype.setItem = function (key, value) {
+        if (key === "codetrial.sessionPresets")
+          throw new DOMException("blocked", "QuotaExceededError");
+        return window.presetOriginalSetItem.call(this, key, value);
+      };
+    });
+    await page.click("#save-session-preset");
+    await page.fill("#session-preset-name", "Blocked save");
+    await page
+      .locator("#session-preset-form")
+      .getByRole("button", { name: "Save", exact: true })
+      .click();
+    await page
+      .locator("#session-preset-status")
+      .getByText("This browser could not save the setup.")
+      .waitFor();
+    assert.deepEqual(
+      await page.locator("#session-preset option").allTextContents(),
+      ["Choose a saved setup", "Kept setup"],
+    );
+    assert.equal(
+      await page.locator("#session-preset-status").textContent(),
+      "This browser could not save the setup.",
+    );
+
+    await page.evaluate(() => {
+      Storage.prototype.getItem = window.presetOriginalGetItem;
+      Storage.prototype.setItem = window.presetOriginalSetItem;
+    });
+    await page.selectOption("#session-preset", "Kept setup");
+    await page.evaluate(() => {
+      Storage.prototype.setItem = function (key, value) {
+        if (key === "codetrial.sessionPresets")
+          throw new DOMException("blocked", "QuotaExceededError");
+        return window.presetOriginalSetItem.call(this, key, value);
+      };
+    });
+    await page.click("#delete-session-preset");
+    await page
+      .locator("#session-preset-status")
+      .getByText("This browser could not delete the setup.")
+      .waitFor();
+    assert.deepEqual(
+      await page.locator("#session-preset option").allTextContents(),
+      ["Choose a saved setup", "Kept setup"],
+    );
+    assert.equal(
+      await page.locator("#session-preset-status").textContent(),
+      "This browser could not delete the setup.",
+    );
+  },
+);
+
+lobbyTest(
+  "a rejected Web Lock reports failed setup saves and deletes",
+  async (page) => {
+    await page.addInitScript(() => {
+      localStorage.setItem(
+        "codetrial.sessionPresets",
+        JSON.stringify([
+          {
+            name: "Kept setup",
+            settings: {
+              durationMin: 45,
+              interviewLoop: "coding_behavioral",
+              interviewMode: "coding",
+              editorOptions: {},
+            },
+          },
+        ]),
+      );
+      Object.defineProperty(Navigator.prototype, "locks", {
+        configurable: true,
+        get: () => ({
+          request: () =>
+            Promise.reject(new DOMException("blocked", "SecurityError")),
+        }),
+      });
+    });
+    await lobby(page);
+    await page.click("#open-session-presets");
+    await page.click("#save-session-preset");
+    await page.fill("#session-preset-name", "Blocked save");
+    await page
+      .locator("#session-preset-form")
+      .getByRole("button", { name: "Save", exact: true })
+      .click();
+    await page
+      .locator("#session-preset-status")
+      .getByText("This browser could not save the setup.")
+      .waitFor();
+
+    await page.selectOption("#session-preset", "Kept setup");
+    await page.click("#delete-session-preset");
+    await page
+      .locator("#session-preset-status")
+      .getByText("This browser could not delete the setup.")
+      .waitFor();
+    assert.deepEqual(
+      await page.locator("#session-preset option").allTextContents(),
+      ["Choose a saved setup", "Kept setup"],
+    );
+  },
+);
+
+lobbyTest(
+  "saved session setup dialog reports invalid names and preserves keyboard focus",
+  async (page) => {
+    await lobby(page);
+    assert.notEqual(
+      await page
+        .locator("#session-preset-status")
+        .evaluate((node) => getComputedStyle(node).display),
+      "none",
+    );
+    await page.locator("#open-session-presets").press("Enter");
+    assert.equal(await isFocused(page.locator("#save-session-preset")), true);
+    await page.locator("#save-session-preset").press("Enter");
+    assert.equal(await isFocused(page.locator("#session-preset-name")), true);
+    await page.fill("#session-preset-name", "   ");
+    await page.locator("#session-preset-name").press("Enter");
+    assert.equal(
+      await page
+        .locator("#session-preset-name")
+        .evaluate((input) => input.validationMessage),
+      "Enter a preset name.",
+    );
+    assert.equal(
+      await page.locator("#session-preset-status").textContent(),
+      "Enter a preset name.",
+    );
+    await page.fill("#session-preset-name", "Half entered");
+    await page.keyboard.press("Escape");
+    await page.locator("#session-preset-form").waitFor({ state: "hidden" });
+    await page.locator("#open-session-presets").press("Enter");
+    assert.equal(await page.locator("#session-preset-form").isHidden(), true);
+    assert.equal(await page.inputValue("#session-preset-name"), "");
+    assert.equal(
+      await page.locator("#session-preset-status").textContent(),
+      "",
+    );
+    await page.locator("#save-session-preset").press("Enter");
+    await page.fill("#session-preset-name", "Keyboard setup");
+    assert.equal(
+      await page.locator("#session-preset-status").textContent(),
+      "",
+    );
+    await page.locator("#session-preset-name").press("Enter");
+    await page
+      .locator("#session-preset-status")
+      .getByText("Saved Keyboard setup.")
+      .waitFor();
+    assert.equal(await isFocused(page.locator("#session-preset")), true);
+    await page.locator("#save-session-preset").press("Enter");
+    assert.equal(await isFocused(page.locator("#session-preset-name")), true);
+    await page.locator("#cancel-session-preset").press("Enter");
+    assert.equal(await isFocused(page.locator("#save-session-preset")), true);
+    await page.locator("#close-session-presets").press("Enter");
+    await page.locator("#open-session-presets").press("Enter");
+    assert.equal(await isFocused(page.locator("#session-preset")), true);
+    await page.locator("#session-preset").press("ArrowDown");
+    await page.locator("#delete-session-preset").press("Enter");
+    await page
+      .locator("#session-preset-status")
+      .getByText("Deleted Keyboard setup.")
+      .waitFor();
+    assert.equal(await isFocused(page.locator("#save-session-preset")), true);
+    await page.locator("#close-session-presets").press("Enter");
+    assert.equal(await isFocused(page.locator("#open-session-presets")), true);
+  },
+);
+
+lobbyTest(
   "retry restores the saved loop over the current choice and explains a capped duration",
   async (page) => {
     session.maxDurationMin = 45;

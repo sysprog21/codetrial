@@ -74,6 +74,8 @@ document.querySelector("#change-keys").hidden =
   globalThis.CODETRIAL_SETUP_ENABLED !== true;
 
 const SETTINGS_KEY = "codetrial.interviewSettings";
+const SESSION_PRESETS_KEY = "codetrial.sessionPresets";
+const SESSION_PRESETS_LOCK = "codetrial-session-presets";
 const requestTimeoutMs = 10_000;
 
 const selection = document.querySelector("#selection-mode");
@@ -101,6 +103,8 @@ let keptDraw = null;
 let manualDuration = false;
 // Preserve the explicit preference independently of the effective server limit.
 let chosenDuration;
+// Preserve the requested offered length when the server temporarily shortens it.
+let requestedDuration;
 let manualDifficulty = false;
 let historyReady = false;
 let historyLoad = 0;
@@ -143,6 +147,16 @@ const nodes = {
   editorOptions: document.querySelector(".editor-options-row"),
   exampleDrawing: document.querySelector("#enable-example-drawing"),
   candidateLed: document.querySelector("#enable-candidate-led"),
+  presetSelect: document.querySelector("#session-preset"),
+  presetDialog: document.querySelector("#session-presets-dialog"),
+  presetOpen: document.querySelector("#open-session-presets"),
+  presetClose: document.querySelector("#close-session-presets"),
+  presetSave: document.querySelector("#save-session-preset"),
+  presetDelete: document.querySelector("#delete-session-preset"),
+  presetForm: document.querySelector("#session-preset-form"),
+  presetName: document.querySelector("#session-preset-name"),
+  presetCancel: document.querySelector("#cancel-session-preset"),
+  presetStatus: document.querySelector("#session-preset-status"),
   accountStatus: document.querySelector("#account-status"),
   githubLogin: document.querySelector("#github-login"),
   loginLink: document.querySelector("#login-link"),
@@ -324,6 +338,320 @@ function selectedEditorOptions() {
   );
 }
 
+function hasLobbyChoice(selector, dataName, value) {
+  if (typeof value !== "string" && typeof value !== "number") return false;
+  return [...document.querySelectorAll(selector)].some(
+    (button) => button.dataset[dataName] === String(value),
+  );
+}
+
+function normalizePreset(raw) {
+  if (!raw || typeof raw !== "object" || typeof raw.name !== "string")
+    return null;
+  const name = raw.name.trim().replace(/\s+/g, " ");
+  const settings = raw.settings;
+  if (
+    !name ||
+    name.length > 40 ||
+    !settings ||
+    typeof settings !== "object" ||
+    Array.isArray(settings)
+  )
+    return null;
+  const rawEditorOptions =
+    settings.editorOptions &&
+    typeof settings.editorOptions === "object" &&
+    !Array.isArray(settings.editorOptions)
+      ? settings.editorOptions
+      : {};
+  const editorOptions = {};
+  for (const input of editorControls) {
+    if (typeof rawEditorOptions[input.value] === "boolean")
+      editorOptions[input.value] = rawEditorOptions[input.value];
+  }
+  const normalizedSettings = { editorOptions };
+  if (
+    Number.isInteger(settings.durationMin) &&
+    hasLobbyChoice("[data-duration]", "duration", settings.durationMin)
+  )
+    normalizedSettings.durationMin = settings.durationMin;
+  if (
+    typeof settings.interviewLoop === "string" &&
+    hasLobbyChoice("[data-loop]", "loop", settings.interviewLoop)
+  )
+    normalizedSettings.interviewLoop = settings.interviewLoop;
+  if (
+    typeof settings.interviewMode === "string" &&
+    hasLobbyChoice("[data-mode]", "mode", settings.interviewMode)
+  )
+    normalizedSettings.interviewMode = settings.interviewMode;
+  if (typeof settings.exampleDrawing === "boolean")
+    normalizedSettings.exampleDrawing = settings.exampleDrawing;
+  if (typeof settings.candidateLed === "boolean")
+    normalizedSettings.candidateLed = settings.candidateLed;
+  return { name, settings: normalizedSettings };
+}
+
+function readStoredSessionPresets() {
+  const storage = storageArea("localStorage");
+  if (!storage) return null;
+  let raw;
+  try {
+    raw = storage.getItem(SESSION_PRESETS_KEY);
+  } catch {
+    return null;
+  }
+  if (raw === null) return [];
+  let stored;
+  try {
+    stored = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(stored)) return null;
+  return stored;
+}
+
+function visibleSessionPresets(stored) {
+  const names = new Set();
+  return stored.map(normalizePreset).filter((preset) => {
+    const key = preset?.name.toLocaleLowerCase();
+    if (!preset || names.has(key)) return false;
+    names.add(key);
+    return true;
+  });
+}
+
+function readSessionPresets() {
+  const stored = readStoredSessionPresets();
+  if (stored === null) return null;
+  return Array.isArray(stored) ? visibleSessionPresets(stored) : [];
+}
+
+let sessionPresets = readSessionPresets() ?? [];
+let presetMutationPending = false;
+let lastSessionPreset = "";
+
+function storeSessionPresets(presets) {
+  const value = JSON.stringify(presets);
+  writeStored(SESSION_PRESETS_KEY, value);
+  return readStored(SESSION_PRESETS_KEY) === value;
+}
+
+function withSessionPresetsLock(callback) {
+  if (navigator.locks?.request)
+    return navigator.locks.request(SESSION_PRESETS_LOCK, callback);
+  return callback();
+}
+
+function savedPreset(name, settings) {
+  return normalizePreset({ name, settings });
+}
+
+function renderSessionPresets(selected = "") {
+  const option = (label, value = label) => {
+    const item = document.createElement("option");
+    item.textContent = label;
+    item.value = value;
+    return item;
+  };
+  const placeholder = option(
+    sessionPresets.length ? "Choose a saved setup" : "",
+    "",
+  );
+  nodes.presetSelect.replaceChildren(
+    placeholder,
+    ...sessionPresets.map((preset) => option(preset.name)),
+  );
+  nodes.presetSelect.value = sessionPresets.some(
+    (preset) => preset.name === selected,
+  )
+    ? selected
+    : "";
+  nodes.presetSelect.hidden = sessionPresets.length === 0;
+  nodes.presetDelete.hidden = sessionPresets.length === 0;
+  syncPresetControls();
+}
+
+function syncPresetControls() {
+  nodes.presetOpen.disabled = starting;
+  nodes.presetSelect.disabled =
+    starting || presetMutationPending || sessionPresets.length === 0;
+  nodes.presetSave.disabled = starting || presetMutationPending;
+  nodes.presetDelete.disabled =
+    starting || presetMutationPending || !nodes.presetSelect.value;
+}
+
+function currentPreset() {
+  return {
+    durationMin: requestedDuration,
+    interviewLoop,
+    interviewMode: mode,
+    exampleDrawing: nodes.exampleDrawing.checked,
+    candidateLed: nodes.candidateLed.checked,
+    editorOptions: selectedEditorOptions(),
+  };
+}
+
+function applyPreset(settings) {
+  if (typeof settings.exampleDrawing === "boolean")
+    nodes.exampleDrawing.checked = settings.exampleDrawing;
+  if (typeof settings.candidateLed === "boolean")
+    nodes.candidateLed.checked = settings.candidateLed;
+  for (const input of editorControls)
+    if (typeof settings.editorOptions[input.value] === "boolean")
+      input.checked = settings.editorOptions[input.value];
+  saveEditorOptions(selectedEditorOptions());
+  if (Number.isInteger(settings.durationMin))
+    setDuration(settings.durationMin, true);
+  if (typeof settings.interviewLoop === "string")
+    setInterviewLoop(settings.interviewLoop);
+  if (typeof settings.interviewMode === "string")
+    setInterviewMode(settings.interviewMode);
+  rememberSettings();
+}
+
+nodes.presetOpen.addEventListener("click", () => {
+  lastSessionPreset = nodes.presetSelect.value || lastSessionPreset;
+  nodes.presetSelect.value = "";
+  syncPresetControls();
+  nodes.presetDialog.showModal();
+  (sessionPresets.length ? nodes.presetSelect : nodes.presetSave).focus();
+});
+
+nodes.presetClose.addEventListener("click", () => {
+  nodes.presetDialog.close();
+});
+
+nodes.presetDialog.addEventListener("close", () => {
+  nodes.presetForm.hidden = true;
+  nodes.presetName.value = "";
+  nodes.presetName.setCustomValidity("");
+  nodes.presetStatus.textContent = "";
+});
+
+nodes.presetSelect.addEventListener("change", () => {
+  const preset = sessionPresets.find(
+    (candidate) => candidate.name === nodes.presetSelect.value,
+  );
+  if (!preset) return syncPresetControls();
+  lastSessionPreset = preset.name;
+  applyPreset(preset.settings);
+  nodes.presetStatus.textContent = `Applied ${preset.name}.`;
+  syncPresetControls();
+});
+
+nodes.presetSave.addEventListener("click", () => {
+  nodes.presetForm.hidden = false;
+  nodes.presetName.value = nodes.presetSelect.value || lastSessionPreset;
+  nodes.presetName.setCustomValidity("");
+  nodes.presetName.focus();
+});
+
+nodes.presetCancel.addEventListener("click", () => {
+  nodes.presetForm.hidden = true;
+  nodes.presetName.value = "";
+  nodes.presetName.setCustomValidity("");
+  nodes.presetSave.focus();
+});
+
+nodes.presetForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const name = nodes.presetName.value.trim().replace(/\s+/g, " ");
+  if (!name) {
+    nodes.presetName.setCustomValidity("Enter a preset name.");
+    nodes.presetName.reportValidity();
+    nodes.presetStatus.textContent = "Enter a preset name.";
+    return nodes.presetName.focus();
+  }
+  const settings = currentPreset();
+  const selected = nodes.presetSelect.value;
+  presetMutationPending = true;
+  nodes.presetStatus.textContent = `Saving ${name}.`;
+  syncPresetControls();
+  let saved = false;
+  try {
+    saved = await withSessionPresetsLock(() => {
+      const stored = readStoredSessionPresets();
+      if (!Array.isArray(stored)) return false;
+      const key = name.toLocaleLowerCase();
+      const index = stored.findIndex(
+        (preset) => normalizePreset(preset)?.name.toLocaleLowerCase() === key,
+      );
+      const next = [...stored];
+      const candidate = savedPreset(name, settings);
+      if (!candidate) return false;
+      if (index < 0) next.push(candidate);
+      else next[index] = candidate;
+      if (!storeSessionPresets(next)) {
+        sessionPresets = visibleSessionPresets(stored);
+        return false;
+      }
+      sessionPresets = visibleSessionPresets(next);
+      return true;
+    });
+  } catch {
+    // The shared failure path below restores the controls and reports the error.
+  } finally {
+    presetMutationPending = false;
+  }
+  if (!saved) {
+    nodes.presetStatus.textContent = "This browser could not save the setup.";
+    renderSessionPresets(selected);
+  } else {
+    lastSessionPreset = name;
+    renderSessionPresets(name);
+    nodes.presetForm.hidden = true;
+    nodes.presetStatus.textContent = `Saved ${name}.`;
+  }
+  if (saved) nodes.presetSelect.focus();
+});
+
+nodes.presetName.addEventListener("input", () => {
+  nodes.presetName.setCustomValidity("");
+  if (nodes.presetStatus.textContent === "Enter a preset name.")
+    nodes.presetStatus.textContent = "";
+});
+
+nodes.presetDelete.addEventListener("click", async () => {
+  const name = nodes.presetSelect.value;
+  presetMutationPending = true;
+  nodes.presetStatus.textContent = `Deleting ${name}.`;
+  syncPresetControls();
+  let deleted = false;
+  try {
+    deleted = await withSessionPresetsLock(() => {
+      const stored = readStoredSessionPresets();
+      if (!Array.isArray(stored)) return false;
+      const index = stored.findIndex(
+        (preset) => normalizePreset(preset)?.name === name,
+      );
+      if (index < 0) return false;
+      const next = [...stored];
+      next.splice(index, 1);
+      if (!storeSessionPresets(next)) {
+        sessionPresets = visibleSessionPresets(stored);
+        return false;
+      }
+      sessionPresets = visibleSessionPresets(next);
+      return true;
+    });
+  } catch {
+    // The shared failure path below restores the controls and reports the error.
+  } finally {
+    presetMutationPending = false;
+  }
+  if (!deleted) {
+    nodes.presetStatus.textContent = "This browser could not delete the setup.";
+    renderSessionPresets(name);
+  } else {
+    if (lastSessionPreset === name) lastSessionPreset = "";
+    renderSessionPresets();
+    nodes.presetStatus.textContent = `Deleted ${name}.`;
+  }
+  if (deleted) nodes.presetSave.focus();
+});
+
 // A picked card is a choice about this one interview, not about the filter the
 // checkboxes carry, so it leaves them alone. Clicking the currently chosen card
 // again toggles it off, releasing the manual selection and falling back to the
@@ -390,11 +718,18 @@ for (const card of cards) {
 }
 
 window.addEventListener("storage", (event) => {
-  if (
-    (event.key !== PRACTICE_LIST_KEY && event.key !== null) ||
-    event.storageArea !== storageArea("localStorage")
-  )
-    return;
+  if (event.storageArea !== storageArea("localStorage")) return;
+  if (event.key === SESSION_PRESETS_KEY || event.key === null) {
+    const stored = readSessionPresets();
+    if (stored !== null) {
+      const selected = nodes.presetSelect.value;
+      sessionPresets = stored;
+      if (!stored.some((preset) => preset.name === lastSessionPreset))
+        lastSessionPreset = "";
+      renderSessionPresets(selected);
+    }
+  }
+  if (event.key !== PRACTICE_LIST_KEY && event.key !== null) return;
   // Notifications can queue behind a newer write, including one by this tab.
   if (!refreshPracticeList()) return;
   practiceListSaved = true;
@@ -721,6 +1056,7 @@ let signInFirst = false;
 let starting = false;
 
 restoreSettings();
+renderSessionPresets();
 renderPracticeList();
 
 selection.addEventListener("change", syncSelectionMode);
@@ -997,6 +1333,7 @@ function syncLobbyControls() {
   // a press would do nothing.
   nodes.sequelSuggestionPick.disabled =
     !historyReady || starting || accountBusy || deletingReports;
+  syncPresetControls();
   const deleteBlocked = reportDeletesBlocked();
   nodes.deleteReports.disabled = deleteBlocked;
   for (const remove of nodes.attemptHistory.querySelectorAll(
@@ -1800,6 +2137,7 @@ function restoreSettings() {
 function setDuration(minutes, chosen = false) {
   if (manualDuration && !chosen) return;
   manualDuration ||= chosen;
+  requestedDuration = minutes;
   if (chosen) chosenDuration = minutes;
   duration = underCeiling(minutes);
   select(
