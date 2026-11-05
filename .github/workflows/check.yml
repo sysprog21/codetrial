@@ -622,9 +622,9 @@ jobs:
           # On the recovery diff, 25 mutants took over 35 minutes on the
           # slower runners. Fifteen leaves room for incremental builds and
           # failing tests within the same budget. The ceiling permits that
-          # load up to 720 mutants; shards beyond the account's concurrency
+          # load up to 960 mutants; shards beyond the account's concurrency
           # limit queue rather than fail.
-          [ "$width" -gt 48 ] && width=48
+          [ "$width" -gt 64 ] && width=64
           {
             echo "count=$count"
             echo "width=$width"
