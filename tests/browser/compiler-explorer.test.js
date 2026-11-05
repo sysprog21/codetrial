@@ -255,6 +255,360 @@ test("every struct Node field a C starter documents is one the harness declares"
   }
 });
 
+// The C++ counterpart of the test above: starters describe ListNode, TreeNode
+// and Node in a comment, and the harness declares what the code compiles
+// against. A constructor drifts too: three tree starters once documented
+// `TreeNode(int x) : val(x), left(nullptr) {}`, leaving `right` indeterminate.
+const cppNodeClasses = ["ListNode", "TreeNode", "Node"];
+
+function closingIndex(text, open) {
+  const [left, right] = text[open] === "(" ? ["(", ")"] : ["{", "}"];
+  let depth = 0;
+  for (let index = open; index < text.length; index += 1) {
+    if (text[index] === left) depth += 1;
+    else if (text[index] === right && --depth === 0) return index;
+  }
+  return -1;
+}
+
+// The pieces of `text` between top-level separators, untrimmed, so a caller
+// can tell where the first one ends.
+function splitTopLevel(text, separator, opens = "({[", closes = ")}]") {
+  const parts = [];
+  let depth = 0;
+  let start = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    if (opens.includes(text[index])) depth += 1;
+    else if (closes.includes(text[index])) depth -= 1;
+    else if (text[index] === separator && depth === 0) {
+      parts.push(text.slice(start, index));
+      start = index + 1;
+    }
+  }
+  return [...parts, text.slice(start)];
+}
+
+// A declaration's type and name. The last word is the name only when a type
+// precedes it, so `TreeNode(int)` has an unnamed int. Spaces stay only between
+// words: `TreeNode *left` reads as `TreeNode*`, `unsigned int` keeps its space.
+const cppBuiltins = new Set([
+  "bool",
+  "char",
+  "double",
+  "float",
+  "int",
+  "long",
+  "short",
+  "signed",
+  "unsigned",
+]);
+function cppDeclaration(text) {
+  const tokens = text.match(/\w+|[^\w\s]/g) ?? [];
+  const last = tokens.at(-1);
+  const named =
+    tokens.length > 1 && /^\w+$/.test(last) && !cppBuiltins.has(last);
+  const type = (named ? tokens.slice(0, -1) : tokens).reduce(
+    (out, token) =>
+      out + (/\w$/.test(out) && /^\w/.test(token) ? " " : "") + token,
+    "",
+  );
+  return { type, name: named ? last : null };
+}
+
+// The members and constructors of class `name` as `source` declares it, or
+// null when it does not. A constructor records the parameter types it takes,
+// how many of them have defaults, and the members it sets: each top-level
+// initializer, and each body statement that assigns a member rather than a
+// local. One whose only initializer is another constructor counts as setting
+// every member, since that constructor is checked on its own.
+function cppClass(source, name, where) {
+  const text = source.replace(/\/\/[^\n]*/g, " ");
+  const head = text.match(new RegExp(`\\b(?:struct|class)\\s+${name}\\s*\\{`));
+  if (!head) return null;
+  const open = head.index + head[0].length - 1;
+  const close = closingIndex(text, open);
+  assert.ok(close > open, `${where}: ${name} has no closing brace`);
+  const body = text
+    .slice(open + 1, close)
+    .replace(/\/\*[\s\S]*?\*\//g, " ")
+    .replace(/\b(?:public|private|protected)\s*:/g, " ");
+  const shape = `${where}: only \`${name}(params) : member(value), ... { member = value; }\` constructors and \`type member;\` members of ${name} can be read`;
+
+  const fields = new Map();
+  const defaulted = new Set();
+  const constructors = [];
+  const constructor = new RegExp(`^${name}\\s*\\(`);
+  let at = 0;
+  const skip = () => {
+    while (/\s/.test(body[at] ?? "")) at += 1;
+  };
+  for (skip(); at < body.length; skip()) {
+    const found = body.slice(at).match(constructor);
+    if (!found) {
+      const [declaration] = splitTopLevel(body.slice(at), ";");
+      assert.ok(at + declaration.length < body.length, shape);
+      at += declaration.length + 1;
+      // A stray `;`, as after `TreeNode() {};`, declares nothing.
+      if (!declaration.trim()) continue;
+      const bare = declaration.replace(/\s*(?:=[\s\S]*|\{[\s\S]*\})$/, "");
+      const { type, name: field } = cppDeclaration(bare);
+      assert.ok(field && type, `${shape}, not "${declaration.trim()}"`);
+      fields.set(field, type);
+      if (bare !== declaration) defaulted.add(field);
+      continue;
+    }
+    const paramsOpen = at + found[0].length - 1;
+    const paramsClose = closingIndex(body, paramsOpen);
+    assert.ok(paramsClose > 0, shape);
+    const params = splitTopLevel(
+      body.slice(paramsOpen + 1, paramsClose),
+      ",",
+      "(<{[",
+      ")>}]",
+    )
+      .filter((param) => param.trim())
+      .map((param) => {
+        const [declaration, fallback] = param.split("=");
+        return {
+          ...cppDeclaration(declaration),
+          optional: fallback !== undefined,
+        };
+      });
+    at = paramsClose + 1;
+    skip();
+    const initialized = [];
+    if (body[at] === ":") {
+      do {
+        at += 1;
+        skip();
+        const member = body.slice(at).match(/^\w+/)?.[0] ?? "";
+        at += member.length;
+        skip();
+        const argsClose = "({".includes(body[at]) ? closingIndex(body, at) : -1;
+        assert.ok(member && argsClose > 0, shape);
+        initialized.push(member);
+        at = argsClose + 1;
+        skip();
+      } while (body[at] === ",");
+    }
+    const bodyClose = body[at] === "{" ? closingIndex(body, at) : -1;
+    assert.ok(bodyClose > 0, shape);
+    const assigned = new Set();
+    // A parameter shadows a member of its name, so `right = right` sets
+    // nothing; only `this->right` reaches the member.
+    const locals = new Set(params.map((param) => param.name).filter(Boolean));
+    for (const statement of splitTopLevel(body.slice(at + 1, bodyClose), ";")) {
+      // `left = right = nullptr` assigns every name before the last `=`; a
+      // statement with none, such as `TreeNode *left;`, only declares.
+      const parts = statement.split(/(?<![=!<>])=(?!=)/);
+      const targets = parts.length > 1 ? parts.slice(0, -1) : [];
+      if (!targets.length) {
+        const local = cppDeclaration(statement).name;
+        if (local) locals.add(local);
+      }
+      for (const target of targets.map((part) => part.trim())) {
+        const member = target.match(/^this\s*->\s*(\w+)$/)?.[1];
+        if (member) assigned.add(member);
+        else if (/^\w+$/.test(target)) {
+          if (!locals.has(target)) assigned.add(target);
+        } else {
+          const local = cppDeclaration(target).name;
+          if (local) locals.add(local);
+        }
+      }
+    }
+    at = bodyClose + 1;
+    const delegates = initialized.length === 1 && initialized[0] === name;
+    constructors.push({
+      types: params.map((param) => param.type),
+      required: params.filter((param) => !param.optional).length,
+      sets: (field) =>
+        delegates || initialized.includes(field) || assigned.has(field),
+    });
+  }
+  return { fields, defaulted, constructors };
+}
+
+// What every constructor has to do, in the harness and in a comment alike:
+// start each pointer member somewhere, which the harness does, so a comment
+// that leaves one out describes code the candidate is not compiled against.
+function assertPointersSet(where, name, { fields, defaulted, constructors }) {
+  const pointers = [...fields]
+    .filter(([field, type]) => type.endsWith("*") && !defaulted.has(field))
+    .map(([field]) => field);
+  assert.ok(
+    constructors.length || !pointers.length,
+    `${where}: ${name} declares no constructor, so ${pointers.join(", ")} start indeterminate`,
+  );
+  for (const { types, sets } of constructors) {
+    for (const pointer of pointers) {
+      assert.ok(
+        sets(pointer),
+        `${where}: ${name}(${types.join(", ")}) leaves ${name}::${pointer} uninitialized`,
+      );
+    }
+  }
+}
+
+// A documented member has the harness's type, and every call a documented
+// constructor accepts, from its required parameters up to all of them,
+// compiles against some harness constructor.
+function assertDocumentedAsDeclared(where, name, documented, declared) {
+  for (const [field, type] of documented.fields) {
+    assert.equal(
+      declared.fields.get(field),
+      type,
+      `${where}: the C++ starter documents ${name}::${field} as ${type}, which the harness does not declare`,
+    );
+  }
+  for (const { types, required } of documented.constructors) {
+    for (let arity = required; arity <= types.length; arity += 1) {
+      const call = types.slice(0, arity);
+      assert.ok(
+        declared.constructors.some(
+          (candidate) =>
+            arity >= candidate.required &&
+            arity <= candidate.types.length &&
+            call.every((type, index) => candidate.types[index] === type),
+        ),
+        `${where}: the C++ starter documents ${name}(${call.join(", ")}), which no harness constructor accepts`,
+      );
+    }
+  }
+  assertPointersSet(where, name, documented);
+}
+
+test("the C++ node class reader catches the drift it compares", () => {
+  const tree = (constructors) =>
+    cppClass(
+      `struct TreeNode { int val; TreeNode *left; TreeNode *right; ${constructors} };`,
+      "TreeNode",
+      "inline",
+    );
+  const check = (constructors) => () =>
+    assertPointersSet("inline", "TreeNode", tree(constructors));
+  const unset = /TreeNode::right uninitialized/;
+  assert.throws(check("TreeNode(int x) : val(x), left(nullptr) {}"), unset);
+  assert.throws(
+    check("TreeNode(int x) : val(x), left(new TreeNode(0)) {}"),
+    unset,
+  );
+  assert.throws(
+    check("TreeNode(int x) { left = nullptr; TreeNode *right = nullptr; }"),
+    unset,
+  );
+  assert.doesNotThrow(
+    check("TreeNode(int x) : val(x) { left = right = nullptr; }"),
+  );
+  assert.doesNotThrow(
+    check("TreeNode() : val(0) { this->left = this->right = nullptr; }"),
+  );
+  assert.throws(
+    check("TreeNode(int x) : val(x) { left; right; }"),
+    /TreeNode::left/,
+  );
+  assert.throws(
+    check("TreeNode() : val(0) { TreeNode *left; left = right = nullptr; }"),
+    /TreeNode::left uninitialized/,
+  );
+  assert.throws(check(""), /TreeNode declares no constructor, so left, right/);
+  assert.throws(
+    check(
+      "TreeNode(TreeNode *left, TreeNode *right) { left = left; right = right; }",
+    ),
+    /TreeNode::left uninitialized/,
+  );
+  assert.doesNotThrow(
+    check(
+      "TreeNode() : val(0), left(nullptr) { this->right = nullptr; } TreeNode(int x) : TreeNode() {}",
+    ),
+  );
+
+  const braced = cppClass(
+    `struct TreeNode {
+      unsigned int val; // the key
+      TreeNode *left{nullptr};
+      TreeNode *right;
+      TreeNode(unsigned int, TreeNode *) : val{0}, right{nullptr} {};
+    };`,
+    "TreeNode",
+    "inline",
+  );
+  assert.deepEqual(Object.fromEntries(braced.fields), {
+    val: "unsigned int",
+    left: "TreeNode*",
+    right: "TreeNode*",
+  });
+  assert.deepEqual(braced.constructors[0].types, ["unsigned int", "TreeNode*"]);
+  assertPointersSet("inline", "TreeNode", braced);
+
+  const list = (constructor) =>
+    cppClass(
+      `struct ListNode { int val; ListNode *next; ${constructor} };`,
+      "ListNode",
+      "inline",
+    );
+  assert.throws(
+    () =>
+      assertDocumentedAsDeclared(
+        "inline",
+        "ListNode",
+        list("ListNode(int x = 0, ListNode *n = nullptr) : val(x), next(n) {}"),
+        list("ListNode(int x, ListNode *n) : val(x), next(n) {}"),
+      ),
+    /documents ListNode\(\), which no harness/,
+  );
+});
+
+test("every C++ starter documents ListNode, TreeNode and Node as the harness declares them", () => {
+  const harnessSource = generateHarness(
+    "cpp",
+    judges["clone-graph"],
+    "class Solution {};",
+  );
+  const harness = Object.fromEntries(
+    cppNodeClasses.map((name) => {
+      const declared = cppClass(harnessSource, name, "the C++ harness");
+      assert.ok(declared, `the C++ harness no longer declares ${name}`);
+      assertPointersSet("the C++ harness", name, declared);
+      return [name, declared];
+    }),
+  );
+
+  let documented = 0;
+  for (const [id, { page }] of Object.entries(pageMap)) {
+    const starter =
+      JSON.parse(readFileSync(webFile(`problems/${page}.json`), "utf8"))
+        .starterCode.cpp ?? "";
+    // Drop the comment's leading asterisks, as the C test does.
+    const comment = starter.replace(/^\s*\*(?!\/)/gm, "");
+    // What the judge passes or returns; `ListNode[]` counts as ListNode, and a
+    // class judge's `binaryTree` constructor argument as TreeNode.
+    const used = new Set(
+      [
+        ...(judges[id].paramTypes ?? []),
+        judges[id].returnType,
+        ...(judges[id].constructorArgTypes ?? []),
+      ].map((type) =>
+        type === "binaryTree" ? "TreeNode" : type?.replace(/\[\]$/, ""),
+      ),
+    );
+    for (const name of cppNodeClasses) {
+      const starterClass = cppClass(comment, name, page);
+      if (!starterClass) {
+        assert.ok(
+          !used.has(name),
+          `${page}: the C++ judge uses ${name}, which the starter does not document`,
+        );
+        continue;
+      }
+      documented += 1;
+      assertDocumentedAsDeclared(page, name, starterClass, harness[name]);
+    }
+  }
+  assert.ok(documented > 0, "no C++ starter documents a node class");
+});
+
 test("harness generator covers every class problem without network access", () => {
   for (const [id, spec] of Object.entries(judges)) {
     if (spec.kind !== "class") continue;
