@@ -62,10 +62,17 @@ and refuses with exit 3 when the PR moved twice while being read; the head in
 its manifest is the revision under review from then on. A PR reviewed before
 gets `--since <head read then>`: the `commit_id` of the account's latest
 review that read code (a fixed-text rebase or hygiene request did not), or the
-sweep's ledger entry; the script's header says what it does with it. A finding
-anywhere in the diff still counts, and the earlier threads in `threads.tsv` say
-what was already raised. Findings carried in an earlier ledger are placed at
-the new head first ([interactive.md](interactive.md#when-the-head-moves)).
+sweep's ledger entry; the script's header says what it does with it. After a
+force push that can be compared, `since.status` says what to read first:
+`rewritten` (one base) gives `since.diff`, the tree diff of the two heads, with
+`since.range-diff.txt` beside it for a reworded message; `rebased` gives
+`since.range-diff.txt` alone. Otherwise the manifest says why and the whole
+diff is reviewed. These files do not replace the full diff: range-diff pairs
+commits by heuristic and skips merge commits, so a rebase with a merge in either
+range is not compared. A finding anywhere in the diff still counts, and the
+earlier threads in `threads.tsv` say what was already raised. Findings carried
+in an earlier ledger are placed at the new head first
+([interactive.md](interactive.md#when-the-head-moves)).
 Every changed file is in `head/` as the head has it, so no reviewer and no
 verification fetches it again. A manifest with
 `files_complete: false` lists only part of a very large PR: say so in the
