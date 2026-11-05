@@ -1,10 +1,10 @@
 #!/bin/sh
 # Gather what a review reads into one directory, so every reviewer, the
 # verification and the posting work from the same snapshot. Writes nothing to
-# GitHub, and nothing outside <dir> but the objects a local mode with no base
-# fetches into the repository.
+# GitHub, and nothing outside <dir> but the objects a local mode with no base,
+# or a --since head that was rewritten, fetches into the repository.
 #
-# Usage: review-bundle.sh <pr> <dir> [repo] [--since <sha>]
+# Usage: review-bundle.sh <pr> <dir> [repo] [--since <sha> [--since-base <sha>]]
 #        review-bundle.sh --local <dir> [<base>]
 #        Prints the manifest (also saved as <dir>/manifest.json). Exits 3 when
 #        the PR moved during two consecutive fetches, 2 on bad arguments.
@@ -31,8 +31,19 @@
 #   since.diff, since.txt
 #                with --since, the diff from the head an earlier review read to
 #                this one, numbered the same way, when that head is an
-#                ancestor of this one; a force push or a merged base reads as
-#                a full review instead, and the manifest says why
+#                ancestor of this one; a merged base reads as a full review
+#                instead, and the manifest says why. After a rewrite on one
+#                base (a squash, an amend, a reorder), the tree diff between
+#                the two heads, and the manifest says rewritten
+#   since.range-diff.txt
+#                with --since, after a rebase, git range-diff of the old commits
+#                against the new ones, and the manifest says rebased. A commit
+#                whose only change is its Change-Id reads as unchanged. The old
+#                base is the old head's merge base with the PR's base unless
+#                --since-base names it. A rewrite compares in the repository at
+#                the working directory, fetching what it lacks by full SHA; with
+#                no repository or an old head nobody can resolve, the whole diff
+#                is reviewed and the manifest says why
 #   experience-start.json pins the local experience run to this manifest/diff;
 #   experience-status.json reports whether begin succeeded
 #   experience.md gives bounded private prior cases without migrating history;
@@ -63,10 +74,11 @@
 set -eu
 umask 077
 
-usage='usage: review-bundle.sh <pr> <dir> [repo] [--since <sha>] | --local <dir> [<base>]'
+usage='usage: review-bundle.sh <pr> <dir> [repo] [--since <sha> [--since-base <sha>]] | --local <dir> [<base>]'
 here=$(dirname "$0")
 mode='pr'
 since=
+since_base=
 base=
 case ${1:-} in
     --local)
@@ -92,7 +104,13 @@ case ${1:-} in
         esac
         if [ "${1:-}" = --since ]; then
             since=${2:?$usage}
-        elif [ -n "${1:-}" ]; then
+            shift 2
+            if [ "${1:-}" = --since-base ]; then
+                since_base=${2:?$usage}
+                shift 2
+            fi
+        fi
+        if [ -n "${1:-}" ]; then
             echo "$usage" >&2
             exit 2
         fi
@@ -102,15 +120,19 @@ case ${1:-} in
                 exit 2
                 ;;
         esac
-        case $since in
+        case $since$since_base in
             *[!0-9a-f]*)
-                echo "review-bundle.sh: $since is not a commit" >&2
+                echo "review-bundle.sh: $since $since_base is not a commit" >&2
                 exit 2
                 ;;
         esac
         # Shorter is no abbreviation of the head, only a prefix it shares.
         if [ -n "$since" ] && [ "${#since}" -lt 7 ]; then
             echo "review-bundle.sh: --since needs at least 7 hex digits" >&2
+            exit 2
+        fi
+        if [ -n "$since_base" ] && [ "${#since_base}" -lt 7 ]; then
+            echo "review-bundle.sh: --since-base needs at least 7 hex digits" >&2
             exit 2
         fi
         ;;
@@ -120,7 +142,8 @@ mkdir -p "$dir"
 # Everything either mode or memory.py context writes, so a rerun in another mode
 # or at another head reads nothing an earlier one left: context reads pr.json
 # whenever it is there.
-rm -rf "$dir/head" "$dir/since.diff" "$dir/since.txt" "$dir/pr.json" \
+rm -rf "$dir/head" "$dir/since.diff" "$dir/since.txt" \
+    "$dir/since.range-diff.txt" "$dir/since.range-diff.raw" "$dir/pr.json" \
     "$dir/talk.json" "$dir/comments.json" "$dir/threads.tsv" "$dir/history.md"
 
 # The diff with each right-side line numbered: " 42 +added", " 43 context", "
@@ -332,9 +355,87 @@ gh api graphql --paginate -F n="$pr" -F owner="${repo%%/*}" -F name="${repo#*/}"
           | ltrimstr(" ") | .[:300])] | @tsv' \
     > "$dir/threads.tsv"
 
+commit_of()
+{
+    git rev-parse -q --verify "$1^{commit}" 2> /dev/null
+}
+
+# What the author changed since a head this one does not descend from. Sets
+# rewrite, old_base and new_base, or returns nonzero with nothing to read. Its
+# caller is a condition, where set -e does not apply, so each step checks
+# itself. A fetch takes only a full SHA, so GitHub expands a short one first.
+compare_rewrite()
+{
+    case $status in
+        diverged | behind | unknown) ;;
+        *) return 1 ;;
+    esac
+    old=$(commit_of "$since") \
+        || old=$(gh api "repos/$repo/commits/$since" --jq .sha 2> /dev/null) \
+        || return 1
+    old_base=
+    if [ -n "$since_base" ]; then
+        old_base=$(commit_of "$since_base") \
+            || old_base=$(gh api "repos/$repo/commits/$since_base" --jq .sha 2> /dev/null) \
+            || return 1
+    fi
+    target=$(jq -r .baseRefOid "$dir/pr.json")
+
+    # Fetch only the commits the clone lacks, so a commit it already holds is
+    # not asked of the remote at all.
+    set --
+    for sha in "$old" "$head" "$target" ${old_base:+"$old_base"}; do
+        commit_of "$sha" > /dev/null || set -- "$@" "$sha"
+    done
+    [ "$#" -eq 0 ] || GIT_TERMINAL_PROMPT=0 git fetch -q --no-tags --no-write-fetch-head \
+        "https://github.com/$repo.git" "$@" 2> /dev/null || return 1
+    new_base=$(git merge-base "$head" "$target") || return 1
+    if [ -z "$old_base" ]; then
+        old_base=$(git merge-base "$old" "$target") || return 1
+    fi
+    # A base the old head does not contain describes a history that never was.
+    git merge-base --is-ancestor "$old_base" "$old" || return 1
+    if [ "$old_base" = "$new_base" ]; then
+        git diff --no-color --no-ext-diff --no-textconv --src-prefix=a/ --dst-prefix=b/ \
+            "$old" "$head" > "$dir/since.diff" || return 1
+        number < "$dir/since.diff" > "$dir/since.txt" || return 1
+        rewrite=rewritten
+        return 0
+    fi
+
+    # A hook-driven rechain gives every rewritten commit a new Change-Id, which
+    # says nothing about the work: such a commit reads as unchanged. A conflict
+    # resolved in a small commit rewrites most of it, and the default creation
+    # factor would list the two as unrelated, hiding the resolution. Everything
+    # under a commit's header is indented, and its marker sits right after the
+    # old SHA, so neither a message nor a subject can pass for one.
+    git range-diff --no-color --creation-factor=100 \
+        "$old_base..$old" "$new_base..$head" \
+        > "$dir/since.range-diff.raw" || return 1
+    awk '
+        function flush(i)
+        {
+            if (n && !real && lines[1] ~ /^ *[0-9-]+: +[0-9a-f-]+ ! /) {
+                sub(/ ! /, " = ", lines[1])
+                n = 1
+            }
+            for (i = 1; i <= n; i++) print lines[i]
+            n = 0
+            real = 0
+        }
+        /^    [-+] *Change-Id: I[0-9a-f]+$/ { next }
+        /^    [-+]/ { real = 1 }
+        !/^    / && /^ *[0-9-]+: +[0-9a-f-]+ [=!<>] / { flush() }
+        { lines[++n] = $0 }
+        END { flush() }
+    ' "$dir/since.range-diff.raw" > "$dir/since.range-diff.txt" || return 1
+    rm -f "$dir/since.range-diff.raw"
+    rewrite=rebased
+}
+
 # An earlier review's head counts only when this head descends from it: then the
-# commits since are the new work. Otherwise history was rewritten, and the whole
-# diff is new to a reviewer.
+# commits since are the new work. After a rewrite, the comparison above says
+# what to read first; failing that, the whole diff is new to a reviewer.
 incremental=null
 # A short sha of the head itself is the head: nothing new, not a rewrite.
 case $head in "$since"*) since= ;; esac
@@ -354,11 +455,18 @@ if [ -n "$since" ]; then
             -H "Accept: application/vnd.github.diff" > "$dir/since.diff"
         number < "$dir/since.diff" > "$dir/since.txt"
         incremental=$(jq -n --arg from "$since" '{from: $from, status: "ahead"}')
+    elif compare_rewrite; then
+        incremental=$(jq -n --arg from "$since" --arg status "$rewrite" \
+            --arg old_base "$old_base" --arg new_base "$new_base" \
+            '{from: $from, status: $status, old_base: $old_base, new_base: $new_base}')
     else
+        rm -f "$dir/since.diff" "$dir/since.txt" "$dir/since.range-diff.txt" "$dir/since.range-diff.raw"
         incremental=$(jq -n --arg from "$since" --arg status "$status" '
             {from: $from, status: $status, why: (if $status == "merged"
               then "a merge since then brings in other work, so the whole diff is reviewed"
-              else "not an ancestor of the head, so the whole diff is reviewed" end)}')
+              elif $status == "diverged" or $status == "behind"
+              then "the rewrite could not be compared, so the whole diff is reviewed"
+              else "the comparison with that head failed, so the whole diff is reviewed" end)}')
     fi
 fi
 
