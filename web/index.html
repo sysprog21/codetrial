@@ -1759,6 +1759,13 @@
               <h2 id="session-heading">Set up your session</h2>
               <p>Choose the length, format and editor you want.</p>
             </div>
+            <button
+              id="open-session-presets"
+              class="account-link session-presets-trigger"
+              type="button"
+            >
+              Presets
+            </button>
           </div>
           <h3 id="length-label" class="setting-label">Session length</h3>
           <section class="duration-row" aria-labelledby="length-label">
@@ -1900,6 +1907,77 @@
               </select></label
             >
           </fieldset>
+          <dialog
+            id="session-presets-dialog"
+            class="session-presets"
+            aria-labelledby="session-presets-title"
+          >
+            <div class="session-presets-heading">
+              <h3 id="session-presets-title">Saved setups</h3>
+              <button
+                id="close-session-presets"
+                class="account-link"
+                type="button"
+              >
+                Close
+              </button>
+            </div>
+            <p class="muted small">
+              Save the session settings in this browser. Problems and optional
+              context are not included.
+            </p>
+            <div class="session-preset-row">
+              <select id="session-preset" aria-label="Saved setup">
+                <option value=""></option>
+              </select>
+              <button
+                id="save-session-preset"
+                class="session-preset-button"
+                type="button"
+              >
+                Save current
+              </button>
+              <button
+                id="delete-session-preset"
+                class="session-preset-button"
+                type="button"
+                disabled
+              >
+                Delete
+              </button>
+            </div>
+            <form id="session-preset-form" class="session-preset-form" hidden>
+              <label for="session-preset-name">Preset name</label>
+              <div class="session-preset-row">
+                <input
+                  id="session-preset-name"
+                  type="text"
+                  maxlength="40"
+                  autocomplete="off"
+                  required
+                />
+                <button
+                  id="submit-session-preset"
+                  class="session-preset-button"
+                  type="submit"
+                >
+                  Save
+                </button>
+                <button
+                  id="cancel-session-preset"
+                  class="session-preset-button"
+                  type="button"
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+            <p
+              id="session-preset-status"
+              class="duration-note"
+              aria-live="polite"
+            ></p>
+          </dialog>
         </section>
         <section
           class="setup-panel start-panel"
