@@ -88,6 +88,9 @@ What splitting `src/agent/prompts.rs` (3944 lines, six modules under
 4. **Rewrite `super::` in bodies to `crate::agent::`**, since `super` is now the
    facade, then import the names used three or more times so the code reads as
    before. Widen a private item to `pub(super)` only where a sibling needs it.
+   A hub whose siblings already open with `use super::*` (`src/livekit/`) takes
+   new modules the same way; clippy decides whether the `expect` for
+   `wildcard_imports` is owed, so run it rather than copy the attribute.
 5. **Tests that reach private items** through `use super::*` keep working if the
    facade carries a `#[cfg(test)] use self::{...}` group naming them, and the
    `use super::...` of the parent's own types they read; the test file is not
@@ -97,7 +100,12 @@ What splitting `src/agent/prompts.rs` (3944 lines, six modules under
    that hashes the file with `include_bytes!` (a digest that would silently stop
    changing when a prompt did), the `Applies to` lines of two review rules, a
    skill doc line, and comments in Rust and in `web/`. A name inside a format string (`{NAME}`) is a compile error if
-   its import is missed, which is the safe way to fail.
+   its import is missed, which is the safe way to fail. The three splits of
+   `src/livekit.rs`, `src/agent.rs` and `src/gemini.rs` found two more kinds:
+   a test that reads the source as text (`include_str!`, then splits on `async
+   fn name`) fails with "is still defined here" in `cargo test --lib` and not in
+   clippy, and a source digest that hashes the old file (the report evaluation's
+   identity) stops covering the code that left it.
 7. **Run `scripts/check-rust-style.py --ratchet`** so the old entry leaves
    `scripts/rust-style-ceilings.json`, then clippy at `-D warnings`, then
    `./scripts/test.sh rust`.

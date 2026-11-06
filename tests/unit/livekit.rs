@@ -236,7 +236,7 @@ fn a_published_packet_carries_its_topic_and_arrives_reliably() {
 fn both_ways_a_live_socket_opens_count_its_instruction() {
     for (source, opener) in [
         (
-            include_str!("../../src/livekit.rs"),
+            include_str!("../../src/livekit/open.rs"),
             "async fn open_session",
         ),
         (
@@ -266,7 +266,7 @@ fn both_ways_a_live_socket_opens_count_its_instruction() {
 /// connected.
 #[test]
 fn only_a_replacement_publishes_its_reconnect_wait() {
-    let startup = include_str!("../../src/livekit.rs")
+    let startup = include_str!("../../src/livekit/open.rs")
         .split("async fn open_session")
         .nth(1)
         .expect("the startup owner is still defined");
@@ -280,7 +280,7 @@ fn only_a_replacement_publishes_its_reconnect_wait() {
     // silent. Recovery supplies its room and retains the caller-owned slot.
     for (source, opener, room) in [
         (
-            include_str!("../../src/livekit.rs"),
+            include_str!("../../src/livekit/open.rs"),
             "async fn open_cold_session(",
             "None",
         ),
@@ -316,7 +316,7 @@ fn only_a_replacement_publishes_its_reconnect_wait() {
 /// distinguishable in a room that really connected.
 #[test]
 fn the_interview_clock_starts_when_the_candidate_joined() {
-    let source = include_str!("../../src/livekit.rs");
+    let source = include_str!("../../src/livekit/open.rs");
     let opener = source
         .split("async fn open_session")
         .nth(1)
@@ -340,7 +340,7 @@ fn the_interview_clock_starts_when_the_candidate_joined() {
 /// what notices, read as source for the reason the clock test above is.
 #[test]
 fn the_candidate_wait_listens_for_its_start_being_released() {
-    let source = include_str!("../../src/livekit.rs");
+    let source = include_str!("../../src/livekit/open.rs");
     let opener = source
         .split("async fn open_session")
         .nth(1)
@@ -373,7 +373,7 @@ fn the_candidate_wait_listens_for_its_start_being_released() {
         "an arrival must be claimed against a release that raced it"
     );
     assert!(
-        source
+        include_str!("../../src/livekit.rs")
             .split("pub(crate) async fn run_room_with_slot")
             .nth(1)
             .is_some_and(|run| run
@@ -387,7 +387,7 @@ fn the_candidate_wait_listens_for_its_start_being_released() {
 /// sends every abandoned start through it within seconds.
 #[test]
 fn an_agent_nobody_came_to_leaves_the_room() {
-    let source = include_str!("../../src/livekit.rs");
+    let source = include_str!("../../src/livekit/open.rs");
     let exit = source
         .split("async fn open_session")
         .nth(1)
@@ -1881,6 +1881,18 @@ fn replacing_a_socket_drops_its_pending_close_request() {
     assert!(!activity.socket.tool_response_outstanding);
 }
 
+/// The room settings every cold-open test shares, with one Gemini key setting.
+fn cold_open_config(setting: &str, value: &str) -> crate::config::AgentConfig {
+    load_from_pairs([
+        ("LIVEKIT_URL", "wss://example.livekit.cloud"),
+        ("LIVEKIT_API_KEY", "devkey"),
+        ("LIVEKIT_API_SECRET", "devsecret"),
+        (setting, value),
+        ("GEMINI_LIVE_MODEL", "gemini-live"),
+    ])
+    .unwrap()
+}
+
 /// The first open of an interview must ride out a 503 on the key it selected.
 /// It once stopped on the first transport failure or 5xx, ending the interview
 /// before the candidate heard anything. A backup does not change that: a 5xx
@@ -1903,14 +1915,7 @@ async fn first_cold_open_retries_a_503_on_the_selected_key() {
             "cold-open-first",
         ),
     ] {
-        let config = load_from_pairs([
-            ("LIVEKIT_URL", "wss://example.livekit.cloud"),
-            ("LIVEKIT_API_KEY", "devkey"),
-            ("LIVEKIT_API_SECRET", "devsecret"),
-            (setting, value),
-            ("GEMINI_LIVE_MODEL", "gemini-live"),
-        ])
-        .unwrap();
+        let config = cold_open_config(setting, value);
         let keys = GeminiKeys::from_config(&config);
         let boot = crate::runtime::bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -2010,14 +2015,7 @@ async fn first_cold_open_retries_a_503_on_the_selected_key() {
 async fn a_sole_key_rate_limit_is_announced_as_quota() {
     use tokio_tungstenite::tungstenite::handshake::server;
 
-    let config = load_from_pairs([
-        ("LIVEKIT_URL", "wss://example.livekit.cloud"),
-        ("LIVEKIT_API_KEY", "devkey"),
-        ("LIVEKIT_API_SECRET", "devsecret"),
-        ("GOOGLE_API_KEY", "rate-limited-only"),
-        ("GEMINI_LIVE_MODEL", "gemini-live"),
-    ])
-    .unwrap();
+    let config = cold_open_config("GOOGLE_API_KEY", "rate-limited-only");
     let keys = GeminiKeys::from_config(&config);
     let boot = crate::runtime::bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -2082,14 +2080,7 @@ async fn a_sole_key_rate_limit_is_announced_as_quota() {
 async fn a_first_open_gives_up_at_its_time_limit() {
     use tokio_tungstenite::tungstenite::handshake::server;
 
-    let config = load_from_pairs([
-        ("LIVEKIT_URL", "wss://example.livekit.cloud"),
-        ("LIVEKIT_API_KEY", "devkey"),
-        ("LIVEKIT_API_SECRET", "devsecret"),
-        ("GOOGLE_API_KEY", "first-open-limit"),
-        ("GEMINI_LIVE_MODEL", "gemini-live"),
-    ])
-    .unwrap();
+    let config = cold_open_config("GOOGLE_API_KEY", "first-open-limit");
     let keys = GeminiKeys::from_config(&config);
     let boot = crate::runtime::bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -2141,14 +2132,7 @@ async fn a_first_open_gives_up_at_its_time_limit() {
 async fn a_rotation_emptied_by_billing_failures_reports_billing() {
     use tokio_tungstenite::tungstenite::handshake::server;
 
-    let config = load_from_pairs([
-        ("LIVEKIT_URL", "wss://example.livekit.cloud"),
-        ("LIVEKIT_API_KEY", "devkey"),
-        ("LIVEKIT_API_SECRET", "devsecret"),
-        ("GOOGLE_API_KEYS", "unpaid-a,unpaid-b"),
-        ("GEMINI_LIVE_MODEL", "gemini-live"),
-    ])
-    .unwrap();
+    let config = cold_open_config("GOOGLE_API_KEYS", "unpaid-a,unpaid-b");
     let keys = GeminiKeys::from_config(&config);
     let boot = crate::runtime::bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -2168,14 +2152,18 @@ async fn a_rotation_emptied_by_billing_failures_reports_billing() {
         }
     });
     let mut attempts = 0;
-    let error = retry_cold_open(
-        &keys,
-        &mut 0,
-        || {
-            attempts += 1;
-            fixture_session_at(&url, &keys, &boot, None)
-        },
-        |_| async {},
+    // Bounded, so a guard that retried the refusal for ever fails, not hangs.
+    let error = crate::gemini::first_open_within(
+        Duration::from_secs(10),
+        retry_cold_open(
+            &keys,
+            &mut 0,
+            || {
+                attempts += 1;
+                fixture_session_at(&url, &keys, &boot, None)
+            },
+            |_| async {},
+        ),
     )
     .await
     .err()
@@ -2222,14 +2210,7 @@ async fn an_exhausted_rotation_waits_only_for_a_key_out_on_quota() {
             false,
         ),
     ] {
-        let config = load_from_pairs([
-            ("LIVEKIT_URL", "wss://example.livekit.cloud"),
-            ("LIVEKIT_API_KEY", "devkey"),
-            ("LIVEKIT_API_SECRET", "devsecret"),
-            ("GOOGLE_API_KEYS", &format!("{prefix}-a,{prefix}-b")),
-            ("GEMINI_LIVE_MODEL", "gemini-live"),
-        ])
-        .unwrap();
+        let config = cold_open_config("GOOGLE_API_KEYS", &format!("{prefix}-a,{prefix}-b"));
         let keys = GeminiKeys::from_config(&config);
         let boot = crate::runtime::bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -5984,10 +5965,10 @@ async fn a_held_round_transition_waits_for_its_judgment_or_its_deadline() {
 /// and the watch tick applies a held transition after collecting the judgment.
 #[test]
 fn the_room_loop_settles_the_end_and_holds_the_transition_before_applying_them() {
-    // The loop and the packet handlers it calls, read as one text.
     let source = concat!(
         include_str!("../../src/livekit.rs"),
-        include_str!("../../src/livekit/packets.rs")
+        include_str!("../../src/livekit/packets.rs"),
+        include_str!("../../src/livekit/side_calls.rs")
     );
     let body = |name: &str| {
         source
