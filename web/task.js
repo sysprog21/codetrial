@@ -56,6 +56,14 @@ import {
   taskRecovery,
   taskReviewForDisplay,
 } from "./task-controller.js";
+import {
+  CALIBRATION_LINE,
+  faceFilesProblem,
+  lineTyped,
+  typedEnough,
+} from "./task-calibration.js";
+import { caseLabel, caseLine } from "./task-cases.js";
+import { feedbackUnavailableText, reviewSections } from "./task-review.js";
 
 // The vendored LiveKit build is a classic script that sets a global, as on the
 // interview page; it has no exports for a module to import.
@@ -242,21 +250,6 @@ async function signedInFlow(
   }
   forgetAttempt();
   return next();
-}
-
-/// The line the learner types during calibration.
-const CALIBRATION_LINE = "for item in items: total += item";
-
-const compact = (value) => value.replace(/\s+/g, "");
-
-/// Whether the typing phase saw typing: a third of the line, ignoring spacing.
-function typedEnough(text) {
-  return compact(text).length >= compact(CALIBRATION_LINE).length / 3;
-}
-
-/// Whether the whole line is in, which ends the typing phase.
-function lineTyped(text) {
-  return compact(text).length >= compact(CALIBRATION_LINE).length;
 }
 
 async function api(path, body) {
@@ -541,7 +534,7 @@ async function loadTask() {
   $("public-cases").replaceChildren(
     ...(task.publicCases?.cases ?? []).map((row, index) => {
       const li = document.createElement("li");
-      li.textContent = `${caseLabel(row, index)}: input ${renderValue(row.input)}, expected ${renderValue(row.expected)}`;
+      li.textContent = `${caseLabel(row, index, task?.requiredCases)}: input ${renderValue(row.input)}, expected ${renderValue(row.expected)}`;
       return li;
     }),
   );
@@ -687,16 +680,6 @@ const faceFiles = loadFaceAssets({
   );
   return result;
 });
-
-/// What to tell a learner when the server lacks the detector's files, which no
-/// amount of retrying fixes and which "not answering" would send them to retry.
-function faceFilesProblem({ missing, unreachable }) {
-  if (missing.length)
-    return `This server is missing face detector files (${missing.map(({ file }) => file).join(", ")}). Ask whoever runs it to run scripts/fetch-vendor.sh, then reload the page.`;
-  return unreachable.length
-    ? `The face model could not be downloaded (${unreachable.join(", ")}). Check the connection, then reload the page.`
-    : "";
-}
 
 // Permission is granted now, before anything is timed, so no prompt can take
 // the page out of fullscreen during the attempt.
@@ -1626,7 +1609,12 @@ $("run").onclick = async () => {
     );
     $("results").textContent = results.runnerUnavailable
       ? `Practice runner unavailable: ${results.setupError}. No cases executed; this is a telemetry gap.`
-      : `${results.passed}/${results.total} public cases passed (learner-reported practice evidence)\n${results.setupError ?? results.cases.map(caseLine).join("\n")}`;
+      : `${results.passed}/${results.total} public cases passed (learner-reported practice evidence)\n${
+          results.setupError ??
+          results.cases
+            .map((row, index) => caseLine(row, index, task?.requiredCases))
+            .join("\n")
+        }`;
     await send(
       TASK_TOPICS.run,
       taskRunPayload(
@@ -1654,29 +1642,6 @@ $("run").onclick = async () => {
     lock();
   }
 };
-/// Public case `index` as the workspace names it, marked when the task
-/// requires it to pass. By index, since a variant rename can make two cases'
-/// shown labels equal.
-function caseLabel(row, index) {
-  const label = row.label ?? `Case ${index + 1}`;
-  return (task?.requiredCases ?? []).includes(index)
-    ? `${label} (required)`
-    : label;
-}
-/// One case of a run: a failure says what went in, what was expected and what
-/// came back, or the error, so the learner has something to debug from.
-function caseLine(row, index) {
-  const label = caseLabel(row, index);
-  if (row.pass) return `OK: ${label}`;
-  const detail = [
-    row.input !== undefined && `input ${row.input}`,
-    row.expected !== undefined && `expected ${row.expected}`,
-    row.error
-      ? `error ${row.error}`
-      : row.got !== undefined && `got ${row.got}`,
-  ].filter(Boolean);
-  return `FAIL: ${label}${detail.length ? ` (${detail.join("; ")})` : ""}`;
-}
 $("thinking").onchange = () =>
   send(TASK_TOPICS.thinking, taskThinkingPayload($("thinking").checked)).catch(
     error,
@@ -1754,12 +1719,6 @@ $("calculator").onsubmit = (event) => {
 
 // --- The result --------------------------------------------------------------
 
-const DIMENSION_LABELS = {
-  reasoningParticipation: "Reasoning participation",
-  implementationOwnership: "Implementation ownership",
-  testingAndDiagnosis: "Testing and diagnosis",
-  revisionAndImprovement: "Revision and improvement",
-};
 function renderReview(value, awaitingResult = false) {
   value = taskReviewForDisplay(value);
   clearError();
@@ -1783,13 +1742,7 @@ function renderReview(value, awaitingResult = false) {
   const codeLost = restored && typeof finalCode !== "string";
   $("export-code").disabled = codeLost;
   if (value.feedbackUnavailable) {
-    container.textContent = awaitingResult
-      ? codeLost
-        ? "The result is still being finalized. Your code cannot be retrieved yet; try reloading later or ask your instructor."
-        : "The result is still being finalized. Download your code now and reload later to retrieve the result."
-      : codeLost
-        ? "No retained code is available. You can start a new attempt or ask your instructor."
-        : "Feedback unavailable. Download your code and ask your instructor for a review.";
+    container.textContent = feedbackUnavailableText(awaitingResult, codeLost);
     return;
   }
   if (!value.taskAssessment?.dimensions) return;
@@ -1803,19 +1756,8 @@ function renderReview(value, awaitingResult = false) {
     section.append(heading, p);
     container.append(section);
   }
-  for (const [name, dimension] of Object.entries(
-    value.taskAssessment.dimensions,
-  )) {
-    appendFeedback(
-      DIMENSION_LABELS[name] ?? name,
-      `${dimension.rating ?? "Insufficient evidence"}. ${dimension.reason}`,
-    );
-  }
-  for (const [field, label] of [
-    ["gaps", "Gaps"],
-    ["nextActions", "Next actions"],
-  ]) {
-    appendFeedback(label, value.taskAssessment[field].join(" "));
+  for (const [label, text] of reviewSections(value.taskAssessment)) {
+    appendFeedback(label, text);
   }
 }
 $("new-attempt").onclick = () => {
