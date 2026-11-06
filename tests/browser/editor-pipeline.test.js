@@ -32,7 +32,10 @@ after(async () => {
 /// starter buffer is seeded. The textarea starts enabled in HTML, so it cannot
 /// signal readiness. Nothing
 /// under test needs a live session, so this never waits on one.
-async function editorPage(t, { params = {}, beforeLoad } = {}) {
+async function editorPage(
+  t,
+  { params = {}, beforeLoad, keepStarter = false } = {},
+) {
   if (!browser) {
     t.skip("playwright chromium unavailable");
     return null;
@@ -61,7 +64,9 @@ async function editorPage(t, { params = {}, beforeLoad } = {}) {
   await closeSetupCheck(page);
   await page.evaluate(() => document.querySelector("#editor").focus());
   // The starter code carries its own brackets; clearing it keeps every
-  // assertion below about exactly the characters this test types.
+  // assertion below about exactly the characters this test types. A test of
+  // what the starter itself brings keeps it.
+  if (keepStarter) return { page, errors, parserRequests };
   await page.keyboard.press("ControlOrMeta+A");
   await page.keyboard.press("Delete");
   await page.waitForFunction(
@@ -653,6 +658,275 @@ test("disabled auto indentation uses native Enter and retains manual indentation
     await page.close();
   }
 });
+
+// The lobby hands the unit over in the URL; the editor-function tests in
+// editor.test.js pass it directly, so only this one fails if the interview
+// page stops forwarding it. The choice applies where the starter measures no
+// width of its own: this problem's JavaScript starter has an empty body.
+for (const [editorIndent, indent] of [
+  ["2", "  "],
+  ["tab", "\t"],
+]) {
+  test(`editorIndent=${editorIndent} is what Enter, Tab and Shift+Tab use in the interview`, async (t) => {
+    const ctx = await editorPage(t, {
+      params: {
+        editorIndent,
+        language: "javascript",
+        problem: "portal-dice-race",
+      },
+    });
+    if (!ctx) return;
+    const { page, errors } = ctx;
+    try {
+      const code = "if (ready) {";
+      await setCode(page, code);
+      await page.keyboard.press("Enter");
+      assert.equal((await caretState(page)).value, `${code}\n${indent}`);
+      await page.keyboard.press("Tab");
+      assert.equal(
+        (await caretState(page)).value,
+        `${code}\n${indent}${indent}`,
+      );
+      await page.keyboard.press("Shift+Tab");
+      assert.equal((await caretState(page)).value, `${code}\n${indent}`);
+      assert.deepEqual(errors, []);
+    } finally {
+      await page.close();
+    }
+  });
+}
+
+/// Puts the caret at `offset` past the first `marker` in the editor, as a
+/// click there would.
+const caretAt = (page, marker, offset = 0) =>
+  page.evaluate(
+    ({ marker, offset }) => {
+      const editor = document.querySelector("#editor");
+      const at = editor.value.indexOf(marker) + offset;
+      editor.focus();
+      editor.setSelectionRange(at, at);
+    },
+    { marker, offset },
+  );
+
+// Every Python starter indents by four. A two-space or tab choice must not
+// nest the next line at six columns or with a tab, which Python rejects as an
+// IndentationError or a TabError against the starter's own lines.
+for (const editorIndent of ["2", "tab"]) {
+  test(`editorIndent=${editorIndent} nests a four-space Python starter by four`, async (t) => {
+    const ctx = await editorPage(t, {
+      params: { editorIndent, language: "python" },
+      keepStarter: true,
+    });
+    if (!ctx) return;
+    const { page, errors } = ctx;
+    try {
+      const signature = "-> list[int]:";
+      await caretAt(page, signature, signature.length);
+      await page.keyboard.press("Enter");
+      const { value, start } = await caretState(page);
+      const line = value.slice(value.lastIndexOf("\n", start - 1) + 1, start);
+      assert.equal(line, "        ");
+      await page.keyboard.press("Shift+Tab");
+      const after = await caretState(page);
+      assert.equal(
+        after.value.slice(
+          after.value.lastIndexOf("\n", after.start - 1) + 1,
+          after.start,
+        ),
+        "    ",
+      );
+      assert.deepEqual(errors, []);
+    } finally {
+      await page.close();
+    }
+  });
+}
+
+// The JavaScript starter's body is one two-space comment line. Tab makes it
+// four columns deep; a width measured from the live buffer would then read
+// four and Shift+Tab would take the line to column 0. A trip to another
+// language and back must not change that either.
+test("Tab, a language switch and Shift+Tab return a starter line to two spaces", async (t) => {
+  const ctx = await editorPage(t, {
+    params: { language: "javascript", editorIndent: "2" },
+    keepStarter: true,
+  });
+  if (!ctx) return;
+  const { page, errors } = ctx;
+  try {
+    const line = "  // Think out loud as you go!";
+    assert.ok((await caretState(page)).value.includes(`\n${line}\n`));
+    await caretAt(page, line);
+    await page.keyboard.press("Tab");
+    assert.ok((await caretState(page)).value.includes(`\n  ${line}\n`));
+    await page.locator("#language-select").selectOption("python");
+    await page.locator("#language-select").selectOption("javascript");
+    await caretAt(page, `  ${line}`);
+    await page.keyboard.press("Shift+Tab");
+    assert.ok((await caretState(page)).value.includes(`\n${line}\n`));
+    assert.deepEqual(errors, []);
+  } finally {
+    await page.close();
+  }
+});
+
+// Code pasted into an emptied buffer keeps its own body width: Enter after
+// `def f():` over a four-space body must not nest by the chosen two.
+test("Enter over a pasted four-space body matches it under a two-space choice", async (t) => {
+  const ctx = await editorPage(t, {
+    params: { language: "python", editorIndent: "2" },
+  });
+  if (!ctx) return;
+  const { page, errors } = ctx;
+  try {
+    await setCode(page, "def f():\n    pass\n", "def f():".length);
+    await page.keyboard.press("Enter");
+    assert.equal((await caretState(page)).value, "def f():\n    \n    pass\n");
+    assert.deepEqual(errors, []);
+  } finally {
+    await page.close();
+  }
+});
+
+// The Python starter is four-space, so an unindented line inside its body
+// takes four too: the choice would give two and then the space width, or a
+// tab beside the starter's spaces, which Python rejects.
+for (const editorIndent of ["2", "tab"]) {
+  test(`editorIndent=${editorIndent} steps a blank line of a four-space Python starter by four`, async (t) => {
+    const ctx = await editorPage(t, {
+      params: { editorIndent, language: "python" },
+    });
+    if (!ctx) return;
+    const { page, errors } = ctx;
+    try {
+      const head = "class Solution:\n    def f(self):\n";
+      await setCode(page, `${head}\n        pass\n`, head.length);
+      await page.keyboard.press("Tab");
+      assert.equal(
+        (await caretState(page)).value,
+        `${head}    \n        pass\n`,
+      );
+      await page.keyboard.press("Tab");
+      assert.equal(
+        (await caretState(page)).value,
+        `${head}        \n        pass\n`,
+      );
+      assert.deepEqual(errors, []);
+    } finally {
+      await page.close();
+    }
+  });
+}
+
+// A candidate who writes tabs in a four-space Python starter: Tab on the
+// blank line between two tab-indented lines must type a tab, or Python rejects
+// the statement typed there.
+test("Tab on a blank line inside a tab-indented block types a tab", async (t) => {
+  const ctx = await editorPage(t, {
+    params: { editorIndent: "2", language: "python" },
+  });
+  if (!ctx) return;
+  const { page, errors } = ctx;
+  try {
+    const head = "def f():\n\tif True:\n";
+    await setCode(page, `${head}\n\t\tpass\n`, head.length);
+    await page.keyboard.press("Tab");
+    assert.equal((await caretState(page)).value, `${head}\t\n\t\tpass\n`);
+    assert.deepEqual(errors, []);
+  } finally {
+    await page.close();
+  }
+});
+
+// A comment can sit at any column; Enter after `def f():` matches the
+// four-space statement below it, not the two-space comment.
+test("Enter over a comment and a four-space body matches the body", async (t) => {
+  const ctx = await editorPage(t, {
+    params: { editorIndent: "2", language: "python" },
+  });
+  if (!ctx) return;
+  const { page, errors } = ctx;
+  try {
+    await setCode(
+      page,
+      "def f():\n  # explanation\n    pass\n",
+      "def f():".length,
+    );
+    await page.keyboard.press("Enter");
+    assert.equal(
+      (await caretState(page)).value,
+      "def f():\n    \n  # explanation\n    pass\n",
+    );
+    assert.deepEqual(errors, []);
+  } finally {
+    await page.close();
+  }
+});
+
+// A block comment, like a line comment, may sit at any column; Enter after
+// `{` matches the four-space statement below it.
+test("Enter over a block comment and a four-space body matches the body", async (t) => {
+  const ctx = await editorPage(t, {
+    params: { editorIndent: "2", language: "javascript" },
+  });
+  if (!ctx) return;
+  const { page, errors } = ctx;
+  try {
+    const code = "if (x) {\n  /* note */\n    work();\n}";
+    await setCode(page, code, "if (x) {".length);
+    await page.keyboard.press("Enter");
+    assert.equal(
+      (await caretState(page)).value,
+      "if (x) {\n    \n  /* note */\n    work();\n}",
+    );
+    assert.deepEqual(errors, []);
+  } finally {
+    await page.close();
+  }
+});
+
+// A deeper line below is a body this Enter opens only when the caret ends its
+// line and selects nothing; otherwise Enter nests by the starter's two.
+for (const [name, code, start, end, expected] of [
+  [
+    "text after the caret",
+    "if (ready) {work();\n      x;\n}",
+    12,
+    12,
+    "if (ready) {\n  work();\n      x;\n}",
+  ],
+  [
+    "a closer after the caret",
+    "if (ready) {}\n      x;",
+    12,
+    12,
+    "if (ready) {\n  \n}\n      x;",
+  ],
+  [
+    "a selection across the deeper line",
+    "if (ready) {\n      x;\n}",
+    12,
+    21,
+    "if (ready) {\n  \n}",
+  ],
+]) {
+  test(`Enter with ${name} ignores the deeper line below`, async (t) => {
+    const ctx = await editorPage(t, {
+      params: { language: "javascript", editorIndent: "2" },
+    });
+    if (!ctx) return;
+    const { page, errors } = ctx;
+    try {
+      await setCode(page, code, start, end);
+      await page.keyboard.press("Enter");
+      assert.equal((await caretState(page)).value, expected);
+      assert.deepEqual(errors, []);
+    } finally {
+      await page.close();
+    }
+  });
+}
 
 test("a click back into the editor after Escape lets Tab indent again", async (t) => {
   const ctx = await editorPage(t);

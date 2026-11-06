@@ -56,9 +56,13 @@ import {
   storeGroundingPacket,
 } from "./document-grounding.js";
 import {
+  DEFAULT_INDENT,
   loadEditorOptions,
+  loadIndent,
   saveEditorOptions,
+  saveIndent,
   setEditorOptions,
+  setIndent,
 } from "./editor-options.js";
 
 import { readStored, storageArea, writeStored } from "./audio-output.js";
@@ -141,6 +145,7 @@ let avoidedProblem;
 
 const nodes = {
   editorOptions: document.querySelector(".editor-options-row"),
+  editorIndent: document.querySelector("#editor-indent"),
   exampleDrawing: document.querySelector("#enable-example-drawing"),
   candidateLed: document.querySelector("#enable-candidate-led"),
   accountStatus: document.querySelector("#account-status"),
@@ -317,6 +322,14 @@ for (const input of editorControls) {
     saveEditorOptions(selectedEditorOptions()),
   );
 }
+
+// The markup already selects the default, so only another saved choice is
+// written: a first visit leaves the control as the page drew it.
+const savedIndent = loadIndent();
+if (savedIndent !== DEFAULT_INDENT) nodes.editorIndent.value = savedIndent;
+nodes.editorIndent.addEventListener("change", () =>
+  saveIndent(nodes.editorIndent.value),
+);
 
 function selectedEditorOptions() {
   return Object.fromEntries(
@@ -780,6 +793,7 @@ start.addEventListener("click", async () => {
   if (!strict && mode === "coding" && retryLanguage)
     destination.searchParams.set("language", retryLanguage);
   setEditorOptions(destination.searchParams, selectedEditorOptions());
+  setIndent(destination.searchParams, nodes.editorIndent.value);
   const profile = {
     role: nodes.profileRole.value.trim(),
     seniority: nodes.profileSeniority.value,

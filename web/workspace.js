@@ -332,6 +332,7 @@ function mountControlledWorkspace(nodes, c) {
         nodes.editor.selectionStart,
         nodes.editor.selectionEnd,
         event.shiftKey,
+        c.indentFor?.(),
       ),
     );
   });
@@ -393,6 +394,8 @@ function mountControlledWorkspace(nodes, c) {
           nodes.editor.selectionStart,
           nodes.editor.selectionEnd,
           c.language,
+          undefined,
+          c.indentFor?.(true),
         ),
       );
       return;

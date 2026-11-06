@@ -14,6 +14,8 @@ import {
   isBackspaceKeystroke,
   deleteEmptyPair,
   isToggleCommentKeystroke,
+  followingIndent,
+  lineIndentUnit,
   toggleLineComment,
 } from "../../web/editor.js";
 import { createSyntaxParser } from "../../web/syntax-parser.js";
@@ -1457,4 +1459,196 @@ test("dropping in the original selection or moving no text leaves it unchanged",
     start: 2,
     end: 2,
   });
+});
+
+// The lobby's Indentation choice reaches these functions as the text one level
+// types. Each case is written for the unit, so ignoring it and typing four
+// spaces fails all but the four-space column.
+test("a chosen indentation unit is what Tab, Shift+Tab and Enter use", () => {
+  for (const [unit, indent] of [
+    ["2 spaces", "  "],
+    ["4 spaces", "    "],
+    ["tab", "\t"],
+  ]) {
+    // Tab with a caret at column 0 indents the line by one unit.
+    assert.deepEqual(
+      indentSelection("call();", 0, 0, false, indent),
+      { value: `${indent}call();`, start: indent.length, end: indent.length },
+      unit,
+    );
+    // Tab past the indentation types one unit where the caret sits.
+    assert.deepEqual(
+      indentSelection("a = 1;", 1, 1, false, indent),
+      {
+        value: `a${indent} = 1;`,
+        start: 1 + indent.length,
+        end: 1 + indent.length,
+      },
+      unit,
+    );
+    // A multi-line selection gains, then loses, exactly one unit per line.
+    const block = "first();\nsecond();";
+    const indented = indentSelection(block, 0, block.length, false, indent);
+    assert.equal(indented.value, `${indent}first();\n${indent}second();`, unit);
+    assert.equal(
+      indentSelection(
+        indented.value,
+        indented.start,
+        indented.end,
+        true,
+        indent,
+      ).value,
+      block,
+      unit,
+    );
+    // Enter after an opener nests by one unit inside the current line's.
+    for (const [line, language] of [
+      [`${indent}if (ready) {`, "javascript"],
+      [`${indent}if ready:`, "python"],
+    ]) {
+      const expected = `${line}\n${indent}${indent}`;
+      assert.deepEqual(
+        indentNewline(
+          line,
+          line.length,
+          line.length,
+          language,
+          undefined,
+          indent,
+        ),
+        { value: expected, start: expected.length, end: expected.length },
+        `${unit} ${language}`,
+      );
+    }
+  }
+});
+
+test("Shift+Tab takes back one level of the chosen unit and no more", () => {
+  // Two-space code nested two levels deep loses one level, not both.
+  assert.equal(
+    indentSelection("    deep();", 0, 0, true, "  ").value,
+    "  deep();",
+  );
+  // A tab unit removes one tab from a tab-indented line.
+  assert.equal(
+    indentSelection("\t\tdeep();", 0, 0, true, "\t").value,
+    "\tdeep();",
+  );
+  // Spaces under the tab unit come back up to the tab's four columns.
+  assert.equal(
+    indentSelection("      mixed();", 0, 0, true, "\t").value,
+    "  mixed();",
+  );
+});
+
+// Under the tab unit, a tab after a line's spaces is a TabError in Python 3.
+test("Enter under the tab unit nests a space-indented line with spaces", () => {
+  const line = "    for x in xs:";
+  const expected = `${line}\n        `;
+  assert.deepEqual(
+    indentNewline(line, line.length, line.length, "python", undefined, "\t"),
+    { value: expected, start: expected.length, end: expected.length },
+  );
+  const tabbed = "\tfor x in xs:";
+  assert.equal(
+    indentNewline(
+      tabbed,
+      tabbed.length,
+      tabbed.length,
+      "python",
+      undefined,
+      "\t",
+    ).value,
+    `${tabbed}\n\t\t`,
+  );
+});
+
+// A file can hold a tab-indented function and a space-indented one. Each line
+// outdents by its own level: the two-space line by two, not by the four a tab
+// stands for in this mostly tabbed buffer.
+test("each line outdents by its own tabs or spaces in a mixed buffer", () => {
+  const value =
+    "def a():\n\tif x:\n\t\tpass\n\tif y:\n\t\tpass\n\ndef b():\n  if z:\n    w()\n";
+  const outdent = (marker) => {
+    const at = value.indexOf(marker);
+    return indentSelection(
+      value,
+      at,
+      at,
+      true,
+      lineIndentUnit(value, at, "\t", "  "),
+    ).value;
+  };
+  assert.equal(outdent("    w()"), value.replace("    w()", "  w()"));
+  assert.equal(outdent("\t\tpass"), value.replace("\t\tpass", "\tpass"));
+  // A line with no indentation takes the unit it is given.
+  assert.equal(lineIndentUnit("x = 1", 0, "  "), "  ");
+  assert.equal(lineIndentUnit("x = 1", 0, "\t"), "\t");
+  // Without a measured width, spaces under the tab unit are four columns.
+  assert.equal(lineIndentUnit("    x", 0, "\t"), "    ");
+});
+
+// Tab on a selection spanning a tab-indented function and a two-space one:
+// with `{ unit, spaces }` each line takes its own level, where one unit for
+// the block would put tabs among the spaces.
+test("Tab and Shift+Tab on a mixed selection give each line its own level", () => {
+  const value = "def a():\n\tpass\ndef b():\n  pass\n";
+  const indent = { unit: "  ", spaces: "  " };
+  const indented = indentSelection(value, 0, value.length, false, indent);
+  assert.equal(indented.value, "  def a():\n\t\tpass\n  def b():\n    pass\n");
+  assert.equal(
+    indentSelection(indented.value, 0, indented.value.length, true, indent)
+      .value,
+    value,
+  );
+  // A plain string keeps one level for every line, as before.
+  assert.equal(
+    indentSelection(value, 0, value.length, false, "  ").value,
+    "  def a():\n  \tpass\n  def b():\n    pass\n",
+  );
+});
+
+// Enter after `def f():` above a body that is already there matches the body,
+// whatever width was chosen.
+test("Enter under a block with a body takes the body's indentation", () => {
+  const value = "def f():\n    pass\n";
+  assert.equal(followingIndent(value, "def f():".length), "    ");
+  const nested = "class A:\n    def f(self):\n\n        pass\n";
+  assert.equal(followingIndent(nested, nested.indexOf("):") + 2), "    ");
+  // No body yet, or a shallower next line, leaves it to the chosen unit.
+  assert.equal(followingIndent("def f():", 8), null);
+  assert.equal(followingIndent("    if x:\ny = 1", 9), null);
+});
+
+// A comment may sit at any column, so it is not the body: the next statement
+// below it is.
+test("Enter under a block measures the body past comment-only lines", () => {
+  const value = "def f():\n  # explanation\n\n    pass\n";
+  assert.equal(followingIndent(value, "def f():".length, "python"), "    ");
+  const js = "if (x) {\n// note\n    y();\n}";
+  assert.equal(followingIndent(js, "if (x) {".length, "javascript"), "    ");
+  // Block comments, on one line or several, are skipped too; a C statement
+  // that starts with `*` is code.
+  const block =
+    "if (x) {\n  /* note */\n  /**\n   * doc\n   */\n    work();\n}";
+  assert.equal(followingIndent(block, "if (x) {".length, "c"), "    ");
+  const deref = "if (x) {\n    *p = 0;\n}";
+  assert.equal(followingIndent(deref, "if (x) {".length, "c"), "    ");
+  // Only comments below: no body to match yet.
+  assert.equal(followingIndent("def f():\n  # todo\n", 8, "python"), null);
+});
+
+// A line with no indentation of its own follows the nearest code above it: in
+// a tab-indented block it takes a tab, not the space width.
+test("an unindented line inside a tab-indented block takes a tab", () => {
+  const value = "def f():\n\tif True:\n\n\t\tpass\n";
+  const blank = value.indexOf("\n\n") + 1;
+  assert.equal(lineIndentUnit(value, blank, "    ", "    "), "\t");
+  // Only a blank line follows the code above: `def b():` after a tab-indented
+  // line is code of its own, and a tab there would sit over a space body.
+  const after = "def a():\n\tpass\ndef b():\n  pass\n";
+  assert.equal(lineIndentUnit(after, after.indexOf("def b"), "  "), "  ");
+  // Spaces above, or nothing above, keep the unit given.
+  assert.equal(lineIndentUnit("  x\n\ny", 5, "    ", "  "), "    ");
+  assert.equal(lineIndentUnit("\n\nx", 1, "  "), "  ");
 });

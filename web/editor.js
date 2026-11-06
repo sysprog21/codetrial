@@ -1,7 +1,11 @@
 import { lineCommentFor, tokenize } from "./tokenizer.js";
 import { parseSyntax } from "./syntax-parser.js";
 
-const INDENT = "    ";
+// One level of indentation unless the candidate chose another in the lobby.
+const DEFAULT_INDENT = "    ";
+// Columns a tab advances, as `tab-size: 4` in styles.css draws it, so
+// Shift+Tab under the tab unit still takes back four spaces at most.
+const TAB_COLUMNS = 4;
 
 function lastCodeCharacter(value, start, language, parse) {
   const prefix = value.slice(0, start);
@@ -22,14 +26,27 @@ function lastCodeCharacter(value, start, language, parse) {
 
 const BRACKET_PAIRS = { "(": ")", "{": "}", "[": "]" };
 
-export function indentNewline(value, start, end, language, parse) {
+export function indentNewline(
+  value,
+  start,
+  end,
+  language,
+  parse,
+  indent = DEFAULT_INDENT,
+) {
   const lineStart = start === 0 ? 0 : value.lastIndexOf("\n", start - 1) + 1;
   const before = value.slice(lineStart, start);
   const indentation = before.match(/^[ \t]*/)[0];
   const opener = lastCodeCharacter(value, start, language, parse);
   const closer = BRACKET_PAIRS[opener];
   const nested = Boolean(closer) || (language === "python" && opener === ":");
-  const innerIndent = indentation + (nested ? INDENT : "");
+  // A tab after spaces mixes the two, which Python 3 refuses as a TabError, so
+  // a space-indented line nests with spaces whatever the unit.
+  const unit =
+    indent === "\t" && indentation.includes(" ")
+      ? " ".repeat(TAB_COLUMNS)
+      : indent;
+  const innerIndent = indentation + (nested ? unit : "");
   let insertion = `\n${innerIndent}`;
   const caret = start + insertion.length;
   const after = value.slice(end);
@@ -198,7 +215,93 @@ export function deleteEmptyPair(value, start, end, language, parse) {
   };
 }
 
-export function indentSelection(value, start, end, outdent = false) {
+/// One level for the line holding `at`: a tab-indented line keeps tabs and a
+/// space-indented one takes `spaces`, whatever the buffer as a whole prefers,
+/// so a tab-indented function and a space-indented one in the same file each
+/// nest and outdent by their own level. A blank line follows the nearest
+/// non-blank line above: a tab there means a tab here, so a blank line inside
+/// a tab-indented block does not get spaces. Any other line with no
+/// indentation is code of its own and takes `unit`.
+export function lineIndentUnit(
+  value,
+  at,
+  unit,
+  spaces = unit === "\t" ? " ".repeat(TAB_COLUMNS) : unit,
+) {
+  const lineStart = at === 0 ? 0 : value.lastIndexOf("\n", at - 1) + 1;
+  const lead = value.slice(lineStart).match(/^[ \t]*/)[0];
+  if (lead.startsWith("\t")) return "\t";
+  if (lead.startsWith(" ")) return spaces;
+  const lineEnd = value.indexOf("\n", lineStart);
+  if (value.slice(lineStart, lineEnd === -1 ? undefined : lineEnd).trim())
+    return unit;
+  for (let end = lineStart - 1; end > 0;) {
+    const start = value.lastIndexOf("\n", end - 1) + 1;
+    const line = value.slice(start, end);
+    if (line.trim()) return line.startsWith("\t") ? "\t" : unit;
+    end = start - 1;
+  }
+  return unit;
+}
+
+/// The indentation Enter should add after the caret's line when the block it
+/// opens already has a body: the extra whitespace of the next code line, if
+/// that line is deeper. Null otherwise. Without it, Enter after `def f():`
+/// above a pasted four-space body nests at the chosen width and Python rejects
+/// the body as an unexpected indent. A comment may sit at any column, so a
+/// line holding nothing but comments, line or block, is skipped like a blank
+/// one. The tokenizer decides what is a comment, so a C statement that starts
+/// with `*` is still code.
+export function followingIndent(value, at, language) {
+  const comments = lineCommentFor(language)
+    ? tokenize(value, language).tokens.filter(
+        (token) => token.kind === "comment",
+      )
+    : [];
+  // Every non-space character of [from, to) lies inside a comment.
+  const commentOnly = (from, to) => {
+    for (let index = from; index < to; index += 1) {
+      if (/\s/.test(value[index])) continue;
+      const token = comments.find(
+        ({ start, end }) => start <= index && index < end,
+      );
+      if (!token) return false;
+      index = token.end - 1;
+    }
+    return true;
+  };
+  const lineStart = at === 0 ? 0 : value.lastIndexOf("\n", at - 1) + 1;
+  const current = value.slice(lineStart).match(/^[ \t]*/)[0];
+  for (let next = value.indexOf("\n", at); next !== -1;) {
+    const lineEnd = value.indexOf("\n", next + 1);
+    const line = value.slice(next + 1, lineEnd === -1 ? undefined : lineEnd);
+    const to = lineEnd === -1 ? value.length : lineEnd;
+    if (line.trim() && !commentOnly(next + 1, to)) {
+      const lead = line.match(/^[ \t]*/)[0];
+      return lead.length > current.length && lead.startsWith(current)
+        ? lead.slice(current.length)
+        : null;
+    }
+    next = lineEnd;
+  }
+  return null;
+}
+
+/// `indent` is either one level for every line, as on `main`, or
+/// `{ unit, spaces }` for `lineIndentUnit` to resolve line by line, so a
+/// selection spanning a tab-indented function and a space-indented one gives
+/// each its own level.
+export function indentSelection(
+  value,
+  start,
+  end,
+  outdent = false,
+  indent = DEFAULT_INDENT,
+) {
+  const levelAt =
+    typeof indent === "string"
+      ? () => indent
+      : (at) => lineIndentUnit(value, at, indent.unit, indent.spaces);
   // Not lastIndexOf alone: a negative fromIndex clamps to 0 and still matches
   // there, so a document that opens with a blank line would resolve the
   // caret at position 0 onto the second line and indent the wrong one.
@@ -214,10 +317,11 @@ export function indentSelection(value, start, end, outdent = false) {
     !outdent &&
     !/^[ \t]*$/.test(value.slice(lineStart, start))
   ) {
+    const unit = levelAt(lineStart);
     return {
-      value: `${value.slice(0, start)}${INDENT}${value.slice(end)}`,
-      start: start + INDENT.length,
-      end: end + INDENT.length,
+      value: `${value.slice(0, start)}${unit}${value.slice(end)}`,
+      start: start + unit.length,
+      end: end + unit.length,
     };
   }
   const changes = [];
@@ -226,11 +330,16 @@ export function indentSelection(value, start, end, outdent = false) {
   // separate bound by backing off a trailing newline cannot tell that newline
   // apart from a selected blank line's own, and skipped it.
   for (let at = lineStart; at < end || at === lineStart;) {
-    const indentation = value.slice(at).match(/^\t|^ {1,4}/)?.[0] || "";
+    const unit = levelAt(at);
+    // One level back: a single tab, or up to one unit's width of spaces.
+    const level = new RegExp(
+      `^\\t|^ {1,${unit === "\t" ? TAB_COLUMNS : unit.length}}`,
+    );
+    const indentation = value.slice(at).match(level)?.[0] || "";
     changes.push({
       at,
       remove: outdent ? indentation.length : 0,
-      insert: outdent ? "" : INDENT,
+      insert: outdent ? "" : unit,
     });
     const next = value.indexOf("\n", at);
     if (next === -1) break;
