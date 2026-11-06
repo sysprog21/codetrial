@@ -423,6 +423,14 @@ new turn following its reveal after the last one was left midway, a tick that
 runs in the same task as a candidate's scroll leaving it in place, and the head
 staying in view while the bar is pinned to the end of a long turn.
 
+`node --test tests/browser/transcript-follow.test.js` runs Chromium against the
+interview page at 1280x720 and 900x700, adding turns by running the tests
+with no room joined. It checks that the empty state keeps its heading in view,
+that new turns keep the Transcript tab at its end without scrolling the page,
+that scrolling up stops the follow and scrolling back resumes it, that a resize
+across the 1024px breakpoint keeps it, and that the tab opens at the end, or
+where the candidate left it, after turns arrived behind the Problem tab.
+
 `BROWSER_CHECK_FLOW=avatar ./scripts/browser-check.sh` is the only check that
 runs the renderer. It asserts the mount leaves `loading` and then asserts
 whichever branch it landed on. The `ready` branch reads a frame counter the
