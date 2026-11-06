@@ -60,7 +60,7 @@ neither name nor payload; see
 | `web/interview.js` | 6226 | 161 | the most edited file in the browser half |
 | `web/app.js` | 2685 | 80 | |
 | `web/lib.js` | 2287 | 87 | carries the wire topics, 12 importers |
-| `web/task.js` | 1881 | 6 | an entry module, nothing imports it; the calibration checks, the case text and the result wording moved to `web/task-calibration.js`, `web/task-cases.js` and `web/task-review.js` |
+| `web/task.js` | 1836 | 6 | an entry module, nothing imports it; the calibration checks, the case text and the result wording moved to `web/task-calibration.js`, `web/task-cases.js` and `web/task-review.js` |
 
 `eslint .` passes. With `complexity` over 20, `max-lines-per-function` over 100,
 `max-depth` over 4 and `max-params` over 7 switched on for a probe, there are 34,
@@ -73,9 +73,10 @@ worst are `bindEvents` (496 lines), `mountBoardText` (444), `sanitizeReport` in
 `web/task.js` was the safest first split: few commits, no importers, two
 functions over 100 lines. It was also the least covered, so each cut pins its
 behavior with a node test first and moves one cohesive block of pure code:
-`web/task-calibration.js`, `web/task-cases.js` and `web/task-review.js` are done. What is left shares
-about 45 module-level variables, and `connect` and the start handler cannot move
-until that state is passed in an object.
+`web/task-calibration.js`, `web/task-cases.js` and `web/task-review.js` are done.
+The page's 45 mutable variables now live in one sealed object in
+`web/task-state.js`, so `connect` and the start handler can move once the
+helpers they call do.
 Not `web/interview.js` first: it is the file most changes go through and the
 most likely to conflict with an open pull request; and not `web/lib.js`, whose
 topics are the contract.
