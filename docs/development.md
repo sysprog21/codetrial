@@ -1132,6 +1132,20 @@ reserve is revalidated before launch against the resolved handover grace
 at or after the boundary is `late_idle` or `late_terminal_preempted` and never
 counts toward the two completed rotations a run needs.
 
+What a reply is judged on is what its question asks and no more
+(`scripts/long-interview-schedule.cjs`). An inspect question asks about the
+duplicate case, so the revision is judged in what the tool read (the answer
+key's `tool.result_fact_ids`), and a reply may state the current revision
+without penalty but not an earlier one. A board has no marker a model can read
+back: `read_board` gives it a count and an image, never text, so a whiteboard
+revision is told apart by the stroke count the tool reports (four strokes are
+drawn per revision and the board keeps them, so revision n reads `4n strokes`),
+its questions do not ask for a revision, and `tests/agent/whiteboard.rs` pins
+the wording the judge reads, which the judge's own test takes from
+`tests/golden/prompts.json`. The rubrics are lexical and were checked against
+the first pilot's real replies. Changing any of this changes the catalogue, so
+`SCHEDULE_VERSION`, the pins and every clip manifest move with it.
+
 `run` also samples the owned process tree (RSS, open descriptors and threads
 for every process, keyed by PID and start time so a reused PID is another
 process) every 30 seconds into `resource-samples.jsonl`, for either arm of a

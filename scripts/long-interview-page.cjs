@@ -172,15 +172,16 @@ function pageController(page, { selectLanguage, mode = "coding" }) {
 }
 
 /// Draws one closed shape per entry of the revision's strokes, in a row of its
-/// own, so each revision leaves a board that differs from the last. The board
-/// has no text tool, so the marker cannot be written on it: a revision is told
-/// apart by position and shape count, not by a legible marker.
+/// own, so each revision leaves a board that differs from the last. The marker
+/// is not drawn: read_board gives the model a stroke count and an image, never
+/// text, so a revision is told apart by the board's running stroke count, which
+/// is four more after each revision (the judge reads it in the tool's text).
 async function drawBoardRevision(page, fixture, index) {
   const bounds = await page.locator("#board").boundingBox();
   if (!bounds) throw new Error("the visible board had no drawing bounds");
   const row = bounds.y + 30 + ((index - 1) % 6) * 70;
   let column = bounds.x + 30;
-  for (let i = 0; i < fixture.strokes.length; i++) {
+  for (let i = 0; i < fixture.strokes; i++) {
     await page.mouse.move(column, row);
     await page.mouse.down();
     await page.mouse.move(column + 80, row, { steps: 4 });

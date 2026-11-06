@@ -206,6 +206,27 @@ fn a_board_reports_its_own_age_and_an_empty_one_says_so() {
     assert_eq!(board_age_seconds(&state), Some(0));
 }
 
+/// What the long-interview judge reads. The fixture draws no text, so a
+/// revision is told apart by the stroke count `read_board` reports, and the
+/// judge (`scripts/long-interview-schedule.cjs`) looks for "<n> strokes" in
+/// this text. Its test reads the frozen output in `tests/golden/prompts.json`,
+/// so a rewording breaks it there too; this pins the phrase on this side.
+#[test]
+fn read_board_states_the_stroke_count_the_whiteboard_judge_matches() {
+    for strokes in [4, 20, 68] {
+        let text = read_board_text(strokes, 3, Some(12), 30);
+        assert!(
+            text.contains(&format!(
+                "image: {strokes} strokes, as the candidate last left it"
+            )),
+            "{text}"
+        );
+    }
+    // An undrawn board says there is nothing to count, and so cannot match one.
+    let empty = read_board_text(0, 0, None, 30);
+    assert!(!empty.contains("strokes"), "{empty}");
+}
+
 /// The reviewer of a whiteboard interview is pointed at the board and at
 /// nothing that does not exist.
 ///

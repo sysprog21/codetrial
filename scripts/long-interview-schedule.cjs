@@ -29,7 +29,7 @@ const fs = require("fs");
 const path = require("path");
 const { spawnSync } = require("child_process");
 
-const SCHEDULE_VERSION = 1;
+const SCHEDULE_VERSION = 3;
 const CYCLE_S = 300;
 /// The end and report reservation; no stimulus is scheduled inside it.
 const STOP_BEFORE_END_S = 120;
@@ -124,12 +124,21 @@ const AUTHORED = Object.freeze({
     sentence:
       "My constraints are at most ten thousand numbers, exactly one valid pair, and never reuse the same element.",
     review: {
-      id: "constraints-v1",
+      id: "constraints-v2",
       reviewer: "schedule author",
       status: "reviewed",
     },
     concepts: [
-      ["ten thousand", "10000", "10,000", "10^4"],
+      [
+        "ten thousand",
+        "ten-thousand",
+        "10 thousand",
+        "10k",
+        "10000",
+        "10,000",
+        "10 000",
+        "10^4",
+      ],
       ["exactly one", "one valid pair", "single valid pair", "one pair"],
       [
         "same element",
@@ -142,7 +151,7 @@ const AUTHORED = Object.freeze({
   },
   duplicate_case: {
     review: {
-      id: "duplicate-v1",
+      id: "duplicate-v2",
       reviewer: "schedule author",
       status: "reviewed",
     },
@@ -150,8 +159,15 @@ const AUTHORED = Object.freeze({
       [
         "different indices",
         "distinct indices",
+        "different index",
+        "distinct index",
+        "different position",
+        "distinct position",
+        "different positions",
+        "distinct positions",
         "two different",
         "two distinct",
+        "two separate",
         "separate indices",
         "not the same index",
       ],
@@ -176,11 +192,21 @@ const AUTHORED = Object.freeze({
   prime: "Could you compare the map approach with checking every pair?",
   barge:
     "Let me clarify the example first. I am still explaining my reasoning.",
-  state_question:
-    "What are the original constraints, our current stage, and the latest {thing}?",
-  final_question:
-    "Before we wrap up, what is the question I still have open, and what is the latest {thing}?",
-  things: { coding: "source revision", whiteboard: "diagram revision" },
+  // What each question asks for is all its reply is held to. A board's
+  // revision cannot be asked for: read_board gives the model a count and an
+  // image, never text, and a marker drawn in the image is not something to
+  // judge a reply on. The whiteboard questions do not ask for a revision; it is
+  // judged in what read_board reports, the stroke count.
+  state_question: {
+    coding:
+      "What are the original constraints, our current stage, and the latest source revision?",
+    whiteboard: "What are the original constraints, and our current stage?",
+  },
+  final_question: {
+    coding:
+      "Before we wrap up, what is the question I still have open, and what is the latest source revision?",
+    whiteboard: "Before we wrap up, what is the question I still have open?",
+  },
 });
 
 const canonicalize = (value) => {
@@ -198,7 +224,7 @@ const hashOf = (value) => sha256(canonicalize(value));
 
 /// Pinned. Edit the catalogue above, bump SCHEDULE_VERSION, and replace this.
 const AUTHORED_SHA256 =
-  "323220654cdf1c5ce18e4bd3a739c9b45557f891e94536a92720035c1deceb1f";
+  "55bfd3f2315601dd598a42bb9ceb0c9e3f0d0acabcecb82d2aceeb7a20f3468b";
 
 function checkAuthoredPin(expected = AUTHORED_SHA256) {
   const actual = hashOf(AUTHORED);
@@ -226,6 +252,9 @@ function nonceFor(mode, checkpointId) {
   return `${first[digest[0] % first.length]} ${second[digest[1] % second.length]}`;
 }
 
+/// Shapes the page controller draws per board revision, one stroke each.
+const STROKES_PER_REVISION = 4;
+
 function markerFor(mode, index) {
   return `rev${pad2(index)}-${sha256(`${SCHEDULE_VERSION}|${mode}|rev|${index}`).slice(0, 6)}`;
 }
@@ -251,11 +280,12 @@ function revisionFixture(mode, index) {
     ].join("\n");
     return { marker, kind: "editor", language: "javascript", source };
   }
+  // The board keeps every revision's strokes, and its reading is the count.
   return {
     kind: "board",
     marker,
-    label: `complement map example ${marker}`,
-    strokes: ["box nums", "arrow need", "box seen", `label ${marker}`],
+    strokes: STROKES_PER_REVISION,
+    strokes_total: STROKES_PER_REVISION * index,
   };
 }
 
@@ -324,6 +354,7 @@ const rubricMatch = (spec) => ({
 /// The schedule and its answer key for `mode`, derived from `plan`
 /// ({durationMin, observationTargetS}, as long-interview-plan.cjs validated).
 function generateSchedule(mode, plan) {
+  const coding = mode === "coding";
   checkAuthoredPin();
   if (!TOOL_BY_MODE[mode]) {
     throw new Error(`mode must be coding or whiteboard, not ${mode}`);
@@ -334,7 +365,6 @@ function generateSchedule(mode, plan) {
     observationTargetS,
   );
   const tool = TOOL_BY_MODE[mode];
-  const thing = AUTHORED.things[mode];
   const recalls = recallPlan(cycles);
 
   const steps = [{ action_id: JOIN_ACTION_ID, at_s: 0, kind: "join" }];
@@ -403,12 +433,22 @@ function generateSchedule(mode, plan) {
       `We are in the ${phase} stage.`,
       { mode: "folded", tokens: [phase] },
     );
-    const revisionFact = factOf(
-      `revision_${c}`,
-      base + 110,
-      `The latest ${thing} is ${revision.marker}.`,
-      { mode: "exact", tokens: [revision.marker] },
-    );
+    // A coding revision is a marker a reply states; a board's is the count
+    // read_board reports, judged in what the tool read and never in a reply, so
+    // its id is not revision_* (the prefix a reply may not state a stale one of).
+    const revisionFact = coding
+      ? factOf(
+          `revision_${c}`,
+          base + 110,
+          `The latest source revision is ${revision.marker}.`,
+          { mode: "exact", tokens: [revision.marker] },
+        )
+      : factOf(
+          `board_${c}`,
+          base + 110,
+          `The board holds ${revision.strokes_total} strokes.`,
+          { mode: "exact", tokens: [`${revision.strokes_total} strokes`] },
+        );
     facts.push(phaseFact, revisionFact);
 
     const planParts = [`Stage ${cycle}. We are now in the ${phase} stage.`];
@@ -506,7 +546,7 @@ function generateSchedule(mode, plan) {
     addClip(id("barge"), "barge", [AUTHORED.barge], base + 175);
 
     const recallId = recalls.get(cycle);
-    const stateQuestion = AUTHORED.state_question.replace("{thing}", thing);
+    const stateQuestion = AUTHORED.state_question[mode];
     const recallSeed = recallId
       ? AUTHORED.seeds.find((s) => s.id === recallId)
       : null;
@@ -536,6 +576,8 @@ function generateSchedule(mode, plan) {
       response_window_s: nextInput(inspectEnd, base + 175),
       clip_id: id("ask_inspect"),
       cycle,
+      // What was seeded for this question. The key below asks less of the
+      // reply: the revision is judged in what the tool read.
       source_fact_ids: ["duplicate_case", revisionFact.id],
       required_tool: { name: tool, call_id_required: true },
       required_tools: [tool],
@@ -543,7 +585,9 @@ function generateSchedule(mode, plan) {
     keyCheckpoints.push({
       checkpoint_id: id("cp_inspect"),
       nonce: inspectNonce,
-      element_fact_ids: ["duplicate_case", revisionFact.id],
+      // Only what the question asks. The revision is checked in what the tool
+      // read, below, and a reply may state it without being faulted.
+      element_fact_ids: ["duplicate_case"],
       tool: {
         name: tool,
         result_fact_ids: [revisionFact.id],
@@ -596,7 +640,9 @@ function generateSchedule(mode, plan) {
     keyCheckpoints.push({
       checkpoint_id: id("cp_state"),
       nonce: stateNonce,
-      element_fact_ids: stateFacts,
+      element_fact_ids: stateFacts.filter(
+        (id) => coding || id !== revisionFact.id,
+      ),
       tools,
     });
   }
@@ -610,15 +656,14 @@ function generateSchedule(mode, plan) {
   );
   facts.push(pendingFact);
   const finalNonce = nonceFor(mode, "cp_final");
-  const finalText = `${AUTHORED.final_question.replace("{thing}", thing)} Please also say the code words ${finalNonce}.`;
+  const finalText = `${AUTHORED.final_question[mode]} Please also say the code words ${finalNonce}.`;
   const finalSpeech = addClip(
     "final_checkpoint",
     "checkpoint",
     [finalText],
     finalAt,
   );
-  const lastRevisionFact = `revision_${pad2(cycles)}`;
-  const finalPhaseFact = `phase_${pad2(cycles)}`;
+  const lastRevisionFact = `${coding ? "revision" : "board"}_${pad2(cycles)}`;
   steps.push({
     action_id: "final_checkpoint",
     at_s: finalAt,
@@ -626,7 +671,11 @@ function generateSchedule(mode, plan) {
     clip_id: "final_checkpoint",
     checkpoint_id: "cp_final",
   });
-  const finalFacts = [pendingFact.id, finalPhaseFact, lastRevisionFact];
+  // What the final question asks for, and no more: the open question and, for
+  // a coding interview, the latest revision; never the stage. A board's
+  // revision is judged in what the tool read, so it is a source, not an element.
+  const finalFacts = [pendingFact.id, lastRevisionFact];
+  const finalElements = coding ? finalFacts : [pendingFact.id];
   checkpoints.push({
     checkpoint_id: "cp_final",
     kind: "final",
@@ -642,7 +691,7 @@ function generateSchedule(mode, plan) {
   keyCheckpoints.push({
     checkpoint_id: "cp_final",
     nonce: finalNonce,
-    element_fact_ids: finalFacts,
+    element_fact_ids: finalElements,
     tools: [
       {
         name: tool,
@@ -909,13 +958,14 @@ function judgeCheckpoint(bundle, evidence, options = {}) {
     const misses = matchFact(fact.match, reply.text);
     if (misses.length) fail(`reply lacks ${id}: ${misses[0]}`);
   }
-  // A reply that names an earlier revision is not about the current one.
+  // A reply that names an earlier revision is not about the current one. The
+  // current one is whichever the checkpoint asks for or its tool must show.
+  const current = new Set([
+    ...key.element_fact_ids,
+    ...(key.tools ?? [key.tool]).flatMap((t) => t.result_fact_ids),
+  ]);
   for (const fact of answerKey.facts) {
-    if (
-      !/^revision_\d+$/.test(fact.id) ||
-      key.element_fact_ids.includes(fact.id)
-    )
-      continue;
+    if (!/^revision_\d+$/.test(fact.id) || current.has(fact.id)) continue;
     if (factIntegrity(fact) && matchFact(fact.match, reply.text).length === 0) {
       fail(`reply states the stale revision ${fact.id}`);
     }

@@ -53,9 +53,9 @@ const bundles = {
 // Pinned on purpose: a change to the authored questions, the timing or the
 // answer key moves these, and the change then has to be made on purpose.
 const PINS = {
-  coding: "1a926968c26adbf61aeea60a5d10dd5a461180fc12686d196d30e94f7b2313a1",
+  coding: "c8099dc2a945e42b147f431525557a481faba3373a9ee507307f9669f1b35cc9",
   whiteboard:
-    "d5851de32e3f63803d0adaab9a93e72ab732aa65a9d05f213f444bb6540c9b93",
+    "84e1a9fe28e0a0a3eced4ec2b8ba3b2551d98abc5a8291575bac4fc1e5952900",
 };
 
 test("the authored catalogue is hash pinned", () => {
@@ -216,8 +216,20 @@ test("every 90 minute schedule recalls facts seeded 30 minutes earlier", () => {
 test("the nonce is never the whole answer in the answer key", () => {
   for (const mode of ["coding", "whiteboard"]) {
     for (const k of bundles[mode].answer_key.checkpoints) {
-      assert.ok(k.element_fact_ids.length >= 2);
+      assert.ok(k.element_fact_ids.length >= 1);
       assert.ok((k.tools ?? [k.tool]).length >= 1);
+      // Nothing is required of the reply that its question did not ask for.
+      if (k.checkpoint_id === "cp_final") {
+        const last = bundles[mode].answer_key.facts
+          .map((f) => f.id)
+          .filter((id) => /^revision_\d+$/.test(id))
+          .at(-1);
+        assert.deepEqual(
+          k.element_fact_ids,
+          mode === "coding" ? ["pending_question", last] : ["pending_question"],
+          mode,
+        );
+      }
     }
   }
 });
@@ -310,6 +322,19 @@ test("interview-run-budget.py validate consumes the generated manifest fields", 
 
 // ---------------------------------------------------------------- the judge
 
+test("an inspect question asks about the duplicate case, not the revision", () => {
+  // The first paid pilot's c04 reply answered what was asked and said the code
+  // words, and failed because the key also wanted a marker the question never
+  // asked for. The revision is checked where it belongs: in what the tool read.
+  for (const mode of ["coding", "whiteboard"]) {
+    for (const k of bundles[mode].answer_key.checkpoints) {
+      if (!k.checkpoint_id.endsWith("_cp_inspect")) continue;
+      assert.deepEqual(k.element_fact_ids, ["duplicate_case"], k.checkpoint_id);
+      assert.match(k.tool.result_fact_ids.join(), /^(revision|board)_\d+$/);
+    }
+  }
+});
+
 const CP_STATE = "c07_cp_state"; // a recall: two tool reads, five facts
 const CP_INSPECT = "c05_cp_inspect";
 
@@ -333,17 +358,30 @@ test("a faithful answer passes every checkpoint of both schedules", () => {
   }
 });
 
+const PASS = { verdict: "pass", reasons: [] };
+const reasonsOf = (mode, evidence) =>
+  judgeCheckpoint(bundles[mode], evidence).reasons.join("\n");
 const key = (mode, id) =>
   bundles[mode].answer_key.checkpoints.find((k) => k.checkpoint_id === id);
 const factsOf = (mode) => bundles[mode].answer_key.facts;
-const marker = (mode, n) =>
-  factsOf(mode).find((f) => f.id === `revision_${String(n).padStart(2, "0")}`)
+const factToken = (mode, prefix, n) =>
+  factsOf(mode).find((f) => f.id === `${prefix}_${String(n).padStart(2, "0")}`)
     .match.tokens[0];
+const boardToken = (n) => factToken("whiteboard", "board", n);
+const marker = (mode, n) => factToken(mode, "revision", n);
 
 // Each fixture names the reason it must fail. Every one of them keeps the
 // nonce, and all but the first few keep the expected tokens, so a judge that
 // stops at the nonce or at the words passes them.
 const NEGATIVES = [
+  {
+    name: "an inspect reply that states an earlier revision",
+    cp: CP_INSPECT,
+    reason: /stale revision revision_04/,
+    edit: (e) => {
+      e.reply.text += ` ${marker("coding", 4)}`;
+    },
+  },
   {
     name: "nonce only, tool evidence valid",
     cp: CP_STATE,
@@ -372,21 +410,21 @@ const NEGATIVES = [
   },
   {
     name: "wrong revision stated in the reply",
-    cp: CP_INSPECT,
-    reason: /lacks revision_05|stale revision/,
+    cp: CP_STATE,
+    reason: /lacks revision_07|stale revision/,
     edit: (e) => {
       e.reply.text = e.reply.text.replace(
-        marker("coding", 5),
-        marker("coding", 4),
+        marker("coding", 7),
+        marker("coding", 6),
       );
     },
   },
   {
     name: "current and stale revision both stated",
-    cp: CP_INSPECT,
-    reason: /stale revision revision_04/,
+    cp: CP_STATE,
+    reason: /stale revision revision_06/,
     edit: (e) => {
-      e.reply.text += ` ${marker("coding", 4)}`;
+      e.reply.text += ` ${marker("coding", 6)}`;
     },
   },
   {
@@ -533,7 +571,7 @@ const NEGATIVES = [
 ];
 
 test("the negative fixtures are a fixed set and every one fails", () => {
-  assert.equal(NEGATIVES.length, 22);
+  assert.equal(NEGATIVES.length, 23);
   for (const fixture of NEGATIVES) {
     const evidence = evidenceFor("coding", fixture.cp);
     // Each starts from a passing answer, so the edit alone is what fails it.
@@ -597,15 +635,95 @@ test("a judge key that drops the schedule's tool requirement is refused", () => 
   );
 });
 
+// What read_board really answers with: the frozen output tests/agent/prompts.rs
+// pins to the Rust that writes it, with its count swapped. The count is the
+// part of a board a reply cannot read off the fixture's drawing with no text on
+// it, so it is what tells one revision from the next.
+const GOLDEN = JSON.parse(
+  fs.readFileSync(path.join(ROOT, "tests", "golden", "prompts.json"), "utf8"),
+);
+assert.match(GOLDEN.readBoard, /: 22 strokes,/);
+const boardText = (strokes) =>
+  GOLDEN.readBoard.replace(": 22 strokes,", `: ${strokes} strokes,`);
+
+test("a whiteboard revision is told apart by the stroke count read_board reports", () => {
+  // Four strokes are drawn per revision and the board keeps them, so revision n
+  // reads 4n strokes. No marker is drawn: read_board gives a count and an image.
+  for (const n of [1, 5, 11, 17]) {
+    assert.equal(boardToken(n), `${4 * n} strokes`);
+  }
+  const evidence = evidenceFor("whiteboard", CP_INSPECT);
+  evidence.tool_calls[0].result_text = boardText(20);
+  assert.deepEqual(judgeCheckpoint(bundles.whiteboard, evidence), PASS);
+  // The count of the revision before, a count that merely contains this one,
+  // and a board that was never drawn on are not the current board.
+  for (const stale of [
+    boardText(16),
+    boardText(120),
+    boardText(2),
+    GOLDEN.readBoardEmpty,
+  ]) {
+    evidence.tool_calls[0].result_text = stale;
+    assert.match(
+      reasonsOf("whiteboard", evidence),
+      /result lacks board_05/,
+      stale,
+    );
+  }
+});
+
+test("every whiteboard checkpoint passes on the real read_board text and is held to nothing more", () => {
+  for (const c of bundles.whiteboard.schedule.checkpoints) {
+    const k = key("whiteboard", c.checkpoint_id);
+    const need = (k.tools ?? [k.tool]).find((t) => t.name === "read_board");
+    const board = need.result_fact_ids.find((id) => id.startsWith("board_"));
+    const count = factsOf("whiteboard").find((f) => f.id === board).match
+      .tokens[0];
+    const evidence = evidenceFor("whiteboard", c.checkpoint_id);
+    const call = evidence.tool_calls.find((x) => x.name === "read_board");
+    call.result_text = boardText(Number.parseInt(count, 10));
+    assert.deepEqual(
+      judgeCheckpoint(bundles.whiteboard, evidence),
+      PASS,
+      c.checkpoint_id,
+    );
+    // A reply may talk about counts without being faulted for a stale one.
+    evidence.reply.text +=
+      " Each revision adds 4 strokes, so the board is much fuller now.";
+    assert.deepEqual(
+      judgeCheckpoint(bundles.whiteboard, evidence),
+      PASS,
+      c.checkpoint_id,
+    );
+  }
+});
+
+test("a whiteboard question never asks for a revision no one can read", () => {
+  const { schedule, answer_key: answerKey } = bundles.whiteboard;
+  for (const clip of schedule.clips) {
+    assert.ok(!/revision/i.test(clip.source_text), clip.clip_id);
+  }
+  for (const k of answerKey.checkpoints) {
+    assert.ok(
+      !k.element_fact_ids.some((id) => /^(revision|board)_/.test(id)),
+      k.checkpoint_id,
+    );
+    // It is still judged: in what the tool read.
+    assert.ok(
+      (k.tools ?? [k.tool]).some((t) =>
+        t.result_fact_ids.some((id) => id.startsWith("board_")),
+      ),
+      k.checkpoint_id,
+    );
+  }
+});
+
 test("the same fixtures fail on the whiteboard schedule", () => {
-  // Board revisions carry the same markers through read_board.
+  // Board revisions are judged from the stroke count read_board reports.
   const evidence = evidenceFor("whiteboard", CP_INSPECT);
   assert.equal(evidence.tool_calls[0].name, "read_board");
-  evidence.tool_calls[0].result_text = marker("whiteboard", 4);
-  assert.match(
-    judgeCheckpoint(bundles.whiteboard, evidence).reasons.join("\n"),
-    /result lacks revision_05/,
-  );
+  evidence.tool_calls[0].result_text = boardToken(4);
+  assert.match(reasonsOf("whiteboard", evidence), /result lacks board_05/);
   const coding = evidenceFor("whiteboard", CP_INSPECT);
   coding.tool_calls[0].name = "read_editor";
   assert.match(
@@ -659,15 +777,82 @@ test("an unreviewed rubric cannot certify a reply", () => {
   assert.match(verdict.reasons.join("\n"), /rubric is not reviewed/);
 });
 
-test("exact tokens are case sensitive and folded tokens are not", () => {
+test("an inspect reply may state the current revision without being faulted for it", () => {
   const evidence = evidenceFor("coding", CP_INSPECT);
+  evidence.reply.text += ` The latest source revision is ${marker("coding", 5)}.`;
+  assert.deepEqual(judgeCheckpoint(bundles.coding, evidence), PASS);
+});
+
+test("the constraints rubric accepts the ways a model says ten thousand", () => {
+  for (const said of [
+    "between 2 and 10 thousand transactions",
+    "ten-thousand numbers",
+    "up to 10k",
+    "at most 10\u00a0000 numbers",
+  ]) {
+    const evidence = evidenceFor("coding", CP_STATE);
+    const before = evidence.reply.text;
+    evidence.reply.text = before.replace(/ten thousand/i, said);
+    assert.notEqual(evidence.reply.text, before, "the answer states the bound");
+    assert.deepEqual(judgeCheckpoint(bundles.coding, evidence), PASS, said);
+  }
+  // A number that merely contains the token is not the bound.
+  for (const not of [
+    "110k numbers",
+    "210 thousand numbers",
+    "model10kweights",
+  ]) {
+    const evidence = evidenceFor("coding", CP_STATE);
+    evidence.reply.text = evidence.reply.text.replace(/ten thousand/i, not);
+    assert.match(
+      reasonsOf("coding", evidence),
+      /rubric concept 1 is missing/,
+      not,
+    );
+  }
+});
+
+test("the duplicate-case rubric accepts the plain ways of saying two different indices", () => {
+  for (const said of [
+    "it uses a different index each time",
+    "the two positions are different positions",
+    "it takes two separate indices",
+    "each element has a distinct index",
+    // The pilot's own c01 reply, which the first rubric missed.
+    "you'll always be getting the index of a previous, different position",
+    "the second one is a distinct position",
+  ]) {
+    const evidence = evidenceFor("coding", CP_INSPECT);
+    evidence.reply.text = `${said}. ${key("coding", CP_INSPECT).nonce}.`;
+    assert.deepEqual(judgeCheckpoint(bundles.coding, evidence), PASS, said);
+  }
+});
+
+test("the final question is answered by its pending question and revision alone", () => {
+  const k = key("coding", "cp_final");
+  const last = k.element_fact_ids.at(-1);
+  const number = Number(last.replace("revision_", ""));
+  const evidence = evidenceFor("coding", "cp_final");
+  const pending = factsOf("coding").find((f) => f.id === "pending_question");
+  evidence.reply.text = `${k.nonce}. The open question is whether to return them in ${pending.match.tokens[0]}, and the latest source revision is ${marker("coding", number)}.`;
+  assert.deepEqual(judgeCheckpoint(bundles.coding, evidence), PASS);
+  const stale = structuredClone(evidence);
+  stale.reply.text += ` ${marker("coding", number - 1)}`;
+  assert.match(
+    reasonsOf("coding", stale),
+    new RegExp(`stale revision revision_${number - 1}`),
+  );
+});
+
+test("exact tokens are case sensitive and folded tokens are not", () => {
+  const evidence = evidenceFor("coding", CP_STATE);
   evidence.reply.text = evidence.reply.text.replace(
-    marker("coding", 5),
-    marker("coding", 5).toUpperCase(),
+    marker("coding", 7),
+    marker("coding", 7).toUpperCase(),
   );
   assert.match(
     judgeCheckpoint(bundles.coding, evidence).reasons.join("\n"),
-    /reply lacks revision_05/,
+    /reply lacks revision_07/,
   );
   const folded = evidenceFor("coding", CP_STATE);
   folded.reply.text = folded.reply.text.replace(
