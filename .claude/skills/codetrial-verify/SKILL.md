@@ -1,6 +1,6 @@
 ---
 name: codetrial-verify
-description: How a CodeTrial change is validated - scripts/test.sh as the credential-free gate, which generated artifacts have to be regenerated before it passes, the checks that need credentials or a browser and therefore sit outside it, the browser and mutation lanes, and how to bring the server up for a live look without taking the maintainer's port. Use before calling work done, when diagnosing failed GitHub Actions checks, when a gate fails on drift rather than on a bug, when adding a test, when a fix needs to be seen working in the app, or after editing a skill or anything a skill names (scripts/check-skill-refs.py). Reviewing a diff or a pull request is codetrial-review.
+description: How a CodeTrial change is validated - scripts/test.sh as the credential-free gate, which generated artifacts have to be regenerated before it passes, the checks that need credentials or a browser and therefore sit outside it, the browser and mutation lanes, and how to bring the server up for a live look without taking the maintainer's port. Use before calling work done, when diagnosing failed GitHub Actions checks, when a gate fails on drift rather than on a bug, when adding a test, when a fix needs to be seen working in the app, or after editing a skill or anything a skill names (scripts/check-skill-refs.py). Reviewing a diff or a pull request is codetrial-review; the order of a change and the refactor method are codetrial-improve.
 ---
 
 # Validating a CodeTrial change

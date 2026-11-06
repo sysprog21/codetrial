@@ -1,6 +1,6 @@
 ---
 name: codetrial-web
-description: The CodeTrial browser half and the boundary it talks across - why web/ has no build step, how a file reaches the browser embedded or from disk, the vendored checksum-pinned assets, the data-channel topics implemented once in web/lib.js and once against the TOPIC_ constants in src/runtime.rs, in both directions, and the wire fixtures that keep the two agreeing. Use when editing anything under web/, adding or changing a data-channel message, touching src/web/, reviewing UI accessibility or interaction states, designing a new page or an explicit redesign, or wondering why a browser change passed every Rust test and still broke the interview.
+description: The CodeTrial browser half and the boundary it talks across - why web/ has no build step, how a file reaches the browser embedded or from disk, the vendored checksum-pinned assets, the data-channel topics implemented once in web/lib.js and once against the TOPIC_ constants in src/runtime.rs, in both directions, and the wire fixtures that keep the two agreeing. Use when editing anything under web/, adding or changing a data-channel message, touching src/web/, reviewing UI accessibility or interaction states, designing a new page or an explicit redesign, or wondering why a browser change passed every Rust test and still broke the interview. The method of a multi-batch refactor is codetrial-improve.
 ---
 
 # The CodeTrial browser boundary
