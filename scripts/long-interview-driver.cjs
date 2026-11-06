@@ -595,6 +595,12 @@ function finalizeLongRun(o) {
     cleanup_assessed: cleanupAssessed,
     end_permit_granted: run.endPermitGranted,
     end_clicked: run.endClicked,
+    // Where the schedule's clock began, so a reader after teardown can put
+    // the interview clock's readings on it.
+    schedule_origin_unix_ms: run.joinedAtMs,
+    // The surface the schedule was generated for, which the plan alone does
+    // not name and a reader rebuilding the schedule needs.
+    schedule_mode: o.mode,
     schedule_start_delay_s: (run.joinedAtMs - run.interviewStartMs) / 1000,
     exposure_s: stamps.exposureS,
     timestamps: stamps.timestamps,

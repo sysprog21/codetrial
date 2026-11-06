@@ -220,15 +220,18 @@ Run the replay and the long-interview report checks without credentials:
 
 ```sh
 python3 scripts/run-python-tests.py tests/test_analyze_latency.py
-node --test tests/browser/soak-judge.test.js tests/browser/long-interview-driver.test.js
+node --test tests/browser/soak-judge.test.js tests/browser/long-interview-driver.test.js \
+  tests/browser/long-interview-evidence.test.js
 ```
 
 A long-interview report's `assessment_scope` is `structural`, even when
 `run_kind` declares a qualification workload. Its `qualification` remains
-`not_evaluated`: checkpoint `reply_content` is `not_assessed` by this driver,
-and post-swap `decoded_signal` (`verified`, `not_required`, `failed` or
-`not_assessed`) is reported beside it and changes neither the qualification
-nor the exit code. Separate evidence is required before qualifying a build. `exposure_s` ends at the harness's observation boundary;
+`not_evaluated`. Checkpoint `reply_content` is `not_assessed` by this driver;
+in serving-fixture mode `scripts/browser-check.sh` judges it from the
+fixture's report once the fixture has stopped and writes the verdict into the
+capture. Post-swap `decoded_signal` (`verified`, `not_required`, `failed` or
+`not_assessed`) is reported beside it. Neither changes the qualification or the
+exit code. Separate evidence is required before qualifying a build. `exposure_s` ends at the harness's observation boundary;
 the analyzer's exposure can extend through the terminal socket's end and must
 not be substituted for it. `end_permit_granted` records permission, while
 `end_clicked` records the page action; the countdown can win after the permit

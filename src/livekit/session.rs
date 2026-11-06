@@ -20,7 +20,9 @@ mod tool_calls;
 
 use floor::write_floor;
 pub(super) use floor::{observe_floor, reconcile_floor};
-use observations::{HintCounters, ToolTiming, execute_timed_tool_batch, known_tool_name};
+use observations::{
+    HintCounters, ToolTiming, execute_timed_tool_batch, known_tool_name, silent_completion_kind,
+};
 
 use recovery::log_socket_pressure;
 pub(super) use recovery::{
@@ -724,15 +726,6 @@ fn observe_latency_event(
     None
 }
 
-/// What a completion with nothing in it answered, if this event is one.
-fn silent_completion_kind(event: &GeminiEvent, activity: &RuntimeActivity) -> Option<&'static str> {
-    if matches!(event, GeminiEvent::TurnComplete) && !activity.generating {
-        activity.debt_silence_answers()
-    } else {
-        None
-    }
-}
-
 /// `accept_event_with_reply_debt`, plus the silence the event answered. Both
 /// reads come before the accept, because the accept clears the waits they
 /// read. A silent completion that settles the reply still closes the turn's
@@ -830,6 +823,8 @@ pub(super) async fn handle_gemini_event(
     let discarding = context.activity.socket.discarding_output;
     let (accepted, interruption_debt, silent_owed) =
         accept_event_noting_silence(&event, context.activity, held, Instant::now());
+    #[cfg(test)]
+    super::probe::acquisition::boundary(&context.activity.latency, &event, accepted);
     let handled = if accepted {
         if let Some(silent_owed) = silent_owed {
             eprintln!(
@@ -1086,7 +1081,7 @@ fn on_output_transcript(room: &RoomLink, context: &mut GeminiEventContext<'_>, t
             final_segment: false,
             identity: None,
         };
-        context.transcripts.publish(room, segment);
+        observations::publish_segment(room, context, segment);
     }
 }
 
@@ -2677,7 +2672,7 @@ pub(super) fn close_turns(room: &RoomLink, context: &mut GeminiEventContext<'_>)
         eprintln!("{line}");
     }
     for segment in closing {
-        context.transcripts.publish(room, segment);
+        observations::publish_segment(room, context, segment);
     }
 }
 
@@ -2691,7 +2686,7 @@ fn close_interviewer_turn(room: &RoomLink, context: &mut GeminiEventContext<'_>)
         crate::current_epoch_millis(),
         None,
     ) {
-        context.transcripts.publish(room, segment);
+        observations::publish_segment(room, context, segment);
     }
 }
 

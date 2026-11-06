@@ -20,6 +20,18 @@ pub(in crate::livekit) struct Identity {
     pub(in crate::livekit) clock: Value,
 }
 
+impl Identity {
+    fn from_view(view: &IdentityView<'_>) -> Self {
+        Self {
+            room: view.room.into(),
+            session: view.session,
+            socket: view.socket,
+            trace_turn: view.trace_turn,
+            clock: view.clock.clone(),
+        }
+    }
+}
+
 #[derive(serde::Serialize)]
 pub(in crate::livekit) struct IdentityView<'a> {
     pub(in crate::livekit) room: &'a str,
@@ -33,8 +45,10 @@ pub(in crate::livekit) struct IdentityView<'a> {
 pub(in crate::livekit) struct Limits {
     pub(in crate::livekit) batches: usize,
     pub(in crate::livekit) calls: usize,
-    /// Serialized JSON bytes of the retained batch array, including
-    /// punctuation.
+    /// Serialized JSON bytes, punctuation included, that each retained array
+    /// (batches, receipts, replies and turn endings) is held to on its own, so
+    /// a report can hold up to four times this. `calls` likewise bounds the
+    /// receipts, the replies and the turn endings each.
     pub(in crate::livekit) bytes: usize,
 }
 
@@ -54,6 +68,76 @@ pub(in crate::livekit) struct Batch {
     pub(in crate::livekit) local_send_completed: Option<bool>,
 }
 
+/// A tool call as the handler received it, before the acknowledgement and
+/// board awaits that can still cancel the batch. Received, executed and
+/// locally sent are three separate facts, and none of them is the provider's
+/// receipt.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub(in crate::livekit) struct Receipt {
+    pub(in crate::livekit) identity: Identity,
+    pub(in crate::livekit) id: String,
+    pub(in crate::livekit) name: String,
+    /// Delivered after a hold or discard had cut its generation off. Such a
+    /// call is still answered, so it is kept, but it is never to be tied to a
+    /// later reply.
+    pub(in crate::livekit) discarded: bool,
+    /// Sequence of the executed batch that answered it; `None` for a call that
+    /// was received and never executed. Stands in for a stage: received,
+    /// executed and locally sent are one lifecycle that the reply capture will
+    /// fold into a single per-call record.
+    pub(in crate::livekit) batch: Option<usize>,
+}
+
+/// The newest view of one interviewer transcript segment, as queued for the
+/// page (the writer may coalesce waiting views, so `views` can exceed what the
+/// page received). Only ordered facts are kept: how many receipts and batches
+/// existed
+/// when the segment first appeared says what could have preceded it, and
+/// nothing here says what it was about.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub(in crate::livekit) struct Reply {
+    /// Where the segment first appeared; later views keep it.
+    pub(in crate::livekit) identity: Identity,
+    pub(in crate::livekit) id: String,
+    pub(in crate::livekit) text: String,
+    pub(in crate::livekit) final_segment: bool,
+    /// A view was not an extension of the one before it, or a final segment
+    /// was published as open again: what the page showed was rewritten.
+    pub(in crate::livekit) revised: bool,
+    pub(in crate::livekit) views: usize,
+    pub(in crate::livekit) receipts_before: usize,
+    pub(in crate::livekit) batches_before: usize,
+    /// The same counts at the newest view. A turn spans tool calls, so a
+    /// segment whose two counts differ straddles them and says nothing about
+    /// which call its later words follow.
+    pub(in crate::livekit) receipts_last: usize,
+    pub(in crate::livekit) batches_last: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
+pub(in crate::livekit) enum Ending {
+    Complete,
+    Interrupted,
+}
+
+/// A turn ending the provider sent, and whether the room loop took it. A
+/// swallowed ending belongs to a generation already cut off, so it closes
+/// nothing the page or the model saw; it is kept because the boundary a reply
+/// would otherwise be bounded by is then missing. Local cuts and socket
+/// replacements are not endings: they show as a sealed segment or a new socket
+/// in the identity. An ending the old socket sent while a speech handoff
+/// collected its events is consumed there and never seen here, so a socket
+/// change between two replies is an unknown boundary, never an absent one.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub(in crate::livekit) struct Boundary {
+    pub(in crate::livekit) identity: Identity,
+    pub(in crate::livekit) ending: Ending,
+    pub(in crate::livekit) accepted: bool,
+    pub(in crate::livekit) receipts_before: usize,
+    pub(in crate::livekit) batches_before: usize,
+    pub(in crate::livekit) replies_before: usize,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(in crate::livekit) enum Failure {
     // Room/session admission or an opaque ticket's batch association differs.
@@ -69,6 +153,32 @@ pub(in crate::livekit) struct Snapshot {
     pub(in crate::livekit) failure: Option<Failure>,
     pub(in crate::livekit) retained_calls: usize,
     pub(in crate::livekit) retained_bytes: usize,
+    pub(in crate::livekit) receipts: Vec<Receipt>,
+    /// Serialized length of the receipt array, brackets and commas included,
+    /// held to the same byte limit as the batches but counted apart from them.
+    pub(in crate::livekit) retained_receipt_bytes: usize,
+    pub(in crate::livekit) replies: Vec<Reply>,
+    pub(in crate::livekit) boundaries: Vec<Boundary>,
+    /// Serialized length of each retained reply and of the two arrays,
+    /// brackets and commas included, so a newer view of a reply, which
+    /// arrives for every transcript chunk, is charged for its own change
+    /// rather than by serializing every reply again under the lock.
+    reply_bytes: Vec<usize>,
+    retained_reply_bytes: usize,
+    retained_boundary_bytes: usize,
+}
+
+impl Snapshot {
+    /// The receipt a call executed under `identity` answers: same session and
+    /// same socket, so a call received on one socket and executed on another
+    /// is left unlinked as evidence of a replacement.
+    fn receipt_mut(&mut self, identity: &IdentityView<'_>, id: &str) -> Option<&mut Receipt> {
+        self.receipts.iter_mut().find(|receipt| {
+            receipt.id == id
+                && receipt.identity.session == identity.session
+                && receipt.identity.socket == identity.socket
+        })
+    }
 }
 
 pub(in crate::livekit) struct Capture {
@@ -116,8 +226,33 @@ impl Capture {
                 failure: None,
                 retained_calls: 0,
                 retained_bytes: 2,
+                receipts: Vec::new(),
+                // The empty array, so the count is the serialized length.
+                retained_receipt_bytes: 2,
+                replies: Vec::new(),
+                boundaries: Vec::new(),
+                reply_bytes: Vec::new(),
+                retained_reply_bytes: 2,
+                retained_boundary_bytes: 2,
             }),
         }))
+    }
+
+    /// Whether the identity is the room and session this capture was admitted
+    /// for; the socket may change under it.
+    fn admits(&self, identity: &IdentityView<'_>) -> bool {
+        identity.room == self.room && identity.session == self.session
+    }
+
+    /// Whether an array that serialized to `retained` bytes still fits once
+    /// `value` is added to it, and its length if so.
+    fn charged(&self, retained: usize, added: usize, value: &impl Serialize) -> Option<usize> {
+        let mut counter = BoundedBytes {
+            remaining: self.limits.bytes.checked_sub(retained + added)?,
+            written: 0,
+        };
+        serde_json::to_writer(&mut counter, value).ok()?;
+        Some(counter.written)
     }
 
     pub(in crate::livekit) fn snapshot(&self) -> Snapshot {
@@ -125,6 +260,177 @@ impl Capture {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
+    }
+
+    /// Records the calls of one batch at the handler's entry. Scoped like a
+    /// batch, bounded by the call and byte limits, and all or nothing: a batch
+    /// that does not fit latches the failure and keeps none of its receipts.
+    pub(in crate::livekit) fn receive(
+        &self,
+        identity: IdentityView<'_>,
+        calls: &[GeminiFunctionCall],
+        discarded: bool,
+    ) {
+        if calls.is_empty() {
+            return;
+        }
+        let mut snapshot = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        if snapshot.failure.is_some() {
+            return;
+        }
+        let failure = if !self.admits(&identity) {
+            Some(Failure::Scope)
+        } else if calls.len() > self.limits.calls.saturating_sub(snapshot.receipts.len()) {
+            Some(Failure::Limit)
+        } else if calls.iter().enumerate().any(|(index, call)| {
+            call.id.is_empty()
+                || calls[..index].iter().any(|earlier| earlier.id == call.id)
+                || snapshot.receipts.iter().any(|old| old.id == call.id)
+        }) {
+            Some(Failure::AmbiguousId)
+        } else {
+            None
+        };
+        if let Some(failure) = failure {
+            snapshot.failure = Some(failure);
+            return;
+        }
+        let mut retained = snapshot.retained_receipt_bytes;
+        let mut fresh = Vec::with_capacity(calls.len());
+        for (index, call) in calls.iter().enumerate() {
+            // A comma before every receipt but the very first.
+            let comma = usize::from(snapshot.receipts.len() + index != 0);
+            let receipt = Receipt {
+                identity: Identity::from_view(&identity),
+                id: call.id.clone(),
+                name: call.name.clone(),
+                discarded,
+                batch: None,
+            };
+            let Some(bytes) = self.charged(retained, comma, &receipt) else {
+                snapshot.failure = Some(Failure::Limit);
+                return;
+            };
+            retained += comma + bytes;
+            fresh.push(receipt);
+        }
+        snapshot.retained_receipt_bytes = retained;
+        snapshot.receipts.extend(fresh);
+    }
+
+    /// Notes a published interviewer segment. A segment is identified by its
+    /// session, socket and id, and only its newest text is kept, so the byte
+    /// limit bounds the serialized array of newest views. A view that does not
+    /// fit latches the failure and leaves the earlier ones as they were.
+    pub(in crate::livekit) fn reply(
+        &self,
+        identity: IdentityView<'_>,
+        id: &str,
+        text: &str,
+        final_segment: bool,
+    ) {
+        let mut snapshot = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        if snapshot.failure.is_some() {
+            return;
+        }
+        if !self.admits(&identity) {
+            snapshot.failure = Some(Failure::Scope);
+            return;
+        }
+        let at = snapshot.replies.iter().position(|reply| {
+            reply.id == id
+                && reply.identity.session == identity.session
+                && reply.identity.socket == identity.socket
+        });
+        let (reply, old) = if let Some(at) = at {
+            // Built anew rather than cloned: the old text, the largest field,
+            // is about to be replaced.
+            let was = &snapshot.replies[at];
+            let reply = Reply {
+                identity: was.identity.clone(),
+                id: was.id.clone(),
+                text: text.into(),
+                final_segment,
+                revised: was.revised
+                    || !text.starts_with(&was.text)
+                    || (was.final_segment && !final_segment),
+                views: was.views + 1,
+                receipts_before: was.receipts_before,
+                batches_before: was.batches_before,
+                receipts_last: snapshot.receipts.len(),
+                batches_last: snapshot.batches.len(),
+            };
+            (reply, snapshot.reply_bytes[at])
+        } else if snapshot.replies.len() >= self.limits.calls {
+            snapshot.failure = Some(Failure::Limit);
+            return;
+        } else {
+            let reply = Reply {
+                identity: Identity::from_view(&identity),
+                id: id.into(),
+                text: text.into(),
+                final_segment,
+                revised: false,
+                views: 1,
+                receipts_before: snapshot.receipts.len(),
+                batches_before: snapshot.batches.len(),
+                receipts_last: snapshot.receipts.len(),
+                batches_last: snapshot.batches.len(),
+            };
+            (reply, 0)
+        };
+        // A comma before every reply but the first.
+        let comma = usize::from(at.is_none() && !snapshot.replies.is_empty());
+        let rest = snapshot.retained_reply_bytes - old;
+        let Some(bytes) = self.charged(rest, comma, &reply) else {
+            snapshot.failure = Some(Failure::Limit);
+            return;
+        };
+        snapshot.retained_reply_bytes = rest + comma + bytes;
+        if let Some(at) = at {
+            snapshot.replies[at] = reply;
+            snapshot.reply_bytes[at] = bytes;
+        } else {
+            snapshot.replies.push(reply);
+            snapshot.reply_bytes.push(bytes);
+        }
+    }
+
+    /// Notes a turn ending in arrival order. Bounded like the replies: by the
+    /// call limit in count and the byte limit in serialized size.
+    pub(in crate::livekit) fn boundary(
+        &self,
+        identity: IdentityView<'_>,
+        ending: Ending,
+        accepted: bool,
+    ) {
+        let mut snapshot = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        if snapshot.failure.is_some() {
+            return;
+        }
+        if !self.admits(&identity) {
+            snapshot.failure = Some(Failure::Scope);
+            return;
+        }
+        let boundary = Boundary {
+            identity: Identity::from_view(&identity),
+            ending,
+            accepted,
+            receipts_before: snapshot.receipts.len(),
+            batches_before: snapshot.batches.len(),
+            replies_before: snapshot.replies.len(),
+        };
+        if snapshot.boundaries.len() >= self.limits.calls {
+            snapshot.failure = Some(Failure::Limit);
+            return;
+        }
+        let comma = usize::from(!snapshot.boundaries.is_empty());
+        let Some(bytes) = self.charged(snapshot.retained_boundary_bytes, comma, &boundary) else {
+            snapshot.failure = Some(Failure::Limit);
+            return;
+        };
+        snapshot.retained_boundary_bytes += comma + bytes;
+        snapshot.boundaries.push(boundary);
     }
 
     fn record(
@@ -139,7 +445,7 @@ impl Capture {
         if snapshot.failure.is_some() {
             return None;
         }
-        let failure = if identity.room != self.room || identity.session != self.session {
+        let failure = if !self.admits(&identity) {
             Some(Failure::Scope)
         } else if snapshot.batches.len() >= self.limits.batches
             || answers.len() > self.limits.calls.saturating_sub(snapshot.retained_calls)
@@ -165,29 +471,18 @@ impl Capture {
         }
         let sequence = snapshot.batches.len();
         let comma = usize::from(sequence != 0);
-        let remaining = self.limits.bytes.saturating_sub(snapshot.retained_bytes);
-        let mut counter = BoundedBytes {
-            remaining: remaining.saturating_sub(comma),
-            written: 0,
-        };
         let view = BatchView {
             identity: &identity,
             sequence,
             calls: CallsView(answers),
             local_send_completed: None,
         };
-        if remaining < comma || serde_json::to_writer(&mut counter, &view).is_err() {
+        let Some(bytes) = self.charged(snapshot.retained_bytes, comma, &view) else {
             snapshot.failure = Some(Failure::Limit);
             return None;
-        }
+        };
         let batch = Batch {
-            identity: Identity {
-                room: identity.room.into(),
-                session: identity.session,
-                socket: identity.socket,
-                trace_turn: identity.trace_turn,
-                clock: identity.clock,
-            },
+            identity: Identity::from_view(&identity),
             sequence,
             calls: answers
                 .iter()
@@ -199,9 +494,23 @@ impl Capture {
                 .collect(),
             local_send_completed: None,
         };
-        snapshot.retained_bytes += counter.written + comma;
+        snapshot.retained_bytes += comma + bytes;
         snapshot.retained_calls += answers.len();
         snapshot.batches.push(batch);
+
+        // Linked only to a receipt from this same socket: a call received on
+        // one socket and executed on another is evidence of a replacement, not
+        // of an answer.
+        let digits = sequence.to_string().len();
+        let mut receipt_bytes = snapshot.retained_receipt_bytes;
+        for (call, _) in answers {
+            if let Some(receipt) = snapshot.receipt_mut(&identity, &call.id) {
+                receipt.batch = Some(sequence);
+                // `null` (four bytes) becomes the sequence number.
+                receipt_bytes = (receipt_bytes + digits).saturating_sub(4);
+            }
+        }
+        snapshot.retained_receipt_bytes = receipt_bytes;
         Some(sequence)
     }
 }
@@ -461,6 +770,10 @@ impl Arming {
                 "failure": snapshot.failure.map(|failure| format!("{failure:?}")),
                 "retained_calls": snapshot.retained_calls,
                 "retained_bytes": snapshot.retained_bytes,
+                "receipts": snapshot.receipts,
+                "retained_receipt_bytes": snapshot.retained_receipt_bytes,
+                "replies": snapshot.replies,
+                "boundaries": snapshot.boundaries,
             })
         });
         serde_json::json!({
@@ -557,17 +870,56 @@ pub(in crate::livekit) fn bound(room: &str, session: u64) {
     }
 }
 
+fn active() -> Option<Arc<Capture>> {
+    ACTIVE
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .as_ref()
+        .map(Arc::clone)
+}
+
 pub(in crate::livekit) fn observe(
     latency: &ReplyLatency,
     answers: &[(GeminiFunctionCall, Value)],
 ) -> Option<Ticket> {
-    let capture = ACTIVE
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .as_ref()
-        .map(Arc::clone)?;
+    let capture = active()?;
     let sequence = capture.record(latency.acquisition_identity(), answers)?;
     Some(Ticket { capture, sequence })
+}
+
+/// The handler's entry, before anything that can cancel the batch.
+pub(in crate::livekit) fn receive(
+    latency: &ReplyLatency,
+    calls: &[GeminiFunctionCall],
+    discarded: bool,
+) {
+    if let Some(capture) = active() {
+        capture.receive(latency.acquisition_identity(), calls, discarded);
+    }
+}
+
+/// A turn ending as the room loop decided it; other events are not endings.
+pub(in crate::livekit) fn boundary(
+    latency: &ReplyLatency,
+    event: &crate::gemini::GeminiEvent,
+    accepted: bool,
+) {
+    use crate::gemini::GeminiEvent;
+    let ending = match event {
+        GeminiEvent::TurnComplete => Ending::Complete,
+        GeminiEvent::Interrupted => Ending::Interrupted,
+        _ => return,
+    };
+    if let Some(capture) = active() {
+        capture.boundary(latency.acquisition_identity(), ending, accepted);
+    }
+}
+
+/// An interviewer segment as the room loop publishes it.
+pub(in crate::livekit) fn reply(latency: &ReplyLatency, id: &str, text: &str, final_segment: bool) {
+    if let Some(capture) = active() {
+        capture.reply(latency.acquisition_identity(), id, text, final_segment);
+    }
 }
 
 #[path = "../../../tests/unit/livekit/probe/acquisition.rs"]

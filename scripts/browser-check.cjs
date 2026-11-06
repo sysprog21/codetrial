@@ -937,6 +937,7 @@ async function longInterview(
     log.endsWith("\n");
   const finished = finalizeLongRun({
     plan,
+    mode: prepared.mode,
     schedule: prepared.schedule,
     playback: prepared.playback,
     clipSource: prepared.clipSource,

@@ -1,0 +1,208 @@
+{
+  "arming_failure": null,
+  "capture": {
+    "batches": [
+      {
+        "calls": [
+          {
+            "id": "call-1",
+            "name": "read_editor",
+            "result": {
+              "frameworkState": {
+                "phases": []
+              },
+              "result": "BEGIN UNTRUSTED EDITOR (python)\n(the editor is currently empty)\nEND UNTRUSTED EDITOR\nBEGIN UNTRUSTED TEST RUN\nNo test run was recorded; tests may not have been attempted or may not have been available for the selected language/problem yet.\nEND UNTRUSTED TEST RUN\nTIMER: about 45 minutes remain on the candidate's countdown."
+            }
+          }
+        ],
+        "identity": {
+          "clock": {
+            "clock_uncertainty_ms": null,
+            "emitted_ms": null,
+            "emitted_unix_ms": 0,
+            "start_unix_ms": null
+          },
+          "room": "recovery-test",
+          "session": 7,
+          "socket": 1,
+          "trace_turn": 1
+        },
+        "local_send_completed": true,
+        "sequence": 0
+      }
+    ],
+    "boundaries": [
+      {
+        "accepted": true,
+        "batches_before": 1,
+        "ending": "Complete",
+        "identity": {
+          "clock": {
+            "clock_uncertainty_ms": null,
+            "emitted_ms": null,
+            "emitted_unix_ms": 0,
+            "start_unix_ms": null
+          },
+          "room": "recovery-test",
+          "session": 7,
+          "socket": 1,
+          "trace_turn": 1
+        },
+        "receipts_before": 1,
+        "replies_before": 1
+      },
+      {
+        "accepted": true,
+        "batches_before": 1,
+        "ending": "Complete",
+        "identity": {
+          "clock": {
+            "clock_uncertainty_ms": null,
+            "emitted_ms": null,
+            "emitted_unix_ms": 0,
+            "start_unix_ms": null
+          },
+          "room": "recovery-test",
+          "session": 7,
+          "socket": 1,
+          "trace_turn": 2
+        },
+        "receipts_before": 1,
+        "replies_before": 2
+      },
+      {
+        "accepted": true,
+        "batches_before": 1,
+        "ending": "Interrupted",
+        "identity": {
+          "clock": {
+            "clock_uncertainty_ms": null,
+            "emitted_ms": null,
+            "emitted_unix_ms": 0,
+            "start_unix_ms": null
+          },
+          "room": "recovery-test",
+          "session": 7,
+          "socket": 1,
+          "trace_turn": 3
+        },
+        "receipts_before": 1,
+        "replies_before": 3
+      },
+      {
+        "accepted": false,
+        "batches_before": 1,
+        "ending": "Complete",
+        "identity": {
+          "clock": {
+            "clock_uncertainty_ms": null,
+            "emitted_ms": null,
+            "emitted_unix_ms": 0,
+            "start_unix_ms": null
+          },
+          "room": "recovery-test",
+          "session": 7,
+          "socket": 1,
+          "trace_turn": null
+        },
+        "receipts_before": 1,
+        "replies_before": 3
+      }
+    ],
+    "failure": null,
+    "receipts": [
+      {
+        "batch": 0,
+        "discarded": false,
+        "id": "call-1",
+        "identity": {
+          "clock": {
+            "clock_uncertainty_ms": null,
+            "emitted_ms": null,
+            "emitted_unix_ms": 0,
+            "start_unix_ms": null
+          },
+          "room": "recovery-test",
+          "session": 7,
+          "socket": 1,
+          "trace_turn": 1
+        },
+        "name": "read_editor"
+      }
+    ],
+    "replies": [
+      {
+        "batches_before": 1,
+        "batches_last": 1,
+        "final_segment": true,
+        "id": "interviewer-0",
+        "identity": {
+          "clock": {
+            "clock_uncertainty_ms": null,
+            "emitted_ms": null,
+            "emitted_unix_ms": 0,
+            "start_unix_ms": null
+          },
+          "room": "recovery-test",
+          "session": 7,
+          "socket": 1,
+          "trace_turn": 1
+        },
+        "receipts_before": 1,
+        "receipts_last": 1,
+        "revised": false,
+        "text": "REPLY-A one. two.",
+        "views": 3
+      },
+      {
+        "batches_before": 1,
+        "batches_last": 1,
+        "final_segment": true,
+        "id": "interviewer-1",
+        "identity": {
+          "clock": {
+            "clock_uncertainty_ms": null,
+            "emitted_ms": null,
+            "emitted_unix_ms": 0,
+            "start_unix_ms": null
+          },
+          "room": "recovery-test",
+          "session": 7,
+          "socket": 1,
+          "trace_turn": 2
+        },
+        "receipts_before": 1,
+        "receipts_last": 1,
+        "revised": false,
+        "text": "REPLY-B.",
+        "views": 2
+      },
+      {
+        "batches_before": 1,
+        "batches_last": 1,
+        "final_segment": true,
+        "id": "interviewer-2",
+        "identity": {
+          "clock": {
+            "clock_uncertainty_ms": null,
+            "emitted_ms": null,
+            "emitted_unix_ms": 0,
+            "start_unix_ms": null
+          },
+          "room": "recovery-test",
+          "session": 7,
+          "socket": 1,
+          "trace_turn": 3
+        },
+        "receipts_before": 1,
+        "receipts_last": 1,
+        "revised": false,
+        "text": "REPLY-C cut",
+        "views": 2
+      }
+    ],
+    "retained_bytes": 0,
+    "retained_calls": 1,
+    "retained_receipt_bytes": 0
+  }
+}

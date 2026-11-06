@@ -413,16 +413,7 @@ async fn a_tick_recovers_when_long_quiet_or_a_failed_request_leaves_the_watchdog
 
 #[tokio::test]
 async fn a_failed_listening_note_keeps_the_cold_brief_due_and_never_arms_the_tick() {
-    let name = format!(
-        "{}::a_failed_listening_note_keeps_the_cold_brief_due_and_never_arms_the_tick",
-        module_path!().split_once("::").unwrap().1
-    );
-    if isolation::isolated_checked(
-        &name,
-        "CODETRIAL_HANDOFF_LISTENING_NOTE_TEST",
-        false,
-        |_| {},
-    ) {
+    if isolation::isolated!("CODETRIAL_HANDOFF_LISTENING_NOTE_TEST") {
         return;
     }
     let mut fixture = TickFixture::new(1500, 10).await;

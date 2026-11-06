@@ -137,11 +137,56 @@ LOGIN_DB_PATH="$TMP/accounts.db"
 LOGIN_SESSION_SECRET=browser-check-session
 CONFIG_PATH="$TMP/codetrial.env.local"
 
+# The in-process serving fixture (scripts/fixture-server.sh): a pinned test
+# executable run as the server in place of `codetrial web`, so the interview
+# leaves behind what the arming observer saw. Off unless a test name is given.
+FIXTURE_TEST=${BROWSER_CHECK_FIXTURE_TEST:-}
+FIXTURE_DIR="$TMP/fixture"
+FIXTURE_STOP_WAIT_S=${BROWSER_CHECK_FIXTURE_STOP_WAIT_S:-150}
+
+# The fixture's connection drain, passed to it, and the slack left after its
+# settle: the settle is whatever the stop wait has left after both.
+FIXTURE_DRAIN_S=10
+FIXTURE_SLACK_S=20
+
+# Asked to stop and waited for, not killed: the serving fixture has connections
+# to drain, rooms and reports to finish and a report of its own to write, and
+# that report is kept before the scratch directory goes.
+cleanup_fixture()
+{
+    fixture_status=0
+    "$ROOT/scripts/fixture-server.sh" stop "$FIXTURE_DIR" "$SERVER_PID" "$FIXTURE_STOP_WAIT_S" \
+        || fixture_status=1
+    wait "$SERVER_PID" 2> /dev/null || {
+        echo "The serving fixture exited with a failure; its report may say why." >&2
+        fixture_status=1
+    }
+
+    "$ROOT/scripts/fixture-server.sh" keep "$FIXTURE_DIR" "$BROWSER_CHECK_FIXTURE_OUT" "$SERVER_LOG" \
+        || fixture_status=1
+    return "$fixture_status"
+}
+
+# The reply content is judged once the serving fixture has stopped and its
+# report is kept: the worker finished before that and could not read it. The
+# verdict is written into the capture file and never into this script's own
+# status, so a run that could not be judged is still the run it was.
+judge_reply_content()
+{
+    [ -n "${BROWSER_CHECK_CAPTURE:-}" ] && [ -f "$BROWSER_CHECK_CAPTURE" ] || return 0
+    node "$ROOT/scripts/long-interview-evidence.cjs" \
+        --capture "$BROWSER_CHECK_CAPTURE" --fixture "$BROWSER_CHECK_FIXTURE_OUT" \
+        || echo "Reply content was not judged; the run's own result stands." >&2
+}
+
 cleanup()
 {
     cleanup_status=$?
     trap - EXIT INT TERM
-    if [ "${SERVER_PID:-}" ]; then
+    if [ "${SERVER_PID:-}" ] && [ -n "$FIXTURE_TEST" ]; then
+        cleanup_fixture || cleanup_status=1
+        judge_reply_content
+    elif [ "${SERVER_PID:-}" ]; then
         kill "$SERVER_PID" 2> /dev/null || true
         wait "$SERVER_PID" 2> /dev/null || true
     fi
@@ -278,6 +323,82 @@ if [ -n "$BUDGET_VARS" ]; then
         --manifest "$BROWSER_CHECK_RUN_MANIFEST" candidate) || exit 2
 fi
 
+if [ -n "$FIXTURE_TEST" ]; then
+    if [ -z "$PREBUILT_BIN" ] || [ "$BROWSER_CHECK_AGENT" != dispatch ]; then
+        echo "BROWSER_CHECK_FIXTURE_TEST needs a budgeted run (its pinned executable is the" >&2
+        echo "fixture) and BROWSER_CHECK_AGENT=dispatch." >&2
+        exit 2
+    fi
+    if [ -z "${BROWSER_CHECK_FIXTURE_OUT:-}" ] || [ -e "$BROWSER_CHECK_FIXTURE_OUT" ] \
+        || [ -e "$BROWSER_CHECK_FIXTURE_OUT.server.log" ] \
+        || [ -L "$BROWSER_CHECK_FIXTURE_OUT.server.log" ] \
+        || [ ! -d "$(dirname -- "$BROWSER_CHECK_FIXTURE_OUT")" ] \
+        || [ ! -w "$(dirname -- "$BROWSER_CHECK_FIXTURE_OUT")" ]; then
+        echo "BROWSER_CHECK_FIXTURE_OUT must name a report file that does not exist yet," >&2
+        echo "in a directory that does and can be written." >&2
+        exit 2
+    fi
+
+    # The verdict is written into the capture after the fixture stops, so a
+    # capture left by an earlier run would be judged against this run's report.
+    if [ -n "${BROWSER_CHECK_CAPTURE:-}" ] && [ -e "$BROWSER_CHECK_CAPTURE" ]; then
+        echo "BROWSER_CHECK_CAPTURE must not exist yet when the serving fixture runs." >&2
+        exit 2
+    fi
+
+    # Neither exists yet, so their directories are compared: the report kept at
+    # cleanup would otherwise replace the capture the run just wrote.
+    if [ -n "${BROWSER_CHECK_CAPTURE:-}" ] && [ -d "$(dirname -- "$BROWSER_CHECK_CAPTURE")" ]; then
+        capture_at="$(cd -P -- "$(dirname -- "$BROWSER_CHECK_CAPTURE")" && pwd)/$(basename -- "$BROWSER_CHECK_CAPTURE")"
+        out_at="$(cd -P -- "$(dirname -- "$BROWSER_CHECK_FIXTURE_OUT")" && pwd)/$(basename -- "$BROWSER_CHECK_FIXTURE_OUT")"
+
+        # Each also stages files beside it (the log beside the report, the
+        # judged capture at .partial), so neither may be a prefix of the other.
+        case $out_at in "$capture_at"*) collides=1 ;; *) collides= ;; esac
+        case $capture_at in "$out_at"*) collides=1 ;; esac
+        if [ -n "$collides" ]; then
+            echo "BROWSER_CHECK_CAPTURE and BROWSER_CHECK_FIXTURE_OUT must name different files." >&2
+            exit 2
+        fi
+    fi
+
+    # A leading zero too: shell arithmetic reads it as octal while the tests
+    # below read it as decimal, so the reserve check would ask for too little.
+    case $FIXTURE_STOP_WAIT_S in
+        '' | *[!0-9]* | 0[0-9]*)
+            echo "BROWSER_CHECK_FIXTURE_STOP_WAIT_S must be a number of seconds." >&2
+            exit 2
+            ;;
+    esac
+
+    # One number drives both sides: the fixture settles for this long less its
+    # connection drain and the slack, so a longer settle cannot make the wait
+    # below give up on a fixture that is still working. At least 10 s of it.
+    fixture_min_wait_s=$((FIXTURE_DRAIN_S + FIXTURE_SLACK_S + 10))
+    if [ "$FIXTURE_STOP_WAIT_S" -lt "$fixture_min_wait_s" ]; then
+        echo "BROWSER_CHECK_FIXTURE_STOP_WAIT_S must be at least $fixture_min_wait_s seconds." >&2
+        exit 2
+    fi
+
+    # The stop waits for a drain and a settle, so the cleanup window has to
+    # outlast it with the launcher's own cleanup still to come.
+    reserve=$("$BUDGET_PYTHON" "$BUDGET_TOOL" validate \
+        --manifest "$BROWSER_CHECK_RUN_MANIFEST" --print cleanup_reserve_s) || exit 2
+    if [ "$reserve" -lt $((FIXTURE_STOP_WAIT_S + 60)) ]; then
+        echo "cleanup_reserve_s is $reserve; the serving fixture's stop wait of" >&2
+        echo "${FIXTURE_STOP_WAIT_S}s needs at least $((FIXTURE_STOP_WAIT_S + 60))s of it." >&2
+        exit 2
+    fi
+
+    # When the budget runner starts its reap, for the fixture's own deadline.
+    case ${BROWSER_CHECK_BUDGET_REAP_AT:-} in
+        '' | *[!0-9]*)
+            echo "BROWSER_CHECK_FIXTURE_TEST needs BROWSER_CHECK_BUDGET_REAP_AT from the budget runner." >&2
+            exit 2
+            ;;
+    esac
+fi
+
 # The duration, run kind, end mode and observation target of a long interview
 # are judged before anything is built or started. The same module answers when
 # browser-check.cjs is run directly.
@@ -290,6 +411,11 @@ fi
 
 if [ "${BROWSER_CHECK_VALIDATE_ENV_ONLY:-}" ]; then
     exit 0
+fi
+
+# Runs the pin, so it waits until validation-only runs are out of the way.
+if [ -n "$FIXTURE_TEST" ]; then
+    "$ROOT/scripts/fixture-server.sh" check "$PREBUILT_BIN" "$FIXTURE_TEST" || exit 2
 fi
 
 # Anything that serves `web/` needs the fetched vendor binaries, and this script
@@ -400,10 +526,49 @@ else
             # mode that a missing dispatch breaks, and nothing else covers it.
             unset INTERVIEW_ROOM_NAME
             DISPATCH_MODE=1
-            SESSION_SECRET="$LOGIN_SESSION_SECRET" \
-                CODETRIAL_DB_PATH="$LOGIN_DB_PATH" \
-                "$@" web --config "$CONFIG_PATH" --web-addr "127.0.0.1:$PORT" --web-dir "$ROOT/web" \
-                > "$SERVER_LOG" 2>&1 &
+            if [ -n "$FIXTURE_TEST" ]; then
+
+                # The pinned test executable, running only the fixture. Its
+                # account database is inside its own directory by construction.
+                mkdir "$FIXTURE_DIR"
+
+                # In a session of its own where it can be, so a signal sent to
+                # this script's process group reaches this script, whose trap
+                # asks the fixture to stop and waits, and not the fixture first:
+                # an INT would end it without a report, and a TERM in its first
+                # moments, before it can take one as a stop request, likewise.
+                # This script has no job control, so setsid runs the fixture in
+                # place and $! is the fixture; were it to fork, wait_for_server
+                # would see the launcher exit and fail the run at once.
+                set -- "$PREBUILT_BIN" --ignored --exact "$FIXTURE_TEST" --nocapture --test-threads=1
+                if command -v setsid > /dev/null 2>&1; then
+                    set -- setsid "$@"
+                fi
+
+                # A backstop only: cleanup asks it to stop first. As late as it
+                # can be and still leave the stop wait and some margin before
+                # the runner's reap, counted from now, since the fixture counts
+                # its deadline from its own start.
+                FIXTURE_DEADLINE_S=$((BROWSER_CHECK_BUDGET_REAP_AT - $(date +%s) - \
+                FIXTURE_STOP_WAIT_S - FIXTURE_SLACK_S))
+                if [ "$FIXTURE_DEADLINE_S" -le 0 ]; then
+                    echo "No wall time is left for the serving fixture to run and stop." >&2
+                    exit 2
+                fi
+                SESSION_SECRET="$LOGIN_SESSION_SECRET" \
+                    CODETRIAL_FIXTURE_CONFIG="$CONFIG_PATH" \
+                    CODETRIAL_FIXTURE_DIR="$FIXTURE_DIR" \
+                    CODETRIAL_FIXTURE_ADDR="127.0.0.1:$PORT" \
+                    CODETRIAL_FIXTURE_DEADLINE_S="$FIXTURE_DEADLINE_S" \
+                    CODETRIAL_FIXTURE_DRAIN_S="$FIXTURE_DRAIN_S" \
+                    CODETRIAL_FIXTURE_SETTLE_S="$((FIXTURE_STOP_WAIT_S - FIXTURE_DRAIN_S - FIXTURE_SLACK_S))" \
+                    "$@" > "$SERVER_LOG" 2>&1 &
+            else
+                SESSION_SECRET="$LOGIN_SESSION_SECRET" \
+                    CODETRIAL_DB_PATH="$LOGIN_DB_PATH" \
+                    "$@" web --config "$CONFIG_PATH" --web-addr "127.0.0.1:$PORT" --web-dir "$ROOT/web" \
+                    > "$SERVER_LOG" 2>&1 &
+            fi
             ;;
         rust)
             INTERVIEW_ROOM_NAME=${INTERVIEW_ROOM_NAME:-interview-browser-$(date +%s)-$$}

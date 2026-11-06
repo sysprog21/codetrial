@@ -62,6 +62,16 @@ async fn acquisition_actual_tool_send(failed: bool) {
         let batch = &snapshot.batches[0];
         assert_eq!(batch.calls.len(), 1);
         assert_eq!(batch.calls[0].id, "actual-tool-send");
+
+        // Every executed call was received first, and a call that arrived under
+        // a discard says so.
+        assert_eq!(snapshot.receipts.len(), 1);
+        assert_eq!(snapshot.receipts[0].id, "actual-tool-send");
+        assert_eq!(snapshot.receipts[0].batch, Some(0));
+
+        // A hold silences the interviewer as a discard does: the call is still
+        // answered, and neither kind is to be tied to a later reply.
+        assert_eq!(snapshot.receipts[0].discarded, held || discarded);
         assert_eq!(batch.calls[0].name, crate::runtime::TOOL_READ_EDITOR);
         assert!(
             batch.calls[0].result["result"]
@@ -109,6 +119,26 @@ async fn acquisition_tool_send_error_records_returned_failure() {
         return;
     }
     acquisition_actual_tool_send(true).await;
+}
+
+async fn acquisition_reply_rig() -> (
+    Rig,
+    std::sync::Arc<crate::livekit::probe::acquisition::Capture>,
+) {
+    use crate::livekit::probe::acquisition::{Capture, Limits};
+    let mut rig = Rig::new("ws://127.0.0.1:9/".into()).await;
+    rig.turn.activity.latency.bind("recovery-test", 7, 1, 1500);
+    let capture = Capture::new(
+        "recovery-test",
+        7,
+        Limits {
+            batches: 2,
+            calls: 4,
+            bytes: 65536,
+        },
+    )
+    .unwrap();
+    (rig, capture)
 }
 
 fn acquisition_gate_capture(
@@ -177,6 +207,17 @@ async fn acquisition_controlled_owner_await_cancellation_preserves_execution_bou
         let executed = matches!(stage, Stage::BoardResend | Stage::ToolSend);
         assert_eq!(snapshot.failure, None);
         assert_eq!(snapshot.batches.len(), usize::from(executed), "{stage:?}");
+
+        // Received before the acknowledgement gate, so cancellation at any gate
+        // leaves the call on record, executed only if the batch got that far.
+        assert_eq!(snapshot.receipts.len(), 1, "{stage:?}");
+        assert_eq!(snapshot.receipts[0].id, "cancelled-owner");
+        assert_eq!(
+            snapshot.receipts[0].batch,
+            executed.then_some(0),
+            "{stage:?}"
+        );
+        assert!(!snapshot.receipts[0].discarded);
         if let Some(batch) = snapshot.batches.first() {
             assert_eq!(batch.calls[0].id, "cancelled-owner");
             assert_eq!(
@@ -418,5 +459,218 @@ async fn acquisition_consumed_gate_does_not_hold_a_later_tool_batch() {
             .batches
             .iter()
             .all(|batch| batch.local_send_completed == Some(true))
+    );
+}
+
+async fn acquisition_event(rig: &mut Rig, event: crate::gemini::GeminiEvent) {
+    let mut context = rig.turn.context(
+        &mut rig.output,
+        &mut rig.gemini,
+        &mut rig.board,
+        &mut rig.media,
+    );
+    session::handle_gemini_event(&rig.room, &mut context, event, Interruptible::Yes)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn acquisition_keeps_the_interviewer_segments_the_page_was_sent() {
+    if isolated("acquisition_keeps_the_interviewer_segments_the_page_was_sent") {
+        return;
+    }
+    use crate::gemini::GeminiEvent;
+    use crate::livekit::probe::acquisition::install;
+    let (mut rig, capture) = acquisition_reply_rig().await;
+    let installed = install(&capture).unwrap();
+    acquisition_receive_editor(&mut rig, "before-reply").await;
+    acquisition_event(
+        &mut rig,
+        GeminiEvent::OutputTranscript("The answer ".into()),
+    )
+    .await;
+    acquisition_event(&mut rig, GeminiEvent::OutputTranscript("is 42.".into())).await;
+    // The candidate's own speech closes with the same turn and is not a reply.
+    rig.media.identity = Some("candidate".into());
+    acquisition_event(&mut rig, GeminiEvent::InputTranscript("my words".into())).await;
+    acquisition_event(&mut rig, GeminiEvent::TurnComplete).await;
+    acquisition_event(&mut rig, GeminiEvent::OutputTranscript("Next.".into())).await;
+    let _ = rig.old_frames().await;
+    let snapshot = capture.snapshot();
+    drop(installed);
+    assert_eq!(snapshot.failure, None);
+    let replies: Vec<_> = snapshot
+        .replies
+        .iter()
+        .map(|reply| (reply.text.as_str(), reply.final_segment, reply.views))
+        .collect();
+
+    // The first turn's newest view, sealed by the turn's end; the next turn's
+    // segment is still open and is its own reply.
+    assert_eq!(
+        replies,
+        [("The answer is 42.", true, 3), ("Next.", false, 1)]
+    );
+    assert_ne!(snapshot.replies[0].id, snapshot.replies[1].id);
+    assert!(snapshot.replies.iter().all(|reply| !reply.revised));
+    // The tool call preceded both, and was answered before either.
+    assert!(
+        snapshot
+            .replies
+            .iter()
+            .all(|reply| (reply.receipts_before, reply.batches_before) == (1, 1))
+    );
+}
+
+#[tokio::test]
+async fn acquisition_seals_the_line_a_cut_marked_before_the_next_words() {
+    if isolated("acquisition_seals_the_line_a_cut_marked_before_the_next_words") {
+        return;
+    }
+    use crate::gemini::GeminiEvent;
+    use crate::livekit::probe::acquisition::install;
+    let (mut rig, capture) = acquisition_reply_rig().await;
+    let installed = install(&capture).unwrap();
+    acquisition_event(&mut rig, GeminiEvent::OutputTranscript("Cut words.".into())).await;
+    rig.turn
+        .state
+        .interviewer_delivery
+        .cancel(crate::agent::DeliveryCut::Generation, Instant::now());
+    acquisition_event(&mut rig, GeminiEvent::OutputTranscript("New words.".into())).await;
+    let snapshot = capture.snapshot();
+    drop(installed);
+    let replies: Vec<_> = snapshot
+        .replies
+        .iter()
+        .map(|reply| (reply.text.as_str(), reply.final_segment))
+        .collect();
+    assert_eq!(replies, [("Cut words.", true), ("New words.", false)]);
+}
+
+#[tokio::test]
+async fn acquisition_marks_an_ending_the_guard_swallowed() {
+    if isolated("acquisition_marks_an_ending_the_guard_swallowed") {
+        return;
+    }
+    use crate::gemini::GeminiEvent;
+    use crate::livekit::probe::acquisition::{Ending, install};
+    let (mut rig, capture) = acquisition_reply_rig().await;
+    let installed = install(&capture).unwrap();
+    acquisition_event(&mut rig, GeminiEvent::OutputTranscript("Said.".into())).await;
+    acquisition_event(&mut rig, GeminiEvent::TurnComplete).await;
+    acquisition_event(&mut rig, GeminiEvent::OutputTranscript("More.".into())).await;
+    acquisition_event(&mut rig, GeminiEvent::Interrupted).await;
+    acquisition_event(&mut rig, GeminiEvent::TurnComplete).await;
+    let snapshot = capture.snapshot();
+    drop(installed);
+    let seen: Vec<_> = snapshot
+        .boundaries
+        .iter()
+        .map(|boundary| (boundary.ending, boundary.accepted, boundary.replies_before))
+        .collect();
+
+    // The ending that follows an interruption closes nothing: the provider
+    // sends it for the generation the interruption already cut.
+    assert_eq!(
+        seen,
+        [
+            (Ending::Complete, true, 1),
+            (Ending::Interrupted, true, 2),
+            (Ending::Complete, false, 2)
+        ]
+    );
+}
+
+#[tokio::test]
+async fn acquisition_does_not_take_a_departed_candidates_words_for_a_reply() {
+    if isolated("acquisition_does_not_take_a_departed_candidates_words_for_a_reply") {
+        return;
+    }
+    use crate::gemini::GeminiEvent;
+    use crate::livekit::probe::acquisition::install;
+    let (mut rig, capture) = acquisition_reply_rig().await;
+    rig.media.identity = Some("candidate".into());
+    let installed = install(&capture).unwrap();
+    acquisition_event(&mut rig, GeminiEvent::InputTranscript("my words".into())).await;
+
+    // The candidate leaves before the turn closes, so the close publishes their
+    // final segment without an identity, as the agent.
+    rig.media.identity = None;
+    acquisition_event(&mut rig, GeminiEvent::TurnComplete).await;
+    let snapshot = capture.snapshot();
+    drop(installed);
+    assert_eq!(snapshot.failure, None);
+    assert!(snapshot.replies.is_empty(), "{:?}", snapshot.replies);
+}
+
+/// The report the fixture leaves behind, from a script that exercises every
+/// shape the JS consumer reads: a reply that cites an executed call, a plain
+/// completed reply, and an interrupted one whose late ending is swallowed.
+/// Wall-clock readings and the byte counts that include them are replaced with
+/// zero, because a fixture cannot hold the time the test ran; the consumer's
+/// tests put times back.
+#[tokio::test]
+async fn acquisition_report_is_the_wire_fixture_the_consumer_reads() {
+    if isolated("acquisition_report_is_the_wire_fixture_the_consumer_reads") {
+        return;
+    }
+    use crate::gemini::GeminiEvent;
+    use crate::livekit::probe::acquisition::{Arming, Limits, install};
+    let (mut rig, _) = acquisition_reply_rig().await;
+    let arming = Arming::detached(Limits {
+        batches: 8,
+        calls: 8,
+        bytes: 65536,
+    });
+    arming.on_assignment("recovery-test");
+    arming.on_bind("recovery-test", 7);
+    let capture = arming.capture().unwrap();
+    let installed = install(&capture).unwrap();
+    acquisition_receive_editor(&mut rig, "call-1").await;
+    for text in ["REPLY-A one. ", "two."] {
+        acquisition_event(&mut rig, GeminiEvent::OutputTranscript(text.into())).await;
+    }
+    acquisition_event(&mut rig, GeminiEvent::TurnComplete).await;
+    acquisition_event(&mut rig, GeminiEvent::OutputTranscript("REPLY-B.".into())).await;
+    acquisition_event(&mut rig, GeminiEvent::TurnComplete).await;
+    acquisition_event(
+        &mut rig,
+        GeminiEvent::OutputTranscript("REPLY-C cut".into()),
+    )
+    .await;
+    acquisition_event(&mut rig, GeminiEvent::Interrupted).await;
+    acquisition_event(&mut rig, GeminiEvent::TurnComplete).await;
+    let _ = rig.old_frames().await;
+    let mut report = arming.report();
+    drop(installed);
+    fn zero_clocks(value: &mut serde_json::Value) {
+        match value {
+            serde_json::Value::Object(map) => {
+                for (key, inner) in map.iter_mut() {
+                    // Byte counts embed the digits of the clock they carry; the
+                    // call count does not, and is kept.
+                    if key == "emitted_unix_ms"
+                        || (key.starts_with("retained_") && key.ends_with("_bytes"))
+                    {
+                        *inner = 0.into();
+                    } else {
+                        zero_clocks(inner);
+                    }
+                }
+            }
+            serde_json::Value::Array(items) => items.iter_mut().for_each(zero_clocks),
+            _ => {}
+        }
+    }
+    zero_clocks(&mut report);
+    let path = "tests/fixtures/acquisition-report.json";
+    let rendered = format!("{}\n", serde_json::to_string_pretty(&report).unwrap());
+    if std::env::var_os("CODETRIAL_UPDATE_FIXTURES").is_some() {
+        std::fs::write(path, &rendered).unwrap();
+    }
+    assert_eq!(
+        std::fs::read_to_string(path).unwrap(),
+        rendered,
+        "regenerate with CODETRIAL_UPDATE_FIXTURES=1"
     );
 }

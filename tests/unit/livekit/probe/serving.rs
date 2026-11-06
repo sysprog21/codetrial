@@ -8,6 +8,9 @@
 //! tests beside it drive `serve` with a throwaway config so the fixture itself
 //! is checked without credentials or a browser.
 //!
+//! Unix only (`probe.rs` gates the module): a TERM is a stop request, which
+//! needs Unix signals, and the launcher keeps it in a session of its own.
+//!
 //! Where it differs from `codetrial web`, on purpose: it is always a launcher's
 //! child (no Setup page, as with the desktop app's server), it does not clear
 //! the operator's web error log, task mode is off, and it reads the process
@@ -189,11 +192,34 @@ fn publish(path: &Path, text: &str) -> Result<(), String> {
         .map_err(|error| format!("cannot write {}: {error}", path.display()))
 }
 
+/// Set once a TERM can be received, so a test sends one only then.
+static TERM_REGISTERED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// Resolves once the stop file exists or the deadline passes.
 async fn stop_file(path: PathBuf, deadline: Duration) {
     let began = Instant::now();
     while !path.exists() && began.elapsed() < deadline {
         tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
+
+/// The stop file, or a TERM, which a launcher that cannot reach the file sends
+/// to ask the same thing: drain, settle and write the report. Registered when
+/// first polled, inside the fixture's runtime, which is after the ready file is
+/// written: a TERM in that first moment still finds the default action and ends
+/// the fixture without a report, so a launcher asks with the stop file and
+/// keeps the fixture out of group-wide signals. Fails loudly if it cannot be
+/// registered, since the fixture would otherwise carry on without its contract.
+async fn stop_requested(path: PathBuf, deadline: Duration) {
+    let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .expect("the TERM handler registers");
+    TERM_REGISTERED.store(true, std::sync::atomic::Ordering::SeqCst);
+
+    // Once this returns the handler stays installed and a later TERM does
+    // nothing, so a launcher's escalation after the stop file is the KILL.
+    tokio::select! {
+        () = stop_file(path, deadline) => {}
+        _ = term.recv() => {}
     }
 }
 
@@ -219,7 +245,7 @@ fn serve_until_stop_file(settings: &Settings) -> Result<(), String> {
             settings.stop().display()
         ));
     }
-    serve(settings, stop_file(settings.stop(), settings.deadline))
+    serve(settings, stop_requested(settings.stop(), settings.deadline))
 }
 
 #[test]
@@ -408,15 +434,7 @@ fn an_address_off_loopback_refuses_the_start() {
 
 #[test]
 fn the_fixture_serves_the_real_service_and_reports_what_the_observer_saw() {
-    if crate::test_isolation::isolated_checked(
-        &format!(
-            "{}::the_fixture_serves_the_real_service_and_reports_what_the_observer_saw",
-            module_path!().split_once("::").unwrap().1
-        ),
-        "CODETRIAL_SERVING_FIXTURE_TEST",
-        false,
-        |_| {},
-    ) {
+    if crate::test_isolation::isolated!("CODETRIAL_SERVING_FIXTURE_TEST") {
         return;
     }
     let dir = scratch("serve");
@@ -475,16 +493,37 @@ fn the_fixture_serves_the_real_service_and_reports_what_the_observer_saw() {
 }
 
 #[test]
+fn a_term_is_a_stop_request_and_the_run_still_reports() {
+    if crate::test_isolation::isolated!("CODETRIAL_SERVING_FIXTURE_TEST") {
+        return;
+    }
+    let dir = scratch("term");
+    let settings = throwaway(&dir);
+    let (ready, out) = (settings.ready(), settings.out());
+    let server = std::thread::spawn(move || serve_until_stop_file(&settings));
+    wait_for(&ready);
+
+    // The handler is registered when the stop future is first polled, which the
+    // bound address does not wait for.
+    let began = Instant::now();
+    while !TERM_REGISTERED.load(std::sync::atomic::Ordering::SeqCst) {
+        assert!(began.elapsed() < Duration::from_secs(30), "no TERM handler");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let status = std::process::Command::new("kill")
+        .args(["-TERM", &std::process::id().to_string()])
+        .status()
+        .unwrap();
+    assert!(status.success());
+    server.join().unwrap().unwrap();
+    let report: serde_json::Value = serde_json::from_str(&wait_for(&out)).unwrap();
+    assert_eq!(report["outcome"], "ok", "{report}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn a_client_holding_a_half_sent_request_cannot_keep_the_run_from_reporting() {
-    if crate::test_isolation::isolated_checked(
-        &format!(
-            "{}::a_client_holding_a_half_sent_request_cannot_keep_the_run_from_reporting",
-            module_path!().split_once("::").unwrap().1
-        ),
-        "CODETRIAL_SERVING_FIXTURE_DRAIN_TEST",
-        false,
-        |_| {},
-    ) {
+    if crate::test_isolation::isolated!("CODETRIAL_SERVING_FIXTURE_DRAIN_TEST") {
         return;
     }
     let dir = scratch("drain");
@@ -531,15 +570,7 @@ fn a_client_holding_a_half_sent_request_cannot_keep_the_run_from_reporting() {
 
 #[test]
 fn a_run_replaces_the_artifacts_an_earlier_run_left() {
-    if crate::test_isolation::isolated_checked(
-        &format!(
-            "{}::a_run_replaces_the_artifacts_an_earlier_run_left",
-            module_path!().split_once("::").unwrap().1
-        ),
-        "CODETRIAL_SERVING_FIXTURE_STALE_TEST",
-        false,
-        |_| {},
-    ) {
+    if crate::test_isolation::isolated!("CODETRIAL_SERVING_FIXTURE_STALE_TEST") {
         return;
     }
     let dir = scratch("stale-artifacts");

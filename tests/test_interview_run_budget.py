@@ -650,10 +650,15 @@ class PermitClientFailureTests(Scratch):
 
 class LauncherRunTests(Scratch):
     def test_a_clean_run_completes_with_every_action_granted_and_dispatched_once(self):
+        started = time.time()
         result, _ = self.launch("normal", env={"FAKE_OBSERVED": "1"})
         self.assertEqual(result.returncode, 0, result.stderr)
         report = self.result()
         self.assertEqual(report["status"], "complete")
+        # The worker is told when the reap begins: before the wall cap.
+        reap_at = int((self.fake / "reap_at").read_text())
+        self.assertGreater(reap_at, started - 1)
+        self.assertLess(reap_at, started + self.manifest()["outer_wall_cap_s"])
         self.assertEqual(self.dispatched(), ACTIONS + ["end"])
         self.assertEqual(self.grants(), ACTIONS + ["end"])
         hard = report["hard"]["scripted_actions"]
@@ -1167,6 +1172,526 @@ class BrowserCheckValidationTests(Scratch):
         )
         self.assertEqual(result.returncode, 2, result.stderr)
         self.assertIn("live BROWSER_CHECK_BUDGET_SOCKET", result.stderr)
+
+    def dummy_config(self):
+        """The credentials a dispatch run asks for, from a throwaway config
+        rather than whatever this machine keeps."""
+        config = self.root / "dummy.env.local"
+        config.write_text(
+            "LIVEKIT_URL=wss://primary.example\nLIVEKIT_API_KEY=k\n"
+            "LIVEKIT_API_SECRET=s\nGOOGLE_API_KEY=g\n"
+        )
+        return config
+
+    def test_the_serving_fixture_needs_a_budgeted_dispatch_run_and_a_fresh_report(self):
+        config = self.dummy_config()
+        report = self.root / "fixture-report.json"
+        # A reserve that outlasts the 150 s default stop wait with a minute over.
+        manifest = self.write_manifest(
+            outer_wall_cap_s=3600, cleanup_reserve_s=300, selected_duration_s=600
+        )
+        base = {
+            "CODETRIAL_CONFIG_ENV": str(config),
+            "BROWSER_CHECK_RUN_MANIFEST": str(manifest),
+            "BROWSER_CHECK_RUN_MANIFEST_SHA256": sha256(manifest),
+            "BROWSER_CHECK_FIXTURE_TEST": "module::serve",
+            "BROWSER_CHECK_AGENT": "dispatch",
+            "BROWSER_CHECK_FIXTURE_OUT": str(report),
+            "BROWSER_CHECK_BUDGET_REAP_AT": str(int(time.time()) + 3600),
+        }
+        result = self.check(**base)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        # A capture path that is free is fine.
+        free = self.check(**base, BROWSER_CHECK_CAPTURE=str(self.root / "capture.json"))
+        self.assertEqual(free.returncode, 0, free.stderr)
+        no_run = {
+            "BROWSER_CHECK_RUN_MANIFEST": None,
+            "BROWSER_CHECK_RUN_ID": None,
+            "BROWSER_CHECK_RUN_MANIFEST_SHA256": None,
+            "BROWSER_CHECK_BUDGET_SOCKET": None,
+        }
+        existing = self.root / "already-there.json"
+        existing.write_text("{}")
+        linked = self.root / "linked"
+        linked.symlink_to(self.root, target_is_directory=True)
+        rows = [
+            ({**base, "BROWSER_CHECK_AGENT": "home"}, "needs a budgeted run"),
+            ({**base, **no_run}, "needs a budgeted run"),
+            ({**base, "BROWSER_CHECK_FIXTURE_OUT": None}, "must name a report file"),
+            ({**base, "BROWSER_CHECK_BUDGET_REAP_AT": None}, "BUDGET_REAP_AT"),
+            ({**base, "BROWSER_CHECK_BUDGET_REAP_AT": "soon"}, "BUDGET_REAP_AT"),
+            (
+                {**base, "BROWSER_CHECK_CAPTURE": str(report)},
+                "must name different files",
+            ),
+            (
+                # Through a symlinked directory: the paths are compared once
+                # resolved, not as they are spelled.
+                {**base, "BROWSER_CHECK_CAPTURE": str(linked / report.name)},
+                "must name different files",
+            ),
+            (
+                {**base, "BROWSER_CHECK_CAPTURE": f"{report}.server.log"},
+                "must name different files",
+            ),
+            (
+                {
+                    **base,
+                    "BROWSER_CHECK_CAPTURE": str(report.with_suffix("")),
+                    "BROWSER_CHECK_FIXTURE_OUT": f"{report.with_suffix('')}.partial",
+                },
+                "must name different files",
+            ),
+            (
+                {**base, "BROWSER_CHECK_FIXTURE_OUT": str(existing)},
+                "must name a report file",
+            ),
+            (
+                {
+                    **base,
+                    "BROWSER_CHECK_FIXTURE_OUT": str(
+                        self.root / "no-such-dir" / "r.json"
+                    ),
+                },
+                "in a directory that does and can be written",
+            ),
+            (
+                {**base, "BROWSER_CHECK_CAPTURE": str(existing)},
+                "BROWSER_CHECK_CAPTURE must not exist yet",
+            ),
+            (
+                {**base, "BROWSER_CHECK_FIXTURE_STOP_WAIT_S": "soon"},
+                "number of seconds",
+            ),
+            (
+                {**base, "BROWSER_CHECK_FIXTURE_STOP_WAIT_S": "0150"},
+                "number of seconds",
+            ),
+            (
+                {**base, "BROWSER_CHECK_FIXTURE_STOP_WAIT_S": "39"},
+                "at least 40 seconds",
+            ),
+            (
+                {**base, "BROWSER_CHECK_FIXTURE_STOP_WAIT_S": "241"},
+                "needs at least 301s",
+            ),
+        ]
+        for env, expected in rows:
+            with self.subTest(env=env):
+                result = self.check(**env)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn(expected, result.stderr)
+
+    def test_the_stop_wait_must_fit_inside_the_manifests_cleanup_reserve(self):
+        config = self.dummy_config()
+        # The reserve the shared manifest here carries is the accepted minimum,
+        # far short of a stop wait of 150 s.
+        result = self.check(
+            CODETRIAL_CONFIG_ENV=str(config),
+            BROWSER_CHECK_AGENT="dispatch",
+            BROWSER_CHECK_FIXTURE_TEST="module::serve",
+            BROWSER_CHECK_FIXTURE_OUT=str(self.root / "report.json"),
+        )
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("cleanup_reserve_s is 60", result.stderr)
+        self.assertIn("needs at least 210s", result.stderr)
+
+    def test_the_fixture_is_started_in_a_session_of_its_own(self):
+        script = (ROOT / "scripts" / "browser-check.sh").read_text()
+        # A TERM sent to the script's process group must reach the script, whose
+        # trap stops the fixture gracefully, and not the fixture first. The
+        # launch itself needs a browser, so this reads the script.
+        self.assertRegex(script, r'set -- setsid "\$@"')
+        self.assertRegex(
+            script, r'--ignored --exact "\$FIXTURE_TEST" --nocapture --test-threads=1'
+        )
+
+    def kill_pidfile(self, path):
+        if path.exists():
+            self.kill(int(path.read_text()))
+
+    GOOD_CAPTURE = {
+        "flow": "long-interview",
+        "mode": "dispatch",
+        "plan": {"durationMin": 90, "observationTargetS": 5400},
+        "report": {
+            "status": "complete",
+            "exit_code": 0,
+            "anchor": {"source": "server_clock"},
+            "validation_fixture": False,
+            "schedule_mode": "coding",
+            "qualification": "not_evaluated",
+            "reply_content": "not_assessed",
+            "schedule_origin_unix_ms": 1700000000000,
+        },
+    }
+
+    def good_capture(self):
+        """The capture a finished long interview leaves, with the schedule hash
+        the judge will rebuild from the plan."""
+        sha = subprocess.run(
+            [
+                shutil.which("node"),
+                "-e",
+                "console.log(require('./scripts/long-interview-schedule.cjs')"
+                ".generateSchedule('coding',{durationMin:90,observationTargetS:5400})"
+                ".schedule.schedule_sha256)",
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        capture = json.loads(json.dumps(self.GOOD_CAPTURE))
+        capture["report"]["schedule_sha256"] = sha
+        return json.dumps(capture)
+
+    def run_fixture_path(self, writes_report=True, worker_exit=0, capture_text=None):
+        """browser-check.sh from the manifest to the exit trap, with a stand-in
+        fixture server and a stand-in worker: no browser, no credentials."""
+        fixture = self.root / "stand-in-fixture"
+        support.write_executable(
+            fixture, support.stub("interview-run-budget/stand-in-fixture.py")
+        )
+        manifest = self.write_manifest(
+            outer_wall_cap_s=3600,
+            cleanup_reserve_s=300,
+            selected_duration_s=600,
+            binaries={"candidate": {"path": str(fixture), "sha256": sha256(fixture)}},
+        )
+        shim = self.root / "shim"
+        shim.mkdir()
+        # The script keeps its floor and latency logs outside its own scratch
+        # directory by design; here they go inside this test's.
+        tmp = self.root / "tmp"
+        tmp.mkdir()
+        support.write_executable(
+            shim / "node", support.stub("interview-run-budget/stand-in-node.sh")
+        )
+        socket_path = self.root / "budget.sock"
+        # Bound and never listened on: the script only asks that it be a socket.
+        listener = socket.socket(socket.AF_UNIX)
+        listener.bind(str(socket_path))
+        self.addCleanup(listener.close)
+        report = self.root / "kept-report.json"
+        capture = self.root / "capture.json"
+        pidfile = self.root / "stand-in.pid"
+        self.addCleanup(self.kill_pidfile, pidfile)
+        result = self.check(
+            BROWSER_CHECK_VALIDATE_ENV_ONLY=None,
+            BROWSER_CHECK_AGENT="dispatch",
+            BROWSER_CHECK_FIXTURE_TEST="module::serve",
+            BROWSER_CHECK_FIXTURE_OUT=str(report),
+            BROWSER_CHECK_FIXTURE_STOP_WAIT_S="40",
+            BROWSER_CHECK_CAPTURE=str(capture),
+            BROWSER_CHECK_RUN_MANIFEST=str(manifest),
+            BROWSER_CHECK_RUN_MANIFEST_SHA256=sha256(manifest),
+            BROWSER_CHECK_BUDGET_SOCKET=str(socket_path),
+            BROWSER_CHECK_BUDGET_REAP_AT=str(int(time.time()) + 3600),
+            CODETRIAL_CONFIG_ENV=str(self.dummy_config()),
+            PATH=f"{shim}:{os.environ['PATH']}",
+            TMPDIR=str(tmp),
+            PORT=None,
+            INTERVIEW_ROOM_NAME=None,
+            STAND_IN_PIDFILE=str(pidfile),
+            REAL_NODE=shutil.which("node"),
+            STAND_IN_CAPTURE=capture_text or self.good_capture(),
+            STAND_IN_WORKER_EXIT=str(worker_exit),
+            STAND_IN_WRITES_REPORT="1" if writes_report else None,
+        )
+        return result, report, capture
+
+    def test_the_fixture_path_runs_from_start_to_a_judged_capture(self):
+        result, report, capture = self.run_fixture_path()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        # The report was kept with a private copy of the server's log.
+        kept_report = json.loads(report.read_text())
+        self.assertEqual(kept_report["outcome"], "ok")
+        # Its drain and settle add up to the stop wait less the slack, and its
+        # own deadline leaves the stop wait and the slack before the runner's
+        # reap (an hour from the launch here), less what the launch used.
+        launched = kept_report["launched_with"]
+        self.assertEqual((launched["DRAIN_S"], launched["SETTLE_S"]), ("10", "10"))
+        ceiling = 3600 - 40 - 20
+        self.assertIn(int(launched["DEADLINE_S"]), range(ceiling - 60, ceiling + 1))
+        log = Path(str(report) + ".server.log")
+        self.assertIn("stand-in fixture stopping", log.read_text())
+        self.assertEqual(log.stat().st_mode & 0o777, 0o600)
+        # And judged after it stopped: the verdict is in the capture, the rest
+        # of the report is as the worker left it.
+        kept = json.loads(capture.read_text())["report"]
+        self.assertEqual(kept["reply_content"], "failed", kept)
+        self.assertEqual(kept["qualification"], "not_evaluated")
+        self.assertEqual(kept["status"], "complete")
+        self.assertIn("long-interview reply_content=failed", result.stdout)
+
+    def test_a_judgment_never_turns_a_failed_run_green(self):
+        failed, _, capture = self.run_fixture_path(worker_exit=1)
+        self.assertNotEqual(failed.returncode, 0, failed.stderr)
+        self.assertEqual(
+            json.loads(capture.read_text())["report"]["reply_content"], "failed"
+        )
+
+    def test_a_judgment_that_cannot_run_leaves_a_good_run_good(self):
+        result, _, capture = self.run_fixture_path(capture_text="not a capture")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("cannot read the capture", result.stderr)
+        self.assertIn("run's own result stands", result.stderr)
+        self.assertEqual(capture.read_text(), "not a capture")
+
+    def test_a_fixture_that_wrote_no_report_fails_the_run_and_says_so(self):
+        result, report, capture = self.run_fixture_path(writes_report=False)
+        self.assertNotEqual(result.returncode, 0, result.stderr)
+        self.assertIn("left no report", json.loads(report.read_text())["outcome"])
+        kept = json.loads(capture.read_text())["report"]
+        self.assertEqual(kept["reply_content"], "not_assessed", kept)
+
+    def test_the_sdk_fixture_launcher_pins_its_test_name_through_the_shared_check(self):
+        script = (ROOT / "scripts" / "live-sdk-fixture.sh").read_text()
+        self.assertIn('fixture-server.sh" check "$bin" "$name"', script)
+
+
+class FixtureServerScriptTests(Scratch):
+    """scripts/fixture-server.sh against stand-in executables."""
+
+    SCRIPT = ROOT / "scripts" / "fixture-server.sh"
+
+    def run_script(self, *args, **env):
+        environment = dict(os.environ)
+        environment.update(env)
+        return subprocess.run(
+            ["sh", str(self.SCRIPT), *map(str, args)],
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+
+    def pin(self, listing):
+        pin = self.root / "pin"
+        support.write_executable(
+            pin,
+            '#!/bin/sh\nif [ "$1" = --list ] && [ "$2" = --ignored ]; then\n'
+            f"cat <<'EOF'\n{listing}EOF\nfi\n",
+        )
+        return pin
+
+    GOOD_REPORT = {
+        "outcome": "ok",
+        "bound": "127.0.0.1:1",
+        "arming_failure": None,
+        "capture": {
+            "failure": None,
+            "receipts": [],
+            "batches": [],
+            "replies": [],
+            "boundaries": [],
+        },
+    }
+
+    def keep(self, report, log="server output\n", before=None):
+        """Runs `keep` over a stand-in fixture directory; returns the result and
+        the path the report was kept at."""
+        directory = Path(tempfile.mkdtemp(dir=self.root))
+        if report is not None:
+            (directory / "out.json").write_text(json.dumps(report))
+        server_log = directory / "web.log"
+        server_log.write_text(log)
+        out = directory / "kept.json"
+        if before:
+            before(out)
+        result = self.run_script("keep", directory, out, server_log)
+        return result, out
+
+    def test_keep_holds_a_good_report_and_a_private_copy_of_the_log(self):
+        result, out = self.keep(self.GOOD_REPORT)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(out.read_text())["outcome"], "ok")
+        # Both private: the report holds the interviewer's replies and the
+        # tool results.
+        self.assertEqual(out.stat().st_mode & 0o777, 0o600)
+        kept = Path(str(out) + ".server.log")
+        self.assertEqual(kept.read_text(), "server output\n")
+        self.assertEqual(kept.stat().st_mode & 0o777, 0o600)
+
+    def test_keep_never_replaces_a_file_already_at_the_report_path(self):
+        # A capture written there by this run, or another run's report, is
+        # left as it was and the keep fails.
+        result, out = self.keep(
+            self.GOOD_REPORT, before=lambda out: out.write_text("the capture\n")
+        )
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertEqual(out.read_text(), "the capture\n")
+
+    def test_keep_replaces_neither_a_log_nor_a_report_already_there(self):
+        result, out = self.keep(
+            self.GOOD_REPORT,
+            before=lambda out: Path(str(out) + ".server.log").write_text("earlier\n"),
+        )
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertEqual(Path(str(out) + ".server.log").read_text(), "earlier\n")
+        result, out = self.keep(None, before=lambda out: out.write_text("earlier\n"))
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertEqual(out.read_text(), "earlier\n")
+        self.assertIn("not this run's report", result.stderr)
+
+    def test_keep_leaves_an_envelope_when_the_fixture_wrote_nothing(self):
+        result, out = self.keep(None)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        envelope = json.loads(out.read_text())
+        self.assertEqual(out.stat().st_mode & 0o777, 0o600)
+        self.assertIn("left no report", envelope["outcome"])
+        self.assertIsNone(envelope["capture"])
+        self.assertIn("server output", result.stderr)
+
+    def test_keep_refuses_a_report_the_judge_could_not_read(self):
+        reports = (
+            {**self.GOOD_REPORT, "outcome": "shutdown bound"},
+            {k: v for k, v in self.GOOD_REPORT.items() if k != "bound"},
+            {**self.GOOD_REPORT, "capture": None},
+        )
+        for report in reports:
+            with self.subTest(report=report):
+                result, out = self.keep(report)
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertTrue(out.exists())
+
+    def test_keep_fails_when_the_log_cannot_be_kept(self):
+        # A directory sits where the log copy has to go.
+        result, _ = self.keep(
+            self.GOOD_REPORT, before=lambda out: Path(str(out) + ".server.log").mkdir()
+        )
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("could not keep the server log", result.stderr)
+
+    def test_the_pin_must_list_the_test_exactly_once(self):
+        pin = self.pin("a::one: test\nmodule::serve: test\n")
+        self.assertEqual(self.run_script("check", pin, "module::serve").returncode, 0)
+        rows = [
+            ("module::missing", "lists 0"),
+            ("serve", "lists 0"),
+        ]
+        for name, expected in rows:
+            with self.subTest(name=name):
+                result = self.run_script("check", pin, name)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn(expected, result.stderr)
+        twice = self.pin("module::serve: test\nmodule::serve: test\n")
+        result = self.run_script("check", twice, "module::serve")
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("lists 2", result.stderr)
+
+    def test_a_pin_that_is_not_runnable_or_a_name_that_is_not_one_name_is_refused(self):
+        plain = self.root / "plain"
+        plain.write_text("not executable")
+        failing = self.root / "failing"
+        support.write_executable(failing, "#!/bin/sh\nexit 1\n")
+        for args in [
+            (plain, "module::serve"),
+            (failing, "module::serve"),
+            (self.pin("module::serve: test\n"), ""),
+            (self.pin("module::serve: test\n"), "two names"),
+        ]:
+            with self.subTest(args=args):
+                self.assertEqual(self.run_script("check", *args).returncode, 2)
+
+    def test_a_fixture_that_stops_on_request_is_waited_for_and_leaves_its_report(self):
+        fixture = self.root / "fixture"
+        support.write_executable(
+            fixture,
+            '#!/bin/sh\nwhile [ ! -e "$1/stop" ]; do sleep 0.1; done\n'
+            'sleep 1\necho \'{"outcome":"ok"}\' > "$1/out.json"\n',
+        )
+        directory = self.root / "fixture-dir"
+        directory.mkdir()
+        process = subprocess.Popen([str(fixture), str(directory)])
+        self.spawned.append(process.pid)
+        result = self.run_script("stop", directory, process.pid, 20)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((directory / "stop").exists())
+        # It finished its own work first: the stop did not cut it short. The
+        # process is still unreaped here, which the script must not mistake for
+        # running.
+        self.assertEqual(
+            (directory / "out.json").read_text().strip(), '{"outcome":"ok"}'
+        )
+        self.assertEqual(process.wait(timeout=10), 0)
+
+    def test_a_fixture_that_will_not_stop_is_terminated_and_that_is_a_failure(self):
+        stubborn = self.root / "stubborn"
+        support.write_executable(
+            stubborn, "#!/bin/sh\ntrap '' TERM\nwhile :; do sleep 1; done\n"
+        )
+        directory = self.root / "stubborn-dir"
+        directory.mkdir()
+        process = subprocess.Popen([str(stubborn)])
+        self.spawned.append(process.pid)
+        result = self.run_script(
+            "stop", directory, process.pid, 0, FIXTURE_SERVER_TERM_GRACE_S="1"
+        )
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("had not stopped after 0s", result.stderr)
+        process.wait(timeout=10)
+        self.assertIsNotNone(process.returncode)
+
+    def test_a_stop_file_that_cannot_be_written_falls_back_to_a_bounded_term(self):
+        # TERM is a stop request to the fixture: it finishes and exits cleanly
+        # inside the wait, past the kill grace, so only the wait lets it.
+        fixture = self.root / "on-term"
+        support.write_executable(
+            fixture,
+            "#!/bin/sh\ntrap 'sleep 2; exit 0' TERM\nwhile :; do sleep 0.1; done\n",
+        )
+        process = subprocess.Popen([str(fixture)])
+        self.spawned.append(process.pid)
+        time.sleep(0.5)
+        started = time.monotonic()
+        result = self.run_script(
+            "stop",
+            self.root / "no-such-dir",
+            process.pid,
+            20,
+            FIXTURE_SERVER_TERM_GRACE_S="1",
+        )
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("could not write the stop file", result.stderr)
+        self.assertEqual(process.wait(timeout=10), 0, "it was asked, not killed")
+        self.assertLess(time.monotonic() - started, 15)
+
+    def test_a_padded_zombie_state_from_ps_still_counts_as_exited(self):
+        # A system that pads the state column (" Z") must not leave the stop
+        # waiting out its whole limit for a process that has already exited.
+        bin_dir = self.root / "bin"
+        bin_dir.mkdir()
+        support.write_executable(bin_dir / "ps", "#!/bin/sh\necho ' Z+'\n")
+        sleeper = subprocess.Popen(["sleep", "300"])
+        self.spawned.append(sleeper.pid)
+        directory = self.root / "padded-dir"
+        directory.mkdir()
+        started = time.monotonic()
+        result = self.run_script(
+            "stop",
+            directory,
+            sleeper.pid,
+            30,
+            PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertLess(time.monotonic() - started, 10)
+
+    def test_stop_refuses_a_pid_or_wait_that_is_not_a_number(self):
+        for args in [
+            ("stop", self.root, "abc", 1),
+            ("stop", self.root, 0, 1),
+            ("stop", self.root, 1, 1),
+            ("stop", self.root, "007", 1),
+            ("stop", self.root, 1, "soon"),
+            ("stop", self.root),
+            ("bogus",),
+        ]:
+            with self.subTest(args=args):
+                self.assertEqual(self.run_script(*args).returncode, 2)
 
 
 class WorkerGuardNodeTests(Scratch):

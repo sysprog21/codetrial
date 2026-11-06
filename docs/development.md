@@ -1069,8 +1069,10 @@ python3 scripts/interview-run-budget.py run \
 `validate` is free and should always precede `run`. `run` passes the worker
 `BROWSER_CHECK_RUN_MANIFEST`, `BROWSER_CHECK_RUN_ID`,
 `BROWSER_CHECK_RUN_MANIFEST_SHA256` (the hash of the manifest bytes),
-`BROWSER_CHECK_BUDGET_SOCKET`, `BROWSER_CHECK_BUDGET_TELEMETRY` and
-`BROWSER_CHECK_BUDGET_STOP`. `scripts/browser-check.sh` refuses a partial set, a
+`BROWSER_CHECK_BUDGET_SOCKET`, `BROWSER_CHECK_BUDGET_TELEMETRY`,
+`BROWSER_CHECK_BUDGET_STOP` and `BROWSER_CHECK_BUDGET_REAP_AT` (when its reap
+begins, in Unix seconds, which the serving fixture's own deadline is set
+before). `scripts/browser-check.sh` refuses a partial set, a
 run ID or hash that disagrees with the manifest, a binary whose sha256 changed,
 and `CODETRIAL_WEB_URL`, since an external server is shared and was not built
 from the pinned executable. With `BROWSER_CHECK_VALIDATE_ENV_ONLY=1` it stops
@@ -1131,6 +1133,22 @@ reserve is revalidated before launch against the resolved handover grace
 (`BROWSER_CHECK_HANDOVER_GRACE_S`, 90 when unset). A GoAway rotation that begins
 at or after the boundary is `late_idle` or `late_terminal_preempted` and never
 counts toward the two completed rotations a run needs.
+
+`scripts/long-interview-evidence.cjs` reads the acquisition report the test
+fixture leaves (receipts, executed batches, interviewer segments and turn
+endings, each with its socket and how many of the others preceded it) and gives
+`judgeCheckpoint` its evidence. It claims an association only when the facts
+leave one reading: a reply cites the calls received on its own socket after the
+previous ending, executed before it began, and not received while output was
+being discarded. A swallowed or missing ending, a segment sealed by a cut, a
+reply that spans a tool call, a socket replacement, a rewritten segment, two
+replies in one window, a window edge inside the clock uncertainty, a reply
+that began after the question but before its estimated end (a recording can
+finish speaking sooner than its word count says) or a latched capture failure
+makes the checkpoint `not_assessed` with the reason, never a pass. The
+interview is `verified` only when every checkpoint passed.
+`tests/fixtures/acquisition-report.json` is real producer output, regenerated
+with `CODETRIAL_UPDATE_FIXTURES=1` on the test that writes it.
 
 What a reply is judged on is what its question asks and no more
 (`scripts/long-interview-schedule.cjs`). An inspect question asks about the

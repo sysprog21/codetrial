@@ -539,6 +539,12 @@ test("the duration is claimed only from the server clock", async () => {
   assert.equal(viaToken.report.full_interview, false);
   assert.equal(finalize(played).report.anchor.source, "server_clock");
   assert.equal(finalize(played).report.schedule_start_delay_s, 5);
+  assert.equal(finalize(played).report.schedule_mode, played.prepared.mode);
+  // The origin a later reader needs to read the interview clock against.
+  assert.equal(
+    finalize(played).report.schedule_origin_unix_ms,
+    played.joinedAtMs,
+  );
 });
 
 test("a stimulus whose page action throws still spends its timestamp", async () => {

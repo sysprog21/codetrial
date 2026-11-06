@@ -134,8 +134,9 @@ livekit-protocol = "0.8.2"
 # LiveKit's transport, reached directly to check the vendored proxy path.
 livekit-net = "0.1.4"
 # The paused clock, so the Live socket's keepalive and idle limits are tested
-# at their real values instead of waiting them out.
-tokio = { version = "1.54.1", features = ["test-util"] }
+# at their real values instead of waiting them out; signals, so the serving
+# fixture can treat TERM as a stop request.
+tokio = { version = "1.54.1", features = ["signal", "test-util"] }
 # The continuity fixture installs a logger to read the SDK's queue-overflow
 # line; the SDK already depends on this crate.
 log = "0.4.34"

@@ -19,6 +19,13 @@ pub(super) async fn on_tool_calls(
     if calls.is_empty() {
         return Ok(());
     }
+    // Before every await below, any of which can cancel the batch.
+    #[cfg(test)]
+    crate::livekit::probe::acquisition::receive(
+        &context.activity.latency,
+        &calls,
+        context.activity.socket.discarding_output || context.state.interviewer_silenced(),
+    );
     // A filler that fails to queue is not worth the tool round it precedes.
     #[cfg(test)]
     owner::before(Stage::Acknowledgement, context).await;

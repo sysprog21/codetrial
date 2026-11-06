@@ -1,5 +1,24 @@
 use std::time::{Duration, Instant};
 
+/// Runs the calling test again in a child process, alone, under `marker`, and
+/// is true in the parent once the child has passed: the test returns then. The
+/// name is read from the path of an item declared inside the test, so it
+/// cannot fall out of step with the test's own; one that selected no test
+/// would fail `isolated_checked` rather than pass vacuously.
+macro_rules! isolated {
+    ($marker:expr) => {{
+        fn here() {}
+        let test = std::any::type_name_of_val(&here)
+            .strip_suffix("::here")
+            .map(|path| path.trim_end_matches("::{{closure}}"))
+            .and_then(|path| path.split_once("::"))
+            .map(|(_, test)| test)
+            .expect("an item inside a test has the test's path");
+        $crate::test_isolation::isolated_checked(test, $marker, false, |_| {})
+    }};
+}
+pub(crate) use isolated;
+
 pub(crate) fn isolated_checked(
     name: &str,
     marker: &str,

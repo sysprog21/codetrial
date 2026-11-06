@@ -22,6 +22,7 @@
 
 pub(super) mod acquisition;
 
+#[cfg(unix)]
 #[path = "../../tests/unit/livekit/probe/serving.rs"]
 mod serving;
 

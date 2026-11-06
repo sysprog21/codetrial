@@ -21,11 +21,7 @@ fn loopback_registration_rejects_every_non_fixture_destination() {
 
 #[test]
 fn loopback_registration_is_scoped_one_shot_and_drops_without_a_connection() {
-    let name = format!(
-        "{}::loopback_registration_is_scoped_one_shot_and_drops_without_a_connection",
-        module_path!().split_once("::").unwrap().1,
-    );
-    if isolation::isolated_checked(&name, "CODETRIAL_SOCKET_FIXTURE_TEST", false, |_| {}) {
+    if isolation::isolated!("CODETRIAL_SOCKET_FIXTURE_TEST") {
         return;
     }
     let endpoint = "ws://127.0.0.1:9/?key=sequence-test-key";

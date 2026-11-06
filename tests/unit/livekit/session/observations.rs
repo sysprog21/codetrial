@@ -222,11 +222,7 @@ fn accepted_close_request_is_observed_before_tool_batch_response_timing() {
 
 #[test]
 fn executed_tool_capture_precedes_send_and_telemetry_gates() {
-    let name = format!(
-        "{}::executed_tool_capture_precedes_send_and_telemetry_gates",
-        module_path!().split_once("::").unwrap().1
-    );
-    if isolation::isolated_checked(&name, "CODETRIAL_ACQUISITION_CAPTURE_TEST", false, |_| {}) {
+    if isolation::isolated!("CODETRIAL_ACQUISITION_CAPTURE_TEST") {
         return;
     }
     use crate::livekit::probe::acquisition::{Capture, Failure, Limits, install};
