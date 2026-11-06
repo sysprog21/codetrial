@@ -108,6 +108,16 @@ userinfo, path, query or fragment.
   the target is a trait object, name the source type so the coercion happens at
   the call: `Arc::<FakeProvider>::clone(&provider)`. An `as Arc<dyn T>` cast is
   not an option; it is a trivial cast.
+- A `std::sync::Mutex` is locked with `.lock().unwrap_or_else(|error|
+  error.into_inner())`, not `.unwrap()`: a poisoned lock is recovered. All 14
+  such locks were checked (2026-11-06) and each guards state that is written
+  whole, so the next taker sees a valid value, and a `Drop` that takes a lock
+  must not panic while a task unwinds. Where the reason is not obvious (the
+  accounts connection, the dispatch maps, the cooldown map, the pressure
+  counters, the task admission state) a comment at the declaration gives it. A
+  new lock gets the same question: if a panic halfway through an update would
+  leave its state inconsistent, recovering is wrong, and the update should be
+  one step or the lock should not be recovered.
 - Casts that can lose information use `try_from`, `cast_unsigned` or a clamp
   first. A cast that is correct by construction carries an `expect` saying why.
 - A glob import is a re-export hub that its test module reads through

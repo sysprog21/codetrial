@@ -13,6 +13,9 @@ pub(crate) const QUOTA_COOLDOWN: Duration = Duration::from_secs(60);
 // refusal that was about the project rather than the key, and so marked every
 // key, clears on its own; a dead key costs a room one quick refusal a minute.
 const INVALID_COOLDOWN: Duration = Duration::from_secs(60);
+
+// A poisoned lock is recovered: `failed` only extends deadlines and nothing in
+// it can panic, so a poisoned lock never holds a half-updated map.
 static COOLDOWNS: OnceLock<Mutex<HashMap<String, Cooldown>>> = OnceLock::new();
 
 /// The reasons Google gives for refusing a key, and for refusing it on quota.

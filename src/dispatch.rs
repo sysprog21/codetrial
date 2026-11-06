@@ -54,6 +54,10 @@ pub struct LocalDispatcher {
     pub config: AgentConfig,
     pub runtime: tokio::runtime::Handle,
 
+    // A poisoned lock is recovered: the maps are written only after the last
+    // call that can panic (the `expect` in `claim_join` fires before it
+    // writes), and `Slot::drop` takes this lock, possibly while a task unwinds,
+    // where a panic would abort the process and leak the room's capacity.
     /// Interview and guest-capacity state protected by one mutex.
     pub state: Arc<Mutex<DispatchState>>,
     /// From `config::max_concurrent_interviews`, so the ceiling an operator set
