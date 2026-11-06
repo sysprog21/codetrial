@@ -584,7 +584,7 @@ async fn admit_caller(
 async fn dispatch_or_release_consent(
     state: &AppState,
     owner: Option<&Owner>,
-    interview: Option<&String>,
+    interview: Option<&str>,
     room_name: &str,
     provider: &crate::config::Provider,
     identity: &str,
@@ -596,7 +596,7 @@ async fn dispatch_or_release_consent(
     let no_show = owner.zip(interview).map(|(owner, interview)| {
         NoShowConsent::new(
             Arc::clone(&owner.accounts),
-            interview.clone(),
+            interview.to_owned(),
             owner.user.id,
             room_name.to_string(),
         )
@@ -669,7 +669,7 @@ async fn claim_and_dispatch(
     dispatch_or_release_consent(
         &state,
         owner.as_ref(),
-        interview.as_ref(),
+        interview.as_deref(),
         &room_name,
         &provider,
         &identity,

@@ -58,7 +58,9 @@ New Rust files stay within 1500 lines. Existing larger files are recorded in
 `scripts/rust-style-ceilings.json` and may only shrink: after splitting one by
 responsibility, run `scripts/check-rust-style.py --ratchet` to lower its entry.
 `scripts/ceiling-hotspots.py` ranks them by churn times size, as one input to
-choosing which to split first.
+choosing which to split first. Count a file's mutants before
+splitting it with `cargo mutants --list -f <file> | wc -l`; `make mutants`
+downloads a compiler first.
 Never raise an entry to land a change; a new module is the answer. The gate passes `--baseline origin/main`, so a raised entry or a new
 exemption fails against what main records, and under CI a baseline ref that was
 not fetched fails too, so a shallow checkout cannot skip it. Test bodies
@@ -103,6 +105,9 @@ endpoint authorities, because a configured URL can contain credentials in its
 userinfo, path, query or fragment.
 
 ## Idioms this tree already follows
+
+Worked before-and-after cases, including the ones deliberately left alone, are
+in [recipes/rust.md](recipes/rust.md).
 
 - `Arc::clone(&x)`, so a refcount bump reads differently from a deep copy. Where
   the target is a trait object, name the source type so the coercion happens at
