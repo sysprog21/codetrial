@@ -202,11 +202,15 @@ the report, as a check, not as a source for it. Local experience is a lead to re
 
 ## Reference synthesis
 
-Three reference projects under externals inform this skill. That directory is
+Reference projects under externals inform this skill. That directory is
 untracked and absent from most clones, so nothing here depends on opening it.
 
 | Reference | Adopted here | Deliberately not adopted |
 |---|---|---|
 | ub-mode | Work, then right, then practice; failing test first; subtract first; attack a shared premise; action log; small ordered commits | `crapper`, `dryer` and `mutator` as required tools (the gate is `./scripts/test.sh` plus CI's `cargo-mutants`); pushing to the main line (a pull request is the path); a `how:` line in a commit body |
 | codereview | A rendering or state machine built once and consumed by every surface; the spec changes in the same commit as the behavior | An end-to-end recording store and per-test coverage as prerequisites; a spec file and an open-work list at the repo root |
+| fastmod | List every site of a pattern first and review each match before it is written | Its interactive per-match editor loop; requiring the tool |
+| reformat | Read the diff before keeping a rewrite; refuse a dirty tree | Its atomic temporary-file writes (no script of ours rewrites files), its emoji and identifier-case steps |
+| repo-audit | Classify findings with a reason; one kind per batch; findings only shrink; labelled claims; stop conditions; a hotspot ranking | Its CLI and virtualenv, the scheduler, a score as proof |
+| splice | Check after the edit; revert only your own diff | The Magellan database it depends on, a helper that edits for the agent (the Edit tool already refuses an ambiguous match), GPL-3.0 code |
 | agentic-workflow-integrity | Anomaly is not malice, so judge an action against the task; a learned baseline can be poisoned, so the fixed guard and CI stay the baseline; failed results stay in the report | A learned trace baseline or live gate: the project's own replay blocked every harmful event but also falsely blocked benign ones (precision 0.200 with its oracle judge, 0.214 with its LLM judge) |

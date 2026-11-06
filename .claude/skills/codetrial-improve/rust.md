@@ -190,17 +190,20 @@ clean" without the checker is half a report.
 
 ## Reference synthesis and audit limits
 
-The six reference projects under externals inform this policy; they are
-reference material, not additional installed skills or required CI tools.
+The reference projects under externals inform this policy; they are reference
+material, not additional installed skills or required CI tools. The tools that
+are not specific to Rust are in the table in [SKILL.md](SKILL.md).
 
 | Reference | Adopted here | Deliberately not adopted |
 |---|---|---|
 | rustgrade | Verify scanner hits against callers; inspect queue growth and lock lifetimes | A numeric grade as proof of safety; blanket bans on loop allocations |
 | BeautifulRust | Manifest-owned lints; narrow, reasoned expectations that expire | Blanket pedantic, Debug or documentation derives for application internals |
-| rust-style-guide-audit | Distinguish application guidance from library contracts; reproduce every finding | Chrome-specific rules; treating text matches as type-aware analysis |
+| rust-style-guide-audit | Distinguish application guidance from library contracts; reproduce every finding; measure a rule's false-positive rate before adopting it (716 findings on `src`; six rules sampled and none adopted: test-only hits the audit cannot tell from production, and style with no bug class) | Chrome-specific rules; treating text matches as type-aware analysis |
 | rust-engineering | Domain boundaries, locality, cancellation and compatibility before polish | Traits, wrappers or dependencies added solely to satisfy a pattern |
 | opinionated-rust-skills | Name errors for invalid conditions; keep defaults near their fields | A new default-annotation crate or macros for a single validation |
 | rust-patterns | Validate at boundaries; explicit ownership and failure values | Type-state, static dispatch or actors without a concrete need |
+| splitrs | A facade that re-exports the same names, and modules grouped by responsibility ("Splitting a file") | Using its output: on the prompts split it proposed the same six modules and left 118 compile errors, and dropped every `pub(crate)` and `cfg(test)` re-export silently; its LSP and SMT checks |
+| refactoring-rust | Before-and-after cases whose outcome may be "leave it" ([recipes/rust.md](recipes/rust.md)) | The slides and exercise numbering |
 
 The Python style checker scans text, not expanded Rust syntax. Multiline
 spellings are checked, but strings, comments and macro expansion can defeat a
