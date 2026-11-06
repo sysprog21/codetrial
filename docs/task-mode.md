@@ -756,8 +756,19 @@ atan2 sinh cosh tanh exp ln log log2 sqrt cbrt pow hypot min max abs floor
 ceil round deg rad`. A selector sets whether trigonometric functions take and
 return radians or degrees, and in degrees the multiples of 90 are exact. A
 result shows fifteen significant digits, except an integer up to 2^53, which
-is shown whole. A
-button above the editor gives it the whole page, and hides the brief and the
+is shown whole.
+
+The calculator's `//` rounds down and `%` takes the sign of the divisor, so
+`-7 // 3` is -3, `-7 % 3` is 2, and `a == (a // b) * b + a % b` holds for
+integers of every sign while the arithmetic stays exact. An exact multiple
+gives 0 and `//` never gives -0, so `-6 % -3` and `0 // -3` are 0. An infinite
+divisor is the exception: `%` leaves a finite dividend unchanged and `//` gives
+0, so `-1 % 10^400` is -1 and `-1 // 10^400` is 0. A fractional operand can
+miss the identity, because `//` rounds the quotient before flooring it, so
+`1 // 0.1` is 10. A dividend of the other sign that is tiny beside the divisor
+rounds to the divisor itself, so `-1e-20 % 3` is 3, as with Python floats.
+
+A button above the editor gives it the whole page, and hides the brief and the
 public cases, until it is pressed again; the code is the same either way. The
 workspace keeps the rules, the countdown, connection status and help inside the
 fullscreen view. Credential repair, sign-in and device selection happen only

@@ -25,6 +25,80 @@ test("arithmetic follows ordinary precedence and associativity", () => {
     assert.equal(evaluate(text), value, text);
 });
 
+test("% is the remainder of the floored division // performs", () => {
+  for (const [text, value] of [
+    ["-7 // 3", -3],
+    ["-7 % 3", 2],
+    ["7 // -3", -3],
+    ["7 % -3", -2],
+    ["-7 // -3", 2],
+    ["-7 % -3", -1],
+    ["-7.5 % 2", 0.5],
+    ["(-7 // 3) * 3 + (-7 % 3)", -7],
+  ])
+    assert.equal(evaluate(text), value, text);
+  for (const a of [-7, -6, -1, 0, 1, 6, 7])
+    for (const b of [-3, -2, 2, 3]) {
+      const text = `(${a} // ${b}) * ${b} + (${a} % ${b})`;
+      assert.equal(evaluate(text), a, text);
+    }
+});
+
+test("neither // nor % leaves a negative zero for atan2 to read", () => {
+  assert.equal(evaluate("-6 % 3"), 0);
+  assert.equal(evaluate("-6 % -3"), 0);
+  assert.equal(evaluate("-0 % 3"), 0);
+  assert.equal(evaluate("atan2(-6 % 3, -1)"), Math.PI);
+  assert.equal(evaluate("0 // -3"), 0);
+  assert.equal(evaluate("-1 // 10^400"), 0);
+  assert.equal(evaluate("atan2(0 // -3, -1)"), Math.PI);
+});
+
+test("// still rounds the quotient before flooring it", () => {
+  for (const [text, value] of [
+    ["1 // 0.1", 10],
+    ["-9.3 // 3.1", -3],
+  ])
+    assert.equal(evaluate(text), value, text);
+});
+
+test("% keeps a finite result under an infinite divisor", () => {
+  for (const [text, value] of [
+    ["-1 % 10^400", -1],
+    ["1 % -1e999", 1],
+    ["5 % 10^400", 5],
+    ["-5 % -1e999", -5],
+  ])
+    assert.equal(evaluate(text), value, text);
+});
+
+test("a tiny remainder of the other sign rounds to the divisor", () => {
+  for (const [text, value] of [
+    ["-1e-20 % 3", 3],
+    ["1e-20 % -3", -3],
+  ])
+    assert.equal(evaluate(text), value, text);
+});
+
+test("% leaves a non-negative dividend and divisor alone", () => {
+  for (const [text, value] of [
+    ["7 % 3", 1],
+    ["6 % 3", 0],
+    ["0.1 % 1", 0.1],
+    ["7.5 % 2", 1.5],
+  ])
+    assert.equal(evaluate(text), value, text);
+});
+
+test("a zero divisor that leaves the result not finite is refused", () => {
+  for (const text of ["5 % 0", "-5 % 0", "0 % 0", "0 // 0"])
+    assert.throws(
+      () => evaluate(text),
+      { message: "The result is not a finite number" },
+      text,
+    );
+});
+
 test("bad input names its problem and never runs code", () => {
   for (const [text, message] of [
     ["", "Enter an expression"],

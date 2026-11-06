@@ -8,6 +8,21 @@ export const MAX_EXPRESSION_LENGTH = 200;
 
 const RADIANS_PER_DEGREE = Math.PI / 180;
 
+/// The remainder of the floored division `//` performs, so the result takes the
+/// divisor's sign and `a == (a // b) * b + a % b` for integers. JavaScript's
+/// `%` truncates instead. It adds the divisor only when the signs differ,
+/// because `((a % b) + b) % b` would disturb `0.1 % 1`. An exact multiple gives
+/// 0, because `atan2` reads the sign of -0. An infinite divisor keeps the plain
+/// remainder, so a finite result stays finite. A dividend of the other sign
+/// that is tiny beside the divisor rounds to the divisor itself: `-1e-20 % 3`
+/// is 3, as with Python floats.
+function flooredRemainder(dividend, divisor) {
+  const remainder = dividend % divisor;
+  if (remainder === 0) return 0;
+  if (!Number.isFinite(divisor)) return remainder;
+  return remainder < 0 !== divisor < 0 ? remainder + divisor : remainder;
+}
+
 /// A trigonometric function of an angle in the mode's unit. In degrees the
 /// multiples of 90 are exact, so `cos(90)` is 0 and `tan(90)` is refused,
 /// where radians would give 6e-17 and 1.6e16.
@@ -126,9 +141,13 @@ export function evaluate(text, { angle = "rad" } = {}) {
     let value = unary();
     for (;;) {
       if (take("*")) value *= unary();
-      else if (take("//")) value = Math.floor(value / unary());
+      // Adding 0 turns a -0 quotient into 0, as `%` does, because `atan2`
+      // reads the sign. A fractional operand can miss
+      // `a == (a // b) * b + a % b`, because this rounds the quotient before
+      // flooring it: `1 // 0.1` is 10.
+      else if (take("//")) value = Math.floor(value / unary()) + 0;
       else if (take("/")) value /= unary();
-      else if (take("%")) value %= unary();
+      else if (take("%")) value = flooredRemainder(value, unary());
       else return value;
     }
   }
