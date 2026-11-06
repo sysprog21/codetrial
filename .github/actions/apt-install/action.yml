@@ -16,8 +16,8 @@ description: Install the named Debian packages the runner image does not already
 # The image's own lists are tried before an update, since an update is a dozen
 # index downloads on the same mirror. A list too stale to name a version the
 # mirror still has fails fast with a 404, and that is the case the update after
-# it is for. Each apt call is bounded, so a wedged mirror fails the step by name
-# instead of running out the job's clock. A bound that fires mid-unpack leaves
+# it is for. Each apt call is bounded to three minutes, so a wedged mirror fails the step by
+# name instead of running out the job's clock. A bound that fires mid-unpack leaves
 # dpkg interrupted, and every later apt call refuses to run until it is
 # finished, so the retry finishes it first; with nothing pending it is a no-op.
 inputs:
@@ -42,7 +42,25 @@ runs:
         fi
         echo "installing: ${missing[*]}"
         apt() {
-          sudo timeout 10m apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 "$@"
+          sudo timeout -k 30s 3m apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 "$@"
         }
-        apt install -y "${missing[@]}" \
-          || { sudo dpkg --configure -a && apt update && apt install -y "${missing[@]}"; }
+        finish_dpkg() {
+          sudo timeout -k 30s 1m dpkg --configure -a || true
+        }
+        # A wedged Azure mirror once ran two 10 minute bounds back to back and
+        # failed the Rust lane after 20 minutes. Now: the image's lists, then
+        # a refresh, then a refresh from the public archive instead of the
+        # Azure mirror. Every call is bounded, so the worst case is about 17
+        # minutes, inside the smallest job timeout that calls this, and
+        # downloaded packages stay cached between attempts. The image names its
+        # mirror through a list file, apt-mirrors.txt, so the archive has to
+        # replace that reference as well as a literal host.
+        apt install -y "${missing[@]}" && exit 0
+        finish_dpkg
+        apt update && apt install -y "${missing[@]}" && exit 0
+        finish_dpkg
+        sudo sed -i \
+          -e 's|mirror+file:/etc/apt/apt-mirrors.txt|http://archive.ubuntu.com/ubuntu/|' \
+          -e 's|azure\.archive\.ubuntu\.com|archive.ubuntu.com|g' \
+          /etc/apt/sources.list /etc/apt/sources.list.d/* 2>/dev/null || true
+        apt update && apt install -y "${missing[@]}"

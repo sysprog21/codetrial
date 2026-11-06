@@ -67,11 +67,15 @@ def stubbed(tmp, script, stubs):
     `shell: bash` step gets, with stubs first on PATH.
 
     Each call takes the environment it adds and returns the lines the stubs
-    logged to $CALLS. `timeout` is always stubbed to run its command.
+    logged to $CALLS. `timeout` is always stubbed to run its command, after
+    the `-k DURATION` kill-after option when it is given.
     """
     bin_dir = Path(tmp) / "bin"
     bin_dir.mkdir()
-    for name, body in {"timeout": 'shift; exec "$@"', **stubs}.items():
+    for name, body in {
+        "timeout": 'if [ "$1" = -k ]; then shift 2; fi; shift; exec "$@"',
+        **stubs,
+    }.items():
         support.write_executable(bin_dir / name, f"#!/bin/sh\n{body}\n")
     calls = Path(tmp) / "calls"
 
@@ -633,11 +637,15 @@ printf 'python:%s\\n' "$*" >> "$CALLS"
                     "printf installed ;; *) exit 1 ;; esac",
                     "sudo": 'exec "$@"',
                     "dpkg": 'printf "dpkg %s\\n" "$*" >> "$CALLS"',
-                    # With $STALE set the first install fails, as a stale list
+                    "sed": 'printf "sed %s\\n" "$*" >> "$CALLS"',
+                    # With $DOWN every install fails, as a stalled mirror
+                    # does. With $STALE set the first install fails, as a stale list
                     # does; the log it just wrote says whether this is the first.
                     "apt-get": 'shift 4; printf "apt %s\\n" "$*" >> "$CALLS"\n'
                     '[ -n "${STALE:-}" ] && [ "$1" = install ] '
                     '&& [ "$(grep -c "^apt install" "$CALLS")" = 1 ] && exit 100\n'
+                    '[ -n "${DOWN:-}" ] && [ "$1" = install ] '
+                    '&& [ "$(grep -c "^apt install" "$CALLS")" -lt 3 ] && exit 100\n'
                     "exit 0",
                 },
             )
@@ -658,6 +666,23 @@ printf 'python:%s\\n' "$*" >> "$CALLS"
                     "apt install -y mold",
                 ],
             )
+            # A stalled mirror gets two refreshed attempts, then the archive.
+            fallback = install(PACKAGES="mold", INSTALLED="", DOWN="1")
+            self.assertEqual(
+                [line.split()[0:2] for line in fallback],
+                [
+                    ["apt", "install"],
+                    ["dpkg", "--configure"],
+                    ["apt", "update"],
+                    ["apt", "install"],
+                    ["dpkg", "--configure"],
+                    ["sed", "-i"],
+                    ["apt", "update"],
+                    ["apt", "install"],
+                ],
+            )
+            self.assertIn("mirror+file:/etc/apt/apt-mirrors.txt", fallback[5])
+            self.assertIn("archive.ubuntu.com", fallback[5])
 
     def test_chromium_installs_system_libraries_only_when_one_is_missing(self):
         with tempfile.TemporaryDirectory() as tmp:
