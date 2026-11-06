@@ -7,7 +7,7 @@ sends may come from something other than the shipped page.
 ## Treat browser-supplied fields as untrusted at every sink
 
 Applies to: `src/agent/events.rs`, `src/livekit/*.rs`, `src/agent/prompts.rs`,
-`web/render.js`, `web/lib.js`, `src/web/mod.rs`
+`src/agent/prompts/*.rs`, `web/render.js`, `web/lib.js`, `src/web/mod.rs`
 
 Data-channel payloads, board streams and saved reports come from a client that
 may not be the shipped page. Check each new sink: `eprintln!` lines with

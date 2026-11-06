@@ -2,7 +2,6 @@
   "src/agent.rs": 3520,
   "src/agent/evidence.rs": 2135,
   "src/agent/problem_variants.rs": 1819,
-  "src/agent/prompts.rs": 3944,
   "src/agent/report.rs": 1730,
   "src/gemini.rs": 2815,
   "src/livekit.rs": 3572,

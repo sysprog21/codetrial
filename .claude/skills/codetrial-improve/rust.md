@@ -58,13 +58,52 @@ New Rust files stay within 1500 lines. Existing larger files are recorded in
 `scripts/rust-style-ceilings.json` and may only shrink: after splitting one by
 responsibility, run `scripts/check-rust-style.py --ratchet` to lower its entry.
 `scripts/ceiling-hotspots.py` ranks them by churn times size, as one input to
-choosing which to split first. Count a file's mutants before
-splitting it with `cargo mutants --list -f <file> | wc -l`; `make mutants`
-downloads a compiler first.
-Never raise an entry to land a change; a new module is the answer. The gate passes `--baseline origin/main`, so a raised entry or a new
-exemption fails against what main records, and under CI a baseline ref that was
-not fetched fails too, so a shallow checkout cannot skip it. Test bodies
-live under `tests/unit/` and answer to the same ceiling.
+choosing which to split first. Count a file's mutants before splitting it with
+`cargo mutants --list -f <file> | wc -l`; `make mutants` downloads a compiler
+first. Never raise an entry to land a change; a new module is the answer. The
+gate passes `--baseline origin/main`, so a raised entry or a new exemption fails
+against what main records, and under CI a baseline ref that was not fetched
+fails too, so a shallow checkout cannot skip it. Test bodies live under
+`tests/unit/` and answer to the same ceiling.
+
+### Splitting a file
+
+What splitting `src/agent/prompts.rs` (3944 lines, six modules under
+`src/agent/prompts/`, commit f122e38) needed, in order:
+
+1. **Plan before moving.** Choose the file with `scripts/ceiling-hotspots.py` and
+   a look at the open pull requests (`gh pr list --state open --json
+   number,files`), list every top-level item with its line span, and group by
+   responsibility. A dependency order between the new modules with no cycle is
+   the test of a good cut.
+2. **Keep the old file as the facade.** It keeps its `#[path]` test module and
+   gains `mod x;` plus `pub use x::{...}` and `pub(crate) use` lines with the
+   same names and visibility the parent re-exported, so no caller changes. This
+   is the layout `src/livekit.rs` beside `src/livekit/` already has.
+3. **Move by line span, never by retyping**, and prove it: after `cargo fmt`,
+   compare each original item with the new files ignoring whitespace, trailing
+   commas, `pub(...)` and the path rewrite below. Expect only small differences:
+   rustfmt wrapping a closure body in braces, and a name imported under step 4
+   losing its path.
+4. **Rewrite `super::` in bodies to `crate::agent::`**, since `super` is now the
+   facade, then import the names used three or more times so the code reads as
+   before. Widen a private item to `pub(super)` only where a sibling needs it.
+5. **Tests that reach private items** through `use super::*` keep working if the
+   facade carries a `#[cfg(test)] use self::{...}` group naming them, and the
+   `use super::...` of the parent's own types they read; the test file is not
+   edited. Group the facade's re-exports by visibility (`pub use`, then
+   `pub(crate) use`), as the parent re-exported them.
+6. **Look for what names the file.** `git grep -n 'path/to/file'` found a test
+   that hashes the file with `include_bytes!` (a digest that would silently stop
+   changing when a prompt did), the `Applies to` lines of two review rules, a
+   skill doc line, and comments in Rust and in `web/`. A name inside a format string (`{NAME}`) is a compile error if
+   its import is missed, which is the safe way to fail.
+7. **Run `scripts/check-rust-style.py --ratchet`** so the old entry leaves
+   `scripts/rust-style-ceilings.json`, then clippy at `-D warnings`, then
+   `./scripts/test.sh rust`.
+
+A comment added to a file that sits exactly at its ceiling fails the checker, so
+a note for a ceilinged file goes here or in the split, not in the file.
 
 ## Judgment, which no gate checks
 

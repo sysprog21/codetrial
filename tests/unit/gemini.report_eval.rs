@@ -137,7 +137,7 @@ fn prompt(input: &Value) -> String {
     })
 }
 
-// Band edges are the report rubric in src/agent/prompts.rs.
+// Band edges are the report rubric in src/agent/prompts/assessment.rs.
 fn band(score: u64) -> usize {
     assert!(score <= 100);
     [40, 60, 75, 90]
@@ -1568,7 +1568,7 @@ mod runner {
         let executable = std::fs::read(std::env::current_exe().unwrap()).unwrap();
         let identity = json!({"run_kind":if seed==GENERATION_SEED && model==config_model {"same-seed same-request repeatability"}else{"seed/configuration variation; do not pool with default-seed runs"},"contract":crate::agent::interview_contract_json(),"model":model,"seed":seed,"call_cap":call_cap,"token_cap":token_cap,"items":limit,"repeats":repeats,"families":selected,
         "requested_rows":corpus.items.iter().map(|item|item.variants.iter().filter(|v|selected.contains(v.family.as_str())).count() as u64 * repeats).sum::<u64>(),"config_path":config_path,"manifest_digest":crate::sha256_hex(&[MANIFEST.as_bytes()]),"prompt_digest":crate::sha256_hex(&[rendered.as_bytes()]),"build":env!("CODETRIAL_BUILD_COMMIT"),"executable_digest":crate::sha256_hex(&[&executable]),
-        "source_digest":crate::sha256_hex(&[include_bytes!("../../src/gemini.rs"),include_bytes!("gemini.report_eval.rs"),include_bytes!("../../src/agent/prompts.rs"),include_bytes!("../../src/agent/report.rs")]),
+        "source_digest":crate::sha256_hex(&[include_bytes!("../../src/gemini.rs"),include_bytes!("gemini.report_eval.rs"),include_bytes!("../../src/agent/prompts.rs"),include_bytes!("../../src/agent/prompts/assessment.rs"),include_bytes!("../../src/agent/prompts/instructions.rs"),include_bytes!("../../src/agent/prompts/material.rs"),include_bytes!("../../src/agent/prompts/nudges.rs"),include_bytes!("../../src/agent/prompts/progress.rs"),include_bytes!("../../src/agent/prompts/recovery.rs"),include_bytes!("../../src/agent/report.rs")]),
         "http_attempts":MAX_REPORT_HTTP_ATTEMPTS,"repairs":MAX_REPORT_REPAIRS,"attempt_timeout_ms":REPORT_ATTEMPT_TIMEOUT.as_millis(),"generation_timeout_ms":REPORT_TIMEOUT.as_millis()});
         let mut journal = Journal::open(
             &output,

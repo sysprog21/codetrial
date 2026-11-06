@@ -382,7 +382,7 @@ const mode = whiteboard ? "whiteboard" : "coding";
 const exampleDrawingEnabled =
   !whiteboard && params.get("exampleDrawing") === "1";
 /// Unlike example drawing, valid in both modes: the Algorithm and Coding
-/// steps exist at a whiteboard too (see `reacto_policy` in prompts.rs).
+/// steps exist at a whiteboard too (see `reacto_policy` in prompts/instructions.rs).
 const candidateLedEnabled = params.get("candidateLed") === "1";
 /// The board, and what is in flight for it.
 ///

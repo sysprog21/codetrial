@@ -385,10 +385,10 @@ fn data_event_handling_uses_frontend_topics() {
 /// Every language tab the browser offers must be one the agent recognizes.
 ///
 /// The list lives in `web/interview.js` and the allowlist in
-/// `src/agent/prompts.rs`. An id the allowlist does not know changes no state
-/// and reaches no prompt, which is correct for a forged packet and silent
-/// breakage for a real tab: the candidate clicks C++, the editor switches, and
-/// the interviewer never notices or says anything.
+/// `src/agent/prompts/progress.rs`. An id the allowlist does not know changes
+/// no state and reaches no prompt, which is correct for a forged packet and
+/// silent breakage for a real tab: the candidate clicks C++, the editor
+/// switches, and the interviewer never notices or says anything.
 #[test]
 fn every_language_tab_the_browser_publishes_is_accepted_by_the_agent() {
     let (topic, cases) = wire_fixture(include_str!("../fixtures/code-update.json"));

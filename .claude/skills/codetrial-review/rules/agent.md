@@ -7,8 +7,8 @@ still behaves.
 
 ## Prompt text must agree with the rest of the prompt and with what the code emits
 
-Applies to: `src/agent/prompts.rs`, `src/agent/events.rs`, `src/agent.rs`,
-`tests/golden/prompts.json`
+Applies to: `src/agent/prompts.rs`, `src/agent/prompts/*.rs`,
+`src/agent/events.rs`, `src/agent.rs`, `tests/golden/prompts.json`
 
 Prompt builders are composed from many fragments (`Surface::CODING`,
 `run_note`, `evidence_note`, `TRANSCRIPTION_REPORT_POLICY`, the decision rule,

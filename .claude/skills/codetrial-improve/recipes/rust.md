@@ -24,7 +24,7 @@ A parameter typed `Option<&String>` names the owning type, so a caller holding a
 
 ## Leave a return type that other closures share
 
-`pending_candidate_line` in `src/agent/prompts.rs` returns `Option<&String>`.
+`pending_candidate_line` in `src/agent/prompts/recovery.rs` returns `Option<&String>`.
 Returning `Option<&str>` looks like the same recipe and is not. Its caller in
 `src/livekit/session.rs` applies one `missing` closure to this value and to
 `first_candidate`, which would both have to change, and the re-export in
