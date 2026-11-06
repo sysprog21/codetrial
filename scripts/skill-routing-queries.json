@@ -406,5 +406,51 @@
   {
     "q": "bump the Rust toolchain to the next stable",
     "expect": []
+  },
+  {
+    "q": "split this 3,000-line file by responsibility without breaking its callers",
+    "expect": [
+      "codetrial-improve"
+    ]
+  },
+  {
+    "q": "clean up the clippy findings across this module, one kind at a time",
+    "expect": [
+      "codetrial-improve"
+    ]
+  },
+  {
+    "q": "refactor the report builder without changing its output",
+    "expect": [
+      "codetrial-improve"
+    ]
+  },
+  {
+    "q": "i have to add a field to the interview report, what order should i work in and how small should each step be",
+    "expect": [
+      "codetrial-improve"
+    ]
+  },
+  {
+    "q": "rename this function and update every caller, what order should i go in",
+    "expect": [
+      "codetrial-improve"
+    ]
+  },
+  {
+    "q": "which lane runs the new python test, and do i need to regenerate anything first",
+    "expect": [
+      "codetrial-verify"
+    ]
+  },
+  {
+    "q": "the candidate joined but nobody answers in the room, what do i check",
+    "expect": [
+      "codetrial-livekit"
+    ]
+  },
+  {
+    "q": "explain what a Rust trait object is and when to use one",
+    "expect": []
   }
 ]
