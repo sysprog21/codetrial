@@ -60,14 +60,16 @@ const {
   validateEnvironment,
 } = require("./long-interview-plan.cjs");
 const {
+  judgeSettledSwapAudio,
+  startSwapMarker,
+} = require("./swap-audio-owner.cjs");
+const {
   clockEvidenceLines,
   completeLines,
   episodeEvidenceLines,
-  installedSwapKeys,
   isRotation,
   judgeEpisodeReplies,
   judgeSoak,
-  judgeSwapAudio,
   parseClock,
   parseEpisodes,
   parseObligations,
@@ -510,6 +512,10 @@ const CONNECTION_CAP_SECONDS = 600;
 /// `GoAway`'s notice plus a stalled reply's twenty seconds.
 const RESUME_GRACE_MS = 45_000;
 
+// What the shared settle needs from this process: the grace the page is given
+// and where its per-episode lines go.
+const SETTLE = { graceMs: RESUME_GRACE_MS, log: console.log };
+
 /// The two runtime lines that are not part of a replacement: the advisory and
 /// its expiry. Matched literally, printed by src/livekit.rs. What a replacement
 /// was is read from the fields of its `replacement:` line by
@@ -786,6 +792,7 @@ async function longInterview(
   tokenRequestsMs,
   joinGuarded,
   tokenExpiredNow,
+  probing = false,
 ) {
   const plan = longPlan;
   const countdownStartS = parseCountdown(
@@ -849,21 +856,34 @@ async function longInterview(
       return pageSide.awaitServerDeadline();
     },
   };
+  const swapMarker = probing
+    ? startSwapMarker({
+        page,
+        roomName,
+        agentOutput,
+        newLines: serverLogTail(),
+      })
+    : null;
   // The schedule's clock starts here: connected, greeted, the join already
   // dispatched through the budget by the media gate.
-  const run = await runLongInterview({
-    plan,
-    schedule: prepared.schedule,
-    playback: prepared.playback,
-    clipSource: prepared.clipSource,
-    budget: runBudget,
-    controller,
-    joinedAtMs: Date.now(),
-    interviewStartMs,
-    joinDispatched: joinGuarded,
-    observe,
-    failure: failure() ?? new Promise(() => {}),
-  });
+  let run;
+  try {
+    run = await runLongInterview({
+      plan,
+      schedule: prepared.schedule,
+      playback: prepared.playback,
+      clipSource: prepared.clipSource,
+      budget: runBudget,
+      controller,
+      joinedAtMs: Date.now(),
+      interviewStartMs,
+      joinDispatched: joinGuarded,
+      observe,
+      failure: failure() ?? new Promise(() => {}),
+    });
+  } finally {
+    await swapMarker?.halt();
+  }
   ended = true;
   refresh();
   const clock = parseClock(`${[...evidence.keys()].join("\n")}\n`, roomName);
@@ -881,6 +901,33 @@ async function longInterview(
     ),
     graceStimuli: 0,
   });
+  const episodeText = `${[...episodeLines.keys()].join("\n")}\n`;
+  const episodes = parseEpisodes(episodeText, roomName);
+  // A probe that could not mark or settle leaves the signal not assessed
+  // rather than failing the run.
+  let audio = null;
+  let replies = null;
+  if (swapMarker) {
+    try {
+      await swapMarker.stop();
+      replies = judgeEpisodeReplies(
+        episodes,
+        parseObligations(episodeText, roomName),
+        true,
+      );
+      audio = await judgeSettledSwapAudio(
+        page,
+        replies,
+        "long-interview",
+        SETTLE,
+      );
+    } catch (error) {
+      console.error(`long-interview: decoded audio not assessed: ${error}`);
+    }
+    await page
+      .evaluate(() => globalThis.__finishJimAudioProbe(true))
+      .catch(() => null);
+  }
   const log = `${agentOutput.join("")}\n${readServerLog()}`;
   const serverLog = process.env.SERVER_LOG;
   const logsComplete =
@@ -897,10 +944,9 @@ async function longInterview(
     observation,
     clock,
     tokenRequestsMs,
-    episodes: parseEpisodes(
-      `${[...episodeLines.keys()].join("\n")}\n`,
-      roomName,
-    ).episodes,
+    episodes: episodes.episodes,
+    audio,
+    replies,
     logs: { truncated: false, evicted: false, complete: logsComplete },
     browserDisconnected,
     tokenExpired: tokenExpiredNow(),
@@ -987,8 +1033,6 @@ async function soakInterview(
   // as it goes past for the same reason: the agent's output is a rolling
   // window.
   const evidence = new Map();
-  // The installed swaps already handed to the page to sample again.
-  const marked = new Set();
 
   // One read per call rather than one per signal: this is the whole server
   // log, and the loop runs for minutes.
@@ -1016,24 +1060,6 @@ async function soakInterview(
       parseObligations(evidenceText(), roomName),
       final,
     );
-  // Each installed swap is marked in the page once, as soon as its end line is
-  // read, so the sample that answers it can only open on a Speaking transition
-  // after this point. Read late, never early: a transition between the install
-  // and this call is missed and the next one is used instead, which can fail
-  // a swap whose reply was quicker than a poll but never passes one on audio
-  // from before it.
-  const newLines = serverLogTail();
-  const markNewSwaps = async () => {
-    if (!probing) return;
-    for (const key of installedSwapKeys(
-      `${agentOutput.join("")}\n${newLines()}`,
-      roomName,
-    )) {
-      if (marked.has(key)) continue;
-      marked.add(key);
-      await page.evaluate((swap) => globalThis.__markJimSwap?.(swap), key);
-    }
-  };
   const failure = (reasons) =>
     new Error(`${reasons.join("; ")} during ${soakSeconds}s soak`);
   const judge = (final) =>
@@ -1055,29 +1081,15 @@ async function soakInterview(
     return soakSummary;
   };
 
-  // Marked on its own clock, not the loops' below: those wait on log parsing
-  // and room-service calls, and a swap read late can miss the transition that
-  // answered it.
-  let marking = true;
-  let markError = null;
-  const marker = (async () => {
-    while (marking) {
-      await sleep(250);
-      if (!marking) break;
-      try {
-        await markNewSwaps();
-      } catch (error) {
-        markError = error;
-        marking = false;
-      }
-    }
-  })();
-  const stopMarking = async () => {
-    marking = false;
-    await marker;
-    if (markError) throw markError;
-    await markNewSwaps();
-  };
+  const swapMarker = probing
+    ? startSwapMarker({
+        page,
+        roomName,
+        agentOutput,
+        newLines: serverLogTail(),
+      })
+    : null;
+  const stopMarking = async () => swapMarker?.stop();
 
   try {
     let nextRefresh = 0;
@@ -1169,16 +1181,7 @@ async function soakInterview(
     // cancels what still waits, and an unsampled swap counts against the soak.
     let audio = null;
     if (probing) {
-      const rearms = await page.evaluate(
-        (waitMs) => globalThis.__settleJimSwapAudio(waitMs),
-        RESUME_GRACE_MS,
-      );
-      audio = judgeSwapAudio(replies, rearms);
-      for (const e of audio.episodes) {
-        console.log(
-          `soak episode ${e.episode} audio: ${e.status} ${e.reasons.join("; ")}`.trimEnd(),
-        );
-      }
+      audio = await judgeSettledSwapAudio(page, replies, "soak", SETTLE);
     }
 
     const result = record(final, replies, audio);
@@ -1195,8 +1198,7 @@ async function soakInterview(
       throw failure(detail.length > 0 ? detail : final.reasons);
     }
   } finally {
-    marking = false;
-    await marker;
+    await swapMarker?.halt();
   }
 }
 
@@ -1360,6 +1362,7 @@ async function isolateRustAgent(
     let bargeReplay = null;
     let jimAudio = null;
     let probingAudio = false;
+    let probingSwapAudio = false;
     if (process.env.BROWSER_CHECK_FLOW === "barge") {
       await page.addInitScript(
         installBargeReplay,
@@ -3025,7 +3028,11 @@ PatternLexicon.prototype.search = function(word) {
       ),
     );
     probingAudio = credentialed && ["voice", "barge", "soak"].includes(flow);
-    if (probingAudio) {
+    // The long interview judges the decoded audio of its own swaps inside
+    // longInterview; the generic end-of-flow assertion on Jim's whole track
+    // would fail a tone fixture that never makes Jim speak.
+    probingSwapAudio = credentialed && flow === "long-interview";
+    if (probingAudio || probingSwapAudio) {
       await page.evaluate(mediaProbeSource());
     }
     let joinGuarded = false;
@@ -3157,6 +3164,7 @@ PatternLexicon.prototype.search = function(word) {
               consoleErrors.some((line) =>
                 /token.*(expired|invalid)|expired.*token/i.test(line),
               ),
+            probingSwapAudio,
           );
         }
         let testResultText = null;
@@ -3323,6 +3331,12 @@ PatternLexicon.prototype.search = function(word) {
     ]).catch(async (error) => {
       if (probingAudio && !jimAudio) {
         jimAudio = await page
+          .evaluate(() => globalThis.__finishJimAudioProbe(true))
+          .catch(() => null);
+      }
+      if (probingSwapAudio) {
+        // Stops the probe's sampling on any failure, whichever step threw.
+        await page
           .evaluate(() => globalThis.__finishJimAudioProbe(true))
           .catch(() => null);
       }

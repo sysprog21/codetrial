@@ -30,6 +30,7 @@ const path = require("path");
 const sched = require("./long-interview-schedule.cjs");
 const timing_ = require("./long-interview-timing.cjs");
 const { BudgetDenied } = require("./run-budget-guard.cjs");
+const { summarizeSwapAudio } = require("./soak-judge.cjs");
 
 const CLIP_DIR_ENV = "BROWSER_CHECK_LONG_CLIP_DIR";
 const TONE_FIXTURE_ENV = "BROWSER_CHECK_LONG_TONE_FIXTURE";
@@ -435,9 +436,40 @@ function judgeDispatch(schedule, playback, run) {
   return errors;
 }
 
+// A swap row is a verdict and at most four small samples, so the rows cost a
+// fixed amount per swap; the cap keeps a runaway page from growing the report,
+// and what it cuts is counted.
+const DECODED_ROWS_KEPT = 512;
+
+/// The judged swap rows with the samples behind them, for a reader that has
+/// only the report. By default the capture file sits beside the artifact
+/// directory, not in it, so these do not draw on the archive bound; a capture
+/// placed inside that directory counts against it like any other file.
+function decodedSignalRows(audio) {
+  const rows = (Array.isArray(audio?.episodes) ? audio.episodes : []).filter(
+    (row) => row && typeof row === "object",
+  );
+  return {
+    decoded_signal_rows: rows
+      .slice(0, DECODED_ROWS_KEPT)
+      .map(({ swap, episode, status, reasons, ...detail }) => ({
+        swap,
+        episode,
+        status,
+        reasons,
+        samples: detail.samples ?? [],
+        samples_dropped: detail.samples_dropped ?? 0,
+        ...(detail.covered_by ? { covered_by: detail.covered_by } : {}),
+      })),
+    decoded_signal_rows_dropped: Math.max(0, rows.length - DECODED_ROWS_KEPT),
+  };
+}
+
 /// The run's verdict, its failure classes and the exit code the process
 /// should leave with. `observation` is judgeObservation's result and
-/// `episodes` the parsed replacement episodes of the room.
+/// `episodes` the parsed replacement episodes of the room. `audio` is
+/// judgeSwapAudio's result and `replies` the reply judge's, when the page ran
+/// the decoded-audio probe.
 function finalizeLongRun(o) {
   const { plan, schedule, playback, run, clipSource, observation } = o;
   const timing = timingForPlan(plan);
@@ -517,6 +549,7 @@ function finalizeLongRun(o) {
         ? "failed"
         : resolved.status;
 
+  const signal = summarizeSwapAudio(o.audio, o.replies);
   const speechClips = clipSource.kind === CLIP_SOURCE.speech;
   const covered =
     !run.aborted && dispatchErrors.length === 0 && run.uncovered.length === 0;
@@ -538,7 +571,11 @@ function finalizeLongRun(o) {
     assessment_scope: "structural",
     qualification: "not_evaluated",
     reply_content: "not_assessed",
-    decoded_signal: "not_assessed",
+    decoded_signal: signal.status,
+    ...decodedSignalRows(o.audio),
+    ...(signal.status === "failed"
+      ? { decoded_signal_reasons: signal.reasons }
+      : {}),
     end_mode: plan.endMode,
     duration_min: plan.durationMin,
     observation_target_s: plan.observationTargetS,
@@ -575,7 +612,11 @@ function finalizeLongRun(o) {
     failure_classes: resolved.artifacts.map((a) => a.class),
     not_exercised: [
       "reply content: checkpoint answers are not judged by this driver",
-      "decoded signal: native capture records do not verify a post-swap decoded waveform",
+      ...(signal.status === "not_assessed"
+        ? [
+            "decoded signal: native capture records do not verify a post-swap decoded waveform",
+          ]
+        : []),
       ...(cleanupAssessed
         ? []
         : ["cleanup: nothing active after teardown was checked by the worker"]),

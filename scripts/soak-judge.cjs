@@ -793,6 +793,52 @@ function isFreshDecodedSample(r) {
 
 const SWAP_AUDIO_OK = ["not_required", "verified", "covered_by_later_swap"];
 
+/// What a judged row keeps of each sample behind it: the fields the judgment
+/// read, and nothing the page might add. A sample is a handful of numbers, so
+/// a row costs a fixed, small amount however long the interview runs.
+const SAMPLE_FIELDS = [
+  "seq",
+  "status",
+  "reason",
+  "edgesAtMark",
+  "windowEdge",
+  "counterPairs",
+  "bytesReceived",
+  "packetsReceived",
+  "peakRms",
+];
+const MAX_SAMPLES_PER_SWAP = 4;
+
+const MAX_SAMPLE_TEXT = 200;
+
+/// A page-supplied reason is cut, so a long one cannot grow a row.
+const keptValue = (value) =>
+  typeof value === "string" ? value.slice(0, MAX_SAMPLE_TEXT) : value;
+
+const keptSample = (sample) =>
+  Object.fromEntries(
+    SAMPLE_FIELDS.filter((field) => field in sample).map((field) => [
+      field,
+      keptValue(sample[field]),
+    ]),
+  );
+
+/// The samples a row keeps: the one that decided it (the first fresh one,
+/// else the first that was ok) always, then the rest in the order taken, up
+/// to the bound. A cap that cut by position alone could keep four stale
+/// samples and drop the fresh one the verdict rests on.
+function keptSamples(own) {
+  const decisive =
+    own.find(isFreshDecodedSample) ?? own.find((r) => r.status === "ok");
+  const kept = own.slice(0, MAX_SAMPLES_PER_SWAP);
+  // Past the bound, the decisive sample takes the last slot, which keeps the
+  // rest in the order they were taken.
+  if (decisive && !kept.includes(decisive)) {
+    kept[MAX_SAMPLES_PER_SWAP - 1] = decisive;
+  }
+  return kept.map(keptSample);
+}
+
 /// Whether the audio the browser decoded after each swap that answered a reply
 /// is on record. `replies` is the result of judgeEpisodeReplies and `rearms`
 /// the per-swap samples the page took after marking each installed swap
@@ -807,13 +853,25 @@ const SWAP_AUDIO_OK = ["not_required", "verified", "covered_by_later_swap"];
 /// nothing about physical audibility or the delay before it began.
 function judgeSwapAudio(replies, rearms = []) {
   const rows = [];
+  // Not Map.groupBy, which needs Node 21; the checks run on Node 18.
+  const bySwap = new Map();
+  for (const r of rearms) {
+    if (!bySwap.has(r.swap)) bySwap.set(r.swap, []);
+    bySwap.get(r.swap).push(r);
+  }
   for (const e of replies.episodes) {
     const swap = `${e.pid}:${e.session}:${e.episode}`;
+    const own = bySwap.get(swap) ?? [];
+    // Kept with the verdict it supports, so the rows can be audited later
+    // without the page; dropped ones are counted, never silently lost.
+    const kept = keptSamples(own);
     const row = {
       swap,
       episode: e.episode,
       status: "not_required",
       reasons: [],
+      samples: kept,
+      samples_dropped: own.length - kept.length,
     };
     rows.push(row);
     if (e.status !== "pass" || e.class !== "answered") continue;
@@ -821,7 +879,6 @@ function judgeSwapAudio(replies, rearms = []) {
       row.status = status;
       row.reasons.push(reason);
     };
-    const own = rearms.filter((r) => r.swap === swap);
     if (own.length === 0) {
       fail(
         "missing_sample",
@@ -843,6 +900,13 @@ function judgeSwapAudio(replies, rearms = []) {
       const silent = own.find((r) => /silent/.test(r.status));
       if (superseded && covering) {
         row.status = "covered_by_later_swap";
+        // The sample that covers it belongs to another swap's row, whose cap
+        // can drop it, so it is carried here as well.
+        row.covered_by = {
+          swap: covering.swap,
+          seq: covering.seq,
+          sample: keptSample(covering),
+        };
       } else if (silent) {
         fail(
           "silent",
@@ -862,6 +926,41 @@ function judgeSwapAudio(replies, rearms = []) {
     episodes: rows,
     reasons: failed.flatMap((r) => r.reasons),
   };
+}
+
+/// The decoded-signal status of a judgeSwapAudio result, read from its episode
+/// rows alone: `failed` with their reasons when any row is not an accepted
+/// status, `verified` when a sample was owed and taken, `not_required` when
+/// none was owed, and `not_assessed` when the rows are not usable, never a
+/// pass.
+///
+/// `replies` is the reply judge's result for the same episodes. The audio
+/// judge skips an episode the reply judge could not place (no reply record, an
+/// unfinished line), so those read as `not_required`, and one verified
+/// neighbor would hide the gap: when the replies are not all placed, a
+/// would-be `verified` or `not_required` is `not_assessed` instead. A signal
+/// that was demonstrated to fail stays `failed`.
+function summarizeSwapAudio(audio, replies) {
+  const rows = audio?.episodes;
+  const usable =
+    Array.isArray(rows) &&
+    rows.every(
+      (e) =>
+        e &&
+        typeof e.status === "string" &&
+        Array.isArray(e.reasons) &&
+        e.reasons.every((r) => typeof r === "string"),
+    );
+  if (!usable) return { status: "not_assessed", reasons: [] };
+  const failed = rows.filter((e) => !SWAP_AUDIO_OK.includes(e.status));
+  if (failed.length) {
+    return { status: "failed", reasons: failed.flatMap((e) => e.reasons) };
+  }
+  if (replies && replies.ok === false) {
+    return { status: "not_assessed", reasons: [] };
+  }
+  const owed = rows.some((e) => e.status !== "not_required");
+  return { status: owed ? "verified" : "not_required", reasons: [] };
 }
 
 /// What a soak writes about itself. Every field is the verdict of a part, so a
@@ -927,6 +1026,8 @@ module.exports = {
   judgeEpisodes,
   judgeSoak,
   judgeSwapAudio,
+  MAX_SAMPLES_PER_SWAP,
+  summarizeSwapAudio,
   judgeEpisodeReplies,
   parseClock,
   parseVerdictMode,
