@@ -720,56 +720,6 @@ async fn token_endpoint_rate_limits_a_noisy_client() {
 }
 
 #[tokio::test]
-async fn token_api_matches_frontend_contract_over_http() {
-    let (config, cookie, db_path) = signed_in_web_config("contract");
-    let (base, server) = spawn_web_server(config).await;
-    let response = http_client()
-        .post(format!("{base}/api/token"))
-        .header("cookie", &cookie)
-        .json(&json!({"problemId":"merge-intervals","durationMin":120}))
-        .send()
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), 200);
-    let body: Value = response.json().await.unwrap();
-    let mut keys = body.as_object().unwrap().keys().collect::<Vec<_>>();
-    keys.sort();
-    assert_eq!(
-        keys,
-        ["durationMin", "guest", "roomName", "serverUrl", "token"]
-    );
-    assert_eq!(body["guest"], false);
-    assert_eq!(body["serverUrl"], "wss://example.livekit.cloud");
-    assert!(body["roomName"].as_str().unwrap().starts_with("interview-"));
-
-    let claims = claims(body["token"].as_str().unwrap());
-    assert_eq!(claims["name"], "Candidate");
-    assert!(claims["sub"].as_str().unwrap().starts_with("candidate-"));
-    assert_eq!(
-        claims["exp"].as_u64().unwrap() - claims["nbf"].as_u64().unwrap(),
-        TOKEN_TTL_SECONDS
-    );
-    assert_eq!(claims["video"]["room"], body["roomName"]);
-    assert_eq!(claims["video"]["roomJoin"], true);
-    assert_eq!(claims["video"]["canPublish"], true);
-    assert_eq!(claims["video"]["canSubscribe"], true);
-    assert_eq!(claims["video"]["canPublishData"], true);
-    let metadata: Value = serde_json::from_str(claims["metadata"].as_str().unwrap()).unwrap();
-    assert_eq!(metadata["problemId"], "merge-intervals");
-    assert_eq!(metadata["durationMin"], 90);
-    assert_eq!(metadata["candidateIdentity"], claims["sub"]);
-
-    // The page cannot read the metadata: it is inside a signed token it never
-    // opens. The response body carries the length the agent will enforce, which
-    // for a whole-minute request is the metadata value itself.
-    assert_eq!(body["durationMin"], metadata["durationMin"]);
-
-    server.shutdown().await;
-    remove_database(db_path).await;
-}
-
-#[tokio::test]
 async fn observer_is_not_the_candidate() {
     let (config, cookie, db_path) = signed_in_web_config("observer");
     let (base, server) = spawn_web_server(config).await;

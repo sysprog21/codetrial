@@ -28,6 +28,11 @@ import {
   createBoard,
   drawBoard,
 } from "/whiteboard.js";
+import {
+  practiceFocusAccountOwner,
+  storeSelectedPracticeFocus,
+} from "./problem-picker.js";
+import { storageArea } from "./audio-output.js";
 
 const nodes = {
   list: document.querySelector("#replay-list"),
@@ -495,6 +500,7 @@ async function loadReport(interviewId, recordingId) {
     nodes.report.textContent = "Could not load the report.";
     return;
   }
+  const reportOwner = practiceFocusAccountOwner(body?.accountId);
   // Matched on the interview id the report carries, which is why
   // `web/interview.js` puts it there. Reports are keyed by their own id and
   // recordings by theirs, and the clock is not a key.
@@ -516,6 +522,31 @@ async function loadReport(interviewId, recordingId) {
     unclearLines: unclearLinesOf(saved.unclearLines),
     ...final,
   });
+  for (const button of nodes.report.querySelectorAll("[data-practice-focus]")) {
+    button.addEventListener("click", async () => {
+      const item =
+        report.improvementPlan?.[Number(button.dataset.practiceFocus)];
+      if (!item) return;
+      const stored = storeSelectedPracticeFocus(
+        storageArea("sessionStorage"),
+        reportOwner,
+        item,
+        saved.interviewMode,
+        saved.id,
+      );
+      if (!stored) {
+        const status = button.parentElement?.querySelector(
+          "[data-practice-focus-status]",
+        );
+        if (status) {
+          status.hidden = false;
+          status.textContent = "Could not save this practice focus.";
+        }
+        return;
+      }
+      window.location.href = "/";
+    });
+  }
   mountFinalCodeCopy(nodes.report, final.code);
   void loadOriginalProblem(
     nodes.report,

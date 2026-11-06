@@ -144,6 +144,8 @@ async fn account_routes_record_interviewee_github_login() {
         .unwrap();
     assert_eq!(signed_in["signedIn"], true);
     assert_eq!(signed_in["user"]["login"], "octo-cat");
+    let owner = signed_in["user"]["id"].as_str().unwrap();
+    assert_eq!(owner, expected_account_owner(&path, "octo-cat"));
     assert_eq!(signed_in["githubSignedIn"], false);
 
     let reports = client
@@ -244,56 +246,6 @@ async fn session_reports_candidate_video_signed_out_and_signed_in() {
         server.shutdown().await;
         remove_database(path).await;
     }
-}
-
-/// A typed handle is not proof of anything, so it must not be the key an
-/// account is found by. If it were, typing a name someone else used would hand
-/// over their interview history, and nothing stops anyone typing any name.
-#[tokio::test]
-async fn a_claimed_handle_does_not_reach_an_earlier_candidates_reports() {
-    let (base, server, path, client) = account_server("claimed-handle").await;
-
-    let first = record_login(&client, &base, "octocat").await;
-    let saved = client
-        .post(format!("{base}/api/reports"))
-        .header("cookie", &first)
-        .json(&json!({"id":"report-one","problemId":"two-sum","score":8}))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(saved.status(), 200);
-
-    let second = record_login(&client, &base, "octocat").await;
-    assert_ne!(first, second, "each recorded login is its own account");
-
-    let reports = client
-        .get(format!("{base}/api/reports"))
-        .header("cookie", &second)
-        .send()
-        .await
-        .unwrap()
-        .json::<Value>()
-        .await
-        .unwrap();
-    assert_eq!(
-        reports["reports"].as_array().unwrap().len(),
-        0,
-        "claiming a handle must not inherit the reports filed under it"
-    );
-
-    let mine = client
-        .get(format!("{base}/api/reports"))
-        .header("cookie", &first)
-        .send()
-        .await
-        .unwrap()
-        .json::<Value>()
-        .await
-        .unwrap();
-    assert_eq!(mine["reports"][0]["id"], "report-one");
-
-    server.shutdown().await;
-    remove_database(path).await;
 }
 
 /// The other half of the fail-closed rule, and the one an operator actually

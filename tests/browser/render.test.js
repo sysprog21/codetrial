@@ -1024,8 +1024,14 @@ test("practice-next drills render accessibly in HTML and Markdown", () => {
   const markdown = reportMarkdown(session);
   assert.match(html, /<h3>Practice next<\/h3>/);
   assert.match(html, /Test · 10 min · high impact/);
+  assert.match(html, />Practice this<\/button>/);
+  assert.match(
+    html,
+    /aria-label="Practice this: [^"]+">Practice this<\/button>/,
+  );
   assert.match(markdown, /## Practice next/);
   assert.match(markdown, /Success: Cover four case classes/);
+  assert.doesNotMatch(markdown, /Practice this/);
 });
 
 test("the report shows the debrief collapsed", () => {

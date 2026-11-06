@@ -18,7 +18,7 @@ use crate::config::{DEFAULT_DURATION_MIN, MAX_DURATION_MIN, MIN_DURATION_MIN};
 use crate::current_epoch_seconds;
 use crate::token::{LivekitTokenInput, TOKEN_TTL_SECONDS, livekit_observer_token, livekit_token};
 
-use super::auth::{Owner, current_user};
+use super::auth::{Owner, account_owner_id, current_user};
 use super::consent::{checked_consent, claim_consent};
 use super::pool::{ProviderChoice, room_and_available_provider};
 use super::{
@@ -882,6 +882,12 @@ pub(crate) async fn token_handler(
         // The same granted length the agent reads from its token metadata.
         "durationMin": response.duration_min
     });
+    if let Some(owner) = owner.as_ref() {
+        body["accountId"] = json!(account_owner_id(
+            &owner.accounts,
+            owner.user.account_identity
+        ));
+    }
     if let Some(assignment) = assignment {
         body["problemPage"] = json!(assignment.page);
         body["previousAssignment"] = json!(assignment.receipt);

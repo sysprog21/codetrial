@@ -32,7 +32,7 @@ let base = "";
 
 /// What the stub answers with. Set per test before the page loads, because the
 /// whole point of most of these is what the lobby does once these arrive.
-let session = { signedIn: true, user: { login: "candidate" } };
+let session = { signedIn: true, user: { id: "A", login: "candidate" } };
 let reports = [];
 /// Endpoint paths the stub answers with a 500 instead of a body, so the tests
 /// about a server that cannot answer are about an actual failure rather than a
@@ -100,11 +100,17 @@ before(async () => {
           reports = [];
           return json({ deleted });
         }
+        // Capture the owner when this request is admitted. A held response must not
+        // change owners just because another tab changes the session while it waits.
+        const accountId =
+          session.signedIn && typeof session.user?.id === "string"
+            ? session.user.id
+            : null;
         if (holdReports) await holdReports;
-        return json({ reports });
+        return json({ accountId, reports });
       }
       if (url.pathname === "/api/login") {
-        session = { signedIn: true, user: { login: "candidate" } };
+        session = { signedIn: true, user: { id: "A", login: "candidate" } };
         if (holdLogin) await holdLogin;
         return json({ ok: true });
       }
@@ -125,7 +131,7 @@ before(async () => {
 /// leaked a stub mode into everything after it and turned a single red test
 /// into a run nobody could read.
 beforeEach(() => {
-  session = { signedIn: true, user: { login: "candidate" } };
+  session = { signedIn: true, user: { id: "A", login: "candidate" } };
   reports = [];
   failing = new Set();
   holdReports = null;
@@ -3375,6 +3381,43 @@ lobbyTest(
 );
 
 lobbyTest(
+  "unchecking Share while Start verifies the account does not share the practice focus",
+  async (page) => {
+    reports = [focusedAttempt(EASY[0])];
+    await lobby(page);
+    const share = page.locator("#practice-focus-share-input");
+    await share.check();
+    let releaseSession;
+    holdSession = new Promise((resolve) => {
+      releaseSession = resolve;
+    });
+    const requested = page.waitForRequest(
+      (request) => new URL(request.url()).pathname === "/api/session",
+    );
+    try {
+      const starting = page.click("#start");
+      // Start has already captured the focus and is now waiting for the
+      // ownership recheck.
+      await requested;
+      await share.uncheck();
+      releaseSession();
+      holdSession = null;
+      await starting;
+      await page.waitForURL(/\/interview/);
+    } finally {
+      releaseSession?.();
+      holdSession = null;
+    }
+    assert.equal(
+      await page.evaluate(() =>
+        sessionStorage.getItem("codetrial.sharedPracticeFocus"),
+      ),
+      null,
+    );
+  },
+);
+
+lobbyTest(
   "loading a resume keeps the JD requirements already checked",
   async (page) => {
     await lobby(page);
@@ -4115,7 +4158,14 @@ for (const first of [0, 1]) {
           url === "/api/reports"
             ? new Promise((resolve) =>
                 window.pendingHistory.push((reports) =>
-                  resolve(new Response(JSON.stringify({ reports }))),
+                  resolve(
+                    new Response(
+                      JSON.stringify({
+                        accountId: "A",
+                        reports,
+                      }),
+                    ),
+                  ),
                 ),
               )
             : fetch(url, ...args);
@@ -4308,6 +4358,485 @@ lobbyTest(
       fetched.filter((path) => path === "/problem-pages.json").length,
       1,
     );
+  },
+);
+
+lobbyTest(
+  "Practice this selects the exact report improvement for the lobby",
+  async (page) => {
+    reports = [
+      focusedAttempt(EASY[0], {
+        weaknesses: ["Test boundaries", "Explain the algorithm clearly"],
+      }),
+    ];
+    Object.assign(reports[0].payload.report.improvementPlan[1], {
+      phase: "Algorithm",
+      drill: "Say the algorithm before coding",
+      successCriterion: "Explain the full approach before implementation",
+    });
+    const before = await lobby(page);
+    assert.match(before.focus, /Test boundaries/);
+    const beforeMode = await page
+      .locator('[data-mode][aria-pressed="true"]')
+      .getAttribute("data-mode");
+    const editorOptions = page
+      .getByRole("group", { name: "Editor options" })
+      .getByRole("checkbox");
+    const beforeEditorOptions = await editorOptions.evaluateAll((inputs) =>
+      inputs.map((input) => ({
+        checked: input.checked,
+        disabled: input.disabled,
+      })),
+    );
+    const history = page.locator("#attempt-history");
+    await history.getByRole("button", { name: "Open report" }).click();
+    const practiceFocus = page.locator("#practice-focus");
+    await practiceFocus.evaluate((node) => {
+      node.practiceSelectionScroll = null;
+      node.scrollIntoView = (options) => {
+        node.practiceSelectionScroll = options;
+      };
+    });
+
+    const practiceButtons = history.getByRole("button", {
+      name: "Practice this",
+    });
+    await practiceButtons.nth(1).click();
+    assert.deepEqual(
+      await practiceFocus.evaluate((node) => node.practiceSelectionScroll),
+      { block: "nearest" },
+    );
+    const after = await snapshot(page);
+    assert.equal(
+      after.card,
+      before.card,
+      "selecting a practice focus must not change the problem",
+    );
+    assert.equal(
+      after.duration,
+      before.duration,
+      "selecting a practice focus must not change session duration",
+    );
+    assert.deepEqual(
+      after.levels,
+      before.levels,
+      "selecting a practice focus must not change difficulty filters",
+    );
+    assert.equal(
+      await page
+        .locator('[data-mode][aria-pressed="true"]')
+        .getAttribute("data-mode"),
+      beforeMode,
+      "selecting a practice focus must not change interview format",
+    );
+    assert.deepEqual(
+      await editorOptions.evaluateAll((inputs) =>
+        inputs.map((input) => ({
+          checked: input.checked,
+          disabled: input.disabled,
+        })),
+      ),
+      beforeEditorOptions,
+      "selecting a practice focus must not change editor settings",
+    );
+    assert.match(
+      after.focus,
+      /Selected practice focus · Algorithm: Explain the algorithm clearly\. Drill: Say the algorithm before coding\. Success: Explain the full approach before implementation\./,
+    );
+    assert.equal(
+      await page.locator("#practice-focus-share-input").isChecked(),
+      false,
+    );
+    await page.click("#practice-focus-share-input");
+    await page.click("#start");
+    await page.waitForURL(/\/interview/);
+    assert.equal(
+      await page.evaluate(() =>
+        sessionStorage.getItem("codetrial.sharedPracticeFocus"),
+      ),
+      "Explain the algorithm clearly",
+    );
+  },
+);
+
+lobbyTest(
+  "a selected practice focus carried from the interview overrides the automatic focus",
+  async (page) => {
+    reports = [
+      focusedAttempt(EASY[0], {
+        weaknesses: ["Test boundaries"],
+      }),
+    ];
+    await page.addInitScript(() => {
+      sessionStorage.setItem(
+        "codetrial.selectedPracticeFocus",
+        JSON.stringify({
+          owner: "account:A",
+          focus: {
+            phase: "Algorithm",
+            weakness: "Explain the algorithm clearly",
+            drill: "Walk through the algorithm step by step",
+            successCriterion: "Explain each step before coding",
+          },
+        }),
+      );
+    });
+    const state = await lobby(page);
+    assert.match(state.focus, /Selected practice focus/);
+    assert.match(state.focus, /Algorithm/);
+    assert.match(state.focus, /Explain the algorithm clearly/);
+    assert.match(state.focus, /Walk through the algorithm step by step/);
+    assert.match(state.focus, /Explain each step before coding/);
+    assert.doesNotMatch(state.focus, /Test boundaries/);
+    assert.equal(
+      await page.locator("#practice-focus-share-input").isChecked(),
+      false,
+    );
+  },
+);
+
+lobbyTest(
+  "a selected practice focus survives a lobby reload until Start",
+  async (page) => {
+    reports = [
+      focusedAttempt(EASY[0], {
+        weaknesses: ["Automatic focus"],
+      }),
+    ];
+    await page.addInitScript(() => {
+      const seeded = "codetrial.test.selectedPracticeFocusSeeded";
+      if (sessionStorage.getItem(seeded)) return;
+      sessionStorage.setItem(
+        "codetrial.selectedPracticeFocus",
+        JSON.stringify({
+          owner: "account:A",
+          focus: {
+            phase: "Algorithm",
+            weakness: "Explain the algorithm clearly",
+            drill: "Walk through the algorithm step by step",
+            successCriterion: "Explain each step before coding",
+          },
+        }),
+      );
+      sessionStorage.setItem(seeded, "1");
+    });
+    await lobby(page);
+    assert.match((await snapshot(page)).focus, /Explain the algorithm clearly/);
+
+    assert.notEqual(
+      await page.evaluate(() =>
+        sessionStorage.getItem("codetrial.selectedPracticeFocus"),
+      ),
+      null,
+    );
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.waitForFunction(
+      () => document.querySelector("#recommendation").textContent !== "",
+    );
+
+    assert.match((await snapshot(page)).focus, /Explain the algorithm clearly/);
+    assert.notEqual(
+      await page.evaluate(() =>
+        sessionStorage.getItem("codetrial.selectedPracticeFocus"),
+      ),
+      null,
+    );
+  },
+);
+
+lobbyTest("Start consumes the selected practice focus", async (page) => {
+  await page.addInitScript(() => {
+    const seeded = "codetrial.test.selectedPracticeFocusSeeded";
+    if (sessionStorage.getItem(seeded)) return;
+    sessionStorage.setItem(
+      "codetrial.selectedPracticeFocus",
+      JSON.stringify({
+        owner: "account:A",
+        focus: {
+          phase: "Algorithm",
+          weakness: "Explain the algorithm clearly",
+          drill: "Walk through the algorithm step by step",
+          successCriterion: "Explain each step before coding",
+        },
+      }),
+    );
+    sessionStorage.setItem(seeded, "1");
+  });
+  await lobby(page);
+  assert.notEqual(
+    await page.evaluate(() =>
+      sessionStorage.getItem("codetrial.selectedPracticeFocus"),
+    ),
+    null,
+  );
+  await page.click("#start");
+  await page.waitForURL(/\/interview/);
+  assert.equal(
+    await page.evaluate(() =>
+      sessionStorage.getItem("codetrial.selectedPracticeFocus"),
+    ),
+    null,
+  );
+});
+
+lobbyTest(
+  "a persisted pageshow reconciles the selected practice focus from storage",
+  async (page) => {
+    reports = [
+      focusedAttempt(EASY[0], {
+        weaknesses: ["Automatic focus"],
+      }),
+    ];
+    await page.addInitScript(() => {
+      sessionStorage.setItem(
+        "codetrial.selectedPracticeFocus",
+        JSON.stringify({
+          owner: "account:A",
+          focus: {
+            phase: "Algorithm",
+            weakness: "Old selected focus",
+            drill: "Old drill",
+            successCriterion: "Old success",
+          },
+        }),
+      );
+    });
+    await lobby(page);
+    assert.match((await snapshot(page)).focus, /Old selected focus/);
+    await page.check("#practice-focus-share-input");
+    await page.evaluate(() => {
+      sessionStorage.removeItem("codetrial.selectedPracticeFocus");
+    });
+    await restore(page);
+    await page.waitForFunction(() =>
+      document
+        .querySelector("#practice-focus")
+        .textContent.includes("Automatic focus"),
+    );
+    const state = await snapshot(page);
+    assert.doesNotMatch(state.focus, /Old selected focus/);
+    assert.match(state.focus, /Automatic focus/);
+    assert.equal(
+      await page.locator("#practice-focus-share-input").isChecked(),
+      false,
+    );
+  },
+);
+
+lobbyTest(
+  "deleting saved history clears the selected practice focus",
+  async (page) => {
+    reports = [focusedAttempt(EASY[0])];
+    await page.addInitScript(() => {
+      sessionStorage.setItem(
+        "codetrial.selectedPracticeFocus",
+        JSON.stringify({
+          owner: "account:A",
+          focus: {
+            phase: "Test",
+            weakness: "Test boundaries",
+            drill: "Build a test table",
+            successCriterion: "Predict each output",
+          },
+        }),
+      );
+    });
+    await lobby(page);
+    assert.match((await snapshot(page)).focus, /Selected practice focus/);
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.click("#delete-reports");
+    await reaches(
+      page,
+      () => document.querySelector("#report-delete-status").textContent !== "",
+    );
+    assert.equal(
+      await page.evaluate(() =>
+        sessionStorage.getItem("codetrial.selectedPracticeFocus"),
+      ),
+      null,
+    );
+    assert.doesNotMatch(
+      (await snapshot(page)).focus,
+      /Selected practice focus/,
+    );
+  },
+);
+
+lobbyTest(
+  "a whiteboard practice focus keeps the phase label shown in the report",
+  async (page) => {
+    const attempt = focusedAttempt(EASY[0], {
+      phase: "Coding",
+      weaknesses: ["Trace the algorithm clearly"],
+    });
+    attempt.payload.interviewMode = "whiteboard";
+    attempt.payload.report.interviewMode = "whiteboard";
+    reports = [attempt];
+    await lobby(page);
+    const history = page.locator("#attempt-history");
+    await history.getByRole("button", { name: "Open report" }).click();
+    assert.match(await history.textContent(), /Trace/);
+    await history.getByRole("button", { name: /Practice this:/ }).click();
+
+    const state = await snapshot(page);
+    assert.match(state.focus, /Selected practice focus · Trace:/);
+    assert.doesNotMatch(state.focus, /Selected practice focus · Coding:/);
+  },
+);
+
+lobbyTest(
+  "deleting the source report clears the selected practice focus",
+  async (page) => {
+    const attempt = focusedAttempt(EASY[0]);
+    reports = [
+      {
+        ...attempt,
+        id: "focus-source",
+        payload: {
+          ...attempt.payload,
+          id: "focus-source",
+        },
+      },
+    ];
+    await page.addInitScript(() => {
+      sessionStorage.setItem(
+        "codetrial.selectedPracticeFocus",
+        JSON.stringify({
+          owner: "account:A",
+          focus: {
+            phase: "Test",
+            weakness: "Test boundaries",
+            drill: "Build a test table",
+            successCriterion: "Predict each output",
+          },
+          sourceReportId: "focus-source",
+        }),
+      );
+    });
+    await lobby(page);
+    assert.match((await snapshot(page)).focus, /Selected practice focus/);
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.locator("#attempt-history [data-delete-report]").click();
+    await reaches(
+      page,
+      () => document.querySelector("#report-delete-status").textContent !== "",
+    );
+    assert.equal(
+      await page.evaluate(() =>
+        sessionStorage.getItem("codetrial.selectedPracticeFocus"),
+      ),
+      null,
+    );
+    assert.doesNotMatch(
+      (await snapshot(page)).focus,
+      /Selected practice focus/,
+    );
+  },
+);
+
+lobbyTest(
+  "deleting another report keeps the selected practice focus",
+  async (page) => {
+    const source = focusedAttempt(EASY[0]);
+    const unrelated = focusedAttempt(EASY[1]);
+    reports = [
+      {
+        ...source,
+        id: "focus-source",
+        payload: {
+          ...source.payload,
+          id: "focus-source",
+          date: "2026-01-02T00:00:00Z",
+        },
+      },
+      {
+        ...unrelated,
+        id: "unrelated-report",
+        payload: {
+          ...unrelated.payload,
+          id: "unrelated-report",
+          date: "2026-01-01T00:00:00Z",
+        },
+      },
+    ];
+    await page.addInitScript(() => {
+      sessionStorage.setItem(
+        "codetrial.selectedPracticeFocus",
+        JSON.stringify({
+          owner: "account:A",
+          focus: {
+            phase: "Test",
+            weakness: "Test boundaries",
+            drill: "Build a test table",
+            successCriterion: "Predict each output",
+          },
+          sourceReportId: "focus-source",
+        }),
+      );
+    });
+    await lobby(page);
+    assert.match((await snapshot(page)).focus, /Selected practice focus/);
+    const deleteButtons = page.locator("#attempt-history [data-delete-report]");
+    page.once("dialog", (dialog) => dialog.accept());
+    // Reports are rendered newest first, so delete the older unrelated report.
+    await deleteButtons.nth(1).click();
+    await reaches(
+      page,
+      () => document.querySelector("#report-delete-status").textContent !== "",
+    );
+    assert.notEqual(
+      await page.evaluate(() =>
+        sessionStorage.getItem("codetrial.selectedPracticeFocus"),
+      ),
+      null,
+    );
+    assert.match((await snapshot(page)).focus, /Selected practice focus/);
+    assert.match((await snapshot(page)).focus, /Test boundaries/);
+  },
+);
+
+lobbyTest(
+  "a missing report deletion keeps the selected practice focus",
+  async (page) => {
+    const attempt = focusedAttempt(EASY[0]);
+    reports = [
+      {
+        ...attempt,
+        id: "focus-source",
+        payload: {
+          ...attempt.payload,
+          id: "focus-source",
+        },
+      },
+    ];
+    await lobby(page);
+    const history = page.locator("#attempt-history");
+    await history.getByRole("button", { name: "Open report" }).click();
+    await history.getByRole("button", { name: /Practice this:/ }).click();
+    assert.match((await snapshot(page)).focus, /Selected practice focus/);
+    const before = await page.evaluate(() =>
+      JSON.parse(sessionStorage.getItem("codetrial.selectedPracticeFocus")),
+    );
+    assert.equal(before.sourceReportId, "focus-source");
+    // Simulate the report having already been removed elsewhere. The row is
+    // still visible in this stale lobby, but DELETE now reports that nothing
+    // was removed.
+    reports = [];
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.locator("#attempt-history [data-delete-report]").click();
+    await reaches(
+      page,
+      () => document.querySelector("#report-delete-status").textContent !== "",
+    );
+    assert.match(
+      await page.locator("#report-delete-status").textContent(),
+      /not found/i,
+    );
+    const after = await page.evaluate(() =>
+      JSON.parse(sessionStorage.getItem("codetrial.selectedPracticeFocus")),
+    );
+    assert.equal(after.sourceReportId, "focus-source");
+    assert.match((await snapshot(page)).focus, /Selected practice focus/);
   },
 );
 
@@ -5441,7 +5970,7 @@ lobbyTest(
     // The login lands while this page is not the one in front: on the way out to
     // the interview, or in another tab. The cached page knows none of it, so what
     // it holds about the session is now wrong in every part.
-    session = { signedIn: true, user: { login: "candidate" } };
+    session = { signedIn: true, user: { id: "A", login: "candidate" } };
     await restore(page);
     await reaches(
       page,
@@ -5970,7 +6499,7 @@ lobbyTest(
     // `stale_after` reaps that recording ten minutes before the interview ends.
     session = {
       signedIn: true,
-      user: { login: "candidate" },
+      user: { id: "A", login: "candidate" },
       maxDurationMin: 45,
     };
 
@@ -6002,7 +6531,7 @@ lobbyTest(
     // what this server is able to record.
     session = {
       signedIn: true,
-      user: { login: "candidate" },
+      user: { id: "A", login: "candidate" },
       maxDurationMin: 30,
     };
 
@@ -6022,7 +6551,7 @@ lobbyTest(
   async (page) => {
     session = {
       signedIn: true,
-      user: { login: "candidate" },
+      user: { id: "A", login: "candidate" },
       maxDurationMin: 90,
     };
 
@@ -6086,7 +6615,7 @@ for (const account of [true, false]) {
   lobbyTest(
     `the problem filter keeps ${account ? "account" : "device"} history and charts in sync`,
     async (page) => {
-      session = { signedIn: account, user: { login: "candidate" } };
+      session = { signedIn: account, user: { id: "A", login: "candidate" } };
       const saved = [55, 85, 70, 90, 80].map((score, index) => {
         const selected = index % 2 === 0;
         const problemId = selected ? EASY[0] : "retired-problem";
@@ -6784,7 +7313,7 @@ lobbyTest(
     // Keep the page usable even when the server limit fits no duration button.
     session = {
       signedIn: true,
-      user: { login: "candidate" },
+      user: { id: "A", login: "candidate" },
       maxDurationMin: 15,
     };
 
@@ -7485,7 +8014,7 @@ lobbyTest(
         route.fulfill({
           json: {
             signedIn: true,
-            user: { login: "candidate" },
+            user: { id: "A", login: "candidate" },
             maxDurationMin: 30,
           },
         }),
@@ -7513,7 +8042,14 @@ lobbyTest(
         url === "/api/reports"
           ? new Promise((resolve) =>
               window.pendingHistory.push((reports) =>
-                resolve(new Response(JSON.stringify({ reports }))),
+                resolve(
+                  new Response(
+                    JSON.stringify({
+                      accountId: "A",
+                      reports,
+                    }),
+                  ),
+                ),
               ),
             )
           : fetch(url, ...args);
@@ -7813,7 +8349,7 @@ for (const trigger of ["header", "Start"]) {
           "Retry account check",
         );
         assert.equal(await page.locator("#start").isDisabled(), true);
-        session = { signedIn: true, user: { login: "candidate" } };
+        session = { signedIn: true, user: { id: "A", login: "candidate" } };
       }
       await page.click("#login-link");
       await awaitReady(page);
@@ -9449,7 +9985,10 @@ lobbyTest(
       const first = ++requests === 1;
       if (first) await gate;
       await route.fulfill({
-        json: { reports: [savedAttempt(first ? EASY[0] : EASY[1])] },
+        json: {
+          accountId: "A",
+          reports: [savedAttempt(first ? EASY[0] : EASY[1])],
+        },
       });
     });
     const pending = page.waitForRequest(`${base}/api/reports`);
@@ -9626,7 +10165,7 @@ lobbyTest(
   async (page) => {
     session = {
       signedIn: true,
-      user: { login: "candidate" },
+      user: { id: "A", login: "candidate" },
       candidateVideo: true,
     };
     await lobbyAfterSession(page, "Signed in as candidate");
@@ -9663,7 +10202,7 @@ for (const candidateVideo of [true, false]) {
     async (page) => {
       session = {
         signedIn: true,
-        user: { login: "candidate" },
+        user: { id: "A", login: "candidate" },
         candidateVideo,
       };
       await lobbyAfterSession(page, "Signed in as candidate");
@@ -9697,7 +10236,7 @@ for (const [name, setup, status] of [
   ],
   [
     "is missing",
-    () => (session = { signedIn: true, user: { login: "candidate" } }),
+    () => (session = { signedIn: true, user: { id: "A", login: "candidate" } }),
     "Signed in as candidate",
   ],
   ["request fails", () => failing.add("/api/session"), "Signed out"],
@@ -9719,7 +10258,7 @@ lobbyTest(
   async (page) => {
     session = {
       signedIn: true,
-      user: { login: "candidate" },
+      user: { id: "A", login: "candidate" },
       candidateVideo: true,
     };
     await lobbyAfterSession(page, "Signed in as candidate");
@@ -9744,7 +10283,7 @@ lobbyTest(
   async (page) => {
     session = {
       signedIn: true,
-      user: { login: "candidate" },
+      user: { id: "A", login: "candidate" },
       candidateVideo: true,
     };
     // The stale failure changes nothing on the page when it is handled
@@ -9796,7 +10335,7 @@ for (const candidateVideo of [true, false]) {
     async (page) => {
       session = {
         signedIn: true,
-        user: { login: "candidate" },
+        user: { id: "A", login: "candidate" },
         candidateVideo,
       };
       await lobbyAfterSession(page, "Signed in as candidate");
@@ -9832,7 +10371,7 @@ lobbyTest(
   async (page) => {
     session = {
       signedIn: true,
-      user: { login: "candidate" },
+      user: { id: "A", login: "candidate" },
       candidateVideo: false,
     };
     await page.addInitScript(() =>
@@ -9859,7 +10398,7 @@ lobbyTest(
   async (page) => {
     session = {
       signedIn: true,
-      user: { login: "candidate" },
+      user: { id: "A", login: "candidate" },
       candidateVideo: true,
     };
     await page.addInitScript(() =>
@@ -10007,7 +10546,14 @@ lobbyTest(
         url === "/api/reports"
           ? new Promise((resolve) =>
               window.pendingHistory.push((reports) =>
-                resolve(new Response(JSON.stringify({ reports }))),
+                resolve(
+                  new Response(
+                    JSON.stringify({
+                      accountId: "A",
+                      reports,
+                    }),
+                  ),
+                ),
               ),
             )
           : fetch(url, ...args);
@@ -10117,7 +10663,7 @@ lobbyTest(
 lobbyTest(
   "the peer practice link shows only for a signed-in, verified member on a server that enables it",
   async (page) => {
-    const user = { login: "candidate" };
+    const user = { id: "A", login: "candidate" };
     const cases = [
       [{ peerEnabled: true, identityVerified: true }, true],
       [{ peerEnabled: true, user: { ...user, identityVerified: true } }, true],
@@ -10139,5 +10685,240 @@ lobbyTest(
         JSON.stringify(extra),
       );
     }
+  },
+);
+
+for (const nextSession of [
+  { signedIn: true, user: { id: "B", login: "candidate" } },
+  { signedIn: false },
+]) {
+  lobbyTest(
+    `selected practice focus is cleared after switching to ${nextSession.signedIn ? "another account with the same handle" : "device owner"}`,
+    async (page) => {
+      reports = [focusedAttempt(EASY[0])];
+      await lobby(page);
+      const history = page.locator("#attempt-history");
+      await history.getByRole("button", { name: "Open report" }).click();
+      await history.getByRole("button", { name: /Practice this:/ }).click();
+      assert.match((await snapshot(page)).focus, /Selected practice focus/);
+      session = nextSession;
+      reports = [];
+      let release;
+      holdSession = new Promise((resolve) => {
+        release = resolve;
+      });
+      const requested = page.waitForRequest(
+        (request) => new URL(request.url()).pathname === "/api/session",
+      );
+      await restore(page);
+      await requested;
+      assert.equal(await page.locator("#practice-focus").isHidden(), true);
+      release();
+      holdSession = null;
+      await page.waitForFunction(
+        () =>
+          sessionStorage.getItem("codetrial.selectedPracticeFocus") === null,
+      );
+      assert.doesNotMatch(
+        (await snapshot(page)).focus,
+        /Selected practice focus/,
+      );
+    },
+  );
+}
+
+lobbyTest(
+  "report owner mismatch discards rows and restarts the account lookup",
+  async (page) => {
+    let sessionRequests = 0;
+    let reportRequests = 0;
+    await page.route(`${base}/api/session`, (route) => {
+      sessionRequests++;
+      return route.fulfill({
+        json: {
+          signedIn: true,
+          user: { id: "A", login: "candidate" },
+        },
+      });
+    });
+    await page.route(`${base}/api/reports`, (route) => {
+      reportRequests++;
+
+      if (reportRequests === 1) {
+        const report = focusedAttempt(EASY[0]);
+        report.payload.problemTitle = "Account B report";
+
+        return route.fulfill({
+          json: {
+            accountId: "B",
+            reports: [report],
+          },
+        });
+      }
+      return route.fulfill({
+        json: {
+          accountId: "A",
+          reports: [],
+        },
+      });
+    });
+    await page.goto(`${base}/`);
+    await page.waitForFunction(
+      () => document.querySelector("#start")?.disabled === false,
+    );
+    assert.ok(
+      sessionRequests >= 2,
+      "an owner mismatch must restart the account lookup",
+    );
+    assert.ok(
+      reportRequests >= 2,
+      "the restarted account lookup must reload account reports",
+    );
+    assert.doesNotMatch(
+      await page.locator("#attempt-history").textContent(),
+      /Account B report/,
+    );
+  },
+);
+
+lobbyTest(
+  "a persistent report owner mismatch retries once and then reports an error",
+  async (page) => {
+    let sessionRequests = 0;
+    let reportRequests = 0;
+    await page.route(`${base}/api/session`, (route) => {
+      sessionRequests++;
+      return route.fulfill({
+        json: {
+          signedIn: true,
+          user: { id: "A", login: "candidate" },
+        },
+      });
+    });
+    await page.route(`${base}/api/reports`, (route) => {
+      reportRequests++;
+      return route.fulfill({
+        json: {
+          accountId: "B",
+          reports: [focusedAttempt(EASY[0])],
+        },
+      });
+    });
+    await page.goto(`${base}/`);
+    await page.waitForFunction(() =>
+      document
+        .querySelector("#progress-summary")
+        ?.textContent.includes("Could not load saved account progress."),
+    );
+    assert.equal(
+      sessionRequests,
+      2,
+      "an owner mismatch should retry the account lookup only once",
+    );
+    assert.equal(
+      reportRequests,
+      2,
+      "an owner mismatch should retry reports only once",
+    );
+    assert.doesNotMatch(
+      await page.locator("#attempt-history").textContent(),
+      /Practice this/,
+    );
+  },
+);
+
+lobbyTest(
+  "Start does not share a practice focus after the account changes",
+  async (page) => {
+    session = {
+      signedIn: true,
+      user: { id: "A", login: "candidate-a" },
+    };
+    reports = [
+      focusedAttempt(EASY[0], {
+        weaknesses: ["Account A focus"],
+      }),
+    ];
+    await lobby(page);
+    const history = page.locator("#attempt-history");
+    await history.getByRole("button", { name: "Open report" }).click();
+    await history
+      .getByRole("button", { name: /Practice this:/ })
+      .first()
+      .click();
+    await page.check("#practice-focus-share-input");
+    // Another tab changes the signed-in account before Start.
+    session = {
+      signedIn: true,
+      user: { id: "B", login: "candidate-b" },
+    };
+    await page.click("#start");
+    await page.waitForURL(/\/interview/);
+    assert.equal(
+      await page.evaluate(() =>
+        sessionStorage.getItem("codetrial.sharedPracticeFocus"),
+      ),
+      null,
+    );
+  },
+);
+
+lobbyTest(
+  "stale Practice this cannot carry another account's report during refresh",
+  async (page) => {
+    session = {
+      signedIn: true,
+      user: { id: "A", login: "candidate" },
+    };
+    reports = [focusedAttempt(EASY[0])];
+    await lobby(page);
+    const history = page.locator("#attempt-history");
+    await history.getByRole("button", { name: "Open report" }).click();
+    // Keep a reference to account A's old report action.
+    const stalePractice = history.getByRole("button", {
+      name: /Practice this:/,
+    });
+    // Switch identity to B, but hold B's reports so A's old row is still
+    // present while the new account is already known.
+    session = {
+      signedIn: true,
+      user: { id: "B", login: "candidate" },
+    };
+    reports = [];
+    let releaseReports;
+    holdReports = new Promise((resolve) => {
+      releaseReports = resolve;
+    });
+    const requested = page.waitForRequest(
+      (request) => new URL(request.url()).pathname === "/api/reports",
+    );
+    await restore(page);
+    await requested;
+    try {
+      // First protection: stale report actions are disabled during refresh.
+      assert.equal(await stalePractice.isDisabled(), true);
+
+      // Bypass the disabled-button UI behavior and exercise the retained
+      // listener itself. Its generation guard must still reject the action.
+      await stalePractice.evaluate((button) => {
+        button.dispatchEvent(
+          new MouseEvent("click", {
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+      });
+      assert.equal(
+        await page.evaluate(() =>
+          sessionStorage.getItem("codetrial.selectedPracticeFocus"),
+        ),
+        null,
+      );
+      assert.equal(await page.locator("#practice-focus").isHidden(), true);
+    } finally {
+      releaseReports();
+      holdReports = null;
+    }
+    await awaitReady(page);
   },
 );

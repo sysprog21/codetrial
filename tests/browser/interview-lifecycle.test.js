@@ -243,6 +243,403 @@ test("the Leave button releases the warning before tearing down the session", as
   assert.equal(target.removed, 1);
 });
 
+for (const admittedOwner of ["account:A", "device", null]) {
+  test(`leaving stores a selected focus only for admitted owner ${admittedOwner}`, async () => {
+    const source = read("web/interview.js");
+    const calls = [];
+    const target = new CountingTarget();
+    const guard = createBeforeUnloadGuard(target);
+    guard.setEnabled(true);
+    const location = {};
+    Object.defineProperty(location, "href", {
+      set(value) {
+        calls.push(`navigate:${value}`);
+      },
+    });
+    target.location = location;
+    const beforeUnloadGuard = {
+      dispose() {
+        calls.push("guard-off");
+        guard.dispose();
+      },
+    };
+    const focus = {
+      phase: "Test",
+      weakness: "Test boundaries",
+      drill: "Build a test table",
+      successCriterion: "Predict each output",
+    };
+    const tabStorage = {};
+    const storeSelectedPracticeFocus = (
+      storage,
+      owner,
+      selected,
+      interviewMode,
+      sourceReportId,
+    ) => {
+      assert.equal(owner, admittedOwner);
+      assert.equal(storage, tabStorage);
+      assert.deepEqual(selected, focus);
+      assert.equal(interviewMode, "coding");
+      assert.equal(sourceReportId, "report-1");
+      calls.push("store-focus");
+      return owner !== null;
+    };
+    const body = functionBody(source, "leaveRoom");
+    const leaveRoom = new Function(
+      "state",
+      "reportRecovery",
+      "beforeUnloadGuard",
+      "window",
+      "stopEndingClock",
+      "stopAvatar",
+      "stopLocalMedia",
+      "localRecording",
+      "storeSelectedPracticeFocus",
+      "tabStorage",
+      "admittedPracticeFocusOwner",
+      "sessionPromise",
+      "mode",
+      `${body}\n}\nreturn leaveRoom;`,
+    )(
+      {
+        phase: "ending",
+        reportReceiving: false,
+        leaving: false,
+        reportId: "report-1",
+        room: {
+          disconnect() {
+            calls.push("disconnect");
+            return Promise.resolve();
+          },
+        },
+      },
+      { finish: () => calls.push("finish") },
+      beforeUnloadGuard,
+      target,
+      () => calls.push("stop-clock"),
+      () => calls.push("stop-avatar"),
+      () => calls.push("stop-media"),
+      { stop: async () => {} },
+      storeSelectedPracticeFocus,
+      tabStorage,
+      admittedOwner,
+      Promise.resolve({ signedIn: true, user: { id: "initial-account" } }),
+      "coding",
+    );
+    await leaveRoom(focus);
+    assert.deepEqual(
+      calls,
+      admittedOwner
+        ? [
+            "store-focus",
+            "guard-off",
+            "stop-clock",
+            "disconnect",
+            "stop-avatar",
+            "stop-media",
+            "navigate:/",
+          ]
+        : ["store-focus"],
+    );
+  });
+}
+
+test("a failed practice focus save keeps the report open", async () => {
+  const source = read("web/interview.js");
+  const calls = [];
+  const focus = {
+    phase: "Test",
+    weakness: "Test boundaries",
+    drill: "Build a test table",
+    successCriterion: "Predict each output",
+  };
+  const status = {
+    hidden: true,
+    textContent: "",
+  };
+  const practiceButton = {
+    parentElement: {
+      querySelector(selector) {
+        assert.equal(selector, "[data-practice-focus-status]");
+        return status;
+      },
+    },
+  };
+  const target = {
+    location: {
+      set href(value) {
+        calls.push(`navigate:${value}`);
+      },
+    },
+  };
+  const state = {
+    phase: "report",
+    reportReceiving: false,
+    reportPersisted: true,
+    downloadingReport: false,
+    leaving: false,
+    reportId: "report-1",
+    room: null,
+  };
+  const body = functionBody(source, "leaveRoom");
+  const leaveRoom = new Function(
+    "state",
+    "reportRecovery",
+    "beforeUnloadGuard",
+    "window",
+    "stopEndingClock",
+    "stopAvatar",
+    "stopLocalMedia",
+    "localRecording",
+    "storeSelectedPracticeFocus",
+    "tabStorage",
+    "admittedPracticeFocusOwner",
+    "sessionPromise",
+    "mode",
+    `${body}\n}\nreturn leaveRoom;`,
+  )(
+    state,
+    {},
+    {
+      dispose() {
+        calls.push("guard-off");
+      },
+    },
+    target,
+    () => calls.push("stop-clock"),
+    () => calls.push("stop-avatar"),
+    () => calls.push("stop-media"),
+    {
+      stop: async () => {
+        calls.push("stop-recording");
+      },
+    },
+    () => {
+      calls.push("store-focus");
+      return false;
+    },
+    {},
+    "account:A",
+    Promise.resolve(),
+    "coding",
+  );
+  await leaveRoom(focus, practiceButton);
+  assert.deepEqual(calls, ["store-focus"]);
+  assert.equal(state.leaving, false);
+  assert.equal(status.hidden, false);
+  assert.equal(status.textContent, "Could not save this practice focus.");
+});
+
+test("a second leave is ignored while the first is still stopping the recording", async () => {
+  const source = read("web/interview.js");
+  const calls = [];
+  let releaseRecording;
+  const recordingStopped = new Promise((resolve) => {
+    releaseRecording = resolve;
+  });
+  const focus = {
+    phase: "Test",
+    weakness: "Test boundaries",
+    drill: "Build a test table",
+    successCriterion: "Predict each output",
+  };
+  const target = {
+    location: {
+      set href(value) {
+        calls.push(`navigate:${value}`);
+      },
+    },
+  };
+  const body = functionBody(source, "leaveRoom");
+  const leaveRoom = new Function(
+    "state",
+    "reportRecovery",
+    "beforeUnloadGuard",
+    "window",
+    "stopEndingClock",
+    "stopAvatar",
+    "stopLocalMedia",
+    "localRecording",
+    "storeSelectedPracticeFocus",
+    "tabStorage",
+    "admittedPracticeFocusOwner",
+    "sessionPromise",
+    "mode",
+    `${body}\n}\nreturn leaveRoom;`,
+  )(
+    {
+      phase: "report",
+      reportReceiving: false,
+      reportPersisted: true,
+      downloadingReport: false,
+      leaving: false,
+      reportId: "report-1",
+      room: null,
+    },
+    {},
+    {
+      dispose() {
+        calls.push("guard-off");
+      },
+    },
+    target,
+    () => calls.push("stop-clock"),
+    () => calls.push("stop-avatar"),
+    () => calls.push("stop-media"),
+    {
+      stop: async () => {
+        calls.push("stop-recording");
+        await recordingStopped;
+      },
+    },
+    () => {
+      calls.push("store-focus");
+      return true;
+    },
+    {},
+    "account:A",
+    Promise.resolve(),
+    "coding",
+  );
+  const first = leaveRoom(focus);
+  // Let the first call reach localRecording.stop().
+  await Promise.resolve();
+  const second = leaveRoom(focus);
+  await second;
+  assert.deepEqual(calls, [
+    "store-focus",
+    "guard-off",
+    "stop-clock",
+    "stop-avatar",
+    "stop-media",
+    "stop-recording",
+  ]);
+  releaseRecording();
+  await first;
+  assert.deepEqual(calls, [
+    "store-focus",
+    "guard-off",
+    "stop-clock",
+    "stop-avatar",
+    "stop-media",
+    "stop-recording",
+    "navigate:/",
+  ]);
+});
+
+test("cancelling an unsafe leave does not store the selected practice focus", async () => {
+  const source = read("web/interview.js");
+  const calls = [];
+  const focus = {
+    phase: "Test",
+    weakness: "Test boundaries",
+    drill: "Build a test table",
+    successCriterion: "Predict each output",
+  };
+  const target = {
+    confirm(message) {
+      calls.push(`confirm:${message}`);
+      return false;
+    },
+    location: {},
+  };
+  const beforeUnloadGuard = {
+    dispose() {
+      calls.push("guard-off");
+    },
+  };
+  const storeSelectedPracticeFocus = () => {
+    calls.push("store-focus");
+  };
+  const body = functionBody(source, "leaveRoom");
+  const leaveRoom = new Function(
+    "state",
+    "reportRecovery",
+    "beforeUnloadGuard",
+    "window",
+    "stopEndingClock",
+    "stopAvatar",
+    "stopLocalMedia",
+    "localRecording",
+    "storeSelectedPracticeFocus",
+    "tabStorage",
+    "admittedPracticeFocusOwner",
+    "sessionPromise",
+    `${body}\n}\nreturn leaveRoom;`,
+  )(
+    {
+      phase: "report",
+      reportReceiving: false,
+      reportPersisted: false,
+      downloadingReport: false,
+      room: null,
+    },
+    {
+      stop() {
+        calls.push("recovery-stop");
+      },
+      finish() {
+        calls.push("recovery-finish");
+      },
+    },
+    beforeUnloadGuard,
+    target,
+    () => calls.push("stop-clock"),
+    () => calls.push("stop-avatar"),
+    () => calls.push("stop-media"),
+    {
+      stop: async () => {
+        calls.push("stop-recording");
+      },
+    },
+    storeSelectedPracticeFocus,
+    {},
+  );
+  await leaveRoom(focus);
+  assert.deepEqual(calls, [
+    "confirm:This report may not be saved. Leave this page anyway?",
+  ]);
+});
+
+test("practice focus actions wait for saving, receipt and download independently", () => {
+  const buttons = [{ disabled: false }, { disabled: false }];
+  const state = {};
+  const nodes = {
+    report: { querySelectorAll: () => buttons },
+  };
+  const body = functionBody(
+    read("web/interview.js"),
+    "setPracticeFocusButtonsDisabled",
+  );
+  const setDisabled = new Function(
+    "nodes",
+    "state",
+    `${body}\n}\nreturn setPracticeFocusButtonsDisabled;`,
+  )(nodes, state);
+  for (const receiving of [false, true]) {
+    for (const downloading of [false, true]) {
+      for (const saved of [false, true]) {
+        Object.assign(state, {
+          reportReceiving: receiving,
+          downloadingReport: downloading,
+          reportSaveComplete: saved,
+        });
+        setDisabled(false);
+        assert.deepEqual(
+          buttons.map((button) => button.disabled),
+          [
+            receiving || downloading || !saved,
+            receiving || downloading || !saved,
+          ],
+        );
+      }
+    }
+  }
+  setDisabled(true);
+  assert.ok(buttons.every((button) => button.disabled));
+});
+
 /// `saveHistory` from web/interview.js, compiled against the module state it
 /// reads. `whiteboard` and `mode` are passed separately, as the page derives
 /// them, so a test can set one without the other.

@@ -56,6 +56,11 @@ pub struct SignedInUser {
     /// `None` for every self-declared login, which is the whole point: a typed
     /// handle is a label, and a recording is delivered to a person.
     pub verified_email: Option<String>,
+    /// Stable account identity stored in `users.github_id`.
+    /// Positive values are GitHub account IDs. Negative values are fresh
+    /// random identities for self-declared accounts. Unlike `users.id`, this
+    /// value is not recycled when a throwaway account is deleted.
+    pub account_identity: i64,
     /// GitHub's numeric account ID, for a login GitHub vouched for; `None` for
     /// a self-declared one.
     pub github_id: Option<u64>,

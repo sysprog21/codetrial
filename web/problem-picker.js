@@ -1,3 +1,8 @@
+import {
+  frameworkChecklist,
+  frameworkPhases,
+  modeIsWhiteboard,
+} from "./lib.js";
 export const LEVELS = ["Easy", "Medium", "Hard"];
 
 /// How many results in a row at one level move a candidate off it. One is a
@@ -11,6 +16,25 @@ const STREAK = 2;
 /// retention model would promise accuracy the interview never measured.
 const REVIEW_INTERVAL_DAYS = [1, 3, 7, 14, 30];
 const DAY_MS = 24 * 60 * 60 * 1000;
+const PRACTICE_FOCUS_TEXT_MAX = 400;
+const CODING_PHASES = frameworkChecklist("coding", [], "coding").steps;
+const WHITEBOARD_PHASES = frameworkChecklist("coding", [], "whiteboard").steps;
+const PRACTICE_FOCUS_PHASES = new Set([
+  ...frameworkPhases,
+  ...WHITEBOARD_PHASES.map((step) => step.label),
+]);
+function practiceFocusText(value) {
+  return typeof value === "string"
+    ? Array.from(value).slice(0, PRACTICE_FOCUS_TEXT_MAX).join("").trim()
+    : "";
+}
+function practiceFocusPhase(value, interviewMode) {
+  const phase = typeof value === "string" ? value : "";
+  if (!PRACTICE_FOCUS_PHASES.has(phase)) return "";
+  if (!modeIsWhiteboard(interviewMode)) return phase;
+  const index = CODING_PHASES.findIndex((step) => step.label === phase);
+  return index < 0 ? phase : WHITEBOARD_PHASES[index].label;
+}
 
 /// Which level to practise next, read off what the candidate has already done.
 ///
@@ -62,6 +86,7 @@ export function suggestDifficulty(problems, reports) {
 }
 
 const sharedFocusKey = "codetrial.sharedPracticeFocus";
+const selectedPracticeFocusKey = "codetrial.selectedPracticeFocus";
 
 /// The focus a candidate chose to share, handed from the lobby to the interview
 /// in this tab's session storage rather than the address bar. A URL carrying
@@ -85,6 +110,114 @@ export function consumeSharedFocus(storage) {
   } catch {
     return "";
   }
+}
+
+export function practiceFocusFrom(item, interviewMode = "coding") {
+  const phase = practiceFocusPhase(item?.phase, interviewMode);
+  const weakness = practiceFocusText(item?.weakness);
+  const drill = practiceFocusText(item?.drill);
+  const successCriterion = practiceFocusText(item?.successCriterion);
+  if (!phase || !weakness || !drill || !successCriterion) {
+    return null;
+  }
+  return {
+    phase,
+    weakness,
+    drill,
+    successCriterion,
+  };
+}
+
+export function storeSelectedPracticeFocus(
+  storage,
+  owner,
+  item,
+  interviewMode = "coding",
+  sourceReportId = null,
+) {
+  const focus = practiceFocusFrom(item, interviewMode);
+  const source =
+    typeof sourceReportId === "string" && sourceReportId
+      ? sourceReportId
+      : null;
+
+  try {
+    if (focus && owner) {
+      storage.setItem(
+        selectedPracticeFocusKey,
+        JSON.stringify({
+          owner,
+          focus,
+          sourceReportId: source,
+        }),
+      );
+      return true;
+    } else {
+      storage.removeItem(selectedPracticeFocusKey);
+      return false;
+    }
+  } catch {
+    // The caller needs to know the selection was not persisted.
+    return false;
+  }
+}
+
+export function readSelectedPracticeFocusSelection(storage, owner) {
+  if (!owner) return null;
+  try {
+    const raw = storage.getItem(selectedPracticeFocusKey);
+    if (!raw) return null;
+    const selected = JSON.parse(raw);
+    if (selected?.owner !== owner) {
+      storage.removeItem(selectedPracticeFocusKey);
+      return null;
+    }
+    const focus = practiceFocusFrom(selected.focus);
+    if (!focus) {
+      storage.removeItem(selectedPracticeFocusKey);
+      return null;
+    }
+    const sourceReportId =
+      typeof selected.sourceReportId === "string" && selected.sourceReportId
+        ? selected.sourceReportId
+        : null;
+    return {
+      focus,
+      sourceReportId,
+    };
+  } catch {
+    try {
+      storage.removeItem(selectedPracticeFocusKey);
+    } catch {
+      /* clearing is best effort */
+    }
+    return null;
+  }
+}
+
+export function readSelectedPracticeFocus(storage, owner) {
+  return readSelectedPracticeFocusSelection(storage, owner)?.focus ?? null;
+}
+
+export function clearSelectedPracticeFocus(storage) {
+  try {
+    storage.removeItem(selectedPracticeFocusKey);
+  } catch {
+    /* clearing is best effort */
+  }
+}
+
+export function practiceFocusAccountOwner(id, guest = false) {
+  if (guest) return "device";
+  return typeof id === "string" && id ? `account:${id}` : null;
+}
+
+export function practiceFocusOwner(session) {
+  if (session?.signedIn !== true && session?.signedIn !== false) return null;
+  return practiceFocusAccountOwner(
+    session?.user?.id,
+    session.signedIn === false,
+  );
 }
 
 /// Carry one concrete action from the reports into the lobby. A focus repeated

@@ -23,7 +23,7 @@
   "tests/unit/livekit/session.rs": 6023,
   "tests/unit/livekit/turn.rs": 3405,
   "tests/unit/tasks/session.rs": 1861,
-  "tests/web/accounts.rs": 1808,
+  "tests/web/accounts.rs": 1760,
   "tests/web/recording.rs": 2496,
-  "tests/web/token.rs": 2151
+  "tests/web/token.rs": 2101
 }

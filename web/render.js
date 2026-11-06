@@ -658,11 +658,13 @@ export function reportMarkup({
       ? ""
       : `<section><h3>Practice next</h3><ol>${report.improvementPlan
           .map(
-            (item) => `
+            (item, index) => `
       <li><strong>${escapeHtml(phaseName(item.phase, atBoard))} · ${escapeHtml(item.durationMin)} min · ${escapeHtml(item.impact)} impact</strong>
         <p>${escapeHtml(item.drill)}</p>
         <p><strong>Success:</strong> ${escapeHtml(item.successCriterion)}</p>
         <ul>${item.selfReview.map((check) => `<li>${escapeHtml(check)}</li>`).join("")}</ul>
+        <button type="button" class="practice-focus-button" data-practice-focus="${index}" aria-label="Practice this: ${escapeHtml(item.drill)}">Practice this</button>
+        <p class="critical small" role="status" data-practice-focus-status hidden></p>
       </li>`,
           )
           .join("")}</ol></section>`;

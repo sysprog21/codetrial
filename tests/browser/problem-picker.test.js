@@ -9,6 +9,13 @@ import {
   sequelSuggestion,
   storeSharedFocus,
   suggestDifficulty,
+  clearSelectedPracticeFocus,
+  practiceFocusFrom,
+  practiceFocusOwner,
+  practiceFocusAccountOwner,
+  readSelectedPracticeFocus,
+  readSelectedPracticeFocusSelection,
+  storeSelectedPracticeFocus,
 } from "../../web/problem-picker.js";
 import { ACTIVE_CONTRACT } from "../../web/lib.js";
 
@@ -690,6 +697,175 @@ test("a shared focus is handed over once, in session storage, and unsharing clea
   );
 });
 
+test("selected practice focus stays stored until explicitly cleared", () => {
+  const store = new Map();
+  const storage = {
+    getItem: (key) => (store.has(key) ? store.get(key) : null),
+    setItem: (key, value) => store.set(key, String(value)),
+    removeItem: (key) => store.delete(key),
+  };
+  const focus = {
+    phase: "Test",
+    weakness: "Test boundaries",
+    drill: "Build a test table",
+    successCriterion: "Predict each output",
+  };
+  storeSelectedPracticeFocus(storage, "account:A", focus);
+  assert.deepEqual(readSelectedPracticeFocus(storage, "account:A"), focus);
+  assert.deepEqual(readSelectedPracticeFocus(storage, "account:A"), focus);
+  clearSelectedPracticeFocus(storage);
+  assert.equal(readSelectedPracticeFocus(storage, "account:A"), null);
+});
+
+test("selected practice focus keeps its source report id", () => {
+  const store = new Map();
+  const storage = {
+    getItem: (key) => (store.has(key) ? store.get(key) : null),
+    setItem: (key, value) => store.set(key, String(value)),
+    removeItem: (key) => store.delete(key),
+  };
+  const focus = {
+    phase: "Test",
+    weakness: "Test boundaries",
+    drill: "Build a test table",
+    successCriterion: "Predict each output",
+  };
+  storeSelectedPracticeFocus(
+    storage,
+    "account:A",
+    focus,
+    "coding",
+    "focus-source",
+  );
+  assert.deepEqual(readSelectedPracticeFocusSelection(storage, "account:A"), {
+    focus,
+    sourceReportId: "focus-source",
+  });
+  assert.deepEqual(readSelectedPracticeFocus(storage, "account:A"), focus);
+});
+
+test("practice focus account owners use one canonical key format", () => {
+  assert.equal(practiceFocusAccountOwner("A"), "account:A");
+  assert.equal(
+    practiceFocusAccountOwner("opaque-owner"),
+    "account:opaque-owner",
+  );
+  assert.equal(practiceFocusAccountOwner(""), null);
+  assert.equal(practiceFocusAccountOwner(null), null);
+  assert.equal(practiceFocusAccountOwner(null, true), "device");
+});
+
+test("selected practice focus reports whether storage succeeded", () => {
+  const item = {
+    phase: "Test",
+    weakness: "Test boundaries",
+    drill: "Build a test table",
+    successCriterion: "Predict each output",
+  };
+  const storage = {
+    setItem() {},
+    removeItem() {},
+  };
+  assert.equal(
+    storeSelectedPracticeFocus(
+      storage,
+      "account:A",
+      item,
+      "coding",
+      "report-1",
+    ),
+    true,
+  );
+  const blockedStorage = {
+    setItem() {
+      throw new Error("blocked");
+    },
+    removeItem() {},
+  };
+  assert.equal(
+    storeSelectedPracticeFocus(
+      blockedStorage,
+      "account:A",
+      item,
+      "coding",
+      "report-1",
+    ),
+    false,
+  );
+  assert.equal(
+    storeSelectedPracticeFocus(storage, null, item, "coding", "report-1"),
+    false,
+  );
+});
+
+test("clearing selected practice focus removes it from storage", () => {
+  const store = new Map();
+  const storage = {
+    getItem: (key) => (store.has(key) ? store.get(key) : null),
+    setItem: (key, value) => store.set(key, String(value)),
+    removeItem: (key) => store.delete(key),
+  };
+  storeSelectedPracticeFocus(storage, "account:A", {
+    phase: "Test",
+    weakness: "Test boundaries",
+    drill: "Build a test table",
+    successCriterion: "Predict each output",
+  });
+  clearSelectedPracticeFocus(storage);
+  assert.equal(readSelectedPracticeFocus(storage, "account:A"), null);
+});
+
+test("invalid selected practice focus is discarded", () => {
+  const store = new Map();
+  const storage = {
+    getItem: (key) => (store.has(key) ? store.get(key) : null),
+    setItem: (key, value) => store.set(key, String(value)),
+    removeItem: (key) => store.delete(key),
+  };
+  const owner = "account:candidate";
+  storage.setItem(
+    "codetrial.selectedPracticeFocus",
+    JSON.stringify({
+      owner,
+      focus: {
+        phase: "Test",
+        weakness: "",
+        drill: "Build a test table",
+        successCriterion: "Predict each output",
+      },
+    }),
+  );
+  assert.equal(readSelectedPracticeFocus(storage, owner), null);
+  assert.equal(storage.getItem("codetrial.selectedPracticeFocus"), null);
+});
+
+test("selected practice focus rejects unknown phases", () => {
+  assert.equal(
+    practiceFocusFrom({
+      phase: "Something else",
+      weakness: "Test boundaries",
+      drill: "Build a test table",
+      successCriterion: "Predict each output",
+    }),
+    null,
+  );
+});
+
+test("selected practice focus rebuilds only bounded fields", () => {
+  const focus = practiceFocusFrom({
+    phase: "Test",
+    weakness: "x".repeat(450),
+    drill: "Build a test table",
+    successCriterion: "Predict each output",
+    durationMin: 15,
+    extra: "not carried",
+  });
+
+  assert.equal(Array.from(focus.weakness).length, 400);
+  assert.equal("durationMin" in focus, false);
+  assert.equal("extra" in focus, false);
+});
+
 test("the interview reads the focus from session storage, never from its address", async () => {
   const { readFile } = await import("node:fs/promises");
   const source = await readFile(
@@ -790,4 +966,61 @@ test("the latest interview decides the offer whatever order the reports arrive i
 test("a sequel the lobby has no card for is not offered", () => {
   const cards = [{ id: "pair", difficulty: "Easy", sequel: "retired" }];
   assert.equal(sequelSuggestion(cards, [attempt("pair", 2, "HIRE")]), null);
+});
+
+for (const session of [
+  { signedIn: true, user: { id: "B", login: "same" } },
+  { signedIn: false },
+]) {
+  test(`selected focus is cleared when owner changes to ${practiceFocusOwner(session)}`, () => {
+    const values = new Map();
+    const storage = {
+      getItem: (key) => values.get(key) ?? null,
+      setItem: (key, value) => values.set(key, value),
+      removeItem: (key) => values.delete(key),
+    };
+    const owner = practiceFocusOwner({
+      signedIn: true,
+      user: { id: "A", login: "same" },
+    });
+    storeSelectedPracticeFocus(storage, owner, {
+      phase: "Test",
+      weakness: "Boundaries",
+      drill: "Test edges",
+      successCriterion: "All predicted",
+    });
+    assert.equal(readSelectedPracticeFocus(storage, null), null);
+    assert.equal(values.size, 1);
+    assert.equal(
+      readSelectedPracticeFocus(storage, practiceFocusOwner(session)),
+      null,
+    );
+    assert.equal(values.size, 0);
+  });
+}
+
+test("selected focus tolerates blocked storage", () => {
+  const storage = {
+    getItem() {
+      throw new Error("blocked");
+    },
+    setItem() {
+      throw new Error("blocked");
+    },
+    removeItem() {
+      throw new Error("blocked");
+    },
+  };
+  storeSelectedPracticeFocus(storage, "account:A", {
+    phase: "Test",
+    weakness: "Boundaries",
+    drill: "Test edges",
+    successCriterion: "All predicted",
+  });
+  assert.equal(readSelectedPracticeFocus(storage, "account:A"), null);
+  clearSelectedPracticeFocus(storage);
+  assert.equal(
+    practiceFocusOwner({ signedIn: true, user: { login: "same" } }),
+    null,
+  );
 });

@@ -267,6 +267,18 @@ async fn record_login(client: &reqwest::Client, base: &str, handle: &str) -> Str
         .to_string()
 }
 
+fn expected_account_owner(path: &Path, login: &str) -> String {
+    let connection = rusqlite::Connection::open(path).unwrap();
+    let identity: i64 = connection
+        .query_row(
+            "SELECT github_id FROM users WHERE login = ?1",
+            [login],
+            |row| row.get(0),
+        )
+        .unwrap();
+    codetrial::token::sign_hs256("session-secret", &format!("account-owner:{identity}"))
+}
+
 /// A LiveKit token names its project in `iss` and proves it in the signature.
 /// Checking only `iss` would miss a token minted with one provider's key and
 /// another's secret, which the SFU rejects and the response body does not show.
@@ -1414,6 +1426,9 @@ mod peer_auth;
 
 #[path = "web/accounts.rs"]
 mod accounts;
+
+#[path = "web/account_focus.rs"]
+mod account_focus;
 
 #[path = "web/routes.rs"]
 mod routes;

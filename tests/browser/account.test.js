@@ -97,7 +97,7 @@ test("interview history routes through the shared persistence helper", () => {
   assert.match(functionBody(script, "renderReport"), /saveResult: null/);
   assert.match(
     functionBody(script, "renderReportSaveStatus"),
-    /querySelector\("#done"\)\.disabled = state\.downloadingReport/,
+    /querySelector\("#done"\)\.disabled =\s*state\.reportReceiving \|\| state\.downloadingReport/,
   );
   assert.match(
     functionBody(script, "renderReport"),
@@ -306,10 +306,11 @@ test("optional interview profile is accessible, bounded, and omitted when blank"
     'if (profile.targetCompany) destination.searchParams.set("company", profile.targetCompany)',
   );
   assert.match(interview, /const interviewProfile = \{/);
-  // The focus travels in session storage, never the address bar.
-  assert.match(
+  // The focus travels in session storage, never the address bar, and sharing
+  // consent is checked again immediately before the handoff is stored.
+  assertIncludesCompact(
     app,
-    /storeSharedFocus\(sessionStorage, focus\?\.weakness \?\? null\)/,
+    "storeSharedFocus(sessionStorage, nodes.practiceFocusShareInput.checked ? (focus?.weakness ?? null) : null)",
   );
   assert.doesNotMatch(app, /searchParams\.set\("focus"/);
   assert.match(interview, /practiceFocus: consumeSharedFocus\(tabStorage\)/);
@@ -1509,6 +1510,7 @@ test("updateCategoryComparison renders category progress and degrades cleanly wh
     "loadReportHistory",
     "updateCategoryComparison",
     "downloadReport",
+    "setPracticeFocusButtonsDisabled",
     "buildMarkdown",
   ]
     .map((name) => `${functionBody(interview, name)}\n}`)
@@ -1593,6 +1595,7 @@ test("updateCategoryComparison renders category progress and degrades cleanly wh
     nodes: {
       report: {
         innerHTML: "existing-report-dom",
+        querySelectorAll: () => [],
         querySelector(selector) {
           if (selector === "#download-report") return downloadButton;
           if (selector === ".category-comparison") {

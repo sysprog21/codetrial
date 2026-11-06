@@ -107,14 +107,16 @@ pub fn session_user(
                 // how an unverified value becomes a delivery target one
                 // refactor later.
                 let verified: i64 = row.get(4)?;
+                let account_identity: i64 = row.get(5)?;
                 Ok(SignedInUser {
                     id: row.get(0)?,
                     // Trusted only under create_session's caller invariant.
-                    identity_verified: row.get::<_, i64>(5)? > 0,
+                    identity_verified: account_identity > 0,
                     login: row.get(1)?,
                     avatar_url: row.get(2)?,
                     verified_email: row.get::<_, Option<String>>(3)?.filter(|_| verified != 0),
-                    github_id: u64::try_from(row.get::<_, i64>(5)?)
+                    account_identity,
+                    github_id: u64::try_from(account_identity)
                         .ok()
                         .filter(|id| *id > 0),
                 })

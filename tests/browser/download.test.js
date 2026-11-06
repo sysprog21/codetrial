@@ -12,6 +12,7 @@ for (const [path, name] of [
     const downloads = [];
     const button = { disabled: false };
     const done = { disabled: false };
+    const practice = [{ disabled: false }, { disabled: false }];
     const scope = {
       state: {
         downloadingReport: false,
@@ -20,6 +21,7 @@ for (const [path, name] of [
       },
       nodes: {
         report: {
+          querySelectorAll: () => practice,
           querySelector: (selector) => (selector === "#done" ? done : button),
         },
       },
@@ -40,6 +42,7 @@ for (const [path, name] of [
       "scope",
       `with (scope) {
       ${name === "exportSavedReport" ? `${functionBody(read(path), "downloadSavedReport")}\n}` : ""}
+      ${name === "downloadReport" ? `${functionBody(read(path), "setPracticeFocusButtonsDisabled")}\n}` : ""}
       ${functionBody(read(path), name)}
       }
       return ${name};
@@ -56,6 +59,7 @@ for (const [path, name] of [
       run,
       button,
       done,
+      practice,
       lookups,
       downloads,
       scope,
@@ -68,7 +72,10 @@ for (const [path, name] of [
     const h = harness();
     const first = h.run();
     assert.equal(h.button.disabled, true);
-    if (name === "downloadReport") assert.equal(h.done.disabled, true);
+    if (name === "downloadReport") {
+      assert.equal(h.done.disabled, true);
+      assert.ok(h.practice.every((button) => button.disabled));
+    }
     await h.run();
     await h.run();
     assert.equal(h.lookups.length, 1);
@@ -77,7 +84,10 @@ for (const [path, name] of [
     await first;
     assert.equal(h.downloads.length, 1);
     assert.equal(h.button.disabled, false);
-    if (name === "downloadReport") assert.equal(h.done.disabled, false);
+    if (name === "downloadReport") {
+      assert.equal(h.done.disabled, false);
+      assert.ok(h.practice.every((button) => !button.disabled));
+    }
     const next = h.run();
     assert.equal(h.button.disabled, true);
     h.lookups[1].resolve(null);
@@ -101,7 +111,10 @@ for (const [path, name] of [
       else h.lookups[0].resolve(null);
       await rejected;
       assert.equal(h.button.disabled, false);
-      if (name === "downloadReport") assert.equal(h.done.disabled, false);
+      if (name === "downloadReport") {
+        assert.equal(h.done.disabled, false);
+        assert.ok(h.practice.every((button) => !button.disabled));
+      }
       h.scope.downloadMarkdown = originalDownload;
       const retry = h.run();
       h.lookups[1].resolve(null);
