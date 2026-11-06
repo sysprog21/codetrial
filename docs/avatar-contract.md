@@ -365,7 +365,9 @@ reread. The empty state before the first turn is not followed, and scrolling it
 does not stop the follow. While the Problem tab is open the panel is hidden and
 has no range, so nothing that happens then changes the follow; opening the
 Transcript tab shows the end if the panel was following, and the place the
-candidate left otherwise. Only the panel scrolls, never the page.
+candidate left otherwise. Only the panel scrolls, never the page, and the panel
+turns off the browser's scroll anchoring, whose move when rows rewrap would
+otherwise read as the candidate's scroll.
 
 An "Unclear" button beside the "Live CC:" label marks the Jim turn on screen,
 and pressing it again unmarks it. It shows only while a Jim turn is on screen,

@@ -2029,6 +2029,12 @@ p {
   padding: 0.5rem;
 }
 
+/* The transcript follows by its own rule (web/render.js); a browser anchor
+   moving the panel when rows rewrap would read as the candidate scrolling. */
+#transcript-panel {
+  overflow-anchor: none;
+}
+
 .transcript-row {
   display: flex;
   margin-bottom: 0.75rem;
