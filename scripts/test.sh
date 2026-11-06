@@ -613,6 +613,7 @@ else
     gate task-package-tests unittest_gate "$ROOT/tests/test_task_package.py"
     gate task-authoring-tests unittest_gate "$ROOT/tests/test_task_authoring.py"
 fi
+gate gemini-shim-tests unittest_gate "$ROOT/tests/test_gemini_shim.py"
 gate gen-problem-cards "$PYTHON" "$ROOT/scripts/gen-problem-cards.py" --check
 gate wire-fixtures node "$ROOT/scripts/gen-wire-fixtures.mjs" --check
 gate recording-fixtures node "$ROOT/scripts/gen-recording-fixtures.mjs" --check
