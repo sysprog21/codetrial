@@ -1351,6 +1351,8 @@ export function createTranscriptView(document, panel) {
       // replaces it.
       if (rows.length === 1) {
         panel.replaceChildren();
+        // Scrolling the empty state was not rereading a turn.
+        following = true;
       }
       const element = document.createElement("div");
       element.className = `transcript-row ${row.speaker === "interviewer" ? "alex" : "you"}`;
@@ -1369,8 +1371,11 @@ export function createTranscriptView(document, panel) {
 
   return {
     /// Called when the Transcript tab opens: showing the panel fires no
-    /// event, so the end it missed while hidden is shown here.
-    reveal: follow,
+    /// event, so the end it missed while hidden is shown here. Before the
+    /// first turn the empty state keeps its heading in view.
+    reveal() {
+      if (rows.length) follow();
+    },
     upsert(id, speaker, text, final, at = Date.now()) {
       let row = rowOf.get(id);
       if (!row) {

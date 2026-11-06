@@ -361,10 +361,11 @@ The Transcript tab follows its newest turn with the checks in
 keeps the panel at its end until the candidate scrolls up, and scrolling back
 to the end resumes the follow. Unlike the bar, a new turn does not restart a
 follow the candidate stopped, since the earlier turns stay on the panel to
-reread. While the Problem tab is open the panel is hidden and has no range, so
-nothing that happens then changes the follow; opening the Transcript tab shows
-the end if the panel was following, and the place the candidate left
-otherwise. Only the panel scrolls, never the page.
+reread. The empty state before the first turn is not followed, and scrolling it
+does not stop the follow. While the Problem tab is open the panel is hidden and
+has no range, so nothing that happens then changes the follow; opening the
+Transcript tab shows the end if the panel was following, and the place the
+candidate left otherwise. Only the panel scrolls, never the page.
 
 An "Unclear" button beside the "Live CC:" label marks the Jim turn on screen,
 and pressing it again unmarks it. It shows only while a Jim turn is on screen,

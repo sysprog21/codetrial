@@ -231,7 +231,8 @@ class LaidOutPanel extends StubElement {
   get scrollHeight() {
     if (this.hidden) return 0;
     const rows = this.children.reduce(
-      (sum, row) => sum + 40 + (row.children[0]?.children[1].text.length ?? 0),
+      (sum, row) =>
+        sum + 40 + (row.children[0]?.children[1].text ?? row.text).length,
       0,
     );
     return Math.max(200, rows);
@@ -280,6 +281,19 @@ test("the transcript follows new and growing turns", () => {
   panel.flush();
   view.upsert("open", "you", `So ${"and then ".repeat(20)}`, false, 11);
   assert.ok(atEnd(panel), "a growing turn stays in view");
+});
+
+test("the empty state is not followed, and the first turn follows", () => {
+  const panel = new LaidOutPanel();
+  const view = createTranscriptView(stubDocument, panel);
+  panel.children[0].text = "x".repeat(400); // a placeholder taller than 200px
+  view.reveal();
+  assert.equal(panel.scrollTop, 0, "the placeholder keeps its heading");
+
+  panel.scrollTo(40);
+  panel.scrollTo(0);
+  addTurns(view, 0, 10);
+  assert.ok(atEnd(panel), "reading the placeholder does not stop the follow");
 });
 
 test("scrolling up stops the follow and scrolling back resumes it", () => {
