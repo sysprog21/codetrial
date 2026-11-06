@@ -6,7 +6,7 @@ description: How a CodeTrial change is validated - scripts/test.sh as the creden
 # Validating a CodeTrial change
 
 The order of work around the gate, test first and small steps, is
-[codetrial-change](../codetrial-change/SKILL.md); this skill is the gate itself.
+[codetrial-improve](../codetrial-improve/SKILL.md); this skill is the gate itself.
 
 One gate needs no credentials and is the thing to run:
 
@@ -37,7 +37,7 @@ Reproduce a failure with the same lane locally.
 one failure does not hide the next; the summary line names every gate that
 failed. It covers `cargo fmt --check`, `clippy -D warnings`, `cargo test`,
 `cargo doc --no-deps` (the Rust lane's `rustdoc` gate), the Rust style checker
-(codetrial-rust), the Rust lane's Cargo-aware `workspace-lints` inheritance
+([Rust profile of codetrial-improve](../codetrial-improve/rust.md)), the Rust lane's Cargo-aware `workspace-lints` inheritance
 audit, the Python unittest suites, the Node browser tests, ESLint,
 `ruff check`, `shellcheck`, the generated-artifact drift checks, the hook suite,
 the skill references, `cargo-audit`, `cargo-deny` and `actionlint`.

@@ -235,8 +235,8 @@ while read -r local_ref local_sha remote_ref remote_sha; do
                 note="$note in Claude Code, /codetrial-review checks it before a pull request does."
             fi
 
-            # A fix with no test beside it is the habit codetrial-change asks an
-            # agent to break, and CONTRIBUTING.md keeps test bodies under
+            # A fix with no test beside it is the habit codetrial-improve asks
+            # an agent to break, and CONTRIBUTING.md keeps test bodies under
             # tests/. Advisory: a refactor that pins behavior already covered,
             # or a comment-only edit, legitimately has none.
             if [ -z "$test_note" ] && [ -n "$review_policy" ]; then
@@ -244,7 +244,7 @@ while read -r local_ref local_sha remote_ref remote_sha; do
                 if printf '%s\n' "$changed" | grep -q '^src/.*[.]rs$' \
                     && ! printf '%s\n' "$changed" | grep -q '^tests/'; then
                     test_note="Note: $local_ref changes src/ and nothing under tests/;"
-                    test_note="$test_note write the failing test first (codetrial-change), or say why none fits in the PR."
+                    test_note="$test_note write the failing test first (codetrial-improve), or say why none fits in the PR."
                 fi
             fi
             ;;

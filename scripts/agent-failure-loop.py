@@ -4,7 +4,7 @@
 A PostToolUse and PostToolUseFailure hook for Bash. It reads the `failed gates:`
 line that `scripts/test.sh` ends on, keeps the last set under the git directory,
 and on the second consecutive identical failure prints a reminder to name the
-shared premise (codetrial-change, "Attack the premise"). A pass or a different
+shared premise (codetrial-improve, "Attack the premise"). A pass or a different
 failure resets the count. It only reminds and always exits 0.
 """
 
@@ -30,7 +30,7 @@ MESSAGE = (
     "The gate has now failed {count} runs in a row on the same gate(s): {gates}. "
     "Before another patch, write the premise your fixes share in one sentence "
     "and name which side (producer, consumer, clock, writer) holds the "
-    "imbalance; remove or reassign that, then fix. See codetrial-change, "
+    "imbalance; remove or reassign that, then fix. See codetrial-improve, "
     "'Attack the premise after two failures'."
 )
 

@@ -1,8 +1,3 @@
----
-name: codetrial-rust
-description: How Rust is written and reviewed in CodeTrial - which rules the build enforces (the [lints] table in Cargo.toml and scripts/check-rust-style.py) and which it leaves to judgment, how to suppress a lint, why a lint is switched off on purpose, the file-size ceilings, and the ownership, error, cast and test idioms the tree follows. Use when writing, refactoring or reviewing Rust under src/, tests/ or build.rs, when clippy or the rust-style gate fails, when tempted to write #[allow], a bare unwrap, an `as` cast, a glob import or a bool parameter, when a file nears its line ceiling, or when asked to audit or tighten the Rust style. Comments, commit messages and what stays out of a public issue are codetrial-conventions; running the gate is codetrial-verify.
----
-
 # Writing Rust in CodeTrial
 
 The build owns what a machine can ask; this page owns what it cannot. Fix a

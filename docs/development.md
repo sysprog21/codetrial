@@ -197,8 +197,8 @@ cannot reintroduce it. `scripts/check-rust-style.py` holds what a lint cannot
 ask: that this table stays strict, that no `allow` or bare `#[ignore]` appears,
 that no marker or CJK text lands in Rust or `web/`, and that no file passes the
 line ceiling in `scripts/rust-style-ceilings.json`, which `--ratchet` only
-lowers. The rules and the lints left off on purpose are in the codetrial-rust
-skill.
+lowers. The rules and the lints left off on purpose are in the Rust profile of
+codetrial-improve, `.claude/skills/codetrial-improve/rust.md`.
 
 The compiler those lints run on is pinned in `rust-toolchain.toml`, so a new
 Rust release cannot fail an unchanged tree: Dependabot proposes each bump as
@@ -728,7 +728,7 @@ stale tags return the current representation.
 
 ## Agent working method
 
-`.claude/skills/codetrial-change/SKILL.md` is the order an agent works in on a
+`.claude/skills/codetrial-improve/SKILL.md` is the order an agent works in on a
 change (failing test first, smallest edit, root cause, small ordered commits)
 and the limits it keeps inside the task it was given. It restates no gate; the
 gate is `scripts/test.sh`, and the layers that hold when an agent does not

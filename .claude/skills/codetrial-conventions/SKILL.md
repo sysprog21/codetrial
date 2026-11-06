@@ -21,7 +21,7 @@ repository `gh` is pointed at, how drafted text reaches it, and what needs the
 user's approval first.
 
 The order to work in, and what an agent leaves alone without being asked, is
-[codetrial-change](../codetrial-change/SKILL.md).
+[codetrial-improve](../codetrial-improve/SKILL.md).
 
 ## Commit messages
 
@@ -204,7 +204,8 @@ tests/stubs/    Fake executables the Python suites install, read by support.stub
 
 `src/` holds implementation. A file there may declare a test module, and may
 carry a `#[cfg(test)]` item that a test needs to reach, but must not contain a
-test body. (Rust idiom, lint suppression and file ceilings are codetrial-rust.)
+test body. (Rust idiom, lint suppression and file ceilings are in the
+[Rust profile of codetrial-improve](../codetrial-improve/rust.md).)
 The `src-test-bodies` gate in `scripts/test.sh` rejects test attributes
 and inline test modules under `src/`; test-only helpers remain allowed.
 
