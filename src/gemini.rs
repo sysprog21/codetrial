@@ -1,3 +1,9 @@
+mod side_calls;
+use side_calls::side_call_once;
+
+mod peer;
+pub(crate) use peer::generate_peer_content;
+
 use std::io;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -1477,35 +1483,6 @@ async fn generate_interim_review_at(
         interim_generation_config(),
     );
     side_call_once(keys, url, &request, "interim", scope, true).await
-}
-
-/// One attempt at a side call on the report keys: the interim review or the
-/// phase judge, which differ only in the request, the label and whether a rate
-/// limit cools the key.
-async fn side_call_once(
-    keys: &GeminiKeys,
-    url: &str,
-    request: &Value,
-    surface: &str,
-    scope: &str,
-    cool_on_quota: bool,
-) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-    let api_key = keys.select_report()?;
-    let result = generate_content_once(
-        &api_key,
-        url,
-        request,
-        INTERIM_ATTEMPT_TIMEOUT,
-        &http_usage_label(surface, scope, 1, 0),
-    )
-    .await;
-    if let Err(error) = &result
-        && let Some(failure) = credential_failure(error.as_ref())
-        && (cool_on_quota || failure != CredentialFailure::Quota)
-    {
-        keys.failed(&api_key, failure, ApiSurface::Report);
-    }
-    result
 }
 
 /// The phase judge: one attempt, like the interim review and for the same

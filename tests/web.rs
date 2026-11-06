@@ -146,6 +146,8 @@ fn web_config() -> WebServerConfig {
         trusted_proxy_hops: 0,
         allowed_hosts: Vec::new(),
         recording: None,
+        peer: None,
+        peer_observer: None,
         pool: primary_pool("wss://example.livekit.cloud", "devkey", "devsecret"),
         probe_provider_quota: false,
         update_check_commit: None,
@@ -604,12 +606,16 @@ fn mock_github_authorized(headers: &axum::http::HeaderMap, issued: &MockGitHubIs
 /// which a value derived from the stub's address could be, the code under test
 /// being handed that address.
 ///
-/// `emails` is the entire difference between the two stubs built on this, so
-/// it is the only parameter: one passes an address list, the other the 403
-/// GitHub sends while rate limiting. Everything else has to stay identical or
-/// the rate-limit test would be comparing two servers that differ in more than
-/// the failure it is about.
 async fn spawn_github_stub(emails: (axum::http::StatusCode, Value)) -> (String, TestServer) {
+    spawn_github_stub_with_id(emails, 303).await
+}
+
+/// Separate OAuth accounts let peer tests prove membership boundaries through
+/// the real callback rather than writing trusted identity flags into rows.
+async fn spawn_github_stub_with_id(
+    emails: (axum::http::StatusCode, Value),
+    github_id: i64,
+) -> (String, TestServer) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let emails = std::sync::Arc::new(emails);
@@ -661,7 +667,7 @@ async fn spawn_github_stub(emails: (axum::http::StatusCode, Value)) -> (String, 
                     (
                         axum::http::StatusCode::OK,
                         [(axum::http::header::CONTENT_TYPE, "application/json")],
-                        json!({"id":303,"login":"octocat","avatar_url":"https://example.test/avatar.png"})
+                        json!({"id":github_id,"login":if github_id == 303 { "octocat".to_string() } else { format!("octocat-{github_id}") },"avatar_url":"https://example.test/avatar.png"})
                             .to_string(),
                     )
                 }
@@ -1400,6 +1406,11 @@ mod pool;
 
 #[path = "web/recording.rs"]
 mod recording;
+
+#[path = "web/peer.rs"]
+mod peer;
+#[path = "web/peer_auth.rs"]
+mod peer_auth;
 
 #[path = "web/accounts.rs"]
 mod accounts;

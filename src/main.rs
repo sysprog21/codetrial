@@ -1,3 +1,5 @@
+mod main_peer;
+
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -298,12 +300,7 @@ fn bind_web_listener(addr: &str) -> Result<std::net::TcpListener, String> {
     Ok(listener)
 }
 
-/// The recording block and the server configuration it goes into.
-///
-/// Split from `run_web` because it is one decision made in one place:
-/// everything here is read from the operator's environment, validated, and put
-/// in a struct, and nothing here binds a socket or starts a task. The order
-/// inside it is load bearing and is written where it happens.
+/// Validates operator settings before a listener or background task starts.
 fn web_server_config(
     values: &std::collections::BTreeMap<String, String>,
     pool: codetrial::config::ProviderPool,
@@ -327,8 +324,14 @@ fn web_server_config(
             && nonempty(values, "GITHUB_CLIENT_SECRET").is_some(),
     )?;
     recording_can_deliver(recording.as_ref())?;
+    let (peer, peer_observer) = main_peer::peer_services(
+        values,
+        nonempty(values, "GITHUB_CLIENT_ID").is_some()
+            && nonempty(values, "GITHUB_CLIENT_SECRET").is_some(),
+    )?
+    .unzip();
 
-    Ok(WebServerConfig {
+    let config = WebServerConfig {
         tasks: None,
         task_mode_requested: options.task_mode,
         web_dir: match nonempty(values, "CODETRIAL_WEB_DIR") {
@@ -356,6 +359,8 @@ fn web_server_config(
         compiler_explorer_enabled: compiler_explorer_enabled(values),
         guest_mode_enabled: guest_mode_enabled(values),
         recording,
+        peer_observer,
+        peer,
         pool,
         probe_provider_quota: true,
 
@@ -367,7 +372,11 @@ fn web_server_config(
             cfg!(target_os = "macos"),
         ),
         provision_rooms: true,
-    })
+    };
+    if let Some(observer) = &config.peer_observer {
+        observer.validate_audio_storage(&config.web_dir)?;
+    }
+    Ok(config)
 }
 
 fn run_web(options: CliOptions) -> Result<(), String> {

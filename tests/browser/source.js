@@ -49,6 +49,7 @@ export function read(name) {
 /// derives the same set from the source and fails when the two disagree.
 export const INTERVIEW_SOURCES = [
   "web/interview.js",
+  "web/workspace.js",
   "web/audio-output.js",
   "web/captions.js",
   "web/integrity.js",
@@ -107,12 +108,13 @@ export function initialisedModules() {
   const called = new Set(
     captures(page, /^(?:const \w+ = )?(init[A-Z]\w*)\(/gm),
   );
+  if (/\bmountWorkspace\(/.test(page)) called.add("mountWorkspace");
   return firstPartyScripts()
     .map((name) => `web/${name}`)
     .filter((path) => {
       const exported = captures(
         read(path),
-        /^export function (init[A-Z]\w*)\(/gm,
+        /^export function (init[A-Z]\w*|mountWorkspace)\(/gm,
       );
       return exported.some((name) => called.has(name));
     });

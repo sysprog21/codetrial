@@ -79,7 +79,7 @@ pub(crate) enum ProviderVerdict {
 }
 
 impl ProviderVerdict {
-    fn is_available(self) -> bool {
+    pub(crate) fn is_available(self) -> bool {
         self == Self::Available
     }
 

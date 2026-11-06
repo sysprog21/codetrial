@@ -3,8 +3,7 @@
 //!
 //! Split out of `rooms.rs`, where the transport read its credentials from
 //! `AgentConfig`. The agent's duplicate handling still goes through it. Room
-//! deletion for the web server, which has only a provider's credentials to
-//! hand, is exercised by the tests and has no production caller yet.
+//! deletion for the web server uses the provider's credentials directly.
 
 use std::time::Duration;
 
@@ -66,7 +65,6 @@ pub(super) fn parse_room_service_response(
 /// proxy can answer 200 with an HTML page while the room is still there. Any
 /// other refusal is an error carrying the method, the status and LiveKit's
 /// body, the same shape as every other RoomService failure.
-#[cfg(test)]
 pub(crate) async fn delete_room(
     url: &str,
     api_key: &str,
@@ -142,9 +140,27 @@ pub(super) async fn create_interview_room_with(
     now_seconds: u64,
     policy: RoomCreatePolicy,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    create_room_with(
+        url,
+        api_key,
+        api_secret,
+        now_seconds,
+        interview_room_request(room_name),
+        policy,
+    )
+    .await
+}
+
+async fn create_room_with(
+    url: &str,
+    api_key: &str,
+    api_secret: &str,
+    now_seconds: u64,
+    body: serde_json::Value,
+    policy: RoomCreatePolicy,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let token = crate::token::livekit_room_create_token(api_key, api_secret, now_seconds)?;
     let base = livekit_http_base(url);
-    let body = interview_room_request(room_name);
     let mut last = String::new();
     for attempt in 0..policy.attempts {
         if attempt > 0 {
@@ -194,6 +210,33 @@ pub(crate) async fn create_interview_room(
         api_secret,
         room_name,
         now_seconds,
+        ROOM_CREATE_POLICY,
+    )
+    .await
+}
+
+/// Reserves room capacity for the host, partner and a publish-disabled
+/// observer.
+/// The empty timeout covers the waiting lobby; departure allows the configured
+/// reconnect grace plus a thirty-second cleanup margin.
+pub(crate) async fn create_peer_waiting_room(
+    url: &str,
+    api_key: &str,
+    api_secret: &str,
+    room_name: &str,
+    now_seconds: u64,
+    reconnect_grace_seconds: u64,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    create_room_with(
+        url,
+        api_key,
+        api_secret,
+        now_seconds,
+        serde_json::json!({
+            "name": room_name, "empty_timeout": 600,
+            "departure_timeout": reconnect_grace_seconds.saturating_add(30),
+            "max_participants": 3,
+        }),
         ROOM_CREATE_POLICY,
     )
     .await

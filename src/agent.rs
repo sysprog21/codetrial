@@ -53,7 +53,7 @@ pub(crate) use evidence::{ModelInputKind, ViewFor};
 pub(crate) use evidence::{analyze_code, analyze_code_cached, observe_code, observe_code_cached};
 use integrity::integrity_hash;
 pub use integrity::{sanitize_integrity_event, sanitize_test_run};
-use problems::variant_for;
+pub(crate) use problems::variant_for;
 pub use problems::{DEFAULT_PROBLEM_ID, PROBLEMS, find_problem, get_problem, topics_for};
 #[cfg(test)]
 pub(crate) use prompts::BEHAVIORAL_ROUND_MARK;

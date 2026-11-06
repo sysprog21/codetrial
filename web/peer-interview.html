@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Peer interview - CodeTrial</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="/peer.css" />
+    <script src="/vendor/livekit-client.js"></script>
+    <script type="module" src="/peer-interview.js"></script>
+  </head>
+  <body>
+    <main class="peer-shell">
+      <header class="peer-toolbar">
+        <a class="brand" href="/peer-lobby">CODETRIAL</a>
+        <h1 id="peer-title">Peer interview</h1>
+        <span id="peer-role"></span
+        ><strong id="peer-timer" aria-label="Round time remaining"></strong>
+      </header>
+      <p id="peer-partners" class="muted small"></p>
+      <p id="peer-error" role="status" aria-live="polite">Loading session...</p>
+      <section
+        id="peer-prestart"
+        class="peer-card"
+        aria-labelledby="peer-prestart-title"
+        hidden
+      >
+        <h2 id="peer-prestart-title">Get ready together</h2>
+        <p>
+          Enter the session, connect your audio, then mark yourself ready. Both
+          partners confirm before the round timer starts.
+        </p>
+        <p id="peer-prestart-settings"></p>
+        <p id="peer-prestart-members"></p>
+        <label id="peer-session-consent-label" class="peer-consent"
+          ><input id="peer-session-consent" type="checkbox" /><span
+            >I agree to the saving choices above, a silent AI observer, and
+            post-session suggestions.</span
+          ></label
+        >
+        <p id="peer-session-consented" hidden>
+          You already confirmed these choices when pairing with your partner.
+        </p>
+        <p class="muted small">
+          Saved transcript, audio and AI suggestions expire 24 hours after
+          practice ends. Workspace snapshots, your feedback and session details
+          are kept for up to 30 days after the session is created. The AI
+          listens without speaking. If transcript saving is off, temporary
+          transcript content is deleted after advice is produced.
+        </p>
+        <div class="peer-actions">
+          <button id="peer-session-enter" type="button">Enter session</button
+          ><button id="peer-session-ready" type="button" disabled>Ready</button
+          ><button id="peer-session-start" type="button" disabled>
+            Confirm start
+          </button>
+        </div>
+      </section>
+      <div class="peer-toolbar">
+        <button id="peer-connect" type="button">Connect audio</button
+        ><button id="peer-mute" type="button" aria-pressed="false" disabled>
+          Mute microphone</button
+        ><label
+          >Microphone
+          <select
+            id="peer-device"
+            aria-label="Microphone device"
+          ></select></label
+        ><button id="peer-enable-sound" type="button" hidden>
+          Enable sound</button
+        ><button id="peer-finish" type="button" disabled>Finish round</button
+        ><button id="peer-advance" type="button" hidden>Confirm swap</button
+        ><button id="peer-exit" type="button">Leave interview</button>
+      </div>
+      <section id="peer-audio-capture" class="peer-card" hidden>
+        <h2>Saved audio</h2>
+        <p id="peer-audio-capture-status" role="status"></p>
+        <p class="muted small">
+          Saved audio expires 24 hours after practice ends. Stopping saved audio
+          does not stop temporary AI observation or post-session advice.
+        </p>
+        <button id="peer-stop-saved-audio" type="button" hidden>
+          Stop and delete saved audio
+        </button>
+      </section>
+      <div class="peer-grid">
+        <aside>
+          <section class="peer-card">
+            <h2 id="peer-problem-title">Problem</h2>
+            <div id="peer-problem"></div>
+          </section>
+          <section id="peer-guide-panel" class="peer-card" hidden>
+            <h2>Interviewer guide</h2>
+            <div id="peer-guide" class="peer-guide"></div>
+            <label
+              >Private notes<textarea
+                id="peer-notes"
+                placeholder="Notes stay in this page and are never sent."
+              ></textarea>
+            </label>
+          </section>
+        </aside>
+        <section class="peer-workspace peer-card" aria-label="Shared workspace">
+          <div class="peer-toolbar">
+            <h2>Workspace</h2>
+            <span id="peer-language"></span
+            ><button id="peer-run" type="button" disabled>Run tests</button>
+          </div>
+          <p id="peer-save-status" role="status"></p>
+          <button id="peer-recover-writer" type="button" hidden>
+            Recover edit access
+          </button>
+          <button id="peer-download" type="button" hidden>
+            Download unsaved code
+          </button>
+          <div class="editor-stack">
+            <pre id="editor-lines" aria-hidden="true"></pre>
+            <pre id="editor-highlight" aria-hidden="true"><code></code></pre>
+            <textarea
+              id="editor"
+              aria-label="Code editor"
+              spellcheck="false"
+              autocapitalize="off"
+              autocomplete="off"
+              autocorrect="off"
+              readonly
+            ></textarea>
+          </div>
+          <section aria-label="Test results">
+            <h3 id="peer-results-label">Tests</h3>
+            <div id="peer-results" class="peer-results">
+              Run your code to see results.
+            </div>
+          </section>
+        </section>
+      </div>
+      <section id="peer-feedback-panel" class="peer-card" hidden>
+        <h2>Give useful, concrete feedback</h2>
+        <p>
+          Not assessed: accent, filler words, eye contact, nervousness,
+          confidence, personality. Feedback is human-authored and unscanned,
+          visible only to you and your partner, and never feeds a CodeTrial
+          score.
+        </p>
+        <p id="peer-feedback-subtitle"></p>
+        <form id="peer-feedback" class="peer-feedback">
+          <div id="peer-dimensions"></div>
+          <div class="peer-actions">
+            <button type="submit" name="action" value="draft">
+              Save private draft</button
+            ><button type="submit" name="action" value="submit">
+              Submit feedback
+            </button>
+          </div>
+        </form>
+        <div id="peer-feedback-results"></div>
+      </section>
+      <section
+        id="peer-advice-panel"
+        class="peer-card"
+        aria-labelledby="peer-advice-title"
+        hidden
+      >
+        <h2 id="peer-advice-title">Your post-session AI suggestions</h2>
+        <p class="muted small">
+          Saved transcript, audio and these suggestions expire 24 hours after
+          practice ends. Workspace snapshots, your feedback and session details
+          are kept for up to 30 days after the session is created.
+        </p>
+        <p>
+          Suggestions focus on the conversation the silent observer could hear.
+          They are practice advice, not a CodeTrial score.
+        </p>
+        <div id="peer-advice" aria-live="polite"></div>
+        <button id="peer-advice-retry" type="button">
+          Refresh suggestions and saved files
+        </button>
+        <h3>Your saved session</h3>
+        <p id="peer-transcript-note"></p>
+        <button id="peer-withdraw-transcript" type="button" hidden>
+          Delete saved transcript for both of us
+        </button>
+        <button id="peer-download-transcript" type="button" hidden>
+          Download transcript
+        </button>
+        <p id="peer-audio-note"></p>
+        <a id="peer-download-audio" hidden>Download audio</a
+        ><button id="peer-withdraw-audio" type="button" hidden>
+          Delete saved audio for both of us
+        </button>
+      </section>
+      <div id="peer-audio"></div>
+    </main>
+  </body>
+</html>

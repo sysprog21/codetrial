@@ -519,6 +519,25 @@ The token endpoint allows 30 starts per 60-second bucket. Signed-in buckets are
 keyed by account and anonymous buckets by client address, so anonymous traffic
 cannot spend an authenticated candidate's allowance.
 
+Reciprocal practice shares one `CODETRIAL_PEER_MAX_SESSIONS` cap (8 by default)
+across advertised waiting rooms and bound sessions. Opening availability creates
+and binds its room/provider before publication; accepting a private invite
+reserves nothing, and its Enter binds the provider. The two humans and silent
+observer draw on the same LiveKit connection-minute quota as AI interviews.
+Admission checks the chosen provider's quota; a reconnect keeps that binding.
+
+The reciprocal observer uses a separate subscribe-only participant and bounded
+Gemini HTTP calls, never the active interviewer loop. At most four peer HTTP
+calls run at once. A call waits at most twelve seconds for that slot and gets
+one twelve-second provider attempt. Each member contributes at most one
+thirty-second mono chunk at a time; silent chunks are skipped, a room has at
+most four transcription jobs, and excess backlog marks evidence incomplete.
+Transcript text is capped at 512 KiB per session and 16 KiB per segment. After
+closure, there is at most one suggestion request per member covering both
+rounds. Peer calls spend the configured Google keys' quota alongside existing
+AI work; these are bounds, not measured savings or class capacity. See
+[the reciprocal runbook](peer-interviews.md).
+
 Candidate-facing failures use bounded machine-owned categories such as
 `at_capacity`, `livekit_quota_exhausted`, rate limit with retry-after, report
 schema failure, and report timeout. Logs never include provider bodies, API
@@ -545,6 +564,23 @@ session. The provisional failure report itself is not an input: the browser
 saves it on arrival like any report, and the final outcome replaces it under
 the same report id, so a tab lost during the window keeps the failure rather
 than nothing.
+
+Peer workspace snapshots and human feedback are persisted as the peer
+session record, accessible only to its two members. They are never a response
+cache, input to a provider call, or source for a CodeTrial score. Interviewer
+notes remain in the page only.
+
+Reciprocal sessions separately obtain both members' consent to a silent
+observer and immutable, independent transcript/audio saving choices. Audio is
+transcribed in bounded in-memory chunks; the same session's temporary
+transcript may feed its end-only suggestions. Raw transcript is persisted only
+when selected, and private local audio files only when selected and configured.
+Saved conversation and suggestions expire after 24 hours. Unselected transcript
+is discarded after suggestions and is never reconstructed from a cache;
+verbatim evidence excerpts are removed from persisted suggestions when text
+saving was not selected. These are session records, never cross-session caches
+or inputs to another interview. See the peer runbook for withdrawal and
+resource bounds.
 
 Two exceptions cover [task mode](task-mode.md), which runs on the learner's
 own machine for that learner alone.

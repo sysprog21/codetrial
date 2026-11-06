@@ -1105,6 +1105,13 @@ async function loadAccount(generation) {
       throw new Error("Invalid account response");
     }
     accountHistory = false;
+    const peerLink = document.getElementById("peer-practice");
+    if (peerLink)
+      peerLink.hidden = !(
+        session.peerEnabled &&
+        session.signedIn &&
+        (session.identityVerified ?? session.user?.identityVerified)
+      );
     applyDurationCeiling(session.maxDurationMin);
     candidateVideo =
       typeof session.candidateVideo === "boolean"

@@ -843,3 +843,69 @@ fn task_mode_runs_only_on_a_private_server_that_neither_records_nor_shares_a_roo
         assert!(!super::task_mode_allowed(reachable, fixed_room, recording));
     }
 }
+
+#[test]
+fn peer_is_offered_once_oauth_and_observer_keys_exist() {
+    let oauth = |settings: &[(&str, &str)]| {
+        super::main_peer::peer_services(&values(settings), true).unwrap()
+    };
+    assert!(oauth(&[]).is_none());
+    assert!(oauth(&[("GOOGLE_API_KEY", "test-key")]).is_some());
+    assert!(
+        super::main_peer::peer_services(&values(&[("GOOGLE_API_KEY", "test-key")]), false)
+            .unwrap()
+            .is_none()
+    );
+    let pool = codetrial::config::ProviderPool {
+        providers: vec![provider(codetrial::config::PRIMARY_PROVIDER_ID)],
+    };
+    let build = |settings: &[(&str, &str)]| {
+        super::web_server_config(
+            &values(settings),
+            pool.clone(),
+            false,
+            &super::CliOptions::default(),
+        )
+        .unwrap()
+    };
+    let credentials = [
+        ("GITHUB_CLIENT_ID", "client"),
+        ("GITHUB_CLIENT_SECRET", "secret"),
+    ];
+    assert!(build(&credentials).peer.is_none());
+    let full = [
+        credentials[0],
+        credentials[1],
+        ("GOOGLE_API_KEY", "test-key"),
+    ];
+    let offered = build(&full);
+    assert!(offered.peer.is_some() && offered.peer_observer.is_some());
+    assert!(build(&[("GOOGLE_API_KEY", "test-key")]).peer.is_none());
+    for half in credentials {
+        assert!(
+            build(&[half, ("GOOGLE_API_KEY", "test-key")])
+                .peer
+                .is_none(),
+            "{} alone is not GitHub sign-in",
+            half.0
+        );
+    }
+}
+
+#[test]
+fn peer_observer_rejects_sessions_longer_than_its_two_hour_capture() {
+    let long = values(&[
+        ("GOOGLE_API_KEY", "test-key"),
+        ("CODETRIAL_PEER_HARD_MAX_MINUTES", "150"),
+    ]);
+    assert!(
+        super::main_peer::peer_services(&long, true)
+            .unwrap_err()
+            .contains("at most 120")
+    );
+    let limit = values(&[
+        ("GOOGLE_API_KEY", "test-key"),
+        ("CODETRIAL_PEER_HARD_MAX_MINUTES", "120"),
+    ]);
+    assert!(super::main_peer::peer_services(&limit, true).is_ok());
+}

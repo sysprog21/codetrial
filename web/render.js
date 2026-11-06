@@ -270,7 +270,7 @@ function sourceEventMarkup(event) {
 // the candidate proposes instead of ones already on screen.
 export function problemMarkup(
   problem,
-  { examples = true, showSources = false } = {},
+  { examples = true, showSources = false, guidance = true } = {},
 ) {
   const example = (example, index) => `
           <section>
@@ -297,7 +297,7 @@ export function problemMarkup(
       </div>`
           : ""
       }
-      <div class="hint-box"><strong>Think out loud.</strong> Jim is listening to your voice and reading your editor in real time. Ask him about input sizes, edge cases and anything the description leaves open, narrate your approach like you would with a human interviewer, and say "can I get a hint?" if you need one.</div>
+      ${guidance ? `<div class="hint-box"><strong>Think out loud.</strong> Jim is listening to your voice and reading your editor in real time. Ask him about input sizes, edge cases and anything the description leaves open, narrate your approach like you would with a human interviewer, and say "can I get a hint?" if you need one.</div>` : ""}
     </div>
   `;
 }

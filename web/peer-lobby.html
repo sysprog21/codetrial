@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Practice with a partner - CodeTrial</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="/peer.css" />
+    <script src="/vendor/livekit-client.js"></script>
+    <script type="module" src="/peer-lobby.js"></script>
+  </head>
+  <body class="practice-page">
+    <main class="lobby peer-lobby">
+      <header>
+        <a class="brand" href="/">CODETRIAL</a><a href="/">AI practice</a>
+      </header>
+      <section class="practice-hero">
+        <span class="practice-badge">Peer practice</span>
+        <h1>Take turns. Get better together.</h1>
+        <p>
+          Find an available partner or invite a friend. Take turns interviewing
+          in two focused rounds, with shared code and advice afterward.
+        </p>
+      </section>
+      <p id="peer-status" role="status" aria-live="polite">
+        Checking account...
+      </p>
+      <a id="peer-signin" href="/api/login?next=peer-join" hidden
+        >Sign in with GitHub</a
+      >
+      <section
+        id="peer-profile"
+        class="peer-card"
+        aria-labelledby="nickname-title"
+        hidden
+      >
+        <h2 id="nickname-title">What should your partner call you?</h2>
+        <p>
+          Choose a nickname using English letters and optional digits, such as
+          Lucky7. Use 1 to 24 characters, including at least one letter.
+          Partners also see your GitHub login.
+        </p>
+        <form id="peer-profile-form" novalidate>
+          <label
+            >Nickname<input
+              id="peer-nickname"
+              name="nickname"
+              autocomplete="nickname"
+              maxlength="24"
+              required
+          /></label>
+          <p id="peer-nickname-error" role="alert"></p>
+          <button id="peer-profile-save" type="submit">
+            Continue to reciprocal practice
+          </button>
+        </form>
+      </section>
+      <div id="peer-content" hidden>
+        <section class="peer-card" aria-labelledby="create-title">
+          <h2 id="create-title">Plan your practice</h2>
+          <p>
+            Choose your settings before becoming available. Your GitHub login
+            and these choices are visible only while you opt in.
+          </p>
+          <label class="peer-consent"
+            ><input id="peer-opt-in" type="checkbox" /><span
+              >Opt in to reciprocal mode and appear as available</span
+            ></label
+          >
+          <form id="peer-create" class="peer-settings">
+            <label
+              >Topic<select name="topic">
+                <option value="">Any topic</option>
+                <option value="Array">Arrays</option>
+                <option value="String">Strings</option>
+                <option value="Tree">Trees</option>
+                <option value="Graph">Graphs</option>
+                <option value="Dynamic Programming">Dynamic programming</option>
+              </select></label
+            >
+            <label
+              >Difficulty<select name="difficulty">
+                <option value="easy">Easy</option>
+                <option value="medium" selected>Medium</option>
+                <option value="hard">Hard</option>
+              </select></label
+            >
+            <label
+              >Language<select name="language">
+                <option value="python">Python</option>
+                <option value="javascript">JavaScript</option>
+                <option value="cpp">C++</option>
+                <option value="java">Java</option>
+                <option value="c">C</option>
+              </select></label
+            >
+            <label
+              >Minutes per round<input
+                name="roundMinutes"
+                type="number"
+                min="1"
+                max="90"
+                value="25"
+                required
+            /></label>
+            <label
+              >Who interviews first?<select name="interviewerFirst">
+                <option value="0">I interview first</option>
+                <option value="1">My partner interviews first</option>
+              </select></label
+            >
+            <label class="peer-consent"
+              ><input
+                id="peer-save-transcript"
+                name="saveTranscript"
+                type="checkbox"
+              /><span>Save transcript for both participants</span></label
+            >
+            <label class="peer-consent"
+              ><input
+                id="peer-save-audio"
+                name="saveAudio"
+                type="checkbox"
+                disabled
+              /><span>Save audio for both participants</span></label
+            >
+            <p class="muted small">
+              Saved transcript, saved audio and AI suggestions expire 24 hours
+              after practice ends. Workspace snapshots, your feedback and
+              session details are kept for up to 30 days after the session is
+              created. Each partner confirms the exact choices before starting.
+            </p>
+            <p id="peer-audio-availability" class="muted small">
+              Audio saving is unavailable on this server.
+            </p>
+            <div class="peer-actions">
+              <button
+                id="peer-available"
+                type="submit"
+                value="available"
+                disabled
+              >
+                Become available
+              </button>
+              <button type="submit" value="invite">
+                Create an invitation instead
+              </button>
+            </div>
+          </form>
+        </section>
+        <section class="peer-card" aria-labelledby="available-title">
+          <h2 id="available-title">Available partners</h2>
+          <p id="peer-presence-status" role="status" aria-live="polite">
+            Loading availability...
+          </p>
+          <ul id="peer-available-list" class="peer-roster"></ul>
+        </section>
+        <section class="peer-card" aria-labelledby="requests-title">
+          <h2 id="requests-title">Join requests</h2>
+          <ul id="peer-requests" class="peer-roster" aria-live="polite"></ul>
+        </section>
+        <section
+          id="peer-session"
+          class="peer-card"
+          aria-labelledby="session-title"
+          hidden
+        >
+          <h2 id="session-title">Your practice session</h2>
+          <p id="peer-members"></p>
+          <p id="peer-session-status" role="status" aria-live="polite"></p>
+          <div id="peer-invite" hidden>
+            <label
+              >Invitation link<input id="peer-invite-link" readonly
+            /></label>
+            <div class="peer-actions">
+              <button id="peer-copy" type="button">Copy link</button
+              ><button id="peer-regenerate" type="button">New invitation</button
+              ><button id="peer-revoke" type="button">Revoke invitation</button>
+            </div>
+          </div>
+          <div class="peer-actions">
+            <button id="peer-enter" type="button">Enter</button
+            ><button id="peer-leave" type="button">Leave</button
+            ><button id="peer-ready" type="button">Ready</button
+            ><button id="peer-start" type="button" disabled>
+              Confirm start</button
+            ><button id="peer-cancel" type="button">Cancel session</button>
+          </div>
+          <a id="peer-open-interview" hidden>Open interview</a>
+        </section>
+        <section class="peer-card">
+          <h2>Your sessions</h2>
+          <ul id="peer-session-list"></ul>
+        </section>
+      </div>
+    </main>
+  </body>
+</html>

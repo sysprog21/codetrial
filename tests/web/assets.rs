@@ -608,3 +608,42 @@ async fn disk_and_embedded_stores_resolve_urls_identically() {
     disk_server.shutdown().await;
     embedded_server.shutdown().await;
 }
+
+#[tokio::test]
+async fn peer_pages_have_the_lobby_policy_from_disk_and_embedded_assets() {
+    let mut disk = web_config();
+    disk.web_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("web");
+    let mut embedded = web_config();
+    embedded.web_dir = absent_web_dir("peer-pages");
+    for config in [disk, embedded] {
+        let (base, server) = spawn_web_server(config).await;
+        let client = http_client();
+        let lobby = client.get(&base).send().await.unwrap();
+        let policy = lobby.headers()["content-security-policy"].clone();
+        for (route, script) in [
+            ("/peer-lobby", "/peer-lobby.js"),
+            ("/peer-lobby.html", "/peer-lobby.js"),
+            ("/peer-interview", "/peer-interview.js"),
+            ("/peer-interview.html", "/peer-interview.js"),
+        ] {
+            let response = client.get(format!("{base}{route}")).send().await.unwrap();
+            assert_eq!(response.status(), 200, "{route}");
+            assert_eq!(response.headers()["content-security-policy"], policy);
+            assert_eq!(
+                response.headers()["content-type"],
+                "text/html; charset=utf-8"
+            );
+            let body = response.text().await.unwrap();
+            assert!(body.contains(script), "{route} serves its own page");
+            assert!(
+                !body.contains("style=\""),
+                "{route} has an inline style attribute"
+            );
+            assert!(
+                !body.contains("<style"),
+                "{route} has an inline style block"
+            );
+        }
+        server.shutdown().await;
+    }
+}

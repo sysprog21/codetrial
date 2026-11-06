@@ -91,6 +91,37 @@ refusing it through every repair would leave the report incomplete.
 Technical uses such as a confidence interval, or an evidence record's explicit
 confidence value, are not presentation judgments and remain allowed.
 
+## Peer feedback
+
+Peer feedback is human-authored and unscanned, visible only to the two session
+members. It never feeds a CodeTrial score or an agent report. Drafts remain
+private to their author; submitted feedback is revealed when both members
+submit for that round, or 24 hours after the round closes.
+
+The form repeats this boundary: not assessed are accent, filler words, eye
+contact, nervousness, confidence, and personality. Feedback should name
+observed engineering work, a concrete example, and one improvement. A missing
+observation is marked `not_observed`, never inferred from presentation.
+
+## Reciprocal AI suggestions
+
+The reciprocal observer publishes no speech or live hints. It transcribes only
+the two members' audio, in bounded in-memory chunks, and produces technical suggestions after the session.
+Transcription failures and unobserved rounds must be marked unavailable or
+incomplete; they cannot earn or lose assessment credit. Every suggestion is
+checked by the same narrative policy boundary before it is stored or shown.
+The suggestions assess engineering content in the observed conversation, not
+accent, filler words, eye contact, nervousness, confidence or personality.
+
+Both participants explicitly confirm the saving preferences and observer
+notice. Selected raw conversation is a member-only session record with 24-hour
+expiry; post-session suggestions follow the retention rules in
+`docs/peer-interviews.md`. Both are separate from agent reports and human
+feedback. Unselected transcript is temporary for the same session's suggestions;
+its verbatim excerpts are not retained inside advice as a substitute for text
+saving. This feature adds no presentation-derived delivery signal or CodeTrial
+score.
+
 ## Adding a delivery signal later
 
 Any future delivery signal requires an explicit opt-in separate from interview

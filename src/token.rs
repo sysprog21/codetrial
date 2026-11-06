@@ -77,6 +77,46 @@ pub fn livekit_token(
     sign_jwt(input.api_secret, &claims)
 }
 
+/// A five-minute join credential for one fixed peer participant.
+pub fn livekit_peer_token(
+    input: LivekitTokenInput<'_>,
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    let mut claims = livekit_claims_with_ttl(
+        input.api_key,
+        input.identity,
+        input.now_seconds,
+        300,
+        json!({ "room": input.room, "roomJoin": true, "canPublish": true,
+            "canSubscribe": true, "canPublishData": true, "agent": false,
+            "canUpdateOwnMetadata": false }),
+    )?;
+    claims["name"] = json!(input.name);
+    claims["metadata"] = json!(input.metadata);
+    sign_jwt(input.api_secret, &claims)
+}
+
+/// The peer observer can subscribe but cannot publish audio, data or metadata.
+pub fn livekit_peer_observer_token(
+    api_key: &str,
+    api_secret: &str,
+    identity: &str,
+    room: &str,
+    now_seconds: u64,
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    let mut claims = livekit_claims(
+        api_key,
+        identity,
+        now_seconds,
+        json!({
+            "room":room,"roomJoin":true,"canPublish":false,"canSubscribe":true,
+            "canPublishData":false,"canUpdateOwnMetadata":false,"agent":true,
+        }),
+    )?;
+    claims["name"] = json!("Silent AI observer");
+    claims["kind"] = json!("agent");
+    sign_jwt(api_secret, &claims)
+}
+
 /// A listen-only room credential for the interviewer. Keeping this separate
 /// from `livekit_token` makes a publish-capable observer unrepresentable at
 /// its call site.
@@ -165,8 +205,18 @@ fn livekit_claims(
     now_seconds: u64,
     video: Value,
 ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
+    livekit_claims_with_ttl(api_key, identity, now_seconds, TOKEN_TTL_SECONDS, video)
+}
+
+fn livekit_claims_with_ttl(
+    api_key: &str,
+    identity: &str,
+    now_seconds: u64,
+    ttl_seconds: u64,
+    video: Value,
+) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
     let exp = now_seconds
-        .checked_add(TOKEN_TTL_SECONDS)
+        .checked_add(ttl_seconds)
         .ok_or("token expiry overflows")?;
     Ok(json!({
         "iss": api_key,

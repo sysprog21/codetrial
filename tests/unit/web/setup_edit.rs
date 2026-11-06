@@ -220,6 +220,8 @@ impl Server {
             trusted_proxy_hops: 0,
             allowed_hosts: Vec::new(),
             recording: None,
+            peer: None,
+            peer_observer: None,
             probe_provider_quota: false,
             provision_rooms: false,
             update_check_commit: None,

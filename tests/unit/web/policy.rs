@@ -28,6 +28,8 @@ fn policy_for(url: &str) -> String {
         trusted_proxy_hops: 0,
         allowed_hosts: Vec::new(),
         recording: None,
+        peer: None,
+        peer_observer: None,
         pool: crate::config::ProviderPool {
             providers: vec![crate::config::Provider {
                 id: crate::config::PRIMARY_PROVIDER_ID.to_string(),
