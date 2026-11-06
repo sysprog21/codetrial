@@ -1,12 +1,12 @@
 ---
 name: codetrial-verify
-description: How a CodeTrial change is validated - scripts/test.sh as the credential-free gate, which generated artifacts have to be regenerated before it passes, the checks that need credentials or a browser and therefore sit outside it, the browser and mutation lanes, and how to bring the server up for a live look without taking the maintainer's port. Use before calling work done, when diagnosing failed GitHub Actions checks, when a gate fails on drift rather than on a bug, when adding a test, when a fix needs to be seen working in the app, or after editing a skill or anything a skill names (scripts/check-skill-refs.py). Reviewing a diff or a pull request is codetrial-review.
+description: How a CodeTrial change is validated - scripts/test.sh as the credential-free gate, which generated artifacts have to be regenerated before it passes, the checks that need credentials or a browser and therefore sit outside it, the browser and mutation lanes, and how to bring the server up for a live look without taking the maintainer's port. Use before calling work done, when diagnosing failed GitHub Actions checks, when a gate fails on drift rather than on a bug, when adding a test, when a fix needs to be seen working in the app, or after editing a skill or anything a skill names (scripts/check-skill-refs.py). Reviewing a diff or a pull request is codetrial-review; the order of a change and the refactor method are codetrial-improve.
 ---
 
 # Validating a CodeTrial change
 
 The order of work around the gate, test first and small steps, is
-[codetrial-change](../codetrial-change/SKILL.md); this skill is the gate itself.
+[codetrial-improve](../codetrial-improve/SKILL.md); this skill is the gate itself.
 
 One gate needs no credentials and is the thing to run:
 
@@ -37,7 +37,7 @@ Reproduce a failure with the same lane locally.
 one failure does not hide the next; the summary line names every gate that
 failed. It covers `cargo fmt --check`, `clippy -D warnings`, `cargo test`,
 `cargo doc --no-deps` (the Rust lane's `rustdoc` gate), the Rust style checker
-(codetrial-rust), the Rust lane's Cargo-aware `workspace-lints` inheritance
+([Rust profile of codetrial-improve](../codetrial-improve/rust.md)), the Rust lane's Cargo-aware `workspace-lints` inheritance
 audit, the Python unittest suites, the Node browser tests, ESLint,
 `ruff check`, `shellcheck`, the generated-artifact drift checks, the hook suite,
 the skill references, `cargo-audit`, `cargo-deny` and `actionlint`.

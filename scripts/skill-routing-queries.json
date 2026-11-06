@@ -267,19 +267,19 @@
   {
     "q": "i have to fix a bug in the replay gate selection, what order should i go in: test first, how small should the edit be, and when do i stop",
     "expect": [
-      "codetrial-change"
+      "codetrial-improve"
     ]
   },
   {
     "q": "my second fix for the flaky reconnect test failed the same gate as the first, how should i step back instead of trying a third patch",
     "expect": [
-      "codetrial-change"
+      "codetrial-improve"
     ]
   },
   {
     "q": "the task was only to rename a field but i noticed i could also read config/codetrial.env.local to check the key, is that in scope for what i was asked",
     "expect": [
-      "codetrial-change"
+      "codetrial-improve"
     ]
   },
   {
@@ -298,7 +298,7 @@
   {
     "q": "clippy flags a needless borrow in src/agent/session.rs, how should I fix it the way this tree writes Rust",
     "expect": [
-      "codetrial-rust"
+      "codetrial-improve"
     ]
   },
   {
@@ -368,19 +368,19 @@
   {
     "q": "clippy says `#[allow]` attribute found in src/web/token.rs, can I just add a reason and keep it, or what is the rule here",
     "expect": [
-      "codetrial-rust"
+      "codetrial-improve"
     ]
   },
   {
     "q": "src/livekit/session.rs is getting huge, the rust-style gate says it is over its ceiling, how do I split it and fix the ceiling",
     "expect": [
-      "codetrial-rust"
+      "codetrial-improve"
     ]
   },
   {
     "q": "refactor this function that takes &Vec<String> and casts an i64 with `as usize`, make the Rust cleaner",
     "expect": [
-      "codetrial-rust"
+      "codetrial-improve"
     ]
   },
   {
@@ -406,5 +406,57 @@
   {
     "q": "bump the Rust toolchain to the next stable",
     "expect": []
+  },
+  {
+    "q": "split this 3,000-line file by responsibility without breaking its callers",
+    "expect": [
+      "codetrial-improve"
+    ]
+  },
+  {
+    "q": "clean up the clippy findings across this module, one kind at a time",
+    "expect": [
+      "codetrial-improve"
+    ]
+  },
+  {
+    "q": "refactor the report builder without changing its output",
+    "expect": [
+      "codetrial-improve"
+    ]
+  },
+  {
+    "q": "i have to add a field to the interview report, what order should i work in and how small should each step be",
+    "expect": [
+      "codetrial-improve"
+    ]
+  },
+  {
+    "q": "rename this function and update every caller, what order should i go in",
+    "expect": [
+      "codetrial-improve"
+    ]
+  },
+  {
+    "q": "which lane runs the new python test, and do i need to regenerate anything first",
+    "expect": [
+      "codetrial-verify"
+    ]
+  },
+  {
+    "q": "the candidate joined but nobody answers in the room, what do i check",
+    "expect": [
+      "codetrial-livekit"
+    ]
+  },
+  {
+    "q": "explain what a Rust trait object is and when to use one",
+    "expect": []
+  },
+  {
+    "q": "web/interview.js has grown past 6000 lines, how do i split it without breaking the page",
+    "expect": [
+      "codetrial-improve"
+    ]
   }
 ]

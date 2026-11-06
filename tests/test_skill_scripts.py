@@ -2714,6 +2714,45 @@ class SkillRefsTests(unittest.TestCase):
         self.assertEqual(set(lines), DANGLING_REPORT)
         self.assertEqual(len(lines), len(DANGLING_REPORT))
 
+    def test_an_unquoted_description_may_not_hold_a_colon_or_a_comment(self):
+        base = ".claude/skills/"
+        result = self.check(
+            RESOLVING,
+            {
+                base + "colon/SKILL.md": skill("colon", "Read rust.md: then edit."),
+                base + "hash/SKILL.md": skill("hash", "Review PR #N and more."),
+                base + "both/SKILL.md": skill("both", "Use it: see #N."),
+                # The same hazards on a wrapped plain scalar's second line.
+                base + "wrapped/SKILL.md": skill(
+                    "wrapped", "Fine first line.\n  Then see #N."
+                ),
+                base + "wrapcolon/SKILL.md": skill("wrapcolon", "Fine.\n  Then: this."),
+                base + "trail/SKILL.md": skill("trail", "Fine.\n  Use it for:"),
+                # Spellings a loader reads whole: backticks, quotes, a block
+                # scalar, and a colon or a hash with no space before it.
+                base + "ticks/SKILL.md": skill("ticks", "Review PR `#N` and more."),
+                base + "quoted/SKILL.md": skill("quoted", '"Use it: see #N."'),
+                base + "single/SKILL.md": skill("single", "'Use it: see #N.'"),
+                base + "folded/SKILL.md": skill("folded", ">\n  Use it: see #N."),
+                base + "tight/SKILL.md": skill(
+                    "tight", "A url http://x.y/a#b, key:value."
+                ),
+            },
+        )
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertEqual(
+            result.stdout.splitlines(),
+            [
+                f"{base}both/SKILL.md: description has a colon and a space; quote it or reword",
+                f"{base}both/SKILL.md: description has a space before #, a YAML comment; use backticks",
+                f"{base}colon/SKILL.md: description has a colon and a space; quote it or reword",
+                f"{base}hash/SKILL.md: description has a space before #, a YAML comment; use backticks",
+                f"{base}trail/SKILL.md: description ends with a colon; quote it or reword",
+                f"{base}wrapcolon/SKILL.md: description has a colon and a space; quote it or reword",
+                f"{base}wrapped/SKILL.md: description has a space before #, a YAML comment; use backticks",
+            ],
+        )
+
     def test_frontmatter_must_name_the_directory_and_describe_it(self):
         base = ".claude/skills/"
         result = self.check(

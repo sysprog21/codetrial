@@ -120,6 +120,9 @@ impl Default for TaskService {
 }
 
 struct Inner {
+    // A poisoned lock is recovered: no call between `admit` setting `active`
+    // and building the lease that clears it can panic (`default_number` reads a
+    // bundled key), so no panic strands the one attempt slot. Keep it so.
     state: Mutex<State>,
     /// One key derivation at a time: each is deliberately slow.
     unlocking: tokio::sync::Mutex<()>,

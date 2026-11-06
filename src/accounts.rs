@@ -78,6 +78,11 @@ pub struct GitHubProfile {
 /// Queries run on the blocking pool and serialize through this connection.
 pub struct Accounts {
     config: GitHubLoginConfig,
+
+    // A poisoned lock is recovered: a `transaction` that panics rolls back as
+    // it unwinds. A `with` closure that panics between two plain statements
+    // would not, so a write of more than one statement belongs in
+    // `transaction`.
     connection: Mutex<rusqlite::Connection>,
 }
 

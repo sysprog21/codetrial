@@ -285,7 +285,8 @@ def frontmatter(text):
 
 for md in sorted(glob.glob(".claude/skills/*/SKILL.md")):
     with open(md, encoding="utf-8") as f:
-        fields = frontmatter(f.read())
+        text = f.read()
+    fields = frontmatter(text)
     if fields is None:
         report(md, "frontmatter", "missing")
         continue
@@ -296,6 +297,34 @@ for md in sorted(glob.glob(".claude/skills/*/SKILL.md")):
         report(md, "name", f"{name} does not match its directory")
     if not fields.get("description"):
         report(md, "description", "empty")
+    else:
+        # The description is all the router reads, and the skill loader cuts an
+        # unquoted one at " #" (a YAML comment): codetrial-review reached it as
+        # "... re-review PR" with `PR #N` in the text, losing every trigger after.
+        # A colon and a space is a YAML error in the same position, and so is a
+        # colon that ends the value.
+        # A plain scalar may wrap onto indented lines, and the same two hazards
+        # hold on each, so the check reads the joined text, not the first line.
+        raw = re.search(r"^description:[ \t]*(.*)$", text, re.M).group(1)
+        if raw[:1] not in ("'", '"', ">", "|"):
+            rows = text.split("\n")
+            at = next(i for i, row in enumerate(rows) if row.startswith("description:"))
+            tail = []
+            for row in rows[at + 1 :]:
+                if not row.startswith((" ", "\t")):
+                    break
+                tail.append(row.strip())
+            joined = " ".join([raw, *tail])
+            if ": " in joined:
+                report(md, "description", "has a colon and a space; quote it or reword")
+            elif joined.rstrip().endswith(":"):
+                report(md, "description", "ends with a colon; quote it or reword")
+            if re.search(r"(^|\s)#", joined):
+                report(
+                    md,
+                    "description",
+                    "has a space before #, a YAML comment; use backticks",
+                )
 
 # A skill's rules/paths routes changed files to rule files beside it: each rule
 # it names has to exist, and each pattern has to match a tracked file, or it

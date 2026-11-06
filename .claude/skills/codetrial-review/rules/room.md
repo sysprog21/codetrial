@@ -86,7 +86,7 @@ text by design, and image bytes need their own counter.
 ## Gemini failures: mark the socket dead, keep the cause, keep failover
 
 Applies to: `src/gemini.rs`, `src/gemini/credentials.rs`, `src/livekit.rs`,
-`src/main.rs`, `src/config*`, `src/dispatch.rs`
+`src/livekit/open.rs`, `src/main.rs`, `src/config*`, `src/dispatch.rs`
 
 A socket write that errors, as opposed to timing out, has to set `dead` and end
 the reader. An idle break has to do the same. Otherwise the next flush pays the

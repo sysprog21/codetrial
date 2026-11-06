@@ -1123,3 +1123,77 @@ pub(super) async fn fixture_session_at(
     .await
     .expect("the fixture provider must complete setup")
 }
+
+#[test]
+fn only_a_standard_participant_with_the_minted_identity_is_the_candidate() {
+    let metadata = r#"{"candidateIdentity":"candidate-abc"}"#;
+    assert!(candidate::candidate_parts(
+        ParticipantKind::Standard,
+        "candidate-abc",
+        metadata
+    ));
+    assert!(
+        !candidate::candidate_parts(ParticipantKind::Agent, "candidate-abc", metadata),
+        "an agent claiming the identity is not the candidate"
+    );
+    assert!(
+        !candidate::candidate_parts(ParticipantKind::Standard, "candidate-xyz", metadata),
+        "another identity than the one the metadata minted"
+    );
+    assert!(!candidate::candidate_parts(
+        ParticipantKind::Standard,
+        "candidate-abc",
+        "{}"
+    ));
+    assert!(
+        !candidate::candidate_parts(
+            ParticipantKind::Standard,
+            "intruder",
+            r#"{"candidateIdentity":"intruder"}"#
+        ),
+        "a minted identity without the candidate- prefix is not the candidate"
+    );
+}
+
+#[test]
+fn another_agent_is_a_duplicate_and_this_agent_is_not() {
+    assert!(candidate::duplicate_agent_parts(
+        ParticipantKind::Agent,
+        "agent-other",
+        "agent-me"
+    ));
+    assert!(
+        !candidate::duplicate_agent_parts(ParticipantKind::Agent, "agent-me", "agent-me"),
+        "the local identity is never its own duplicate"
+    );
+    assert!(
+        !candidate::duplicate_agent_parts(ParticipantKind::Standard, "agent-other", "agent-me"),
+        "a person is not an agent, whatever they are called"
+    );
+}
+
+#[test]
+fn a_reply_owed_during_a_hold_is_kept_and_a_known_event_is_not_replaced() {
+    let owed = |state: &RuntimeState| state.owed_reply_on_resume.clone();
+    let mut state = RuntimeState::default();
+    hold_owed_reply(&mut state, None);
+    assert_eq!(
+        owed(&state),
+        Some(None),
+        "a hold with no event still owes a reply"
+    );
+    hold_owed_reply(&mut state, Some("first"));
+    assert_eq!(owed(&state), Some(Some("first".into())), "an event arrives");
+    hold_owed_reply(&mut state, None);
+    assert_eq!(
+        owed(&state),
+        Some(Some("first".into())),
+        "an unknown event never replaces a known one"
+    );
+    hold_owed_reply(&mut state, Some("second"));
+    assert_eq!(
+        owed(&state),
+        Some(Some("second".into())),
+        "a newer known event does"
+    );
+}

@@ -112,7 +112,7 @@ so that two sessions answer the same way.
 - **Review into the ledger.** Steps 1 to 5 end with the findings written to
   Pending instead of only the report. Questions and Notes fill the same way.
 - **Address one finding.** Fix only it, per
-  [codetrial-change](../codetrial-change/SKILL.md) and the narrowest lane of
+  [codetrial-improve](../codetrial-improve/SKILL.md) and the narrowest lane of
   [codetrial-verify](../codetrial-verify/SKILL.md). Move it to Completed with
   the commit and the command that shows it, or report it as partly fixed or
   unverified. If the fix outgrows the finding, stop and ask.

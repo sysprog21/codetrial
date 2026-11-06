@@ -1,8 +1,3 @@
----
-name: codetrial-rust
-description: How Rust is written and reviewed in CodeTrial - which rules the build enforces (the [lints] table in Cargo.toml and scripts/check-rust-style.py) and which it leaves to judgment, how to suppress a lint, why a lint is switched off on purpose, the file-size ceilings, and the ownership, error, cast and test idioms the tree follows. Use when writing, refactoring or reviewing Rust under src/, tests/ or build.rs, when clippy or the rust-style gate fails, when tempted to write #[allow], a bare unwrap, an `as` cast, a glob import or a bool parameter, when a file nears its line ceiling, or when asked to audit or tighten the Rust style. Comments, commit messages and what stays out of a public issue are codetrial-conventions; running the gate is codetrial-verify.
----
-
 # Writing Rust in CodeTrial
 
 The build owns what a machine can ask; this page owns what it cannot. Fix a
@@ -62,10 +57,61 @@ through `clippy.toml`.
 New Rust files stay within 1500 lines. Existing larger files are recorded in
 `scripts/rust-style-ceilings.json` and may only shrink: after splitting one by
 responsibility, run `scripts/check-rust-style.py --ratchet` to lower its entry.
-Never raise an entry to land a change; a new module is the answer. The gate passes `--baseline origin/main`, so a raised entry or a new
-exemption fails against what main records, and under CI a baseline ref that was
-not fetched fails too, so a shallow checkout cannot skip it. Test bodies
-live under `tests/unit/` and answer to the same ceiling.
+`scripts/ceiling-hotspots.py` ranks them by churn times size, as one input to
+choosing which to split first. Count a file's mutants before splitting it with
+`cargo mutants --list -f <file> | wc -l`; `make mutants` downloads a compiler
+first. Never raise an entry to land a change; a new module is the answer. The
+gate passes `--baseline origin/main`, so a raised entry or a new exemption fails
+against what main records, and under CI a baseline ref that was not fetched
+fails too, so a shallow checkout cannot skip it. Test bodies live under
+`tests/unit/` and answer to the same ceiling.
+
+### Splitting a file
+
+What splitting `src/agent/prompts.rs` (3944 lines, six modules under
+`src/agent/prompts/`, commit f122e38) needed, in order:
+
+1. **Plan before moving.** Choose the file with `scripts/ceiling-hotspots.py` and
+   a look at the open pull requests (`gh pr list --state open --json
+   number,files`), list every top-level item with its line span, and group by
+   responsibility. A dependency order between the new modules with no cycle is
+   the test of a good cut.
+2. **Keep the old file as the facade.** It keeps its `#[path]` test module and
+   gains `mod x;` plus `pub use x::{...}` and `pub(crate) use` lines with the
+   same names and visibility the parent re-exported, so no caller changes. This
+   is the layout `src/livekit.rs` beside `src/livekit/` already has.
+3. **Move by line span, never by retyping**, and prove it: after `cargo fmt`,
+   compare each original item with the new files ignoring whitespace, trailing
+   commas, `pub(...)` and the path rewrite below. Expect only small differences:
+   rustfmt wrapping a closure body in braces, and a name imported under step 4
+   losing its path.
+4. **Rewrite `super::` in bodies to `crate::agent::`**, since `super` is now the
+   facade, then import the names used three or more times so the code reads as
+   before. Widen a private item to `pub(super)` only where a sibling needs it.
+   A hub whose siblings already open with `use super::*` (`src/livekit/`) takes
+   new modules the same way; clippy decides whether the `expect` for
+   `wildcard_imports` is owed, so run it rather than copy the attribute.
+5. **Tests that reach private items** through `use super::*` keep working if the
+   facade carries a `#[cfg(test)] use self::{...}` group naming them, and the
+   `use super::...` of the parent's own types they read; the test file is not
+   edited. Group the facade's re-exports by visibility (`pub use`, then
+   `pub(crate) use`), as the parent re-exported them.
+6. **Look for what names the file.** `git grep -n 'path/to/file'` found a test
+   that hashes the file with `include_bytes!` (a digest that would silently stop
+   changing when a prompt did), the `Applies to` lines of two review rules, a
+   skill doc line, and comments in Rust and in `web/`. A name inside a format string (`{NAME}`) is a compile error if
+   its import is missed, which is the safe way to fail. The three splits of
+   `src/livekit.rs`, `src/agent.rs` and `src/gemini.rs` found two more kinds:
+   a test that reads the source as text (`include_str!`, then splits on `async
+   fn name`) fails with "is still defined here" in `cargo test --lib` and not in
+   clippy, and a source digest that hashes the old file (the report evaluation's
+   identity) stops covering the code that left it.
+7. **Run `scripts/check-rust-style.py --ratchet`** so the old entry leaves
+   `scripts/rust-style-ceilings.json`, then clippy at `-D warnings`, then
+   `./scripts/test.sh rust`.
+
+A comment added to a file that sits exactly at its ceiling fails the checker, so
+a note for a ceilinged file goes here or in the split, not in the file.
 
 ## Judgment, which no gate checks
 
@@ -107,10 +153,23 @@ userinfo, path, query or fragment.
 
 ## Idioms this tree already follows
 
+Worked before-and-after cases, including the ones deliberately left alone, are
+in [recipes/rust.md](recipes/rust.md).
+
 - `Arc::clone(&x)`, so a refcount bump reads differently from a deep copy. Where
   the target is a trait object, name the source type so the coercion happens at
   the call: `Arc::<FakeProvider>::clone(&provider)`. An `as Arc<dyn T>` cast is
   not an option; it is a trivial cast.
+- A `std::sync::Mutex` is locked with `.lock().unwrap_or_else(|error|
+  error.into_inner())`, not `.unwrap()`: a poisoned lock is recovered. All 14
+  such locks were checked (2026-11-06) and each guards state that is written
+  whole, so the next taker sees a valid value, and a `Drop` that takes a lock
+  must not panic while a task unwinds. Where the reason is not obvious (the
+  accounts connection, the dispatch maps, the cooldown map, the pressure
+  counters, the task admission state) a comment at the declaration gives it. A
+  new lock gets the same question: if a panic halfway through an update would
+  leave its state inconsistent, recovering is wrong, and the update should be
+  one step or the lock should not be recovered.
 - Casts that can lose information use `try_from`, `cast_unsigned` or a clamp
   first. A cast that is correct by construction carries an `expect` saying why.
 - A glob import is a re-export hub that its test module reads through
@@ -139,17 +198,20 @@ clean" without the checker is half a report.
 
 ## Reference synthesis and audit limits
 
-The six reference projects under externals inform this policy; they are
-reference material, not additional installed skills or required CI tools.
+The reference projects under externals inform this policy; they are reference
+material, not additional installed skills or required CI tools. The tools that
+are not specific to Rust are in the table in [SKILL.md](SKILL.md).
 
 | Reference | Adopted here | Deliberately not adopted |
 |---|---|---|
 | rustgrade | Verify scanner hits against callers; inspect queue growth and lock lifetimes | A numeric grade as proof of safety; blanket bans on loop allocations |
 | BeautifulRust | Manifest-owned lints; narrow, reasoned expectations that expire | Blanket pedantic, Debug or documentation derives for application internals |
-| rust-style-guide-audit | Distinguish application guidance from library contracts; reproduce every finding | Chrome-specific rules; treating text matches as type-aware analysis |
+| rust-style-guide-audit | Distinguish application guidance from library contracts; reproduce every finding; measure a rule's false-positive rate before adopting it (716 findings on `src`; six rules sampled and none adopted: test-only hits the audit cannot tell from production, and style with no bug class) | Chrome-specific rules; treating text matches as type-aware analysis |
 | rust-engineering | Domain boundaries, locality, cancellation and compatibility before polish | Traits, wrappers or dependencies added solely to satisfy a pattern |
 | opinionated-rust-skills | Name errors for invalid conditions; keep defaults near their fields | A new default-annotation crate or macros for a single validation |
 | rust-patterns | Validate at boundaries; explicit ownership and failure values | Type-state, static dispatch or actors without a concrete need |
+| splitrs | A facade that re-exports the same names, and modules grouped by responsibility ("Splitting a file") | Using its output: on the prompts split it proposed the same six modules and left 118 compile errors, and dropped every `pub(crate)` and `cfg(test)` re-export silently; its LSP and SMT checks |
+| refactoring-rust | Before-and-after cases whose outcome may be "leave it" ([recipes/rust.md](recipes/rust.md)) | The slides and exercise numbering |
 
 The Python style checker scans text, not expanded Rust syntax. Multiline
 spellings are checked, but strings, comments and macro expansion can defeat a

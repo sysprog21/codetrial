@@ -106,6 +106,9 @@ impl Pressure {
         pressure
     }
 
+    // A poisoned lock is recovered: these are counters behind a log line, and
+    // `Blocked::drop` takes the lock, possibly while a task unwinds, where a
+    // panic would abort the process.
     fn state(&self) -> std::sync::MutexGuard<'_, State> {
         self.0.lock().unwrap_or_else(|error| error.into_inner())
     }
