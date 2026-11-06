@@ -6,8 +6,6 @@ import {
   taskActionPayload,
   taskRevisionPayload,
   taskRunPayload,
-  taskConnectedPayload,
-  taskStartPayload,
   taskEndPayload,
   taskThinkingPayload,
   taskEditPayload,
@@ -64,13 +62,57 @@ import {
 } from "./task-calibration.js";
 import { caseLabel, caseLine } from "./task-cases.js";
 import { feedbackUnavailableText, reviewSections } from "./task-review.js";
-import { st } from "./task-state.js";
+import { $, id } from "./task-dom.js";
+import {
+  attemptFinished,
+  hasStarted,
+  lend,
+  monitoring,
+  st,
+} from "./task-state.js";
+import { startAttempt } from "./task-start.js";
+import {
+  connect,
+  dropConnection,
+  send,
+  startNeverArrived,
+} from "./task-room.js";
+
+// What the modules split out of this file still reach back for; see task-state.js.
+lend({
+  Room: () => Room,
+  RoomEvent: () => RoomEvent,
+  Track: () => Track,
+  api: () => api,
+  error: () => error,
+  forgetAttempt: () => forgetAttempt,
+  leaveFullscreen: () => leaveFullscreen,
+  localRecordingHome: () => localRecordingHome,
+  lock: () => lock,
+  lockChoices: () => lockChoices,
+  pollReview: () => pollReview,
+  rememberAttempt: () => rememberAttempt,
+  renderReview: () => renderReview,
+  renderState: () => renderState,
+  show: () => show,
+  showUnlock: () => showUnlock,
+  startAttemptTimers: () => startAttemptTimers,
+  stopAttemptTimers: () => stopAttemptTimers,
+  stopMonitoring: () => stopMonitoring,
+  FULLSCREEN_REQUIRED: () => FULLSCREEN_REQUIRED,
+  armRules: () => armRules,
+  clearError: () => clearError,
+  endAttempt: () => endAttempt,
+  localRecording: () => localRecording,
+  recoveryKey: () => recoveryKey,
+  releaseMedia: () => releaseMedia,
+  startReady: () => startReady,
+});
 
 // The vendored LiveKit build is a classic script that sets a global, as on the
 // interview page; it has no exports for a module to import.
 const { Room, RoomEvent, Track } = globalThis.LivekitClient;
 
-const $ = (id) => document.getElementById(id);
 const parts = location.pathname.split("/");
 // The assignment this page works from: the link's, or, for a learner who goes
 // on to their instructor's tasks, the ones they enter.
@@ -80,8 +122,6 @@ const query = new URLSearchParams(location.search);
 st.site = query.get("site") ?? "";
 st.version = Number(query.get("version"));
 st.admissionKey = crypto.randomUUID();
-const hasStarted = () => st.attempt !== "preparing";
-const id = () => crypto.randomUUID();
 // The microphone and camera are let go together, and a recording of them is
 // finalized first, since its audio comes from this stream.
 function releaseMedia() {
@@ -795,203 +835,6 @@ $("calibrate").onclick = async () => {
   }
 };
 
-// --- Connection ------------------------------------------------------------
-
-async function send(topic, message) {
-  if (!st.room) throw new Error("Task is not connected.");
-  await st.room.localParticipant.publishData(
-    new TextEncoder().encode(JSON.stringify(message)),
-    { reliable: true, topic },
-  );
-}
-
-async function connect() {
-  if (!st.task || st.task.taskId !== st.taskId)
-    throw new Error("Wait for the selected assignment to load.");
-  const supported =
-    /Firefox|Chrome|Chromium/.test(navigator.userAgent) &&
-    !/Mobile|Android/.test(navigator.userAgent) &&
-    Boolean(document.fullscreenEnabled);
-  const token = await api(
-    `/api/task-sets/${encodeURIComponent(st.setId)}/tasks/${encodeURIComponent(st.taskId)}/attempts`,
-    {
-      site: st.site,
-      version: st.version,
-      requestKey: st.admissionKey,
-      language: st.language,
-      supportedPlatform: supported,
-      rulesAcknowledgedAt: st.acknowledgedAt,
-      calibration: st.calibration,
-    },
-  );
-  lockChoices(true);
-  // The room never stops the devices' tracks: before Start a dropped room is
-  // only left, and the same microphone is published to the next one.
-  st.room = new Room({ stopLocalTrackOnUnpublish: false });
-  const thisRoom = st.room;
-  const { agentIdentity } = token;
-  let setupFailure;
-  let prepared = false;
-  // Before Start, a lost room or a departed interviewer cannot start the
-  // attempt: the page lets go of it, so calibrating again connects afresh.
-  const lostBeforeStart = () => {
-    setupFailure = {
-      code: "setup_failed",
-      message:
-        "The task connection ended before Start. Calibrate again to reconnect.",
-    };
-    if (!prepared) return;
-    dropConnection();
-    error(setupFailure);
-  };
-  const lost = () => (hasStarted() ? collectResult() : lostBeforeStart());
-  st.room.on(RoomEvent.ParticipantDisconnected, (participant) => {
-    if (st.room === thisRoom && participant?.identity === agentIdentity) lost();
-  });
-  st.room.on(RoomEvent.Disconnected, () => {
-    if (st.room === thisRoom) lost();
-  });
-  st.room.on(RoomEvent.TrackSubscribed, (track) => {
-    if (st.room !== thisRoom) return;
-    if (track.kind === "audio") {
-      const audio = track.attach();
-      audio.dataset.taskAudio = "1";
-      document.body.append(audio);
-    }
-  });
-  st.room.on(RoomEvent.DataReceived, (payload, participant, kind, topic) => {
-    if (st.room !== thisRoom) return;
-    if (participant?.identity !== agentIdentity) return;
-    let message;
-    try {
-      message = JSON.parse(new TextDecoder().decode(payload));
-    } catch {
-      return;
-    }
-    if (topic === TASK_TOPICS.state) renderState(message);
-    else if (topic === TASK_TOPICS.review) renderReview(message);
-    else if (topic === TASK_TOPICS.error) {
-      if (message.code === "setup_failed" && !hasStarted())
-        setupFailure = message;
-      if (!message.requestId && st.state?.phase === "feedback") return;
-      // An error naming no request answers no capture: with none pending
-      // either, undefined would match undefined.
-      if (
-        message.requestId &&
-        st.pendingRevision?.requestId === message.requestId
-      ) {
-        st.pendingRevision.reject(message);
-        st.pendingRevision = null;
-      }
-      error(message);
-    }
-  });
-  try {
-    await st.room.connect(token.serverUrl, token.token);
-    await st.room.localParticipant.publishTrack(st.media.getAudioTracks()[0], {
-      source: Track.Source.Microphone,
-    });
-    const setupDeadline = Date.now() + st.task.setupTimeoutSeconds * 1000;
-    // Sent at least once even if a snapshot already arrived: the runtime
-    // accepts Start only after this handshake, and a snapshot it published
-    // on its own does not count as one.
-    st.state = null;
-    st.serverClockOffset = null;
-    do {
-      if (setupFailure) throw setupFailure;
-      if (Date.now() >= setupDeadline)
-        throw {
-          code: "setup_failed",
-          message: "The task connection timed out.",
-        };
-      await send(TASK_TOPICS.connected, taskConnectedPayload());
-      if (!st.state) await new Promise((resolve) => setTimeout(resolve, 1000));
-    } while (!st.state);
-    if (setupFailure) throw setupFailure;
-    // The first handshake can go out before the interviewer has joined and
-    // be lost, while the snapshot it publishes on joining ends the loop. It
-    // is in the room now, so this one arrives, and before any Start.
-    await send(TASK_TOPICS.connected, taskConnectedPayload());
-  } catch (value) {
-    dropConnection();
-    throw value;
-  }
-  prepared = true;
-  st.activeRoomName = token.roomName;
-}
-
-/// Once Start has been sent, losing the room or the interviewer leaves only
-/// the result to collect: the server finalizes the attempt without the page.
-/// A Start never acknowledged may not have arrived, which the server's answer
-/// settles.
-function collectResult() {
-  if (attemptFinished()) return;
-  st.startUnconfirmed = st.attempt === "starting";
-  st.startViolation = null;
-  st.attempt = "lost";
-  show("task");
-  lock();
-  stopMonitoring();
-  leaveFullscreen();
-  st.reviewPollUntil = Date.now() + st.task.reviewDeliverySeconds * 1000;
-  rememberAttempt();
-  $("message-text").textContent = st.startUnconfirmed
-    ? "The connection ended while Start was being confirmed. Checking whether the attempt began."
-    : "The room disconnected. Waiting for your result.";
-  $("message").hidden = false;
-  $("recovery").hidden = true;
-  startAttemptTimers();
-  pollReview();
-}
-
-/// The server holds nothing for a Start it never acknowledged, so it never
-/// began: the learner prepares again, with the devices the page let go of.
-function startNeverArrived() {
-  st.activeRoomName = null;
-  st.startUnconfirmed = false;
-  forgetAttempt();
-  stopAttemptTimers();
-  dropConnection();
-  st.attempt = "preparing";
-  localRecordingHome.append($("local-recording"));
-  if (!st.task || st.restored) {
-    st.restored = false;
-    showUnlock();
-    return error({
-      code: "unlock_required",
-      message: "The task did not start. Enter the PIN to prepare again.",
-    });
-  }
-  show("prepare");
-  lock();
-  $("devices").disabled = !st.acknowledgedAt || Boolean(st.media);
-  error({
-    code: "devices_required",
-    message:
-      "The task did not start. Allow the microphone and camera again, then calibrate again.",
-  });
-}
-
-/// Lets go of a room that can no longer start the attempt.
-function dropConnection() {
-  const oldRoom = st.room;
-  st.room = null;
-  // The interviewer's audio element belongs to the room just left.
-  for (const audio of document.querySelectorAll("[data-task-audio]"))
-    audio.remove();
-  oldRoom?.disconnect(false)?.catch?.(() => {});
-  // The old key would replay the admission of the room just left.
-  st.admissionKey = id();
-  st.state = null;
-  // A new room's server may keep another clock; nothing carries over.
-  st.serverClockOffset = null;
-  st.calibration = null;
-  $("start").disabled = true;
-  lockChoices(false);
-  $("calibrate").disabled = !st.media || !st.acknowledgedAt;
-  $("calibration-result").textContent = "";
-}
-
 // --- Start and the rules -----------------------------------------------------
 
 const FULLSCREEN_REQUIRED = {
@@ -1005,127 +848,7 @@ const startReady = () =>
   !hasStarted() &&
   st.state?.phase === "ready";
 
-$("start").onclick = () => {
-  if (!st.room || !st.calibration || hasStarted() || localRecording.settingUp)
-    return;
-  // A camera that stopped since calibration would only interrupt the
-  // attempt the moment it began.
-  if (!videoTrackReady(st.media?.getVideoTracks()[0])) {
-    releaseMedia();
-    dropConnection();
-    $("devices").disabled = !st.acknowledgedAt;
-    $("calibrate").disabled = true;
-    return error({
-      code: "devices_required",
-      message:
-        "The camera stopped. Allow the microphone and camera again, then calibrate.",
-    });
-  }
-  const thisStart = {};
-  st.currentStart = thisStart;
-  // A newer Start, or a loss that moved the page on to collecting the
-  // result, owns the page from then on.
-  const superseded = () =>
-    st.currentStart !== thisStart || st.attempt !== "starting";
-  const startingRoom = st.room;
-  const startingCalibration = st.calibration;
-  const startingRoomName = st.activeRoomName;
-  const startRecoveryKey = recoveryKey();
-  $("start").disabled = true;
-  // Fullscreen must be requested synchronously inside this click.
-  st.enteringFullscreen = true;
-  const fullscreen = $("workspace").requestFullscreen?.();
-  Promise.resolve(fullscreen)
-    .then(async () => {
-      if (st.currentStart === thisStart) st.enteringFullscreen = false;
-      if (st.room !== startingRoom || st.calibration !== startingCalibration)
-        throw {
-          code: "setup_failed",
-          message:
-            "The connection changed before Start. Calibrate again to reconnect.",
-        };
-      if (!document.fullscreenElement) throw FULLSCREEN_REQUIRED;
-      st.reviewPollUntil =
-        Date.now() +
-        (st.task.rules.durationMin * 60 + st.task.reviewDeliverySeconds) * 1000;
-      const until = st.reviewPollUntil;
-      // A reload while Start is on its way cannot tell whether it arrived,
-      // so `pagehide` keeps a way back to the result in case it did.
-      st.startInFlight = {
-        room: startingRoomName,
-        until,
-        key: startRecoveryKey,
-      };
-      st.startViolation = null;
-      st.attempt = "starting";
-      try {
-        await send(TASK_TOPICS.start, taskStartPayload());
-      } catch {
-        st.startInFlight = null;
-        if (superseded()) return;
-        st.attempt = "preparing";
-        if (st.room === startingRoom) dropConnection();
-        throw {
-          code: "setup_failed",
-          message: "Start could not be sent. Calibrate again to reconnect.",
-        };
-      }
-      st.startInFlight = null;
-      // Lost while it was sent, the page is already collecting the result;
-      // a newer Start owns the page and its record.
-      if (superseded()) return;
-      rememberAttempt(startingRoomName, until, startRecoveryKey, true);
-      const deadline = Date.now() + 10000;
-      while (
-        !superseded() &&
-        st.state?.phase === "ready" &&
-        Date.now() < deadline
-      )
-        await new Promise((resolve) => setTimeout(resolve, 200));
-      if (superseded()) return;
-      if (!["work", "wrap-up"].includes(st.state?.phase)) {
-        // Unacknowledged is not refused: the server may be running the
-        // clock, so the page leaves the room and asks for the result.
-        collectResult();
-        dropConnection();
-        return;
-      }
-      st.attempt = "running";
-      rememberAttempt(startingRoomName, until, startRecoveryKey, false);
-      startAttemptTimers();
-      $("task").prepend($("local-recording"));
-      show("task");
-      clearError();
-      armRules();
-      // Leaving fullscreen or the page while Start was being acknowledged
-      // fired before the rules were armed; it still counts, even if the
-      // learner came back before the acknowledgement.
-      const broken = st.startViolation;
-      st.startViolation = null;
-      if (broken) endAttempt("invalid", broken, 0);
-      else if (!document.fullscreenElement)
-        endAttempt("invalid", "fullscreen", 0);
-      else if (document.hidden) endAttempt("invalid", "visibility", 0);
-    })
-    .catch((value) => {
-      if (st.currentStart !== thisStart) return;
-      st.enteringFullscreen = false;
-      if (st.room && st.room !== startingRoom) return;
-      if (!hasStarted()) leaveFullscreen();
-      $("start").disabled = !startReady();
-      error(
-        st.room !== startingRoom || st.calibration !== startingCalibration
-          ? {
-              code: "setup_failed",
-              message:
-                "The connection ended before Start. Calibrate again to reconnect.",
-            }
-          : value?.code
-            ? value
-            : FULLSCREEN_REQUIRED,
-      );
-    });
-};
+$("start").onclick = startAttempt;
 
 function armRules() {
   navigator.wakeLock
@@ -1168,10 +891,6 @@ function armRules() {
     st.monitorTimer = setTimeout(tick, SAMPLE_INTERVAL_MS);
   };
   st.monitorTimer = setTimeout(tick, SAMPLE_INTERVAL_MS);
-}
-
-function monitoring() {
-  return st.attempt === "running" && st.state?.phase !== "feedback";
 }
 
 /// Stops watching. Once an attempt has started, stopping is for good, so the
@@ -1363,11 +1082,6 @@ function lock() {
 // What a capture settles with when the attempt ended before acknowledging it;
 // nothing is left to report or retry.
 const ATTEMPT_ENDED = Object.freeze({ attemptEnded: true });
-
-/// Whether the attempt is over for good: its result is shown, or its room is
-/// lost. A send still in flight then fails on the room that is gone, which is
-/// no news to the learner looking at the result.
-const attemptFinished = () => st.attempt === "done" || st.attempt === "lost";
 
 const CODE_TOO_LARGE = Object.freeze({
   code: "action_rejected",

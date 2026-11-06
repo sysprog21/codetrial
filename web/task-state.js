@@ -95,3 +95,30 @@ export const st = Object.seal({
   // the result is shown; before and after there is nothing for them to do.
   attemptTimers: null,
 });
+
+/// Whether Start has been sent: every state of the attempt after "preparing".
+export const hasStarted = () => st.attempt !== "preparing";
+
+/// Whether the attempt is over for good: its result is shown, or its room is
+/// lost. A send still in flight then fails on the room that is gone, which is
+/// no news to the learner looking at the result.
+export const attemptFinished = () =>
+  st.attempt === "done" || st.attempt === "lost";
+
+/// Whether the rules are being watched: the attempt is running and the server
+/// has not yet moved on to feedback.
+export function monitoring() {
+  return st.attempt === "running" && st.state?.phase !== "feedback";
+}
+
+// What task.js still owns and the modules split out of it reach back for, by
+// name. task.js lends each one near its top, as a getter so that the name is
+// read at the call and not when it is lent; an entry goes from that list when
+// the function it names moves into a module of its own. Because a split-out
+// module imports this file and not task.js, it can be imported without the page.
+export const host = {};
+
+export function lend(getters) {
+  for (const [name, get] of Object.entries(getters))
+    Object.defineProperty(host, name, { get, configurable: true });
+}

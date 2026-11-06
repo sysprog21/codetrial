@@ -21,7 +21,8 @@ Each exits 0 on a clean tree, so run them before handing back:
 
 `scripts/browser-check.sh` runs a real browser against a real page and is
 outside the gate; codetrial-verify has what it needs. A passing lane is evidence
-for what it covers, and a file no test imports is covered by none of them.
+for what it covers. A node test covers a module it imports; a file the real-page
+tests drive is covered only where Chromium runs them.
 
 Read the lane's "not checked by this run" lines. Without a usable Chromium the
 browser lane still exits 0 and skips the real-page tests (973 of them on a
@@ -57,10 +58,10 @@ neither name nor payload; see
 
 | File | Lines | Commits in 90 days | Note |
 |---|---|---|---|
-| `web/interview.js` | 6226 | 161 | the most edited file in the browser half |
-| `web/app.js` | 2685 | 80 | |
+| `web/interview.js` | 5903 | 163 | the most edited file in the browser half |
+| `web/app.js` | 2692 | 81 | |
 | `web/lib.js` | 2287 | 87 | carries the wire topics, 12 importers |
-| `web/task.js` | 1836 | 6 | an entry module, nothing imports it; the calibration checks, the case text and the result wording moved to `web/task-calibration.js`, `web/task-cases.js` and `web/task-review.js` |
+| `web/task.js` | 1550 | 9 | an entry module, nothing imports it; the calibration checks, the case text and the result wording moved to `web/task-calibration.js`, `web/task-cases.js` and `web/task-review.js` |
 
 `eslint .` passes. With `complexity` over 20, `max-lines-per-function` over 100,
 `max-depth` over 4 and `max-params` over 7 switched on for a probe, there are 34,
@@ -74,9 +75,12 @@ worst are `bindEvents` (496 lines), `mountBoardText` (444), `sanitizeReport` in
 functions over 100 lines. It was also the least covered, so each cut pins its
 behavior with a node test first and moves one cohesive block of pure code:
 `web/task-calibration.js`, `web/task-cases.js` and `web/task-review.js` are done.
-The page's 45 mutable variables now live in one sealed object in
-`web/task-state.js`, so `connect` and the start handler can move once the
-helpers they call do.
+The page's 45 mutable variables live in one sealed object in `web/task-state.js`,
+and `web/task-room.js` (the room connection) and `web/task-start.js` (what
+pressing Start does) reach what `task.js` still owns through `host`, lent by
+name, so they are imported without the page and tested in node with fakes. Each
+move shortens the `lend` list in `task.js`; what is left in it is the next thing
+to move.
 Not `web/interview.js` first: it is the file most changes go through and the
 most likely to conflict with an open pull request; and not `web/lib.js`, whose
 topics are the contract.
