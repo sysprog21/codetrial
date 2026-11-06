@@ -11,7 +11,7 @@ use codetrial::config::{
     DEFAULT_GEMINI_VOICE, DEFAULT_MAX_CONCURRENT_INTERVIEWS, DEFAULT_MAX_INTERIM_REVIEWS,
     DEFAULT_ROOM_PREFIX, MAX_GEMINI_REPLY_TIMEOUT_S, MAX_GEMINI_SILENCE_MS, MAX_INTERIM_REVIEWS,
     MIN_GEMINI_FIRST_OUTPUT_S, MIN_GEMINI_REPLY_TIMEOUT_S, guest_mode_enabled, load_from_pairs,
-    max_concurrent_interviews, update_check_commit,
+    max_concurrent_interviews,
 };
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -72,26 +72,6 @@ fn config_bounds_the_reply_timeout() {
     assert_eq!(timeout(Some("5")), MIN_GEMINI_REPLY_TIMEOUT_S);
     assert_eq!(timeout(Some("9999")), MAX_GEMINI_REPLY_TIMEOUT_S);
     assert_eq!(timeout(Some("soon")), DEFAULT_GEMINI_REPLY_TIMEOUT_S);
-}
-
-/// The update check asks GitHub something the binary otherwise never asks, so
-/// it takes all three: the setting, a macOS build, and a commit CI recorded.
-/// A local build's HEAD is not one the `latest` release will name, so it would
-/// be told to update forever.
-#[test]
-fn the_update_check_needs_the_setting_a_macos_build_and_a_ci_commit() {
-    assert_eq!(update_check_commit(None, "abc1234", true), None);
-    assert_eq!(update_check_commit(Some("false"), "abc1234", true), None);
-    assert_eq!(update_check_commit(Some("true"), "abc1234", false), None);
-    assert_eq!(update_check_commit(Some("true"), "", true), None);
-    assert_eq!(
-        update_check_commit(Some("true"), "abc1234", true).as_deref(),
-        Some("abc1234")
-    );
-    assert_eq!(
-        update_check_commit(Some("1"), "abc1234", true).as_deref(),
-        Some("abc1234")
-    );
 }
 
 /// build.rs reads the same `GITHUB_SHA` this reads, so in CI, where both see
@@ -1345,6 +1325,8 @@ fn loading_config_does_not_depend_on_the_current_directory() {
 /// `codetrial web` runs without a Gemini key and still has to validate this.
 #[path = "config/recording.rs"]
 mod recording;
+#[path = "config/update_check.rs"]
+mod update_check;
 
 /// A cap the operator set and the server cannot honor is said out loud.
 ///
