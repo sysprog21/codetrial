@@ -55,7 +55,13 @@ PR detail and unfinished passes, and requires a successful sweep within seven
 days. It refuses an existing output directory. The release ID and generator
 commit are explicit inputs; no timestamp is substituted for a sync checkpoint.
 
-Local raw GitHub payloads remain verbatim. Public copies apply a deterministic,
+A stored record keeps only the payload fields memory reads (`SOURCE_FIELDS` in
+memory.py): the identity, author, timestamps, text, diff locators and patches.
+API links, avatars, reactions and the head and base repository objects are
+dropped on the way in, so the derived tables are unchanged by the trim. A store
+or snapshot built before index version 11 is trimmed once when opened, and an
+imported redaction count drops with any placeholder the trim removed; a field
+the trim does not keep needs a fresh collection to come back. Public copies apply a deterministic,
 credential-only projection across decoded strings, including patches and hunks.
 Matched spans are replaced with typed placeholders; unrelated text, CRLF and
 model delimiters remain byte-for-byte unchanged. Matching also examines the

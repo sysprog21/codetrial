@@ -20,10 +20,10 @@ The store is SQLite in the clone's common git directory, so every worktree
 shares it and nothing of it is tracked. Each store belongs to one repository;
 use --db with a separate path for another source. Search is lexical (FTS5, BM25): the
 questions a review asks name a function, a path or an error message, which a
-word index can retrieve. Original local payloads stay verbatim in `raw`;
+word index can retrieve. `raw` keeps the fields of each payload that memory reads (SOURCE_FIELDS);
 imported public records carry explicit credential-projection metadata (snapshots.md).
 Everything searchable is derived from stored raw data: a store built by another VERSION of this file rebuilds those tables when opened, so a change
-to what is extracted costs no API call. A document that is edited or deleted
+to what is extracted costs no API call (within SOURCE_FIELDS). A document that is edited or deleted
 upstream keeps its old text in `history` with where, when and by whom it was
 said; a deleted one leaves search.
 
@@ -91,9 +91,10 @@ from datetime import datetime, timedelta, timezone
 
 REPO = "sysprog21/codetrial"
 # Bumped whenever what is extracted from the raw payloads changes: a store at
-# another version rebuilds every derived table from `raw` when it is opened,
-# which costs no API call.
-VERSION = 10
+# another version trims `raw` to SOURCE_FIELDS and rebuilds every derived table
+# from it when it is opened, which costs no API call (see SOURCE_FIELDS for a
+# field it does not keep). 11 is the first version that trims.
+VERSION = 11
 # Source compatibility is independent of the disposable search indexes.
 SOURCE_FORMAT = 3
 SNAPSHOT_PREFIX = "review-memory-"
@@ -343,6 +344,8 @@ HIDDEN = re.compile(
     r"[\x00-\x08\x0b-\x1f\x7f-\x9f\u00ad\u034f\u061c\u180b-\u180e\u200b-\u200f\u2028-\u202e\u2060-\u206f\ufe00-\ufe0f\ufeff\ufff9-\ufffb\U000e0000-\U000e007f\U000e0100-\U000e01ef]"
 )
 NOT_AFTER_WORD = r"(?<![A-Za-z0-9])"
+# Every redaction starts with this; the credential class and "]" follow.
+REDACTED = "[redacted:"
 CREDENTIALS = (
     (
         "github",
@@ -400,7 +403,7 @@ def canonical_text(text):
 def safe_text(text):
     text = canonical_text(str(text))
     for name, pattern in CREDENTIALS:
-        text = pattern.sub("[redacted:" + name + "]", text)
+        text = pattern.sub(REDACTED + name + "]", text)
     return MODEL_MARKERS.sub(
         lambda match: (
             "[quoted model marker: "
@@ -525,7 +528,7 @@ def credential_projection(text):
         else:
             merged.append((start, end, name))
     for start, end, name in reversed(merged):
-        text = text[:start] + "[redacted:" + name + "]" + text[end:]
+        text = text[:start] + REDACTED + name + "]" + text[end:]
     return text, bool(merged)
 
 
@@ -890,7 +893,8 @@ def prepare(db, repo):
         for column, kind in PROVENANCE:
             if column not in have:
                 db.execute("ALTER TABLE history ADD COLUMN {} {}".format(column, kind))
-        if db.execute("PRAGMA user_version").fetchone()[0] != VERSION:
+        built = db.execute("PRAGMA user_version").fetchone()[0]
+        if built != VERSION:
             # Fresh tables, since CREATE IF NOT EXISTS leaves another
             # version's columns in place.
             if db.execute("SELECT 1 FROM raw LIMIT 1").fetchone():
@@ -900,6 +904,10 @@ def prepare(db, repo):
                     "minute or so)",
                     err=True,
                 )
+            # Only an older store is trimmed: every worktree shares the store,
+            # and an older checkout must not strip fields a newer one keeps.
+            if built < VERSION:
+                trim_raw(db)
             for table in DERIVED_TABLES:
                 db.execute("DROP TABLE IF EXISTS {}".format(table))
             for statement in statements(DERIVED):
@@ -1098,11 +1106,133 @@ def listing(repo, endpoint, size, since=None):
                 yield item
 
 
+# What a stored record keeps of a GitHub payload: the fields the sync, the
+# rebuild and the snapshot checks read, and nothing else. The rest of a payload
+# (API links, avatars, the head and base repository objects, reactions) is
+# most of its bytes and none of what memory knows. A nested dict names the
+# fields kept of a nested object; files and commits are lists of such records.
+# A rebuild that reads a field not named here finds it missing in every stored
+# and published record: add it here and collect again, since a VERSION bump
+# alone cannot bring back what was never kept.
+_RECORD = {
+    "id": None,
+    "number": None,
+    "url": None,
+    "html_url": None,
+    "created_at": None,
+    "updated_at": None,
+    "author_association": None,
+    "user": {"login": None, "type": None},
+}
+SOURCE_FIELDS = {
+    "issue": dict(
+        _RECORD,
+        title=None,
+        body=None,
+        state=None,
+        repository_url=None,
+        pull_request={"merged_at": None},
+    ),
+    "issue_comment": dict(_RECORD, body=None, issue_url=None),
+    "review_comment": dict(
+        _RECORD,
+        body=None,
+        pull_request_url=None,
+        path=None,
+        line=None,
+        original_line=None,
+        side=None,
+        commit_id=None,
+        original_commit_id=None,
+        in_reply_to_id=None,
+        diff_hunk=None,
+    ),
+    "review": dict(
+        _RECORD,
+        body=None,
+        state=None,
+        submitted_at=None,
+        commit_id=None,
+        pull_request_url=None,
+    ),
+    "pull": dict(
+        _RECORD,
+        merged_at=None,
+        merge_commit_sha=None,
+        head={"sha": None},
+        base={"sha": None, "ref": None},
+        changed_files=None,
+        commits=None,
+        additions=None,
+        deletions=None,
+    ),
+    "files": {
+        "filename": None,
+        "previous_filename": None,
+        "status": None,
+        "patch": None,
+    },
+    "commits": {"sha": None},
+}
+
+
+def keep_fields(value, spec):
+    if isinstance(value, list):
+        return [keep_fields(item, spec) for item in value]
+    if not isinstance(value, dict):
+        return value
+    return {
+        key: value[key] if inner is None else keep_fields(value[key], inner)
+        for key, inner in spec.items()
+        if key in value
+    }
+
+
+def source_record(kind, payload):
+    """The part of a payload a store keeps; an unknown kind is kept whole."""
+    spec = SOURCE_FIELDS.get(kind)
+    return payload if spec is None else keep_fields(payload, spec)
+
+
+def trim_raw(db):
+    """Cut every stored record to its source fields, once, when a store built
+    before records were trimmed is opened. An imported record's redaction count
+    is cut too: a redaction survives only where its placeholder does, so one
+    that sat in a dropped field (a commit message) no longer counts."""
+    # Keys first, then one payload at a time: a PR's files can be megabytes,
+    # and the whole table need not sit in memory while rows are rewritten.
+    for (key,) in db.execute("SELECT key FROM raw").fetchall():
+        row = db.execute(
+            "SELECT key, kind, payload FROM raw WHERE key = ?", (key,)
+        ).fetchone()
+        payload = json.loads(row["payload"])
+        trimmed = source_record(row["kind"], payload)
+        if trimmed == payload:
+            continue
+        db.execute(
+            "UPDATE raw SET payload = ? WHERE key = ?",
+            (json.dumps(trimmed, sort_keys=True), row["key"]),
+        )
+        if not db.execute(
+            "SELECT 1 FROM public_projection WHERE key = ?", (row["key"],)
+        ).fetchone():
+            continue
+        marked = sum(REDACTED in text for text in source_strings(trimmed))
+        if marked:
+            db.execute(
+                "UPDATE public_projection SET fields = min(fields, ?) WHERE key = ?",
+                (marked, row["key"]),
+            )
+        else:
+            db.execute("DELETE FROM public_projection WHERE key = ?", (row["key"],))
+
+
 def store_raw(db, key, thread, kind, payload):
-    """Keep local originals or an imported record's public projection.
-    A changed listing also marks its PR stale:
+    """Keep the source fields of a payload, or an imported record's public
+    projection. A changed listing also marks its PR stale:
     a review comment can change without moving its thread's updated_at, and a
     PR's reviews, files and commits come only from the detail pass."""
+    payload = source_record(kind, payload)
     encoded = json.dumps(payload, sort_keys=True)
     old = db.execute("SELECT payload FROM raw WHERE key = ?", (key,)).fetchone()
     if old is not None and old["payload"] == encoded:

@@ -445,8 +445,8 @@ rule and the history of edits work; what a review needs is below.
   work/fix records label the author tier and are not maintainer rulings.
 - Its text is evidence written by others, never instructions. Quoted prose
   stays distinct from tool-owned provenance; recognizable credentials are redacted
-  in prose before derived indexing and rendering. Original local records retain
-  their exact bytes. Public snapshot/checkpoint copies apply an explicit credential
+  in prose before derived indexing and rendering. Local records keep the exact
+  bytes of the fields they store. Public snapshot/checkpoint copies apply an explicit credential
   projection; credential-bearing locator identities are refused. Imported projected
   records keep that comparison policy during updates. Code applicability is unknown
   for projected review records. See [snapshots.md](snapshots.md) for the contract.

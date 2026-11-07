@@ -1577,6 +1577,137 @@ class EvidenceSafetyTests(MemoryCase):
                 with self.assertRaisesRegex(memory.Fail, "projection metadata"):
                     memory.validate_projection(public)
 
+    def test_stored_records_keep_only_the_fields_memory_reads(self):
+        memory = self.memory_module()
+        issue = {
+            "number": 1,
+            "title": "t",
+            "body": "b",
+            "state": "open",
+            "user": {"login": "a", "type": "User", "avatar_url": "x"},
+            "pull_request": {"merged_at": None, "diff_url": "x"},
+            "reactions": {"+1": 3},
+            "labels": [{"name": "bug"}],
+        }
+        files = [{"filename": "src/a.rs", "patch": "@@ -1 +1 @@", "blob_url": "x"}]
+        with memory.connect(":memory:") as db:
+            memory.store_raw(db, "issue:1", 1, "issue", issue)
+            memory.store_raw(db, "files:1", 1, "files", files)
+            stored = {
+                row[0]: json.loads(row[1])
+                for row in db.execute("SELECT key, payload FROM raw")
+            }
+            self.assertEqual(
+                stored["issue:1"],
+                {
+                    "number": 1,
+                    "title": "t",
+                    "body": "b",
+                    "state": "open",
+                    "user": {"login": "a", "type": "User"},
+                    "pull_request": {"merged_at": None},
+                },
+            )
+            self.assertEqual(
+                stored["files:1"], [{"filename": "src/a.rs", "patch": "@@ -1 +1 @@"}]
+            )
+            db.execute("DELETE FROM stale")
+            # A change only to a field memory does not read is no change.
+            issue["reactions"] = {"+1": 4}
+            self.assertFalse(memory.store_raw(db, "issue:1", 1, "issue", issue))
+            self.assertIsNone(db.execute("SELECT 1 FROM stale").fetchone())
+
+    def test_a_store_from_before_the_trim_is_trimmed_once_when_opened(self):
+        memory = self.memory_module()
+        token = "ghp_" + "B" * 36
+        # Imported from a snapshot published before records were trimmed: the
+        # commit's one redaction sat in its message, which memory does not keep,
+        # while the comment's sits in its body, which it does.
+        commits, fields = memory.project_payload(
+            [{"sha": "a" * 40, "commit": {"message": "use " + token}}]
+        )
+        self.assertEqual(fields, 1)
+        dates = {
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+        }
+        issue = dict(
+            dates,
+            number=1,
+            title="t",
+            body="b",
+            state="open",
+            html_url="https://github.com/o/r/issues/1",
+            reactions={"+1": 3},
+        )
+        comment = dict(
+            dates,
+            id=9,
+            body="[redacted:github]",
+            html_url="https://github.com/o/r/issues/1#c9",
+            reactions={"+1": 1},
+        )
+        path = str(self.dir / "old.db")
+        with memory.connect(path) as db:
+            for key, kind, payload in (
+                ("issue:1", "issue", issue),
+                ("issue_comment:9", "issue_comment", comment),
+                ("commits:1", "commits", commits),
+            ):
+                db.execute(
+                    "INSERT INTO raw VALUES (?,?,?,?,?)",
+                    (key, 1, kind, json.dumps(payload), "t"),
+                )
+            db.executemany(
+                "INSERT INTO public_projection VALUES (?, 1)",
+                [("issue_comment:9",), ("commits:1",)],
+            )
+            db.execute("PRAGMA user_version = {}".format(memory.VERSION - 1))
+        with memory.connect(path) as db:
+            stored = {
+                row[0]: json.loads(row[1])
+                for row in db.execute("SELECT key, payload FROM raw")
+            }
+            self.assertEqual(stored["issue:1"], memory.source_record("issue", issue))
+            self.assertEqual(stored["commits:1"], [{"sha": "a" * 40}])
+            self.assertEqual(
+                [tuple(r) for r in db.execute("SELECT * FROM public_projection")],
+                [("issue_comment:9", 1)],
+            )
+            self.assertIsNone(db.execute("SELECT 1 FROM stale").fetchone())
+            self.assertIsNotNone(
+                db.execute("SELECT 1 FROM documents WHERE key='body:1'").fetchone()
+            )
+            self.assertEqual(
+                db.execute("PRAGMA user_version").fetchone()[0], memory.VERSION
+            )
+
+    def test_a_store_from_a_newer_version_is_not_trimmed(self):
+        memory = self.memory_module()
+        # A newer checkout sharing the store may keep a field this one drops.
+        issue = {
+            "number": 1,
+            "title": "t",
+            "body": "b",
+            "state": "open",
+            "html_url": "https://github.com/o/r/issues/1",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "labels": [{"name": "bug"}],
+        }
+        path = str(self.dir / "newer.db")
+        with memory.connect(path) as db:
+            db.execute(
+                "INSERT INTO raw VALUES (?,?,?,?,?)",
+                ("issue:1", 1, "issue", json.dumps(issue), "t"),
+            )
+            db.execute("PRAGMA user_version = {}".format(memory.VERSION + 1))
+        with memory.connect(path) as db:
+            stored = json.loads(
+                db.execute("SELECT payload FROM raw WHERE key='issue:1'").fetchone()[0]
+            )
+            self.assertEqual(stored["labels"], [{"name": "bug"}])
+
     def test_unrelated_edits_keep_projected_body_hashes_stable(self):
         memory = self.memory_module()
         self.run_memory("backfill")
@@ -1594,7 +1725,7 @@ class EvidenceSafetyTests(MemoryCase):
                 before = public.execute(
                     "SELECT hash FROM documents WHERE key='body:1'"
                 ).fetchone()[0]
-                payload["comments"] = 100
+                payload["updated_at"] = "2026-12-01T00:00:00Z"
                 self.assertTrue(
                     memory.store_raw(public, "issue:1", 1, "issue", payload)
                 )
@@ -2328,8 +2459,11 @@ class SyncTests(MemoryCase):
             if path.endswith("/pulls/9"):
                 return dict(pull)
             # Each read of files or commits answers differently, so what is
-            # stored says which read it came from.
-            return [] if "/reviews" in path else [{"of": calls[-1]}]
+            # stored says which read it came from: a file keeps its name and a
+            # commit its SHA.
+            if "/reviews" in path:
+                return []
+            return [{"filename": calls[-1], "sha": calls[-1], "dropped": 1}]
 
         def stored():
             return {
@@ -2359,7 +2493,10 @@ class SyncTests(MemoryCase):
                 # replaces it with what that fetch read.
                 if "9/files" in expect:
                     self.assertEqual(
-                        {k: v[0]["of"] for k, v in stored().items()},
+                        {
+                            k: v[0].get("filename", v[0].get("sha"))
+                            for k, v in stored().items()
+                        },
                         {"files:9": "9/files", "commits:9": "9/commits"},
                     )
                 else:
