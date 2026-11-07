@@ -28,7 +28,8 @@ case "$*" in
         printf 'true\ttrue\tweb/a.js\t3\tmaint\tFixed.\n'
         ;;
     # gh applies --jq itself: the status, then how many merges the run holds.
-    "api repos/sysprog21/codetrial/compare/c0ffee1...h1 --jq "*)
+    "api repos/sysprog21/codetrial/compare/${FAKE_SINCE:-c0ffee1}...${FAKE_HEAD:-h1} --jq "*)
+        [ "${FAKE_COMPARE:-}" != fail ] || exit 1
         echo "${FAKE_COMPARE:-ahead 0}"
         ;;
     "api repos/sysprog21/codetrial/compare/c0ffee1...h1 -H Accept: application/vnd.github.diff")
