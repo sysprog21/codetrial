@@ -548,9 +548,10 @@ function bindWorkspaceTestPanel(nodes, panel) {
   // field. Those keep the chord, since on some platforms it types a line break
   // there, as in the report's STAR answers. The button's disabled state is the
   // guard, but the button stays enabled during the media preflight and after
-  // the interview ends, so those are checked here. Everywhere else the chord
-  // is taken, so it never types a newline into the code or presses the
-  // focused button.
+  // the interview ends, so those are checked here, and so is a test panel the
+  // page reports covered, as an expanded Example drawing covers the results a
+  // run would write. Everywhere else the chord is taken, so it never types a
+  // newline into the code or presses the focused button.
   document.addEventListener("keydown", (event) => {
     // Some input methods end composition before its confirming keydown. The
     // legacy IME code remains 229 even when isComposing is already false.
@@ -569,7 +570,7 @@ function bindWorkspaceTestPanel(nodes, panel) {
     )
       return;
     event.preventDefault();
-    if (event.repeat || !panel.execution()) return;
+    if (event.repeat || !panel.execution() || panel.covered()) return;
     if (nodes.audioCheck.hidden && !panel.closed()) nodes.run.click();
   });
 }

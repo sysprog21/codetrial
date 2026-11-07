@@ -1405,6 +1405,7 @@ function bindEvents() {
         run: runTests,
         execution: () => editorOptions.execution,
         closed: codingClosed,
+        covered: () => exampleBoard?.expanded(),
       },
       get language() {
         return state.language;
@@ -5345,24 +5346,37 @@ function testDrawerBounds() {
 /// Takes the avatar off a panel too narrow to carry it, or a window, leaving
 /// the captions. The window's width alone stopped being enough to tell once
 /// the sidebar could be widened: at 1280px the editor can be 592px with the
-/// avatar still over it. One class for both, so the stylesheet says what
-/// compact looks like once, and the avatar's own width observer pauses and
-/// resumes its drawing from the result.
+/// avatar still over it. An expanded Example drawing takes the panel's room
+/// the same way, so Jim's captions stay over a corner of the board. One class
+/// for all three, so the stylesheet says what compact looks like once, and
+/// the avatar's own width observer pauses and resumes its drawing from the
+/// result.
 function compactJimStageBesideNarrowPanel(panel) {
   const narrowWindow = matchMedia(JIM_STAGE_NARROW_WINDOW);
+  const board = document.querySelector("#example-board");
   const fit = () => {
     const rem = Number.parseFloat(
       getComputedStyle(document.documentElement).fontSize,
     );
-    nodes.jimStage.classList.toggle(
-      "compact",
+    const compact =
       narrowWindow.matches ||
-        panel.getBoundingClientRect().width < JIM_AVATAR_PANEL_MIN_REM * rem,
-    );
+      panel.getBoundingClientRect().width < JIM_AVATAR_PANEL_MIN_REM * rem ||
+      board?.hasAttribute("data-expanded") === true;
+    nodes.jimStage.classList.toggle("compact", compact);
+    // Hide avatar goes with the avatar, so focus left on it moves to the
+    // stage, as when an automatic turn-off hides the button.
+    if (compact && document.activeElement === nodes.hideAvatar)
+      nodes.jimStage.focus({ preventScroll: true });
   };
   if (window.ResizeObserver) new window.ResizeObserver(fit).observe(panel);
   else window.addEventListener("resize", fit);
   narrowWindow.addEventListener("change", fit);
+  // The whiteboard page has no editor panel, so no board to watch.
+  if (board)
+    new MutationObserver(fit).observe(board, {
+      attributes: true,
+      attributeFilter: ["data-expanded"],
+    });
   fit();
 }
 

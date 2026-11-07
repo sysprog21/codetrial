@@ -280,6 +280,495 @@ test("the wait keeps Jim heard and the recording withdrawable", async (t) => {
   }
 });
 
+// #579's own case: a 13.6-inch MacBook Air window with the divider at its
+// maximum, where the editor panel overflows by a few pixels. The expanded
+// board must not scroll with it and show what it covers.
+test("the expanded Example drawing stays at the panel's top when the panel could scroll, and the scroll comes back on shrink", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const page = await browser.newPage({
+    viewport: { width: 1250, height: 630 },
+  });
+  try {
+    await page.goto(
+      `${base}/interview.html?problem=chargeback-pair-match&exampleDrawing=1`,
+      { waitUntil: "domcontentloaded" },
+    );
+    await page.waitForFunction(
+      () => document.querySelector("#candidate-case-input").placeholder !== "",
+    );
+    await closeSetupCheck(page);
+    await page.locator("#example-board").evaluate((node) => (node.open = true));
+    await page.locator(".drawer-resizer").focus();
+    await page.keyboard.press("End");
+    const offset = () =>
+      page.evaluate(() => {
+        const panel = document.querySelector(".editor-panel");
+        const pane = document.querySelector(".example-pane");
+        return Math.round(
+          pane.getBoundingClientRect().top - panel.getBoundingClientRect().top,
+        );
+      });
+    // Scrolled before expanding, and wheeled over the board after.
+    const scrolled = await page
+      .locator(".editor-panel")
+      .evaluate(
+        (panel) => (panel.scrollTop = panel.scrollHeight) && panel.scrollTop,
+      );
+    assert.ok(scrolled > 0, "the panel can scroll at this size");
+    await page.getByRole("button", { name: "Expand drawing" }).click();
+    assert.ok(
+      Math.abs(await offset()) <= 1,
+      "the pane starts at the panel's top",
+    );
+    const pane = await page.locator(".example-pane").boundingBox();
+    await page.mouse.move(pane.x + pane.width / 2, pane.y + pane.height / 2);
+    await page.mouse.wheel(0, 300);
+    // The wheel scrolls on a later frame.
+    await page.evaluate(
+      () =>
+        new Promise((done) =>
+          requestAnimationFrame(() => requestAnimationFrame(done)),
+        ),
+    );
+    assert.ok(Math.abs(await offset()) <= 1, "and stays there under the wheel");
+    // Shrinking puts the panel back where the candidate had scrolled it.
+    await page.getByRole("button", { name: "Shrink drawing" }).click();
+    assert.equal(
+      await page.locator(".editor-panel").evaluate((panel) => panel.scrollTop),
+      scrolled,
+      "the panel's scroll comes back on shrink",
+    );
+  } finally {
+    await page.close();
+  }
+});
+
+// The drawer sizes the docked drawing from its own layout, which an expanded
+// board is not in: a resize while expanded must neither measure it from the
+// floating box nor leave a wrong height for the docked board to come back to.
+test("a resize while expanded leaves the docked height alone until shrinking sizes it for the new window", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const page = await browser.newPage({
+    viewport: { width: 1280, height: 800 },
+  });
+  try {
+    await page.goto(
+      `${base}/interview.html?problem=chargeback-pair-match&exampleDrawing=1`,
+      { waitUntil: "domcontentloaded" },
+    );
+    await page.waitForFunction(
+      () => document.querySelector("#candidate-case-input").placeholder !== "",
+    );
+    await closeSetupCheck(page);
+    await page.locator("#example-board").evaluate((node) => (node.open = true));
+    // The drawer repaints from observers, a frame or two after a change.
+    const settled = () =>
+      page.evaluate(
+        () =>
+          new Promise((done) =>
+            requestAnimationFrame(() => requestAnimationFrame(done)),
+          ),
+      );
+    const surface = () =>
+      page
+        .locator(".example-surface")
+        .evaluate((node) => node.getBoundingClientRect().height);
+    const reserved = () =>
+      page.locator(".example-surface").evaluate((node) => node.style.height);
+    // The divider at its maximum, which the shorter window then lowers, so
+    // the docked drawing must come back shorter than it left.
+    await page.locator(".drawer-resizer").focus();
+    await page.keyboard.press("End");
+    await settled();
+    const docked = await reserved();
+    await page.getByRole("button", { name: "Expand drawing" }).click();
+    await page.setViewportSize({ width: 1280, height: 600 });
+    await settled();
+    // The resize repaints the drawer, which leaves the expanded board's docked
+    // height alone rather than measuring it from the box the board floats in.
+    assert.equal(await reserved(), docked, "while expanded");
+    await page.getByRole("button", { name: "Shrink drawing" }).click();
+    await settled();
+    const back = await surface();
+    // What the drawer gives the drawing at this size when it paints afresh.
+    await page
+      .locator("#results-body")
+      .evaluate((node) => (node.hidden = !node.hidden));
+    await settled();
+    await page
+      .locator("#results-body")
+      .evaluate((node) => (node.hidden = !node.hidden));
+    await settled();
+    assert.ok(Math.abs(back - (await surface())) <= 1, `${back}px`);
+  } finally {
+    await page.close();
+  }
+});
+
+// A resize while expanded changes the docked strip's height, which the drawer
+// measures again only after the board shrinks; the strip's scroll waits for
+// that, or it is clamped against the old height and lands short.
+test("a resize while expanded keeps the docked strip's scroll on shrink", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const page = await browser.newPage({
+    viewport: { width: 1440, height: 900 },
+  });
+  try {
+    await page.goto(
+      `${base}/interview.html?problem=chargeback-pair-match&exampleDrawing=1`,
+      { waitUntil: "domcontentloaded" },
+    );
+    await page.waitForFunction(
+      () => document.querySelector("#candidate-case-input").placeholder !== "",
+    );
+    await closeSetupCheck(page);
+    await page.locator("#example-board").evaluate((node) => (node.open = true));
+    await page.locator(".drawer-resizer").focus();
+    await page.keyboard.press("End");
+    const settled = () =>
+      page.evaluate(
+        () =>
+          new Promise((done) =>
+            requestAnimationFrame(() => requestAnimationFrame(done)),
+          ),
+      );
+    await settled();
+    const strip = page.locator(".example-surface");
+    const scrolled = await strip.evaluate(
+      (node) => (node.scrollTop = node.scrollHeight) && node.scrollTop,
+    );
+    assert.ok(scrolled > 0, "the strip can scroll at this size");
+    await page.getByRole("button", { name: "Expand drawing" }).click();
+    await page.setViewportSize({ width: 1280, height: 700 });
+    await settled();
+    await page.getByRole("button", { name: "Shrink drawing" }).click();
+    await settled();
+    const back = await strip.evaluate((node) => ({
+      top: node.scrollTop,
+      max: node.scrollHeight - node.clientHeight,
+    }));
+    assert.ok(back.max >= scrolled, "the new strip can hold the old scroll");
+    assert.equal(back.top, scrolled);
+  } finally {
+    await page.close();
+  }
+});
+
+// The panel's own layers under an expanded board: the Test results chevron is
+// transformed, which would paint it over a board with no stacking order of its
+// own. Inert nodes are skipped by hit-testing, which is not what is painted,
+// so the chevron's covered ancestor is let back in for the one lookup.
+test("an expanded Example drawing is drawn over the editor panel's own layers", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const page = await browser.newPage({
+    viewport: { width: 1280, height: 800 },
+  });
+  try {
+    await page.goto(
+      `${base}/interview.html?problem=chargeback-pair-match&exampleDrawing=1`,
+      { waitUntil: "domcontentloaded" },
+    );
+    await page.waitForFunction(
+      () => document.querySelector("#candidate-case-input").placeholder !== "",
+    );
+    await closeSetupCheck(page);
+    await page.locator("#example-board").evaluate((node) => (node.open = true));
+    await page.getByRole("button", { name: "Expand drawing" }).click();
+    const onBoard = await page.evaluate(() => {
+      const chevron = document.querySelector("#results-chevron");
+      const covered = chevron.closest("[inert]");
+      covered.inert = false;
+      const box = chevron.getBoundingClientRect();
+      const hit = document.elementFromPoint(
+        box.x + box.width / 2,
+        box.y + box.height / 2,
+      );
+      covered.inert = true;
+      return Boolean(hit.closest(".example-pane"));
+    });
+    assert.ok(onBoard, "the chevron is under the board");
+  } finally {
+    await page.close();
+  }
+});
+
+// Each of the page's own overlays over an expanded board, on the real page:
+// the pane sits under them, so whichever one opens is what the candidate sees.
+test("an expanded Example drawing stays under the setup check, the ending wait and the report", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const page = await browser.newPage({
+    viewport: { width: 1280, height: 800 },
+  });
+  try {
+    await page.goto(
+      `${base}/interview.html?problem=chargeback-pair-match&exampleDrawing=1`,
+      { waitUntil: "domcontentloaded" },
+    );
+    await page.waitForFunction(
+      () => document.querySelector("#candidate-case-input").placeholder !== "",
+    );
+    await closeSetupCheck(page);
+    await page.locator("#example-board").evaluate((node) => (node.open = true));
+    await page.getByRole("button", { name: "Expand drawing" }).click();
+    for (const overlay of [
+      "#audio-check",
+      "#ending-overlay",
+      "#report-modal",
+    ]) {
+      const covered = await page.evaluate((overlay) => {
+        const node = document.querySelector(overlay);
+        node.hidden = false;
+        const pane = document
+          .querySelector(".example-pane")
+          .getBoundingClientRect();
+        const hit = document.elementFromPoint(
+          pane.x + pane.width / 2,
+          pane.y + pane.height / 2,
+        );
+        node.hidden = true;
+        return node.contains(hit);
+      }, overlay);
+      assert.ok(covered, overlay);
+    }
+  } finally {
+    await page.close();
+  }
+});
+
+// On the real page, wide and narrow: expanding makes Jim's stage the compact
+// card a narrow window already has, so the captions stay on top of the board
+// while the avatar and Hide avatar go; shrinking gives the wide window its full
+// stage back.
+test("an expanded Example drawing turns Jim's stage into the compact card over the board", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  for (const [width, height, docked] of [
+    [1440, 900, false],
+    [900, 800, true],
+  ]) {
+    const size = `${width}x${height}`;
+    const page = await browser.newPage({ viewport: { width, height } });
+    try {
+      await page.goto(
+        `${base}/interview.html?problem=chargeback-pair-match&exampleDrawing=1`,
+        { waitUntil: "domcontentloaded" },
+      );
+      await page.waitForFunction(
+        () =>
+          document.querySelector("#candidate-case-input").placeholder !== "",
+      );
+      await closeSetupCheck(page);
+      await page
+        .locator("#example-board")
+        .evaluate((node) => (node.open = true));
+      const compact = () =>
+        page
+          .locator("#jim-stage")
+          .evaluate((node) => node.classList.contains("compact"));
+      // Whether the element at the centre of `selector` is inside it.
+      const onTop = (selector) =>
+        page.evaluate((selector) => {
+          const node = document.querySelector(selector);
+          const box = node.getBoundingClientRect();
+          return node.contains(
+            document.elementFromPoint(
+              box.x + box.width / 2,
+              box.y + box.height / 2,
+            ),
+          );
+        }, selector);
+      assert.equal(await compact(), docked, size);
+      // The avatar's mount has no width, which is what stops its drawing, and
+      // Hide avatar goes with it; a wide window has both before expanding.
+      const avatar = () =>
+        page.evaluate(() => [
+          document.querySelector("#jim-avatar").clientWidth > 0,
+          getComputedStyle(document.querySelector("#jim-stage .hide-avatar"))
+            .display !== "none",
+        ]);
+      assert.deepEqual(await avatar(), [!docked, !docked], size);
+      await page.getByRole("button", { name: "Expand drawing" }).click();
+      // The class follows on the observer's microtask.
+      await page.waitForFunction(() =>
+        document.querySelector("#jim-stage").classList.contains("compact"),
+      );
+      assert.ok(await onTop("#captions-bar"), size);
+      assert.deepEqual(await avatar(), [false, false], size);
+      // The card's volume slider, under Audio controls, keeps Escape for itself.
+      await page
+        .locator("#jim-stage .jim-volume-controls")
+        .evaluate((node) => (node.open = true));
+      await page.locator("#jim-volume").focus();
+      assert.equal(
+        await page.evaluate(() => document.activeElement.id),
+        "jim-volume",
+        size,
+      );
+      await page.keyboard.press("Escape");
+      assert.equal(
+        await page
+          .locator("#example-board")
+          .evaluate((node) => node.hasAttribute("data-expanded")),
+        true,
+        size,
+      );
+      // Blocked audio puts Resume audio in the card, on top as well.
+      await page.evaluate(
+        () => (document.querySelector("#audio-playback-notice").hidden = false),
+      );
+      assert.ok(await onTop("#resume-audio"), size);
+      await page.evaluate(
+        () => (document.querySelector("#audio-playback-notice").hidden = true),
+      );
+      await page.getByRole("button", { name: "Shrink drawing" }).click();
+      await page.waitForFunction(
+        (docked) =>
+          document.querySelector("#jim-stage").classList.contains("compact") ===
+          docked,
+        docked,
+      );
+    } finally {
+      await page.close();
+    }
+  }
+});
+
+// Safari and Firefox on macOS leave focus where it was on a click, so it can
+// still be on Hide avatar when the card hides that button; it moves to the
+// stage, as when an automatic turn-off hides it.
+test("expanding with focus on Hide avatar moves it to Jim's stage", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const page = await browser.newPage({
+    viewport: { width: 1440, height: 900 },
+  });
+  try {
+    await page.goto(
+      `${base}/interview.html?problem=chargeback-pair-match&exampleDrawing=1`,
+      { waitUntil: "domcontentloaded" },
+    );
+    await page.waitForFunction(
+      () => document.querySelector("#candidate-case-input").placeholder !== "",
+    );
+    await closeSetupCheck(page);
+    await page.locator("#example-board").evaluate((node) => (node.open = true));
+    await page.locator("#hide-avatar").focus();
+    // A resize that leaves the window wide keeps the button, and its focus.
+    await page.setViewportSize({ width: 1400, height: 900 });
+    await page.evaluate(
+      () =>
+        new Promise((done) =>
+          requestAnimationFrame(() => requestAnimationFrame(done)),
+        ),
+    );
+    assert.equal(
+      await page.evaluate(() => document.activeElement.id),
+      "hide-avatar",
+    );
+    // A scripted click moves no focus, as those browsers' clicks do not.
+    await page
+      .locator("#example-board [data-action=expand]")
+      .evaluate((node) => node.click());
+    await page.waitForFunction(() =>
+      document.querySelector("#jim-stage").classList.contains("compact"),
+    );
+    assert.equal(
+      await page.evaluate(() => document.activeElement.id),
+      "jim-stage",
+    );
+  } finally {
+    await page.close();
+  }
+});
+
+// The wait for the report over an expanded board: its own rule lifts Jim's card
+// over the dialog so his closing lines are seen, and the board behind the
+// dialog is inert, so Escape from the card leaves it expanded.
+test("over an expanded Example drawing the ending wait lifts Jim's card and keeps Escape from the board", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const page = await browser.newPage({
+    viewport: { width: 1440, height: 900 },
+  });
+  try {
+    await page.goto(
+      `${base}/interview.html?problem=chargeback-pair-match&exampleDrawing=1`,
+      { waitUntil: "domcontentloaded" },
+    );
+    await page.waitForFunction(
+      () => document.querySelector("#candidate-case-input").placeholder !== "",
+    );
+    await closeSetupCheck(page);
+    await page.locator("#example-board").evaluate((node) => (node.open = true));
+    await page.getByRole("button", { name: "Expand drawing" }).click();
+    await page
+      .locator("#ending-overlay")
+      .evaluate((node) => (node.hidden = false));
+    // The page makes the workspace inert on the observer's microtask.
+    await page.waitForFunction(
+      () => document.querySelector(".editor-panel").inert,
+    );
+    const captions = await page.evaluate(() => {
+      const bar = document.querySelector("#captions-bar");
+      const box = bar.getBoundingClientRect();
+      return bar.contains(
+        document.elementFromPoint(
+          box.x + box.width / 2,
+          box.y + box.height / 2,
+        ),
+      );
+    });
+    assert.ok(captions, "the card's captions are over the wait");
+    await page.locator("#jim-stage").focus();
+    await page.keyboard.press("Escape");
+    assert.equal(
+      await page
+        .locator("#example-board")
+        .evaluate((node) => node.hasAttribute("data-expanded")),
+      true,
+    );
+  } finally {
+    await page.close();
+  }
+});
+
+// The whiteboard page has no Example drawing to expand, so only the window and
+// its panel decide: a wide one keeps Jim's full stage, resize after resize.
+test("the whiteboard page keeps Jim's full stage in a wide window", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const page = await browser.newPage({
+    viewport: { width: 1440, height: 900 },
+  });
+  try {
+    await page.goto(
+      `${base}/interview.html?problem=chargeback-pair-match&mode=whiteboard`,
+      { waitUntil: "domcontentloaded" },
+    );
+    await page.waitForFunction(
+      () => document.querySelector(".editor-panel") === null,
+    );
+    const compact = () =>
+      page.evaluate(
+        () =>
+          new Promise((done) =>
+            requestAnimationFrame(() =>
+              requestAnimationFrame(() =>
+                done(
+                  document
+                    .querySelector("#jim-stage")
+                    .classList.contains("compact"),
+                ),
+              ),
+            ),
+          ),
+      );
+    assert.equal(await compact(), false);
+    for (const width of [1400, 1440]) {
+      await page.setViewportSize({ width, height: 900 });
+      assert.equal(await compact(), false, `${width}`);
+    }
+  } finally {
+    await page.close();
+  }
+});
+
 // On a phone the compact stage runs along the bottom edge above the wait, so a
 // long closing line must not grow it over the wait's own buttons.
 test("on a phone Jim's closing lines leave the wait's buttons reachable", async (t) => {

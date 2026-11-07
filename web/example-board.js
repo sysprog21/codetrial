@@ -16,10 +16,15 @@ const TOOL_ICONS = {
   eraser: '<path d="m4 14 9-10 7 7-9 10H7Z M8 10l7 7 M11 21h10"/>',
   undo: '<path d="m9 5-5 5 5 5 M4 10h10a6 6 0 0 1 0 12"/>',
   clear: '<path d="M3 6h18 M9 6V3h6v3 M5 6l1 15h12l1-15 M10 10v7 M14 10v7"/>',
+  expand: '<path d="M4 9V4h5 M15 4h5v5 M20 15v5h-5 M9 20H4v-5"/>',
+  shrink: '<path d="M9 4v5H4 M20 9h-5V4 M15 20v-5h5 M4 15h5v5"/>',
 };
 
-function setToolIcon(button, name) {
-  const label = name[0].toUpperCase() + name.slice(1);
+function setToolIcon(
+  button,
+  name,
+  label = name[0].toUpperCase() + name.slice(1),
+) {
   button.setAttribute("aria-label", label);
   button.title = name === "clear" ? "Clear drawing; Undo restores it" : label;
   button.classList.add("example-tool-icon");
@@ -44,10 +49,21 @@ export function mountExampleBoard(
   const model = createBoard();
   const pointers = createPointerGate();
   const tools = root.querySelector("[data-tools]");
-  const status = root.querySelector(":scope > [role=status]");
+  // The interview wraps the board in `.example-pane` so it can lift out of
+  // the drawer; the task page keeps it directly under the details element.
+  const status = root.querySelector(
+    ":scope > [role=status], :scope > .example-pane > [role=status]",
+  );
+  const expand = root.querySelector("[data-action=expand]");
+  const pane = root.querySelector(":scope > .example-pane");
+  const panel = root.closest(".editor-panel");
+  const strip = canvas.parentElement;
   let tool = "pen";
   let color = PEN_COLORS[0].color;
   let drag = null;
+  let scrollBack = 0;
+  let stripBack = [0, 0];
+  let covered = [];
   let settle = null;
   let unsentSince = 0;
   let dirty = false;
@@ -269,13 +285,106 @@ export function mountExampleBoard(
   });
   canvas.addEventListener("pointercancel", cancel);
   canvas.addEventListener("lostpointercapture", cancel);
+  // Expanding moves no element: the pane is restyled in place, so the canvas,
+  // its strokes and anything waiting to reach Jim stay exactly as they were.
+  // Only the drawn size changes, and `boardPoint` already scales by it.
+  function expandBoard() {
+    // Read before the restyle, which can clamp the drawing's scroll.
+    scrollBack = panel.scrollTop;
+    stripBack = [strip.scrollTop, strip.scrollLeft];
+    root.setAttribute("data-expanded", "");
+    setToolIcon(expand, "shrink", "Shrink drawing");
+    // The panel can scroll a little on a short screen, and the pane would
+    // scroll with it; the stylesheet stops it scrolling while expanded. A text
+    // box near the bottom keeps its controls below the canvas, so the drawing
+    // can still scroll; it starts from the canvas's top.
+    panel.scrollTop = 0;
+    strip.scrollTop = 0;
+    // What the pane covers leaves the tab order with it, or Shift+Tab walks
+    // into a code editor nobody can see. The sidebar is outside the panel.
+    // Only what this makes inert is given back, so a node held inert by
+    // something else stays so.
+    covered = [];
+    for (let node = pane; node !== panel; node = node.parentElement)
+      for (const sibling of node.parentElement.children)
+        if (sibling !== node && !sibling.inert) {
+          sibling.inert = true;
+          covered.push(sibling);
+        }
+    // A click focuses the button in Chromium but not in Safari or Firefox on
+    // macOS, so focus left in what is now covered moves to the button.
+    if (document.activeElement.closest("[inert]")) expand.focus();
+  }
+  function shrinkBoard() {
+    if (!root.hasAttribute("data-expanded")) return;
+    root.removeAttribute("data-expanded");
+    setToolIcon(expand, "expand", "Expand drawing");
+    for (const sibling of covered) sibling.inert = false;
+    // The panel and the strip go back where the candidate had them, once the
+    // drawer's observer has measured the docked height again after this
+    // returns; restored before it, the strip is clamped against its old
+    // height after a resize while expanded.
+    const [top, left] = stripBack;
+    queueMicrotask(() => {
+      panel.scrollTop = scrollBack;
+      strip.scrollTop = top;
+      strip.scrollLeft = left;
+    });
+  }
+  if (expand) {
+    setToolIcon(expand, "expand", "Expand drawing");
+    expand.addEventListener("click", () => {
+      if (drag || textDraft.busy()) return;
+      if (root.hasAttribute("data-expanded")) shrinkBoard();
+      else expandBoard();
+    });
+    // Not a modal dialog: the sidebar's turn and mute controls stay usable
+    // while the board is large, so Escape is handled here rather than by
+    // `showModal`. A text draft claims Escape first and stops it. An ink
+    // stroke takes no focus, so after a sidebar button the key still arrives
+    // there. A field or a dialog keeps Escape for itself, and so does an
+    // input method, a modifier chord, a held key or a handler that already
+    // took it. Under a dialog the board is inert, so a key from Jim's stage,
+    // which the ending wait lifts over that dialog, is not the board's; with
+    // no dialog the stage's card is like the sidebar. The Escape that shrinks
+    // the board is marked as taken, so a later listener does not act on it
+    // too; one while docked passes through untouched.
+    document.addEventListener("keydown", (event) => {
+      if (
+        event.key !== "Escape" ||
+        event.isComposing ||
+        event.keyCode === 229 ||
+        event.repeat ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.shiftKey ||
+        drag ||
+        textDraft.busy() ||
+        root.closest("[inert]") ||
+        event.defaultPrevented ||
+        event.target.closest?.("input, textarea, select, dialog, [role=dialog]")
+      )
+        return;
+      if (!root.hasAttribute("data-expanded")) return;
+      event.preventDefault();
+      shrinkBoard();
+    });
+  }
   root.addEventListener("toggle", () => {
-    if (!root.open) cancelTurn?.();
-    if (!root.open && drag) {
-      model.cancel();
-      drag = null;
-      if (previewShared) dirty = true;
-      previewShared = false;
+    // Nothing on the page closes it while expanded, but whatever does must
+    // not leave the editor inert under a board that is gone. Everything a
+    // close undoes is here: the board shrinks, then the turn and any stroke
+    // are cancelled.
+    if (!root.open) {
+      shrinkBoard();
+      cancelTurn?.();
+      if (drag) {
+        model.cancel();
+        drag = null;
+        if (previewShared) dirty = true;
+        previewShared = false;
+      }
     }
     paint();
     if (dirty && !drag) schedule();
@@ -285,6 +394,7 @@ export function mountExampleBoard(
   paint();
   return {
     refresh: paint,
+    expanded: () => root.hasAttribute("data-expanded"),
     async flush() {
       const deadline = Date.now() + 2000;
       while (uploading && Date.now() < deadline)
