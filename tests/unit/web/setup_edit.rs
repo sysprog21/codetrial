@@ -217,6 +217,7 @@ impl Server {
             production: false,
             compiler_explorer_enabled: false,
             guest_mode_enabled: true,
+            default_duration_min: crate::config::DEFAULT_DURATION_MIN,
             trusted_proxy_hops: 0,
             allowed_hosts: Vec::new(),
             recording: None,

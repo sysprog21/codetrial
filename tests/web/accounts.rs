@@ -129,7 +129,7 @@ async fn account_routes_record_interviewee_github_login() {
     assert_eq!(
         session.json::<Value>().await.unwrap(),
         json!({"signedIn": false, "loginRequired": true,
-                "guestModeAvailable": true, "deviceLogin": false, "maxDurationMin": MAX_DURATION_MIN,
+                "guestModeAvailable": true, "deviceLogin": false, "maxDurationMin": MAX_DURATION_MIN, "defaultDurationMin": DEFAULT_DURATION_MIN,
                 "peerEnabled": false, "peerMaxRoundMinutes": null, "peerObserverAvailable": false, "peerAudioAvailable": false, "candidateVideo": null})
     );
 
@@ -329,7 +329,7 @@ async fn an_unmigratable_account_database_refuses_rather_than_disabling_login() 
     assert_eq!(
         session,
         json!({"signedIn": false, "loginRequired": true,
-                "guestModeAvailable": false, "deviceLogin": false, "maxDurationMin": MAX_DURATION_MIN,
+                "guestModeAvailable": false, "deviceLogin": false, "maxDurationMin": MAX_DURATION_MIN, "defaultDurationMin": DEFAULT_DURATION_MIN,
                 "peerEnabled": false, "peerMaxRoundMinutes": null, "peerObserverAvailable": false, "peerAudioAvailable": false, "candidateVideo": null}),
         "a database this binary cannot migrate still requires a login"
     );
@@ -371,7 +371,7 @@ async fn an_unopenable_account_database_refuses_rather_than_disabling_login() {
     assert_eq!(
         session,
         json!({"signedIn": false, "loginRequired": true,
-                "guestModeAvailable": false, "deviceLogin": false, "maxDurationMin": MAX_DURATION_MIN,
+                "guestModeAvailable": false, "deviceLogin": false, "maxDurationMin": MAX_DURATION_MIN, "defaultDurationMin": DEFAULT_DURATION_MIN,
                 "peerEnabled": false, "peerMaxRoundMinutes": null, "peerObserverAvailable": false, "peerAudioAvailable": false, "candidateVideo": null}),
         "a broken database still requires a login; it cannot serve one"
     );
@@ -428,7 +428,7 @@ async fn an_unopenable_account_database_refuses_rather_than_disabling_login() {
             "signedIn": false,
             "loginRequired": false,
             "guestModeAvailable": true, "deviceLogin": false,
-            "maxDurationMin": MAX_DURATION_MIN,
+            "maxDurationMin": MAX_DURATION_MIN, "defaultDurationMin": DEFAULT_DURATION_MIN,
             "peerEnabled": false, "peerMaxRoundMinutes": null, "peerObserverAvailable": false, "peerAudioAvailable": false, "candidateVideo": null
         }),
         "nothing to sign in to, and the lobby has to be told so"
@@ -1084,7 +1084,7 @@ async fn account_reports_are_scoped_to_the_signed_in_user() {
     assert_eq!(
         signed_out,
         json!({"signedIn": false, "loginRequired": true,
-                "guestModeAvailable": true, "deviceLogin": false, "maxDurationMin": MAX_DURATION_MIN,
+                "guestModeAvailable": true, "deviceLogin": false, "maxDurationMin": MAX_DURATION_MIN, "defaultDurationMin": DEFAULT_DURATION_MIN,
                 "peerEnabled": false, "peerMaxRoundMinutes": null, "peerObserverAvailable": false, "peerAudioAvailable": false, "candidateVideo": null}),
         "accounts exist here, so the browser has to know to demand a sign-in"
     );

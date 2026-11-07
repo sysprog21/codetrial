@@ -92,6 +92,9 @@ pub struct WebServerConfig {
     pub compiler_explorer_enabled: bool,
     /// Guest interviews require explicit operator opt-in.
     pub guest_mode_enabled: bool,
+    /// `CODETRIAL_DURATION_MIN`: the lobby's preselected length, and the one
+    /// a token request that names none gets.
+    pub default_duration_min: u32,
     /// Number of trusted reverse proxies in front of this server. Zero, the
     /// default, keys rate limiting on the TCP peer. Anything higher reads the
     /// client from `X-Forwarded-For`, which is only safe once every request is
@@ -180,6 +183,7 @@ impl fmt::Debug for WebServerConfig {
             production,
             compiler_explorer_enabled,
             guest_mode_enabled,
+            default_duration_min,
             trusted_proxy_hops,
             allowed_hosts,
             recording,
@@ -212,6 +216,7 @@ impl fmt::Debug for WebServerConfig {
             .field("production", production)
             .field("compiler_explorer_enabled", compiler_explorer_enabled)
             .field("guest_mode_enabled", guest_mode_enabled)
+            .field("default_duration_min", default_duration_min)
             .field("trusted_proxy_hops", trusted_proxy_hops)
             .field("allowed_hosts", allowed_hosts)
             .field("recording", recording)

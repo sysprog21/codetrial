@@ -170,3 +170,202 @@ test("the interviewer controls fit narrow and desktop preflights", async (t) => 
     await page.close();
   }
 });
+
+// A URL that skips the lobby names no length, so the server's configured
+// default decides; sending the provisional 45 would override it.
+for (const [query, sent] of [
+  ["", false],
+  // Neither names a usable length, so neither may override the server default.
+  ["&duration=", false],
+  ["&duration=abc", false],
+  ["&duration=0", false],
+  ["&duration=-5", false],
+  // Trailing text is not a number, so it names no length either.
+  ["&duration=30abc", false],
+  ["&duration=60", 60],
+  // The server keeps fractional minutes, and so does the page.
+  ["&duration=42.8", 42.8],
+]) {
+  test(`the token request ${sent ? "names" : "omits"} the length for ${query || "a URL without duration"}`, async (t) => {
+    if (!browser) return t.skip("playwright chromium unavailable");
+    const page = await browser.newPage();
+    try {
+      await page.route("**/api/token", (route) =>
+        route.fulfill({
+          status: 503,
+          contentType: "application/json",
+          body: JSON.stringify({
+            error: "Token request captured by the test.",
+          }),
+        }),
+      );
+      await page.goto(
+        `${base}/interview.html?problem=chargeback-pair-match${query}`,
+        { waitUntil: "domcontentloaded" },
+      );
+      await page.locator("#audio-heard").click();
+      await page.locator("#camera-skip").click();
+      await page.waitForFunction(
+        () => !document.querySelector("#audio-check-join").disabled,
+      );
+      const request = page.waitForRequest((r) =>
+        r.url().endsWith("/api/token"),
+      );
+      await page.locator("#audio-check-join").click();
+      const body = (await request).postDataJSON();
+      assert.equal(Object.hasOwn(body, "durationMin"), sent !== false);
+      if (sent !== false) assert.equal(body.durationMin, sent);
+    } finally {
+      await page.close();
+    }
+  });
+}
+
+// The round plan is drawn from the length, so a URL with no `duration` waits
+// for the server's default instead of showing 45 minutes and jumping.
+for (const query of ["", "&duration=", "&duration=abc"]) {
+  test(`the round plan for ?${query || "no duration"} waits for the server default`, async (t) => {
+    if (!browser) return t.skip("playwright chromium unavailable");
+    const page = await browser.newPage();
+    try {
+      let release;
+      const held = new Promise((resolve) => (release = resolve));
+      await page.route("**/api/session", async (route) => {
+        await held;
+        await route.fulfill({
+          json: { signedIn: false, defaultDurationMin: 30, maxDurationMin: 90 },
+        });
+      });
+      await page.goto(
+        `${base}/interview.html?problem=chargeback-pair-match&loop=coding_only${query}`,
+        { waitUntil: "domcontentloaded" },
+      );
+      const plan = page.locator("#round-plan-summary");
+      // `renderProblem` writes the title in the same task as `bindEvents`; the
+      // static `#audio-check` is there before either has run.
+      await page.waitForFunction(
+        () =>
+          document.querySelector("#problem-title").textContent !==
+          "Loading interview...",
+      );
+      assert.equal(await plan.textContent(), "");
+      release();
+      await page.waitForFunction(() =>
+        /30 minute coding budget/.test(
+          document.querySelector("#round-plan-summary").textContent,
+        ),
+      );
+    } finally {
+      await page.close();
+    }
+  });
+}
+
+// With no answer from the server either, the plan falls back to the 45 minutes
+// a URL without a length shows. `-5` once read as 10 here, because the length
+// shown was parsed apart from the decision that it named none.
+for (const query of ["&duration=-5", "&duration=0", "&duration=30abc"]) {
+  test(`the round plan for ?${query} falls back to 45 when the session fails`, async (t) => {
+    if (!browser) return t.skip("playwright chromium unavailable");
+    const page = await browser.newPage();
+    try {
+      await page.route("**/api/session", (route) =>
+        route.fulfill({ status: 500, body: "nope" }),
+      );
+      await page.goto(
+        `${base}/interview.html?problem=chargeback-pair-match&loop=coding_only${query}`,
+        { waitUntil: "domcontentloaded" },
+      );
+      await page.waitForFunction(() =>
+        /45 minute coding budget/.test(
+          document.querySelector("#round-plan-summary").textContent,
+        ),
+      );
+    } finally {
+      await page.close();
+    }
+  });
+}
+
+// Fractional minutes are kept, so the split must not show the float error of
+// subtracting the reserve: 33.3 - 8 is 25.299999999999997 in JavaScript.
+test("the round plan rounds a fractional length's coding budget", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const page = await browser.newPage();
+  try {
+    await page.route("**/api/session", (route) =>
+      route.fulfill({
+        json: { signedIn: false, defaultDurationMin: 30, maxDurationMin: 90 },
+      }),
+    );
+    await page.goto(
+      `${base}/interview.html?problem=chargeback-pair-match&loop=coding_behavioral&duration=33.3`,
+      { waitUntil: "domcontentloaded" },
+    );
+    await page.waitForFunction(() =>
+      /25\.3 minute coding budget/.test(
+        document.querySelector("#round-plan-summary").textContent,
+      ),
+    );
+  } finally {
+    await page.close();
+  }
+});
+
+// The server echoes the length it granted and the page redraws the split from
+// it, so that second draw rounds too.
+test("the round plan rounds a fractional length the server granted", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const page = await browser.newPage();
+  try {
+    await page.route("**/api/token", (route) =>
+      route.fulfill({
+        json: {
+          serverUrl: "wss://test.invalid",
+          token: "t",
+          durationMin: 33.3,
+        },
+      }),
+    );
+    await page.goto(
+      `${base}/interview.html?problem=chargeback-pair-match&loop=coding_behavioral&duration=20`,
+      { waitUntil: "domcontentloaded" },
+    );
+    await page.locator("#audio-heard").click();
+    await page.locator("#camera-skip").click();
+    await page.waitForFunction(
+      () => !document.querySelector("#audio-check-join").disabled,
+    );
+    await page.locator("#audio-check-join").click();
+    await page.waitForFunction(() =>
+      /25\.3 minute coding budget/.test(
+        document.querySelector("#round-plan-summary").textContent,
+      ),
+    );
+  } finally {
+    await page.close();
+  }
+});
+
+test("the round plan for a URL with a duration is drawn at once", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const page = await browser.newPage();
+  try {
+    await page.route("**/api/session", (route) =>
+      route.fulfill({
+        json: { signedIn: false, defaultDurationMin: 30, maxDurationMin: 90 },
+      }),
+    );
+    await page.goto(
+      `${base}/interview.html?problem=chargeback-pair-match&loop=coding_only&duration=60`,
+      { waitUntil: "domcontentloaded" },
+    );
+    await page.waitForFunction(() =>
+      /60 minute coding budget/.test(
+        document.querySelector("#round-plan-summary").textContent,
+      ),
+    );
+  } finally {
+    await page.close();
+  }
+});

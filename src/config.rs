@@ -476,7 +476,10 @@ pub fn load_from_pairs(
             DEFAULT_GEMINI_END_SENSITIVITY,
         ),
         room_prefix: optional(&values, "CODETRIAL_ROOM_PREFIX", DEFAULT_ROOM_PREFIX),
-        default_duration_min: optional_u32(&values, "CODETRIAL_DURATION_MIN", DEFAULT_DURATION_MIN),
+        default_duration_min: configured_duration(
+            values.get("CODETRIAL_DURATION_MIN").map(String::as_str),
+        )
+        .0,
         gemini_candidate_video_enabled: gemini_candidate_video_enabled(
             values
                 .get("CODETRIAL_GEMINI_CANDIDATE_VIDEO_ENABLED")
@@ -636,6 +639,52 @@ pub fn max_concurrent_interviews(
             DEFAULT_MAX_CONCURRENT_INTERVIEWS
         }
     }
+}
+
+/// The length `CODETRIAL_DURATION_MIN` stands for, held to the range the
+/// endpoints offer, and what to say when it is not used as written: unreadable,
+/// so the built-in length applies, or outside the range, so it is clamped.
+/// One function for both, so the number in the message is the one the server
+/// runs on and the operator who mistyped is not left guessing.
+pub fn configured_duration(value: Option<&str>) -> (u32, Option<String>) {
+    let value = value.map(str::trim).unwrap_or_default();
+    if value.is_empty() {
+        return (DEFAULT_DURATION_MIN, None);
+    }
+
+    // A number past `i64` is still a number, only a very large or small one, so
+    // it is clamped like the rest and only text that is no number falls back.
+    let digits = value.strip_prefix(['+', '-']).unwrap_or(value);
+    let number = value.parse::<i64>().ok().or_else(|| {
+        (!digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit())).then_some(
+            if value.starts_with('-') {
+                i64::MIN
+            } else {
+                i64::MAX
+            },
+        )
+    });
+    let (reason, used) = match number {
+        Some(minutes) => {
+            let used = u32::try_from(
+                minutes.clamp(i64::from(MIN_DURATION_MIN), i64::from(MAX_DURATION_MIN)),
+            )
+            .unwrap_or(DEFAULT_DURATION_MIN);
+            if i64::from(used) == minutes {
+                return (used, None);
+            }
+            (
+                format!("is outside {MIN_DURATION_MIN} to {MAX_DURATION_MIN}"),
+                used,
+            )
+        }
+        None => (
+            "is not a usable number of minutes".to_string(),
+            DEFAULT_DURATION_MIN,
+        ),
+    };
+    let warning = format!("codetrial: CODETRIAL_DURATION_MIN {value:?} {reason}; read as {used}");
+    (used, Some(warning))
 }
 
 fn optional_u32(values: &BTreeMap<String, String>, key: &str, default: u32) -> u32 {
