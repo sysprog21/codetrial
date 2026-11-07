@@ -23,6 +23,9 @@
 # counts as passing. So no job here may have an `if:`, and the pull-request
 # run's guard refuses a change to this file (or another workflow naming this
 # check) without an approved head. See docs/development.md.
+# GitHub blocks this trigger in public repositories by default from December 2,
+# 2026; a repository Actions policy allows it for this file only, so renaming
+# the file needs the policy changed too (docs/development.md).
 # Changing the trigger or the token's scope needs the review that
 # .claude/skills/codetrial-triage/apply-pr-actions.sh names for this file.
 name: pr-description

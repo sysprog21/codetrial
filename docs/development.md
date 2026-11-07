@@ -516,12 +516,14 @@ Repository setup, done once by an admin; the reasons follow below:
 1. A ruleset on `main` requiring `check` and `interactive-review`, the merge
    queue (merge method), one approval that a push dismisses, code-owner review,
    and a maintainer bypass from a pull request only.
-2. Approval required for first-time contributors' runs (Settings, Actions,
+2. The Actions event policy that keeps `pull_request_target` running for
+   `pr-description.yml` (the command is below).
+3. Approval required for first-time contributors' runs (Settings, Actions,
    General); a maintainer grants it, through
    `.claude/skills/codetrial-triage/apply-pr-actions.sh` in a sweep.
-3. Before merging a pull request that edits `pr-description.yml`,
+4. Before merging a pull request that edits `pr-description.yml`,
    `CODETRIAL_POLICY_APPROVED_HEAD` set to its head (the guard below).
-4. Once the review record replaces the old label gate: delete the label named
+5. Once the review record replaces the old label gate: delete the label named
    `explained`, and tell each open pull request over the thresholds that its next run needs the
    signing key and a record ([the troubleshooting
    list](large-change-explanation.md#troubleshooting)).
@@ -538,6 +540,31 @@ a first-time contributor's run to the confirmed list while a workflow uses that
 trigger: `pr-description.yml` is the one workflow it names as reviewed, and only
 for `pull_request_target`. A new workflow on either base-token trigger needs the
 same review, and the script's tests fail until it has one.
+
+From December 2, 2026, GitHub blocks `pull_request_target` in a public
+repository that has no Actions event policy allowing it, and the check would
+then never run. The repository keeps the trigger, because it is what stops a
+pull request from editing its own check, with one repository policy (Settings,
+Actions, Policies) that targets only this workflow and allows the two events it
+runs on. A repository admin creates it once:
+
+```sh
+gh api -X POST repos/sysprog21/codetrial/actions/policies \
+    -H 'X-GitHub-Api-Version: 2026-03-10' --input - << 'EOF'
+{"name": "pr-description: pull_request_target",
+ "enforcement": "active",
+ "conditions": {"workflow_path": {
+     "include": [".github/workflows/pr-description.yml"], "exclude": []}},
+ "rules": [{"type": "restrict_action_events",
+     "parameters": {"allowed_events": ["pull_request_target", "merge_group"]}}]}
+EOF
+```
+
+`merge_group` is listed too because the rule reads as an allow list for the
+workflows it targets. `gh api repos/sysprog21/codetrial/actions/policies` shows
+it; a run that no longer carries GitHub's notice about the default policy
+confirms it applies. Renaming the workflow file needs the policy's path changed
+with it.
 
 The required job is named `interactive-review` (the workflow is
 `pr-description`); require that job and `check` in the branch ruleset. The
