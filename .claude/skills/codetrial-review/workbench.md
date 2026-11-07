@@ -442,11 +442,16 @@ already needs: the diagram's layout is computed in the browser, not by Node.js.
 The external tool needs Node.js 20 and would add a required dependency to a
 workflow that otherwise needs Python's standard library and Git; its output is
 also a finished page, which could not be bound to the pinned diff or made to
-reveal only after submission. Managed mode's Codex worker still writes prose.
-An agent that wants a drawn note writes it with `feedback` as above, which
-refuses it with the reason when a citation does not hold. The managed worker is
-not refused: it cannot be asked again, so its note is stored as written, and a
-note that does not read is shown as the text it is.
+reveal only after submission.
+
+Managed mode's Codex worker draws too. It is taught the draft format, is given
+the asked file's lines with the numbers a citation uses (`citable_lines`), and is
+asked for one small flow of the key change unless the change has no flow to show.
+Its note is checked like an agent's: when the diff does not hold a citation the
+worker is called once more, told the problem, and a note that still does not
+read is stored as written and shown as the text it is. It is never called a third
+time. An agent that writes a note with `feedback` is refused with the reason
+when a citation does not hold, and fixes it.
 
 ## Three debts: what the change leaves behind
 
