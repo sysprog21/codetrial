@@ -113,8 +113,15 @@ let historyLoad = 0;
 let historyRefreshing = false;
 let loginPending = false;
 // Successful and uncertain POSTs need an account check before another login.
-// Null means no check is owed; otherwise this is "recorded" or "unknown".
+// Null means no check is owed; otherwise this is "recorded" or "unknown", or
+// "unchecked" for a session check that failed where storage is blocked, which
+// holds Start and is retried the same way but has no POST behind it.
 let loginResult = null;
+// This tab's session store, or null where site data is blocked. The block lifts
+// only on reload, so it is read once rather than probed again through a getter
+// that throws.
+const tabStorage = storageArea("sessionStorage");
+const tabStorageBlocked = !tabStorage;
 let deletingReports = false;
 /// The longest interview this deployment can record, which only the server
 /// knows. `Infinity` until `/api/session` answers: the duration row is live
@@ -766,6 +773,7 @@ start.addEventListener("click", async () => {
       (!historyReady || accountHistory !== true)) ||
     starting ||
     accountUpdatePending() ||
+    sessionUnknownWithoutStorage() ||
     deletingReports
   )
     return;
@@ -819,9 +827,20 @@ start.addEventListener("click", async () => {
     return;
   }
 
+  nodes.groundingError.textContent = "";
+  // Assumes a block on storage also refuses the session cookie, where signing in
+  // here would reach the interview signed out and come straight back. A block on
+  // storage alone can still sign in through Use GitHub, which stays ungated.
+  if (signInFirst && tabStorageBlocked) {
+    nodes.accountStatus.textContent =
+      "Signing in needs site data, which this browser is blocking for this site. Allow site data for this site, then reload this page.";
+    // On a narrow page Start sits far below the account row, out of its view.
+    nodes.githubLogin.focus();
+    return;
+  }
+
   starting = true;
   syncLobbyControls();
-  nodes.groundingError.textContent = "";
   if (signInFirst) {
     start.textContent = "Recording GitHub...";
     if (!(await recordGitHubLogin())) {
@@ -840,9 +859,9 @@ start.addEventListener("click", async () => {
   start.textContent = "Starting...";
   if (!nodes.groundingConsent.checked) packet = null;
   try {
-    if (strict) resetAssignments(sessionStorage);
-    storeGroundingPacket(sessionStorage, packet);
-    storeSharedFocus(sessionStorage, focus?.weakness ?? null);
+    if (strict) resetAssignments(tabStorage);
+    storeGroundingPacket(tabStorage, packet);
+    storeSharedFocus(tabStorage, focus?.weakness ?? null);
   } catch (error) {
     nodes.groundingError.textContent = error.message;
     starting = false;
@@ -921,7 +940,7 @@ function clearGrounding() {
   nodes.groundingError.textContent = "";
   nodes.groundingChoices.replaceChildren();
   try {
-    storeGroundingPacket(sessionStorage, null);
+    storeGroundingPacket(tabStorage, null);
   } catch {
     /* clearing is best effort */
   }
@@ -993,6 +1012,7 @@ function syncLobbyControls() {
       (!historyReady || accountHistory !== true)) ||
     starting ||
     accountBusy ||
+    sessionUnknownWithoutStorage() ||
     deletingReports;
   selection.disabled = starting;
   nodes.loginLink.disabled =
@@ -1021,6 +1041,12 @@ function syncLobbyControls() {
 
 function accountUpdatePending() {
   return loginPending || loginResult !== null || historyRefreshing;
+}
+
+/// Practice may start before the account answers, except where storage is
+/// blocked: the answer then decides whether Start can sign in at all.
+function sessionUnknownWithoutStorage() {
+  return !historyReady && accountHistory === null && tabStorageBlocked;
 }
 
 /// One rule for the bulk delete and every row's: until the lobby knows whose
@@ -1144,7 +1170,8 @@ async function loadAccount(generation) {
       await renderServerHistory(generation);
       return;
     }
-    const unconfirmedLogin = loginResult !== null;
+    const unconfirmedLogin =
+      loginResult === "recorded" || loginResult === "unknown";
     if (unconfirmedLogin) {
       signedOutMessage =
         loginResult === "recorded"
@@ -1176,6 +1203,13 @@ async function loadAccount(generation) {
     }
   }
   if (generation !== historyLoad) return;
+  // Not waved through as the catch above says: with storage blocked, a server
+  // that requires sign-in would send the candidate straight back. Retry is GET.
+  if (accountHistory === null && tabStorageBlocked) {
+    loginResult ??= "unchecked";
+    // A restored page may still be labelled for the start that left it.
+    setStartGate(signInFirst);
+  }
   if (loginResult) {
     showAccountCheckError();
     return;
@@ -1189,14 +1223,16 @@ async function loadAccount(generation) {
 }
 
 function showAccountCheckError() {
-  nodes.accountStatus.textContent =
-    loginResult === "recorded"
+  const unchecked = loginResult === "unchecked";
+  nodes.accountStatus.textContent = unchecked
+    ? "Could not check your account. Retry the account check."
+    : loginResult === "recorded"
       ? "GitHub username recorded, but the account could not be refreshed."
       : "Could not confirm the sign-in result. Retry the account check.";
   nodes.githubLogin.hidden = true;
   nodes.loginLink.hidden = false;
   nodes.loginLink.textContent = "Retry account check";
-  nodes.logout.hidden = false;
+  nodes.logout.hidden = unchecked;
   showProgressError(
     "Could not load account progress. Retry the account check.",
   );

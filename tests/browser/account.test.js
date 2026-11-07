@@ -309,7 +309,7 @@ test("optional interview profile is accessible, bounded, and omitted when blank"
   // The focus travels in session storage, never the address bar.
   assert.match(
     app,
-    /storeSharedFocus\(sessionStorage, focus\?\.weakness \?\? null\)/,
+    /const tabStorage = storageArea\("sessionStorage"\)[\s\S]*storeSharedFocus\(tabStorage, focus\?\.weakness \?\? null\)/,
   );
   assert.doesNotMatch(app, /searchParams\.set\("focus"/);
   assert.match(interview, /practiceFocus: consumeSharedFocus\(tabStorage\)/);
@@ -337,7 +337,10 @@ test("document grounding is explicit, clearable, ephemeral, and absent from save
     app,
     /nodes\.groundingClear\.addEventListener\("click", clearGrounding\)/,
   );
-  assert.match(app, /storeGroundingPacket\(sessionStorage, packet\)/);
+  assert.match(
+    app,
+    /const tabStorage = storageArea\("sessionStorage"\)[\s\S]*storeGroundingPacket\(tabStorage, packet\)/,
+  );
   assert.match(interview, /consumeGroundingPacket\(tabStorage\)/);
   const savedArtifacts = [
     read("history.js"),
@@ -1215,6 +1218,39 @@ test("a report the account kept stays on this device too", async () => {
     }),
     "failed",
   );
+});
+
+// A device copy that cannot be reached is a failed delete, not a missing report.
+// Guards the null `storageArea` answers: passed through, `storedList` reads it
+// as an empty store and the delete answers "missing".
+test("deleting a report says so when local storage cannot be reached", async () => {
+  const original = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    get() {
+      throw new DOMException("blocked", "SecurityError");
+    },
+  });
+  try {
+    assert.equal(
+      await deleteReport("keep", {
+        fetcher: async () => response({ signedIn: false }),
+      }),
+      "failed",
+    );
+    assert.equal(
+      await deleteReport("keep", {
+        fetcher: async (url) =>
+          url === "/api/session"
+            ? response({ signedIn: true })
+            : response({ deleted: 1 }),
+      }),
+      "account-deleted-local-failed",
+    );
+  } finally {
+    if (original) Object.defineProperty(globalThis, "localStorage", original);
+    else delete globalThis.localStorage;
+  }
 });
 
 test("deleting an id no store holds says so instead of claiming a removal", async () => {

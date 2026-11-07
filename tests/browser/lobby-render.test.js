@@ -19,7 +19,7 @@
 // depends on: `document.querySelectorAll` answers ids and nothing else, so the
 // problem cards, the difficulty radios, the duration buttons and the loop
 // buttons are all absent, and this drives the page that is left. What that page
-// still proves is the import, the signed-out account state, and the branch the
+// still proves is the import, the unidentified account state, and the branch the
 // progress panel takes when it cannot read anything.
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -29,28 +29,52 @@ import { installDocument } from "./dom.js";
 const markup = read("web/index.html");
 const dom = installDocument(markup);
 
+// Site data blocked, said here rather than left to the runtime: from Node 25
+// `sessionStorage` is a working store by default and `localStorage` is one
+// once `--localstorage-file` names a file (an empty object without it), while
+// plain `node` before 25 has neither. What the page renders would depend on
+// how Node runs it, so both throw on access, as a browser with site data
+// blocked does.
+for (const name of ["localStorage", "sessionStorage"]) {
+  Object.defineProperty(globalThis, name, {
+    configurable: true,
+    get() {
+      throw new DOMException("blocked", "SecurityError");
+    },
+  });
+}
+
 // Imported once, at the top, because ESM caches by URL and the page does its
 // work while it loads. Every test below reads the same rendered document.
 await import("/app.js");
 
-/// What the page may say to a signed-out visitor whose device has no history.
+/// What the page may say to a visitor it cannot identify, on a device with no
+/// history.
 ///
-/// Both of those are the stub's doing and neither is contrived: `installDocument`
-/// refuses the fetch the page starts at import, so the session lookup fails, and
-/// plain `node` has no `localStorage`, so the saved-progress read fails too.
-/// That is the worst case a real visitor can also reach, on a first visit with
-/// the network down, and it is the one state this file can produce without a
-/// browser.
-const SIGNED_OUT = {
-  "account-status": "Signed out",
+/// Neither is contrived: `installDocument` refuses the fetch the page starts at
+/// import, so the session lookup fails, and the storage block above decides
+/// the rest. The blocked `sessionStorage` is what turns that failed lookup into
+/// the account retry: `account-status`, `login-link`, `start` and
+/// `progress-summary` all follow from it. The blocked `localStorage` is what
+/// makes the practice list unreadable, which is the only reason
+/// `practice-list-status` ends by saying browser storage is unavailable. No
+/// expectation here needs either store to work. That is the worst case a real
+/// visitor can also reach, with site data blocked and the network down, and it
+/// is the one state this file can produce without a browser. Start is held
+/// there, because a server that requires sign-in would send the visitor
+/// straight back, so the page offers the account retry.
+const UNIDENTIFIED = {
+  "account-status": "Could not check your account. Retry the account check.",
+  "login-link": "Retry account check",
   "progress-problem": "all",
   start: "Start interview",
-  "progress-summary": "Could not load progress saved on this device.",
+  "progress-summary":
+    "Could not load account progress. Retry the account check.",
   "practice-list-status":
     "0 problems in your list. Open the problem picker below to check problems. Kept for this visit only; browser storage is unavailable.",
 };
 test("the lobby page loads outside a browser and says what it was given", () => {
-  for (const [id, expected] of Object.entries(SIGNED_OUT)) {
+  for (const [id, expected] of Object.entries(UNIDENTIFIED)) {
     assert.deepEqual(dom.node(id).spoken(), [expected], `#${id}`);
   }
 });
@@ -64,7 +88,7 @@ test("no other panel of the lobby speaks before anything has loaded", () => {
   const spoke = [];
   for (const [, id] of markup.matchAll(/id="([^"]+)"/g)) {
     const node = dom.node(id);
-    if (node && node.spoken().length && !(id in SIGNED_OUT)) spoke.push(id);
+    if (node && node.spoken().length && !(id in UNIDENTIFIED)) spoke.push(id);
   }
   assert.deepEqual(
     spoke,
