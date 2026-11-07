@@ -1,8 +1,12 @@
 # Explain a large change before submitting it
 
+This page owns the large-change rules: the thresholds, who is exempt, what
+reaches the pull request, and how to recover from each refusal. CONTRIBUTING.md
+gives the one-time setup and links here; the skills follow this page.
+
 A large pull request needs the contributor's account of what changed and why,
 before it is opened. Interactive web review is required when **any proposed
-commit has at least 200 added plus deleted reviewable text lines**, or when
+commit has at least 200 added plus deleted text lines**, or when
 the **whole PR has more than 500**. Exactly 200 triggers the commit rule;
 exactly 500 does not trigger the PR rule unless a commit also reaches 200.
 Measure each commit against its parent (a merge against its first parent).
@@ -13,22 +17,24 @@ when a later commit reduces the final PR diff to a few lines. This is a practica
 review budget, not a measure of difficulty or proof of understanding.
 
 Count hand-maintained implementation, tests, scripts, configuration, and prose:
-all take attention to review. Report the raw total and the reviewable total.
-Exclude generated output, vendored content, lockfile churn, or mechanical moves
-only when you list the paths and explain how their origin or unchanged behavior
-was checked. Count changes to their generators and inputs. Do not subtract an
+all take attention to review. The hook and CI count raw text lines and grant no
+exclusion, so what decides whether the review is required is the raw count.
+Generated output, vendored content, lockfile churn, or mechanical moves may be
+pointed out to the reviewer, with the paths and how their origin or unchanged
+behavior was checked, but that does not lower the count. Count changes to their generators and inputs. Do not subtract an
 entire mixed file when only part is mechanical. Binary files have no text line
 count; name them and how they were checked separately. Unknown counts or an
 incomplete file list cannot establish that the branch is below the threshold.
 The hook therefore requires interactive review for unmeasured committed files,
 including paths Git marks binary. A `-diff` attribute is not a size exemption.
 Missing per-commit history is likewise unknown coverage, not evidence that all
-commits are small. Record each triggering full commit ID, its raw and reviewable
-totals, and any exclusions; splitting commits does not remove the PR-wide check.
+commits are small. Splitting commits does not remove the PR-wide check.
 
-A maintainer may choose a different budget for a particular change; record the
-decision and its reason. A contributor or agent cannot silently raise the
-threshold or split a single change into commits to avoid it. Smaller changes
+No one sets a different budget for a single change: the thresholds are in the
+checker. What gets past them is the exemptions below (Dependabot, and a code
+owner's own work) and the maintainer's ruleset bypass on the maintainer's own
+pull requests. A contributor or agent cannot raise the threshold or
+split a single change into commits to avoid it. Smaller changes
 still need the usual problem, rationale, and validation in their PR description.
 
 ## What the contributor explains
@@ -89,17 +95,72 @@ question-and-answer transcript and the local review report private; do not post
 a score or claim that a contributor has been certified. The explanation can be
 in the contributor's language locally.
 
-The pull request carries no review block. CI measures the commits and the diff
-itself, from the base branch's workflow and checker, so nothing in the
-description can be edited out and a pull request cannot change the check. A change
-under the thresholds passes. A change over them passes only once a maintainer has
-added the `explained` label, which only people with triage access can add. A
-pull request that Dependabot opened and whose every commit is Dependabot's needs
-no label, however large; a person's commit on its branch removes the exemption. The
-label means a maintainer has seen the contributor explain the change. CI cannot
-see the local evidence, so the label is the maintainer's word and not a
-verification. It is not tied to a head: a later push keeps it, and the ruleset's
-dismissal of stale approvals is what asks for a fresh review of that push.
+The pull request carries no review block and no label to ask for. CI measures
+the commits and the diff itself, from the base branch's workflow and checker, so
+nothing in the description can be edited out and a pull request cannot change
+the check. The interactive review itself is required before the push, as above.
+The pre-push hook refuses a large branch without it, and once the evidence
+verifies it sends a small record with the branch: the review marker described in
+[the workbench](../.claude/skills/codetrial-review/workbench.md#inspect-the-requirement),
+which holds the counts, the head and base, a hash of the reviewed diff and
+`complete`, and none of your answers. The hook signs it on your machine with
+two fingerprints in it:
+
+- the **review fingerprint**, a SHA-256 over this project, the head, the base,
+  the diff hash and a digest of your answers, so it names exactly this code and
+  this explanation without carrying a word of it; and
+- the **key fingerprint** (`SHA256:...`) of the SSH key that signed it, which
+  has to be a key on your GitHub account.
+
+The signature is one `ssh-keygen -Y sign` over the review fingerprint. The key
+is `git config codetrial.signingKey` (a private key, or its `.pub` with the key
+in `ssh-agent`), else `user.signingKey` when Git already signs with SSH, else
+the first key in `ssh-agent`. Setting one up is a one-time step, listed in
+[CONTRIBUTING.md](../CONTRIBUTING.md#pull-requests): a key of its own,
+registered on GitHub as a Signing Key, leaves the way you push untouched. The
+push prints the key fingerprint it used.
+
+On the pull request the required `interactive-review` check reads that record
+from your fork and checks the signature against the keys GitHub publishes for
+you: your authentication keys (`github.com/<you>.keys`) and your signing keys
+(`GET /users/<you>/ssh_signing_keys`). A change under the thresholds
+passes. A change over them passes with a "Large change" notice when the record
+is there, matches the code exactly and is signed by one of your keys, and fails,
+saying how to fix it, when it is missing, unsigned, signed by another key, or
+for other code. A merge that GitHub's
+"Update branch" makes, bringing in only the base, keeps the record of the commit
+it was made on. A pull request that Dependabot opened and whose every commit is
+Dependabot's needs no record, however large; a person's commit on its branch
+removes the exemption. Nor does a code owner's own pull request: when the
+account that opened it and the GitHub account GitHub links to every commit's
+author are all named in the base branch's `.github/CODEOWNERS`, the review is
+opt-in. A contributor's commit in it, or one GitHub links to no account,
+removes the exemption, so a code owner opening a pull request for someone else's
+work does not excuse it; the contributor signs the record, and the check accepts
+the keys of the commits' authors as well as the opener's (the opener and up
+to nine other commit authors). The check reads the
+record from the repository the pull request's branch is in, so the code owner
+carries the contributor's record there:
+`git fetch <contributor-fork> refs/notes/codetrial-review`, then
+`git notes --ref=codetrial-review merge -s theirs FETCH_HEAD` (the
+contributor's record wins over a pending one the code owner's own push left) and
+`git push <remote> refs/notes/codetrial-review`, with the contributor's commits
+unchanged. GitHub links a commit
+to an account by its author email, so a code owner's commits need an email on
+their account, and a pull request of more than 250 commits gets no exemption. A code owner who does the review gets the same signed
+record; one who skips it tells the pre-push hook once with `git config
+codetrial.codeOwner <login>`, which the hook checks against the same base file.
+The check never reads that setting, so claiming someone else's login only moves
+the refusal from the push to the pull request. Everyone else goes through the
+interactive review for every large change.
+
+The signed record shows that the holder of your key declared a completed review
+of this code with these answers. It does not show who wrote the answers, or
+that you understand them: anyone who reads the checker can still produce one,
+but now only as a statement signed in their own name. The approval the branch
+ruleset requires is separate, and a push dismisses it, so a later change is
+approved again. What that approval confirms about the explanation is not
+settled ([development.md](development.md#what-cannot-be-enforced-locally)).
 
 An unanswered explanation or incomplete reflection means submission is pending,
 even if the code review and tests pass. Continue useful review and validation
@@ -112,15 +173,48 @@ who wrote an answer or whether the contributor understands it.
 
 ## Troubleshooting
 
-Each rejection names its reason in brackets.
-
-- `[interactive-review/required]`: the pull request reaches a threshold, is not
-  Dependabot's own, and has no `explained` label. Finish the interactive review on the committed branch and
-  show the explanation to a maintainer, who adds the label.
+- `Interactive review missing` on the `interactive-review` check: the pull
+  request reaches a threshold and no completed review record for its code came
+  with the push, usually because the hooks were not installed or were skipped.
+  Run `make hooks` and finish `/codetrial-review` on the branch. If that
+  changed the branch, push it; the record goes with it and the push reruns the
+  check. If the branch is already up to date, send the record alone with
+  `sh scripts/git-pre-push.sh --publish-review <fork-remote> [<branch>]`, then
+  close and reopen the pull request: a record sent without the branch does not
+  rerun the check. The command refuses when the fork's branch is not your
+  `HEAD`, and says so when there is nothing to send. A first-time
+  contributor's reopened run may wait for a maintainer to approve it, as the
+  first one did; a maintainer can also rerun the failed job, which reads the
+  record again. A record "made for different code" means the branch changed
+  after the review: review the new head.
+- `Large change` notice: the record is there and matches the code.
+- `No SSH key to sign the interactive review with` at push: the one-time
+  signing key setup is missing. Follow the three steps the message lists
+  (generate, register as a Signing Key, `git config codetrial.signingKey`) and
+  push again; nothing was pushed.
+- `signed with SHA256:..., which does not verify against any SSH key on GitHub
+  of <you> or the commits' authors` or `have an SSH key on GitHub` on the check: the record was
+  signed with a key that is not on your account, often a key `ssh-agent` offered.
+  Set `codetrial.signingKey` to a key you registered (the same three steps),
+  then run `sh scripts/git-pre-push.sh --publish-review <fork-remote> [<branch>]`,
+  which signs the record again and sends it without changing the branch, and
+  close and reopen the pull request. The push prints the key fingerprint it
+  signed with; `ssh-keygen -lf <key>` beside your keys on GitHub shows whether
+  it is one of them.
+- `could not read the SSH keys of <you> and the commits' authors from GitHub`: GitHub did not answer while the
+  check ran. Nothing is wrong with your setup; close and reopen the pull
+  request to run it again.
+- `cannot send the interactive review record` at push: the hook could not push
+  `refs/notes/codetrial-review` to the remote the branch goes to. Fix access to
+  that remote and push again.
+- `Cannot fetch the change`: the head the run was started for is gone, usually
+  because the branch was pushed again. The newer push starts its own run.
 - `Interactive review required` at push: the same thresholds, found before the
   pull request exists. Finish the explanation and durable report for the exact
   head being pushed; amending or rechaining changes the head and needs them
-  again.
+  again. When a large commit was reverted later and the final diff is empty,
+  there is nothing left to explain: drop or squash the commit and its revert,
+  so no commit reaches the threshold, and push again.
 - `no remote-tracking main to measure`: the hook has no base to size the change
   against, and does not skip the check for that. Run `git fetch` for the
   upstream remote (or add it) and push again.
@@ -128,9 +222,8 @@ Each rejection names its reason in brackets.
   fully present locally. Fetch upstream `main` and retry.
 
 The required status check is the `interactive-review` job in the `pr-description`
-workflow, which keeps its name from when it read the description. It reruns when a
-label is added or removed. Merge groups recheck each included pull request's
-current labels with the base checker. An independent maintainer approval is a
-separate GitHub ruleset requirement, with stale approvals dismissed after a push.
-The label and any future signature must not be described as proof of
-understanding.
+workflow, which keeps its name from when it read the description. It runs when a
+pull request is opened, reopened or pushed, and for each merge group. An
+independent maintainer approval is a separate GitHub ruleset requirement, with
+stale approvals dismissed after a push. Neither the approval nor the signed
+record may be described as proof of understanding.

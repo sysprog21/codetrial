@@ -443,8 +443,15 @@ way. Two PRs that rewrite the same harness function (#376 and #396 on
 `json_graph`) conflict as soon as one merges: name the order.
 
 "Approved before the last push" means every maintainer whose latest verdict is
-an approval left it on an older head. GitHub keeps such an approval, so
-`decision` can read APPROVED for code nobody approved; it waits on a re-review.
+an approval left it on an older head. Where the ruleset does not dismiss stale
+approvals, GitHub keeps such an approval, so `decision` can read APPROVED for
+code nobody approved; it waits on a re-review.
+
+A failing `interactive-review` check is the author's to fix, like any failing
+check: quote the fix for its message from [the troubleshooting
+list](../../../docs/large-change-explanation.md#troubleshooting) rather than
+restating it. A fix that sends only the record reruns nothing until the pull
+request is reopened or a maintainer reruns the job.
 
 Each `status` entry carries `waits_on`, read off the same rows as the grade:
 `approval` for a held run, `ci` for a pending check or a mergeability GitHub

@@ -12,17 +12,17 @@ adds layout styles and does not become a route in the interview application.
 
 Count over the whole intended PR diff, even when the review reads a smaller
 `--since` or explicit-base delta. Use the manifest's per-file additions and
-deletions as the raw totals only. The reviewable total follows the counting
-rule of [the large-change requirement](../../../docs/large-change-explanation.md):
-subtract generated, vendored, lockfile or mechanical-move paths only when each
-is listed with how its origin was checked, and report every exclusion and its
-evidence. A null count or incomplete manifest is unknown coverage, never zero.
+deletions as the totals, raw, as [the large-change
+requirement](../../../docs/large-change-explanation.md) counts them: nothing is
+subtracted. Generated, vendored, lockfile or mechanical-move paths may be named
+for the reviewer with how their origin was checked, which does not lower the
+count. A null count or incomplete manifest is unknown coverage, never zero.
 Check every proposed commit against its parent as well as the whole PR. Local
 bundles with an explicit or resolved branch base carry `commit_sizes`, collected
 by `commit-sizes.py` without network access. Missing or incomplete commit-size
 coverage, including a PR bundle without local history, needs the full base/head
 checkout before the threshold can be cleared; never infer small commits from a
-small net diff. Verify exclusions per commit and record triggering full SHAs.
+small net diff. Record the triggering full SHAs.
 
 When the threshold is reached, pick the single most consequential modification
 in the pinned diff: a changed behavior, trust boundary, failure path or
@@ -30,8 +30,9 @@ consequential design choice. Read related callers first; line count alone does
 not decide. If the large commit was reverted before the head, so that no path
 or passage of it remains in the pinned diff, ask about the largest change that
 does remain and say in the report that the triggering commit has no passage
-left; if the final diff is empty, interactive evidence cannot be certified and
-a maintainer decides. The question asks why this change is needed or why this
+left; if the final diff is empty there is nothing to explain, and the
+contributor drops or squashes the commit and its revert so no commit reaches
+the threshold. The question asks why this change is needed or why this
 approach serves the contributor's goal.
 
 Do not reveal a reference answer before the author submits; afterward give
@@ -60,7 +61,7 @@ explaining; never generate or silently infer an answer.
 ## Track readiness
 
 Record explanation readiness separately from defect severity: `not required`,
-`pending` or `complete`, with the base/head, totals, exclusions, covered areas,
+`pending` or `complete`, with the base/head, totals, covered areas,
 answer location and unresolved questions, in the private report's coverage and
 questions fields. No new report schema or reviewed-head marker certifies
 explanation completion. A dirty-tree explanation is provisional until checked
@@ -77,8 +78,7 @@ check.
 Use the complete intended PR diff from step 1, not a fix-only delta, counted as
 [above](#decide-whether-it-applies). If its manifest is dirty, incomplete, or
 lists undiffed untracked files, the workspace shows that limitation and its
-explanation remains provisional; its raw total is never a reviewed exclusion
-count. For a dirty preview, supply the full PR base to `commit-sizes.py`.
+explanation remains provisional. For a dirty preview, supply the full PR base to `commit-sizes.py`.
 
 Prepare `$bundle/questions.json` with **one core key-change question**, chosen after
 reading the diff and relevant callers. Include a manifest `path`, a short `quote`
@@ -217,8 +217,7 @@ Once the reflection is confirmed the page offers **Finish and close**. It asks
 the server to stop (`PUT /api/finish`, refused until the explanation is
 confirmed), which also stops the managed worker, removes the token from the
 address bar, and replaces the page with what comes next: push the branch, then
-open the pull request, where a maintainer adds the `explained` label to a large
-change. A browser lets a script close only a window the script opened, so the
+open the pull request. A browser lets a script close only a window the script opened, so the
 tab may stay; the page then says it is safe to close. The saved explanation and
 confirmation are not touched, and starting the server again reopens them.
 
@@ -411,7 +410,7 @@ revision, coverage, unresolved questions and private answer location in the
 normal local report. Finish the code review through its existing lifecycle,
 which remains independent of explanation readiness. The workspace writes no
 reviewed-head marker. Before submission, recheck the committed full PR diff,
-counting/exclusion evidence, applicable answers, validation and final approval.
+counts, applicable answers, validation and final approval.
 Put only useful rationale and reading order in the PR body, never this transcript.
 
 ### Git hook evidence
@@ -446,8 +445,9 @@ defect freedom, test coverage or permission to merge.
 
 ## Inspect the requirement
 
-Large-change events have a local Git note at `refs/notes/codetrial-review`,
-attached to the branch head and linked to its `Change-Id`. Read it with:
+Large-change events have a Git note at `refs/notes/codetrial-review`, attached
+to the branch head and linked to its `Change-Id`; the pre-push hook sends the
+notes ref with a large branch once its evidence verifies. Read it with:
 
 ```sh
 git log -1 --notes=codetrial-review
@@ -465,33 +465,41 @@ head, base, triggering commit SHAs and counts. It contains no answers, feedback,
 tokens, transcript or private evidence paths. Dirty and provisional previews
 do not annotate a committed head as if they had reviewed it.
 
-These are display snapshots, not authorization. A forged or copied `complete`
-note cannot pass the hook; it verifies the actual receipt again. Use the status
+Locally these are display snapshots, not authorization. A forged or copied
+`complete` note cannot pass the hook; it verifies the actual receipt again. On
+the pull request the signed marker is what the check requires, as a declaration
+signed with the author's key, not as proof. Use the status
 command below to recheck against the current PR base. A rebase or amend needs
 new evidence even if its Change-Id stays the same. An old head's note remains
-a historical record. Notes do not change commit SHAs, trees or Change-Ids, and
-are not automatically pushed. No Change-Id suffix or completion trailer is
+a historical record. Notes do not change commit SHAs, trees or Change-Ids. The
+pre-push hook sends the notes ref with a large branch once its evidence
+verifies; the `interactive-review` check reads the head's marker from there and
+compares it with the diff; the record's fields and how the check verifies
+them are in [the large-change
+page](../../../docs/large-change-explanation.md#what-reaches-the-pull-request).
+No Change-Id suffix or completion trailer is
 added, since changing a message to announce approval would invalidate the very
 commit identity the approval covers.
 
 If a note cannot be written, the command reports the failure; a completed Git
 commit remains intact. After resolving Git identity or note-ref locks, refresh
-the marker with `python3 scripts/check-interactive-review.py mark --base origin/main`
+the marker with `python3 scripts/check-interactive-review.py mark --base upstream/main`
 using the intended PR base. This command rechecks evidence and cannot grant
 approval. Notes for older heads are not copied forward as current evidence.
 
-Run `python3 scripts/check-interactive-review.py status --base origin/main`
+Run `python3 scripts/check-interactive-review.py status --base upstream/main`
 with the intended PR base. The JSON distinguishes `not_required`, `pending`,
 and `complete`, lists triggering full commit SHAs and text line counts, and
 binds completion to the exact branch head and merge base. This is the same
 size and evidence check used before pushing. A later commit undoing a large
 one does not remove its trigger. No commit-message trailer certifies approval.
-The private evidence remains local; other clones and CI cannot infer completion
-from a Change-Id or from the reviewed-head marker alone.
-These are local workflow records, not signed maintainer attestations: a person
-who controls the clone can alter its JSON and database. Remote enforcement must
-use a maintainer-controlled required check and independently trusted review
-evidence. Never publish the private answer transcript as a workaround.
+The private evidence remains local. What leaves the machine is the marker, signed
+with the contributor's SSH key over the review fingerprint, which the required
+check verifies against the author's keys on GitHub. It is the author's signed
+declaration, not proof: a person who controls the clone can alter its JSON and
+database and sign the result. What the approval adds is not settled
+([development.md](../../../docs/development.md#what-cannot-be-enforced-locally)).
+Never publish the private answer transcript as a workaround.
 Size checks ignore Git replacement objects and refuse shallow history or local
 grafts; fetch full history rather than treating missing commits as zero lines.
 

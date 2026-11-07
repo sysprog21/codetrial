@@ -761,6 +761,52 @@ print(json.dumps(seen))
         self.as_ci()
         self.assertEqual(self.pr().returncode, 0)
 
+    def test_the_documents_state_what_the_checker_enforces(self):
+        gate = load_gate("gate_constants")
+        steps = (
+            "ssh-keygen -t ed25519 -f ~/.ssh/codetrial_signing",
+            "Key type: Signing Key",
+            "git config codetrial.signingKey ~/.ssh/codetrial_signing",
+        )
+        for step in steps:
+            self.assertIn(step, gate.SETUP)
+        documents = {
+            "CONTRIBUTING.md": (
+                f"at least {gate.LARGE_COMMIT} added plus deleted",
+                f"more than {gate.PR_TOTAL}",
+                "Key type: Signing Key",
+                "git config codetrial.codeOwner",
+                "docs/large-change-explanation.md#troubleshooting",
+                *steps[::2],
+            ),
+            "docs/large-change-explanation.md": (
+                f"at least {gate.LARGE_COMMIT} added plus deleted",
+                f"more than {gate.PR_TOTAL}",
+                gate.NAMESPACE,
+                "CODEOWNERS",
+                gate.PUBLISH,
+            ),
+            ".claude/skills/codetrial-contribute/SKILL.md": (
+                "large-change-explanation.md#troubleshooting",
+            ),
+            "docs/development.md": (gate.NAMESPACE, gate.NOTES),
+            ".claude/skills/codetrial-review/workbench.md": (gate.NOTES,),
+        }
+        for name, phrases in documents.items():
+            # Compared with whitespace folded, so rewrapping a paragraph passes.
+            text = " ".join((ROOT / name).read_text().split())
+            for phrase in phrases:
+                with self.subTest(document=name, phrase=phrase):
+                    self.assertIn(phrase, text)
+        # The removed label is gone from everything a contributor reads.
+        for path in [ROOT / "CONTRIBUTING.md", *(ROOT / "docs").glob("*.md")] + [
+            *(ROOT / ".claude/skills/codetrial-review").rglob("*.*")
+        ]:
+            if path.suffix in (".md", ".html", ".js", ".py"):
+                with self.subTest(path=path.name):
+                    self.assertNotIn("`explained` label", path.read_text())
+                    self.assertNotIn("<code>explained</code>", path.read_text())
+
     def test_a_code_owner_may_skip_the_review_and_others_may_not(self):
         self.owners()
         self.large()
