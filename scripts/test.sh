@@ -783,4 +783,17 @@ write_receipt()
     echo "failed gates:$failed" >&2
     exit 1
 }
+
+css_tokens_gate()
+{
+    echo "Running CSS token enforcement tests..."
+    python3 -m unittest tests/scripts/test_check_css_tokens.py || return 1
+
+    echo "Checking CSS tokens..."
+    python3 scripts/check-css-tokens.py || return 1
+
+    return 0
+}
+gate css-tokens css_tokens_gate
+
 write_receipt true

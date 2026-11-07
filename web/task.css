@@ -48,6 +48,8 @@
   --tok-comment: #6a9955;
   --tok-number: #b5cea8;
   --tok-literal: #569cd6;
+  --cube-body-background: #11110f;
+  --cube-border: #11110f;
 }
 * {
   box-sizing: border-box;
@@ -685,15 +687,15 @@ nav {
   backface-visibility: hidden;
 }
 .cube-body {
-  background: #11110f;
+  background: var(--cube-body-background);
 }
 .cube-sticker {
   display: grid;
   place-items: center;
   box-sizing: border-box;
-  border: 4px solid #11110f;
+  border: 4px solid var(--cube-border);
   border-radius: 10px;
-  color: #11110f;
+  color: var(--cube-border);
   font: 700 1.5rem var(--font-mono);
 }
 .cube-net {
