@@ -210,6 +210,151 @@ test("remote transcript text cannot inject markup", () => {
   );
 });
 
+// A panel laid out the way the browser lays out #transcript-panel: a row is
+// 40px plus one pixel per character, in a 200px viewport. As Chrome does, a
+// hidden panel reads as having no geometry, ignores scrollTop writes, and is
+// back at the candidate's place when shown, without a scroll event. Every
+// change of scrollTop queues one scroll event; `flush` runs it, and
+// `scrollTo` is the candidate.
+class LaidOutPanel extends StubElement {
+  constructor() {
+    super("section");
+    this.append(new StubElement("div")); // the empty-state placeholder
+    this.hidden = false;
+    this.top = 0;
+    this.pending = false;
+    this.listeners = [];
+  }
+  get clientHeight() {
+    return this.hidden ? 0 : 200;
+  }
+  get scrollHeight() {
+    if (this.hidden) return 0;
+    const rows = this.children.reduce(
+      (sum, row) =>
+        sum + 40 + (row.children[0]?.children[1].text ?? row.text).length,
+      0,
+    );
+    return Math.max(200, rows);
+  }
+  get scrollTop() {
+    return this.hidden ? 0 : this.top;
+  }
+  set scrollTop(value) {
+    if (this.hidden) return;
+    const before = this.top;
+    this.top = Math.min(Math.max(0, value), this.scrollHeight - 200);
+    if (this.top !== before) this.pending = true;
+  }
+  addEventListener(type, listener) {
+    if (type === "scroll") this.listeners.push(listener);
+  }
+  flush() {
+    if (!this.pending) return;
+    this.pending = false;
+    for (const listener of this.listeners) listener();
+  }
+  scrollTo(value, { queued = false } = {}) {
+    this.scrollTop = value;
+    if (!queued) this.flush();
+  }
+}
+
+const atEnd = (panel) =>
+  panel.scrollTop + panel.clientHeight >= panel.scrollHeight;
+const addTurns = (view, from, count) => {
+  for (let i = from; i < from + count; i++) {
+    view.upsert(`turn-${i}`, "interviewer", `Turn ${i}`, true, i);
+  }
+};
+
+test("the transcript follows new and growing turns", () => {
+  const panel = new LaidOutPanel();
+  const view = createTranscriptView(stubDocument, panel);
+  addTurns(view, 0, 10);
+  assert.ok(panel.scrollHeight > 200, "the panel overflows");
+  assert.ok(atEnd(panel), "a new turn is shown");
+  // Our own follow queues a scroll event; it must not read as the candidate.
+  panel.flush();
+
+  view.upsert("open", "you", "So", false, 10);
+  panel.flush();
+  view.upsert("open", "you", `So ${"and then ".repeat(20)}`, false, 11);
+  assert.ok(atEnd(panel), "a growing turn stays in view");
+});
+
+test("the empty state is not followed, and the first turn follows", () => {
+  const panel = new LaidOutPanel();
+  const view = createTranscriptView(stubDocument, panel);
+  panel.children[0].text = "x".repeat(400); // a placeholder taller than 200px
+  view.reveal();
+  assert.equal(panel.scrollTop, 0, "the placeholder keeps its heading");
+
+  panel.scrollTo(40);
+  panel.scrollTo(0);
+  addTurns(view, 0, 10);
+  assert.ok(atEnd(panel), "reading the placeholder does not stop the follow");
+});
+
+test("scrolling up stops the follow and scrolling back resumes it", () => {
+  const panel = new LaidOutPanel();
+  const view = createTranscriptView(stubDocument, panel);
+  addTurns(view, 0, 10);
+
+  panel.scrollTo(40);
+  addTurns(view, 10, 3);
+  assert.equal(panel.scrollTop, 40, "the candidate is rereading");
+
+  panel.scrollTo(panel.scrollHeight);
+  addTurns(view, 13, 3);
+  assert.ok(atEnd(panel), "back at the end, the follow resumes");
+});
+
+test("a scroll still queued when a turn arrives is the candidate's", () => {
+  const panel = new LaidOutPanel();
+  const view = createTranscriptView(stubDocument, panel);
+  addTurns(view, 0, 10);
+  panel.flush();
+
+  panel.scrollTo(40, { queued: true });
+  addTurns(view, 10, 1);
+  panel.flush();
+  assert.equal(panel.scrollTop, 40);
+});
+
+test("scrolling back to where the last follow started is the candidate's", () => {
+  const panel = new LaidOutPanel();
+  const view = createTranscriptView(stubDocument, panel);
+  addTurns(view, 0, 10);
+  panel.flush();
+  const before = panel.scrollTop;
+
+  addTurns(view, 10, 1);
+  panel.scrollTo(before, { queued: true });
+  addTurns(view, 11, 1);
+  panel.flush();
+  assert.equal(panel.scrollTop, before);
+});
+
+test("a hidden transcript keeps its follow and reveal shows the end", () => {
+  const panel = new LaidOutPanel();
+  const view = createTranscriptView(stubDocument, panel);
+  addTurns(view, 0, 10);
+
+  panel.hidden = true;
+  addTurns(view, 10, 3);
+  panel.hidden = false;
+  view.reveal();
+  assert.ok(atEnd(panel), "following, so the tab opens at the end");
+
+  panel.scrollTo(40);
+  panel.hidden = true;
+  addTurns(view, 13, 3);
+  panel.hidden = false;
+  view.reveal();
+  assert.equal(panel.scrollTop, 40, "paused, so the tab opens at their place");
+});
+
 test("results markup reports counts and marks each case", () => {
   const { label, body } = resultsMarkup({
     passed: 1,

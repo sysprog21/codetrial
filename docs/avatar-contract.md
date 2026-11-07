@@ -356,6 +356,19 @@ Keeping the last turn lets the candidate reread a hint or follow-up question
 while thinking, without switching away from the problem. The Transcript tab
 still keeps every turn.
 
+The Transcript tab follows its newest turn with the checks in
+`web/scroll-follow.js` that the bar uses. A new turn, or a turn still growing,
+keeps the panel at its end until the candidate scrolls up, and scrolling back
+to the end resumes the follow. Unlike the bar, a new turn does not restart a
+follow the candidate stopped, since the earlier turns stay on the panel to
+reread. The empty state before the first turn is not followed, and scrolling it
+does not stop the follow. While the Problem tab is open the panel is hidden and
+has no range, so nothing that happens then changes the follow; opening the
+Transcript tab shows the end if the panel was following, and the place the
+candidate left otherwise. Only the panel scrolls, never the page, and the panel
+turns off the browser's scroll anchoring, whose move when rows rewrap would
+otherwise read as the candidate's scroll.
+
 An "Unclear" button beside the "Live CC:" label marks the Jim turn on screen,
 and pressing it again unmarks it. It shows only while a Jim turn is on screen,
 and once `MAX_UNCLEAR_LINES` (10) turns are marked it is disabled on any turn
@@ -395,9 +408,12 @@ Caption tests use a fake clock and actual page functions to cover retention,
 dismissal, final-stream handling, and editor input, and a bar laid out like
 `#captions-bar` (clamped, hideable, optionally with the fractional bottom of a
 zoomed page, and queuing a scroll event for every change of scrollTop, whoever
-caused it) to cover when the reveal follows. These checks
-cannot see WebGL, a canvas, or a layout, and no assertion in them should claim
-to.
+caused it) to cover when the reveal follows.
+`node --test tests/browser/scroll-follow.test.js tests/browser/render.test.js`
+covers the two shared checks and the Transcript tab's follow, with a panel laid
+out like `#transcript-panel` and hidden the way Chrome hides it.
+These checks cannot see WebGL, a canvas, or a layout, and no assertion in them
+should claim to.
 
 `node --test tests/browser/editor-pipeline.test.js` runs Chromium against the
 interview page. It checks caption retention during editor focus, caret
@@ -406,6 +422,14 @@ words, a candidate's scroll position surviving an update to the same turn, a
 new turn following its reveal after the last one was left midway, a tick that
 runs in the same task as a candidate's scroll leaving it in place, and the head
 staying in view while the bar is pinned to the end of a long turn.
+
+`node --test tests/browser/transcript-follow.test.js` runs Chromium against the
+interview page at 1280x720 and 900x700, adding turns by running the tests
+with no room joined. It checks that the empty state keeps its heading in view,
+that new turns keep the Transcript tab at its end without scrolling the page,
+that scrolling up stops the follow and scrolling back resumes it, that a resize
+across the 1024px breakpoint keeps it, and that the tab opens at the end, or
+where the candidate left it, after turns arrived behind the Problem tab.
 
 `BROWSER_CHECK_FLOW=avatar ./scripts/browser-check.sh` is the only check that
 runs the renderer. It asserts the mount leaves `loading` and then asserts

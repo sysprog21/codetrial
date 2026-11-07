@@ -15,6 +15,7 @@ import {
   surfaceLabel,
   languageLabel,
 } from "./lib.js";
+import { atScrollEnd, scrolledByCandidate } from "./scroll-follow.js";
 
 export const FINAL_CODE_NOT_SAVED = "(final code was not saved)";
 
@@ -1312,16 +1313,46 @@ function frameworkEvidenceMarkup(items, atBoard) {
 /// to patch a row in place. It used to reassemble sentences here by guessing
 /// from timestamps, which could not see turn boundaries and never reached the
 /// copy of the transcript that feeds the report prompt.
+///
+/// The panel follows the newest turn the way the caption bar follows Jim's,
+/// with the same checks from `scroll-follow.js`: only the candidate scrolling
+/// away from the end stops it, and scrolling back resumes it. A hidden panel
+/// has no range, so nothing done to it while the Problem tab is open changes
+/// the follow; `reveal` shows the end when the tab opens again, if following.
 export function createTranscriptView(document, panel) {
   const rows = [];
   const rowOf = new Map();
+  let following = true;
+  // Where the panel was last seen resting, so a move since then that its
+  // geometry cannot explain is the candidate's.
+  let seenTop = 0;
+
+  function trackCandidateScroll() {
+    if (scrolledByCandidate(panel, seenTop)) following = atScrollEnd(panel);
+    seenTop = panel.scrollTop;
+  }
+  panel.addEventListener?.("scroll", trackCandidateScroll);
+
+  function follow() {
+    // panel.scrollTop, not scrollIntoView: below the 1024px breakpoint the
+    // page scrolls too, and the candidate's place in it is not ours to move.
+    if (following) panel.scrollTop = panel.scrollHeight;
+    // The follow and the clamp from new text both queue an event that is not
+    // the candidate's.
+    seenTop = panel.scrollTop;
+  }
 
   function render(row) {
+    // A scroll the candidate made can still be queued, and this follow would
+    // write over it; the panel has already moved, though.
+    trackCandidateScroll();
     if (!row.body) {
       // The panel ships with an empty-state placeholder; the first real row
       // replaces it.
       if (rows.length === 1) {
         panel.replaceChildren();
+        // Scrolling the empty state was not rereading a turn.
+        following = true;
       }
       const element = document.createElement("div");
       element.className = `transcript-row ${row.speaker === "interviewer" ? "alex" : "you"}`;
@@ -1335,9 +1366,16 @@ export function createTranscriptView(document, panel) {
     }
     // textContent, not innerHTML: transcript text is remote input.
     row.body.textContent = row.final ? row.text : `${row.text}...`;
+    follow();
   }
 
   return {
+    /// Called when the Transcript tab opens: showing the panel fires no
+    /// event, so the end it missed while hidden is shown here. Before the
+    /// first turn the empty state keeps its heading in view.
+    reveal() {
+      if (rows.length) follow();
+    },
     upsert(id, speaker, text, final, at = Date.now()) {
       let row = rowOf.get(id);
       if (!row) {
