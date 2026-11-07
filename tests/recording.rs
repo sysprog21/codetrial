@@ -918,11 +918,10 @@ pub(crate) mod lifecycle {
             vec!["EG_live@interview-abc12345".to_string()]
         );
 
-        // The other normal-end path arriving second changes nothing, which is
-        // what lets a browser close and a webhook be lost independently. The
-        // provider is not asked again either: only the caller that moved the
-        // row talks to it, so `/end` racing a `room_finished` webhook sends one
-        // stop rather than two.
+        // A second stop arriving changes nothing, as when a `room_finished`
+        // webhook is delivered twice. The provider is not asked again either:
+        // only the caller that moved the row talks to it, so two deliveries
+        // send one stop rather than two.
         let recording = recording_by_id(&accounts, "rec-1").unwrap().unwrap();
         let again = codetrial::recording::stop_recording(
             &accounts,

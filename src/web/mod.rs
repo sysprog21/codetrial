@@ -578,12 +578,7 @@ pub(crate) fn web_router(
             "/api/interviews/{id}/recording",
             post(start_recording_handler).get(recording_status_handler),
         )
-        .route("/api/interviews/{id}/end", post(end_interview_handler))
         .route("/api/interviews/{id}/events", post(replay_events_handler))
-        .route(
-            "/api/interviews/{id}/snapshot",
-            get(replay_snapshot_handler),
-        )
         .route(
             crate::recording::WEBHOOK_ROUTE,
             post(recording_webhook_handler),
@@ -1099,20 +1094,21 @@ fn forwarded_client(headers: &header::HeaderMap, peer: SocketAddr, hops: u32) ->
         .unwrap_or_else(|| peer.ip())
 }
 
-/// One answer for every replay read, so the three routes that take one cannot
-/// drift apart.
+/// One answer for every replay read, so the history events route and the
+/// template's replay read cannot drift apart.
 ///
 /// They differ in two things and this takes both: what "no such replay" means
 /// to the caller, which is a recording id to one route and a room to another,
 /// and the sentence a read error is logged under. Everything else was written
-/// out three times, including the two `410` bodies, and those are the retention
-/// promise: a copy that said something slightly different would be a third
-/// answer to a question the product gives one answer to. `gone_response` below
-/// exists for the same reason on the route ahead of this one.
+/// out three times before the fold, including the two `410` bodies, and those
+/// are the retention promise: a copy that said something slightly different
+/// would be a second answer to a question the product gives one answer to.
+/// `recordings::gone_response` exists for the same reason on the route ahead of
+/// this one.
 ///
-/// A function pointer rather than a closure, because none of the three captures
+/// A function pointer rather than a closure, because no route captures
 /// anything: what a route answers here is a constant, and a signature that
-/// allowed a captured one would be inviting a fourth thing to differ.
+/// allowed a captured one would be inviting another thing to differ.
 pub(crate) fn replay_response(
     view: rusqlite::Result<crate::recording::SnapshotView>,
     missing: fn() -> Response,
@@ -1162,3 +1158,7 @@ fn replay_body(snapshot: &crate::recording::Snapshot) -> Value {
             .collect::<Vec<_>>(),
     })
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/web.rs"]
+mod tests;

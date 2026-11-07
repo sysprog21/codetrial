@@ -309,8 +309,8 @@ pub fn transition_within(
         }
 
         // Somebody else moved it first, so the state to report is theirs and
-        // not the one that was asked for. Reporting `next` here told `/end`
-        // that a recording was `finalizing` when it had already failed.
+        // not the one that was asked for. Reporting `next` here told the stop
+        // path that a recording was `finalizing` when it had already failed.
         let actual: String = connection.query_row(
             "SELECT state FROM recordings WHERE id = ?1",
             [recording_id],

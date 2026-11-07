@@ -706,7 +706,7 @@ fn test_summary_text_is_kept_cut_at_its_limit_on_a_character_boundary() {
 
 #[test]
 fn ending_a_session_preserves_sealed_rounds_and_seals_unfinished_ones() {
-    for end in ["deadline", "cancel", "terminate"] {
+    for end in ["deadline", "cancel"] {
         let (accounts, mut session) = fixture();
         activate(&mut session);
         let mut unfinished = session.rounds[0].clone();
@@ -739,23 +739,30 @@ fn ending_a_session_preserves_sealed_rounds_and_seals_unfinished_ones() {
 }
 
 #[test]
-fn cancel_and_terminate_close_the_session_differently() {
-    for (name, status) in [("cancel", "cancelled"), ("terminate", "finalizing")] {
-        let (accounts, mut session) = fixture();
-        activate(&mut session);
-        accounts
-            .with(|c| {
-                save(c, &session)?;
-                let body = json!({"expectedVersion":session.version});
-                action(c, &mut session, 0, name, &body, 300)?.unwrap();
-                assert_eq!(session.status, status);
-                assert_eq!(session.outcome.as_deref(), Some("partial"));
-                assert_eq!(session.rounds[0].sealed_at, Some(300));
-                assert!(session.rounds[0].final_capture_incomplete);
-                Ok(())
-            })
-            .unwrap();
-    }
+fn cancel_closes_the_session_and_terminate_is_no_longer_an_action() {
+    let (accounts, mut session) = fixture();
+    activate(&mut session);
+    accounts
+        .with(|c| {
+            save(c, &session)?;
+            let body = json!({"expectedVersion":session.version});
+            let (status, version) = (session.status.clone(), session.version);
+            assert_eq!(
+                action(c, &mut session, 0, "terminate", &body, 300)?,
+                Err("invalid_action")
+            );
+            assert_eq!(
+                (session.status.as_str(), session.version),
+                (status.as_str(), version)
+            );
+            action(c, &mut session, 0, "cancel", &body, 300)?.unwrap();
+            assert_eq!(session.status, "cancelled");
+            assert_eq!(session.outcome.as_deref(), Some("partial"));
+            assert_eq!(session.rounds[0].sealed_at, Some(300));
+            assert!(session.rounds[0].final_capture_incomplete);
+            Ok(())
+        })
+        .unwrap();
 }
 
 #[test]

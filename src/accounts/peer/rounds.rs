@@ -28,21 +28,14 @@ pub(super) fn action(
     }
     if matches!(
         action,
-        "ready" | "start" | "advance" | "finish" | "terminate" | "cancel" | "invite"
+        "ready" | "start" | "advance" | "finish" | "cancel" | "invite"
     ) && let Err(e) = version(s, body)
     {
         return Ok(Err(e));
     }
     let result = match action {
-        "cancel" | "terminate" => {
-            s.close_partial(
-                if action == "cancel" {
-                    "cancelled"
-                } else {
-                    "finalizing"
-                },
-                now,
-            );
+        "cancel" => {
+            s.close_partial("cancelled", now);
             c.execute("DELETE FROM peer_active_users WHERE session_id=?1", [&s.id])?;
             Ok(())
         }

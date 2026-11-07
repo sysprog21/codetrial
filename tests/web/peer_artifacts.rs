@@ -106,7 +106,7 @@ async fn suggestions_are_end_only_and_each_member_sees_only_their_own() {
     );
     let state = f.get(&path, 0).await;
     f.post(
-        &format!("{path}/terminate"),
+        &format!("{path}/cancel"),
         0,
         json!({"expectedVersion":state["version"]}),
     )

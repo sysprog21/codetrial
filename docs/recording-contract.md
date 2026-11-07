@@ -442,10 +442,13 @@ made the distinction necessary:
 
 ### Ending
 
-Normal end is `POST /api/interviews/{id}/end` or the LiveKit `room_finished`
-webhook, whichever arrives first. Neither is optional: a browser can be closed
-and a webhook can be lost. Both move the recording to `finalizing`, and
-`finalizing` may become itself, so the second one to arrive changes nothing.
+Normal end is the LiveKit `room_finished` webhook, which moves the recording to
+`finalizing`. `finalizing` may become itself, so a repeated delivery changes
+nothing. The browser sends no end of its own. The file arrives with the
+`egress_ended` that Egress sends, which also completes the recording if
+`room_finished` was lost. If `egress_ended` is lost, whether or not
+`room_finished` arrived, the row is left to the sweeper below, which fails it as
+`abandoned` once the bound for its state has passed.
 
 Consent withdrawal is not a normal end. The recording is not finished, it is
 abandoned: it goes to `failed` with reason `consent_withdrawn` and the file it
@@ -742,9 +745,6 @@ allocated the number the caller is told.
 
 ### The snapshot
 
-`GET /api/interviews/{id}/snapshot`, signed in, answering
-`{"seq", "quotaExceeded", "events": [...]}`.
-
 Nothing is stored to produce it and there is no cadence to configure. The four
 replaceable kinds already are the snapshot: the newest event of each is the
 whole state of that kind, so a snapshot is the replay with the superseded frames
@@ -752,28 +752,12 @@ dropped, computed at the read. A periodic snapshot written to a second table
 would be a copy that can disagree with the events it was made from.
 
 A late join is therefore the snapshot plus everything after `seq`, concatenated.
-The ceiling and the rows under it are read in one transaction, so a writer
-landing between two statements cannot put an event in the snapshot that the
-caller is about to ask for again.
-
-| Answer | When |
-|---|---|
-| `200` | the snapshot, and the `seq` to carry on from |
-| `404 recording_not_found` | no such interview, not this account's, consent withdrawn, or this server records nothing |
-| `410 replay_expired` | past the retention deadline, whether or not the sweeper has run |
-| `410 recording_deleted` | the recording is a tombstone |
-
-`410` rather than `404` for the last two: the account owns the interview and is
-owed the difference between "never yours" and "not any more".
-
-Authorization is the account that owns the interview, and nothing else. There is
-no separate verified-identity gate here, because a replay is scoped by account
-row rather than by handle: a self-declared account is its own row and sees its
-own interviews. The verified-identity gate lives where identity decides who
-receives a file, which is the start of a recording, not the read of a replay.
-
-An interview whose recording never started still has a replay and it is readable.
-Expiry and deletion are read from the recording when there is one.
+`GET /api/recordings/{id}/events` and the template's replay read, both below,
+serve it, answering `{"seq", "quotaExceeded", "events": [...]}`;
+`quotaExceeded` says the replay stopped growing at its quota, so its tail is
+missing. The ceiling and the rows under it are read in one transaction, so a
+writer landing between two statements cannot put an event in the snapshot that
+the caller is about to ask for again.
 
 ### The template's replay read
 
@@ -1523,7 +1507,7 @@ new reads and future ready transitions, then waits for the observer to close
 its writer and unlinks saved and partial files. A late capture finish cannot
 resurrect the record. Already downloaded copies cannot be recalled. Deleting
 saved audio does not cancel the separately agreed temporary AI transcription
-and end-only suggestions; session termination stops the interview.
+and end-only suggestions; cancelling the session stops the interview.
 
 Transcripts are separately selectable and withdrawable. When not selected,
 raw text exists only in bounded observer memory until the same session's

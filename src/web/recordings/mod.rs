@@ -306,7 +306,7 @@ pub(crate) async fn recording_status_handler(
 /// Asks the provider to stop and moves the row to `finalizing`.
 ///
 /// Idempotent by way of the transition table: `finalizing` may become itself,
-/// so the second of the two normal-end paths to arrive changes nothing.
+/// so a second `room_finished` delivery changes nothing.
 pub(crate) async fn finish_recording(
     accounts: &Arc<Accounts>,
     recorder: &crate::recording::Recorder,

@@ -689,8 +689,10 @@ fn replay_view(
             return Ok(SnapshotView::NoInterview);
         }
 
-        // No recording row is not a refusal: an interview whose recording never
-        // started still has a replay, and it is this account's to read.
+        // No recording row is not a refusal, only nothing to check expiry or
+        // deletion against. The history events route and the template's replay
+        // read find the recording first, so through them the row is always
+        // there.
         let recording: Option<(String, Option<i64>, i64)> = transaction
             .query_row(
                 "
