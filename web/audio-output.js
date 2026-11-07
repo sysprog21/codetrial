@@ -163,8 +163,8 @@ function showOutputNote(text) {
 /// there, touching either global throws rather than returning a storage that
 /// refuses. The helpers below default through this rather than naming the
 /// global, because a default parameter is evaluated before their `try`, and
-/// every reader of the result already treats a failing call as "nothing
-/// stored", which `null` is.
+/// they treat a failing call as "nothing stored", which `null` is. A caller
+/// that must tell a failure from an empty store has to check for null itself.
 export function storageArea(name) {
   try {
     return globalThis[name];

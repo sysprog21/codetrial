@@ -63,6 +63,33 @@ const CORRECTNESS = {
   "no-async-promise-executor": "error",
 };
 
+// Where site data is blocked, touching either storage global throws rather than
+// answering a storage that refuses, and the name alone is enough: at module
+// scope in `web/interview.js` it stopped the whole page from loading (d5ad668),
+// and as an argument it throws before the callee's own `try` can answer it. Both
+// work wherever storage is allowed, so a local run never shows either failure.
+const STORAGE_MESSAGE =
+  "Throws where site data is blocked. Use storageArea() from web/audio-output.js.";
+const STORAGE_ACCESS = {
+  "no-restricted-globals": [
+    "error",
+    ...["localStorage", "sessionStorage"].map((name) => ({
+      name,
+      message: STORAGE_MESSAGE,
+    })),
+  ],
+  "no-restricted-properties": [
+    "error",
+    ...["window", "self", "globalThis"].flatMap((object) =>
+      ["localStorage", "sessionStorage"].map((property) => ({
+        object,
+        property,
+        message: STORAGE_MESSAGE,
+      })),
+    ),
+  ],
+};
+
 export default [
   {
     // `externals/` holds unrelated checkouts, is untracked, and is excluded in
@@ -83,6 +110,19 @@ export default [
     },
     linterOptions: { reportUnusedDisableDirectives: "error" },
     rules: CORRECTNESS,
+  },
+  {
+    // Application code only. The review workbench under `.claude/skills` is a
+    // developer tool, not a page a candidate opens.
+    //
+    // `web/peer-lobby.js` is exempt for now. Three of its five
+    // references sit outside any `try`, one of them at module scope, and a
+    // mechanical `storageArea(...).setItem` would pass this rule and still throw
+    // on null. The fix needs a decision about where the invite token lives
+    // without storage, after the page has removed it from the URL.
+    files: ["web/**/*.js"],
+    ignores: ["web/peer-lobby.js"],
+    rules: STORAGE_ACCESS,
   },
   {
     // Node: the browser tests and the generator scripts.
