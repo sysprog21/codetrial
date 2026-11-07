@@ -126,9 +126,9 @@ launch()
         || die "the pinned binary changed since build"
     artifacts=$dir/artifacts-$letter
     [ ! -e "$artifacts" ] || die "$artifacts exists; a scenario runs once per directory"
-    name=$("$bin" --list --ignored 2> /dev/null \
-        | sed -n "s/: test\$//p" | grep "^${live_test}\$") \
-        || die "the pinned binary lists no live fixture"
+    name=$live_test
+    sh "$ROOT/scripts/fixture-server.sh" check "$bin" "$name" \
+        || die "the pinned binary does not list $name exactly once"
     writer=$("$bin" --list 2> /dev/null \
         | sed -n "s/: test\$//p" | grep "^${TEST_FILTER}live_write_manifest\$") \
         || die "the pinned binary lists no manifest writer"

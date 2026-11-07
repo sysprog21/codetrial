@@ -833,6 +833,13 @@ pub trait RoomDispatcher: Send + Sync + 'static {
         false
     }
 
+    /// Stops admitting new rooms; those already admitted keep running. A
+    /// stopping server calls it as its shutdown begins, so "nothing live" can
+    /// mean nothing will be. The default does nothing, for a dispatcher that
+    /// cannot refuse; with `is_idle` also left at its default, a server that
+    /// bounds its stop waits out the whole bound and reports rooms running.
+    fn close_admission(&self) {}
+
     fn ensure_guest_agent(
         &self,
         _room_name: &str,
@@ -856,13 +863,14 @@ pub enum AgentJob {
     },
 }
 
-/// Why no interviewer will come. The two answer the candidate differently: a
+/// Why no interviewer will come. Each answers the candidate differently: a
 /// full server frees up as any interview ends, a finalizing room only when its
-/// own report is out.
+/// own report is out, and a stopping server not until it is started again.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DispatchRefusal {
     AtCapacity,
     Finalizing,
+    Stopping,
 }
 
 pub fn web_service(config: WebServerConfig) -> IntoMakeServiceWithConnectInfo<Router, SocketAddr> {

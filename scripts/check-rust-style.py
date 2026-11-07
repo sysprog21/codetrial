@@ -17,12 +17,11 @@ ownership, panics and casts. This owns what a lint has no way to ask:
                no comment naming the untracked working documents.
   language     No CJK in Rust or the browser half; fixtures that need
                multi-byte text use Greek or emoji.
-  ceiling      A file does not grow past the size recorded for it in
-               scripts/rust-style-ceilings.json, or past DEFAULT_CEILING when
-               it has no entry. `--ratchet` lowers entries to what the files
-               are now and never raises one. `--baseline REF` also refuses an
-               entry above, or absent from, the one REF records; under CI an unfetched REF
-               is itself a finding.
+  ceiling      New files stay within DEFAULT_CEILING. Existing larger files
+               cannot grow beyond their committed size in HEAD. --baseline REF
+               also uses the smallest committed size since REF; deletion retires
+               an exemption. Limits come from Git, without a generated table.
+               An explicit baseline needs complete history and never skips errors.
 
 `--workspace` audits Cargo's own membership for lint inheritance and needs
 Cargo; the default run needs none. Exit status 1 when anything is reported.
@@ -31,7 +30,6 @@ Cargo; the default run needs none. Exit status 1 when anything is reported.
 import argparse
 import functools
 import json
-import os
 import re
 import subprocess
 import sys
@@ -39,7 +37,6 @@ import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-CEILINGS = "scripts/rust-style-ceilings.json"
 DEFAULT_CEILING = 1500
 
 RUST_ROOTS = ("src", "tests", "scripts/hook-check")
@@ -394,14 +391,6 @@ def check_ceilings(current, recorded):
                 f"{rel}: ceiling: {lines} lines, over {ceiling}; "
                 "split it by responsibility, do not raise the ceiling"
             )
-    for rel, ceiling in sorted(recorded.items()):
-        if rel not in current:
-            yield f"{CEILINGS}: {rel} no longer exists; drop its entry"
-        elif current[rel] < ceiling:
-            yield (
-                f"{CEILINGS}: {rel} is {current[rel]} lines, "
-                f"under its {ceiling}; run --ratchet so it cannot grow back"
-            )
 
 
 def git_ok(root, *args):
@@ -418,46 +407,94 @@ def git_ok(root, *args):
     return result.stdout if result.returncode == 0 else None
 
 
-def baseline_findings(root, ref, recorded):
-    """Ceiling findings against `ref`.
+def git_ceilings(root, current, baseline=None):
+    """Derive allowances from committed paths, including every branch version."""
+    head = git_ok(root, "rev-parse", "--verify", "-q", "HEAD^{commit}")
+    if head is None and baseline is None:
+        return {}
 
-    A ref that does not resolve is a finding under CI, where a shallow checkout
-    would otherwise skip the ratchet without a word, and a note elsewhere. A ref
-    that has no ceilings file yet, the change that introduces it, is skipped.
-    """
-    if git_ok(root, "rev-parse", "--verify", "-q", f"{ref}^{{commit}}") is None:
-        if os.environ.get("CI") == "true":
-            return [f"baseline {ref} is not fetched; fetch it so the ratchet can run"]
-        print(f"baseline {ref} not found; skipped", file=sys.stderr)
-        return []
-    text = git_ok(root, "show", f"{ref}:{CEILINGS}")
-    if text is None:
-        print(f"baseline {ref} has no ceilings file; skipped", file=sys.stderr)
-        return []
-    return list(check_baseline(recorded, json.loads(text)))
+    def required(*args):
+        value = git_ok(root, *args)
+        if value is None:
+            raise ValueError(
+                "cannot read Git size baseline; fetch its complete history"
+            )
+        return value
 
+    if baseline is not None:
+        ref = git_ok(
+            root,
+            "rev-parse",
+            "--verify",
+            "-q",
+            "--end-of-options",
+            f"{baseline}^{{commit}}",
+        )
+        if ref is None:
+            raise ValueError(
+                f"baseline {baseline} is not fetched; fetch its complete history"
+            )
+        if (
+            head is None
+            or required("rev-parse", "--is-shallow-repository").strip() != "false"
+        ):
+            raise ValueError(
+                "Git size baseline needs complete history; fetch --unshallow"
+            )
+        required("merge-base", "--all", ref.strip(), head.strip())
+        history = required(
+            "rev-list", "--parents", "--full-history", f"{ref.strip()}..{head.strip()}"
+        )
+    else:
+        ref, history = head, ""
 
-def check_baseline(recorded, base):
-    """A ceiling never rises, and no file gains an exemption, since `base`."""
-    for rel, ceiling in sorted(recorded.items()):
-        if rel not in base:
-            yield f"{CEILINGS}: {rel} is a new exemption; split the file instead"
-        elif ceiling > base[rel]:
-            yield f"{CEILINGS}: {rel} rose from {base[rel]} to {ceiling}; split the file instead"
+    paths = sorted(path for path, size in current.items() if size > DEFAULT_CEILING)
+    if not paths:
+        return {}
+    trees, counts = {}, {}
 
+    def tree(commit):
+        if commit not in trees:
+            rows = required(
+                "--literal-pathspecs",
+                "ls-tree",
+                "-rz",
+                "--full-tree",
+                commit,
+                "--",
+                *paths,
+            )
+            trees[commit] = {
+                path: meta.split()[2]
+                for row in rows.split("\0")
+                if row
+                for meta, path in [row.split("\t", 1)]
+                if path in current and path.endswith(".rs")
+            }
+        return trees[commit]
 
-def ratchet(current, recorded):
-    """Lower every entry to the file's size now; add none, raise none."""
-    return {
-        rel: min(ceiling, current[rel])
-        for rel, ceiling in recorded.items()
-        if rel in current and current[rel] > DEFAULT_CEILING
+    def lines(oid):
+        if oid not in counts:
+            counts[oid] = len(required("cat-file", "blob", oid).splitlines())
+        return counts[oid]
+
+    base, committed = tree(ref.strip()), tree(head.strip())
+    limits = {
+        path: max(DEFAULT_CEILING, min(lines(base[path]), lines(committed[path])))
+        for path, size in current.items()
+        if size > DEFAULT_CEILING and path in base and path in committed
     }
-
-
-def load_ceilings(root):
-    path = root / CEILINGS
-    return json.loads(path.read_text()) if path.exists() else {}
+    for row in history.splitlines():
+        commit, *parents = row.split()
+        version = tree(commit)
+        for path in limits:
+            if path in version:
+                limits[path] = min(
+                    limits[path], max(DEFAULT_CEILING, lines(version[path]))
+                )
+            elif any(path in tree(parent) for parent in parents):
+                limits[path] = DEFAULT_CEILING
+    return limits
 
 
 def run(root, baseline=None):
@@ -467,22 +504,17 @@ def run(root, baseline=None):
         findings.extend(check_rust(root, path))
     for path in web_files(root):
         findings.extend(check_web(root, path))
-    recorded = load_ceilings(root)
-    findings.extend(check_ceilings(sizes(root), recorded))
-    if baseline:
-        findings.extend(baseline_findings(root, baseline, recorded))
+    current = sizes(root)
+    try:
+        findings.extend(check_ceilings(current, git_ceilings(root, current, baseline)))
+    except ValueError as error:
+        findings.append(f"ceiling: {error}")
     return findings
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    modes = parser.add_mutually_exclusive_group()
-    modes.add_argument(
-        "--ratchet",
-        action="store_true",
-        help="lower recorded ceilings to current sizes",
-    )
-    modes.add_argument(
+    parser.add_argument(
         "--workspace",
         action="store_true",
         help="audit Cargo workspace lint inheritance (requires Cargo and cached dependencies)",
@@ -490,16 +522,10 @@ def main():
     parser.add_argument(
         "--baseline",
         metavar="REF",
-        help="also refuse ceilings above those REF records; skipped when REF has none",
+        help="derive size limits from REF and all committed versions since it (needs complete Git history)",
     )
     parser.add_argument("--root", type=Path, default=ROOT, help=argparse.SUPPRESS)
     args = parser.parse_args()
-    if args.ratchet:
-        kept = ratchet(sizes(args.root), load_ceilings(args.root))
-        (args.root / CEILINGS).write_text(
-            json.dumps(dict(sorted(kept.items())), indent=2) + "\n"
-        )
-        return 0
     findings = (
         list(check_lint_table(args.root)) + list(check_workspace(args.root))
         if args.workspace

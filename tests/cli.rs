@@ -2175,8 +2175,9 @@ fn binary_web_serves_in_production_with_a_session_secret() {
 /// startup refusal read from the same values, for real.
 #[test]
 fn binary_web_reads_deployment_keys_from_the_config_file() {
-    let source = std::fs::read_to_string("src/main.rs")
-        .unwrap()
+    let source = ["src/main.rs", "src/launch.rs"]
+        .map(|path| std::fs::read_to_string(path).unwrap())
+        .concat()
         .replace("\r\n", "\n");
 
     // Ends at the closing brace in column zero rather than at whatever item
@@ -2193,21 +2194,14 @@ fn binary_web_reads_deployment_keys_from_the_config_file() {
             .to_string()
     };
 
-    // Both halves of the startup path. The configuration is assembled in
-    // `web_server_config` and the socket is bound in `run_web`, and the
-    // property is about the pair: what this deployment runs on comes out of the
-    // config file the operator wrote, never out of the ambient environment.
-    // Splitting the function moved the first assertion's subject and would have
-    // left this reading an empty haystack had it kept naming only one of them.
-    let serve = body("run_web");
-    let configure = body("web_server_config");
-
-    assert!(
-        configure.contains("trusted_proxy_hops(values)"),
-        "{configure}"
-    );
-    assert!(!serve.contains("std::env::var"), "{serve}");
-    assert!(!configure.contains("std::env::var"), "{configure}");
+    // Every phase of the startup path, in src/launch.rs and src/main.rs, takes
+    // its deployment from the operator's config file, never the environment.
+    assert!(body("web_server_config").contains("trusted_proxy_hops(values)"));
+    let phases = "run_web prepare finish local_agent_config web_server_config \
+                  serve serve_with run";
+    for name in phases.split(' ') {
+        assert!(!body(name).contains("std::env::var"), "{name}");
+    }
 }
 
 /// The log is the one place the error text sends a reader with no console, so

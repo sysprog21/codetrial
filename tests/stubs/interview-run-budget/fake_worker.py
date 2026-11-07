@@ -78,6 +78,7 @@ if os.environ.get("FAKE_IGNORE_TERM"):
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
 
 note("pids", str(os.getpid()))
+note("reap_at", os.environ["BROWSER_CHECK_BUDGET_REAP_AT"])
 telemetry(event="hb")
 guard = irb.WorkerGuard.from_env()
 stop = os.environ["BROWSER_CHECK_BUDGET_STOP"]

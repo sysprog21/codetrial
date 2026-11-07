@@ -981,7 +981,7 @@ async fn held_contexts_are_kept_within_a_count_and_a_byte_bound() {
     let kept = |driver: &Driver<'_, '_, '_>| {
         (
             driver.held_contexts.len(),
-            driver.held_bytes,
+            driver.held_contexts.iter().map(String::len).sum::<usize>(),
             driver.held_omitted,
             driver.held_omitted_total,
         )
@@ -1001,11 +1001,7 @@ async fn held_contexts_are_kept_within_a_count_and_a_byte_bound() {
     // Two that together reach the bound exactly are both kept; one more byte
     // drops the first and only the first.
     driver.held_contexts.clear();
-    (
-        driver.held_bytes,
-        driver.held_omitted,
-        driver.held_omitted_total,
-    ) = (0, 0, 0);
+    (driver.held_omitted, driver.held_omitted_total) = (0, 0);
     driver.retain_held_context("a".repeat(40_000));
     driver.retain_held_context("b".repeat(MAX_HELD_BYTES - 40_000));
     assert_eq!(kept(&driver), (2, MAX_HELD_BYTES, 0, 0));
@@ -1013,13 +1009,20 @@ async fn held_contexts_are_kept_within_a_count_and_a_byte_bound() {
     assert_eq!(kept(&driver), (2, MAX_HELD_BYTES - 40_000 + 1, 1, 1));
     assert!(driver.held_contexts[0].starts_with('b'));
 
+    // Room for one can take more than one eviction, each subtracted from the
+    // running total: dropping only the first would leave the bound exceeded.
+    driver.held_contexts.clear();
+    (driver.held_omitted, driver.held_omitted_total) = (0, 0);
+    for (fill, len) in [('a', 30_000), ('b', 30_000), ('c', 4_000)] {
+        driver.retain_held_context(fill.to_string().repeat(len));
+    }
+    driver.retain_held_context("d".repeat(40_000));
+    assert_eq!(kept(&driver), (2, 44_000, 2, 2));
+    assert!(driver.held_contexts[0].starts_with('c'));
+
     // The count bound drops the oldest, one at a time.
     driver.held_contexts.clear();
-    (
-        driver.held_bytes,
-        driver.held_omitted,
-        driver.held_omitted_total,
-    ) = (0, 0, 0);
+    (driver.held_omitted, driver.held_omitted_total) = (0, 0);
     for n in 0..MAX_HELD_CONTEXTS {
         driver.retain_held_context(format!("{n}"));
     }
@@ -1029,10 +1032,6 @@ async fn held_contexts_are_kept_within_a_count_and_a_byte_bound() {
     assert_eq!(driver.held_contexts.len(), MAX_HELD_CONTEXTS);
     assert_eq!((driver.held_omitted, driver.held_omitted_total), (1, 1));
     assert_eq!(driver.held_contexts[0], "1");
-    assert_eq!(
-        driver.held_bytes,
-        driver.held_contexts.iter().map(String::len).sum::<usize>()
-    );
     drop(driver);
     rig.finish().await;
 }
@@ -1163,7 +1162,6 @@ async fn reference_debt_survives_noop_packets_and_action_supersession() {
         }
         assert!(driver.context.state.earlier_steps_named.is_empty());
         driver.held_contexts.push_back("unsent held summary".into());
-        driver.held_bytes = "unsent held summary".len();
         driver.round = Some("skipped");
         driver.loops.pending_round_notice = Some("started");
         assert!(!driver.drain(&mut closed).await.unwrap());

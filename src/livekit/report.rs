@@ -125,6 +125,8 @@ pub(super) async fn generate_report_bounded(
     seed: i64,
     refused: &std::sync::atomic::AtomicBool,
 ) -> GeneratedReport {
+    #[cfg(test)]
+    crate::gemini::tests::note_bounded_report(boot.room_name, seed);
     tokio::time::timeout(
         REPORT_TIMEOUT,
         generate_report_with_keys(

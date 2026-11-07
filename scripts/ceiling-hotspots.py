@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """Rank oversized files by how often they change times how large they are.
 
-`scripts/rust-style-ceilings.json` says which Rust files are over the size
-ceiling; it does not say which to split first. A big file nobody touches costs
-nothing, and a big file every change goes through costs on every change. This
-prints, per top-level directory, each file with its lines, its recorded ceiling,
-the commits that touched it in a window, and score = commits x lines.
+`scripts/check-rust-style.py` says which Rust files are over the size ceiling;
+it does not say which to split first. A big file nobody touches costs nothing,
+and a big file every change goes through costs on every change. This prints,
+per top-level directory, each file with its lines, its ceiling, the commits
+that touched it in a window, and score = commits x lines.
 
-  default             the files named in the ceilings JSON
+  default             every Rust file the style checker sees above its default
+                      ceiling, with the limit it derives from HEAD
   --under DIR         instead, every tracked file under DIR (a directory such as
                       `web`) with at least --min-lines lines; there is no ceiling
                       column to fill, so it shows `-`. `--suffix .js` keeps only
@@ -25,15 +26,24 @@ file.
 """
 
 import argparse
-import json
+import importlib.util
 import subprocess
 import sys
 from collections import Counter
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-CEILINGS = "scripts/rust-style-ceilings.json"
 DEFAULT_SINCE = "90.days"
+
+# The gate's own line counts and the limits it derives from HEAD. The gate run
+# with `--baseline` can be stricter: it also takes the smallest size since that
+# ref, so a file that shrank on a branch and grew back shows a larger ceiling
+# here than the one the gate enforces.
+_SPEC = importlib.util.spec_from_file_location(
+    "check_rust_style", Path(__file__).with_name("check-rust-style.py")
+)
+STYLE = importlib.util.module_from_spec(_SPEC)
+_SPEC.loader.exec_module(STYLE)
 
 
 class GitError(Exception):
@@ -81,20 +91,17 @@ def commit_counts(repo, since, paths):
     return Counter(name for name in out.split("\0") if name)
 
 
-def ceiling_rows(repo, ceilings):
-    """{path: ceiling} for each recorded file that still exists."""
-    if not isinstance(ceilings, dict) or not all(
-        isinstance(name, str) and type(ceiling) is int
-        for name, ceiling in ceilings.items()
-    ):
-        raise ValueError(f"{CEILINGS} is not a map of path to line ceiling")
-    rows = {}
-    for name in sorted(ceilings):
-        if (repo / name).is_file():
-            rows[name] = ceilings[name]
-        else:
-            print(f"skipped {name}: no such file", file=sys.stderr)
-    return rows
+def ceiling_rows(repo):
+    """{path: ceiling} for each Rust file over the default ceiling. A file with
+    no committed version, or one at or under the default in HEAD, gets the
+    default, as the gate gives it."""
+    current = STYLE.sizes(repo)
+    limits = STYLE.git_ceilings(repo, current)
+    return {
+        name: limits.get(name, STYLE.DEFAULT_CEILING)
+        for name, lines in sorted(current.items())
+        if lines > STYLE.DEFAULT_CEILING
+    }
 
 
 def under_rows(repo, directory, min_lines, suffixes=(), excludes=()):
@@ -176,7 +183,7 @@ def main(argv=None):
                 repo, args.under, args.min_lines, args.suffix, args.exclude
             )
         else:
-            rows = ceiling_rows(repo, json.loads((repo / CEILINGS).read_text()))
+            rows = ceiling_rows(repo)
         ranked = rank(repo, rows, args.since)
     except (GitError, OSError, ValueError) as error:
         print(f"ceiling-hotspots: {error}", file=sys.stderr)

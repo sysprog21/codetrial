@@ -188,7 +188,7 @@ None of this is a gate; each piece names what it can and cannot see.
 | `scripts/agent-failure-loop.py` (PostToolUse) | Prompts for the shared premise on the second identical gate failure | Know the premise, or block |
 | `scripts/test.sh` receipts | Records lane, verdict, skipped count and the fingerprint of the tree as the run started, under the git directory | Prove the run was complete, or stop an agent with a shell from writing one; CI recomputes the verdict |
 | `scripts/agent-closeout-check.py` (Stop) | Tells the user once per tree when it has changes the gate has not passed on in every lane (`all`, or rust, portable and browser) | Block, or see a gate run elsewhere |
-| `scripts/ceiling-hotspots.py` | Ranks the files recorded as exceptions to the size limit by commits in a window times lines | Say a file is worth splitting, or whether its tests cover it; it is one input |
+| `scripts/ceiling-hotspots.py` | Ranks the Rust files over the default size limit by commits in a window times lines | Say a file is worth splitting, or whether its tests cover it; it is one input |
 | pre-push note | Notes `src/` changes with no `tests/` change | Judge whether a test was needed |
 
 ## Local evidence at closeout

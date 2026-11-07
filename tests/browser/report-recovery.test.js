@@ -396,6 +396,27 @@ test("page finalizes a regeneration once, cancelling provisional timers", async 
   );
 });
 
+test("page keeps the room for a report held through the rejoin grace", async () => {
+  const page = pageHarness();
+  await page.receiveReport(page.room, packet(raw));
+  page.advance(30_000);
+  assert.equal(page.reportRecovery.retry(), true);
+  page.receiveControl(control(accepted));
+  // A 124-second generation can be held until a rejoin at 152 seconds.
+  page.advance(152_000);
+  await settle();
+  assert.equal(page.scope.state.phase, "report_recovery");
+  assert.equal(page.scope.state.room, page.room);
+  assert.ok(!page.events.includes("disconnect"));
+  await page.receiveReport(
+    page.room,
+    packet({ incomplete: true, summary: "retained regeneration" }),
+  );
+  await settle();
+  assert.equal(page.scope.state.phase, "report");
+  assert.equal(page.saves.at(-1).summary, "retained regeneration");
+});
+
 test("the agent's closing notice finalizes the page through its control topic", async () => {
   const page = pageHarness();
   await page.receiveReport(page.room, packet(raw));

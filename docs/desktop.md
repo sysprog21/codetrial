@@ -17,10 +17,11 @@ server in: it runs the `codetrial` executable that ships beside it as a child
 process, and its window shows the page that child serves on
 `http://127.0.0.1:3101`.
 
-A child process rather than a library call, because the server's startup lives
-in `src/main.rs` (config search, the Setup handover, every refusal it makes
-before serving) and moving that into the library would have been a rewrite of
-the file the CLI's behavior is pinned to. As a child it is the binary the CLI
+A child process rather than a library call, because the server's startup is
+the binary's: `src/main.rs` runs the Setup handover and binds the socket, and
+builds the server from `src/launch.rs` (config search, every refusal it makes
+before serving). Calling that from the app would have meant a second launcher
+beside the one the CLI's behavior is pinned to. As a child it is the binary the CLI
 tests already cover, started with five things a launcher needs that the CLI
 did not have. Each is decided in the server, so the app keeps no copy of the
 server's rules:

@@ -1128,3 +1128,5 @@ include!("recovery_live_parts/native_worker_and_room_disconnect.rs");
 // room loop, one clip arm per invocation.
 #[path = "recovery_continuity.rs"]
 mod continuity;
+
+include!("recovery_live_parts/report_generation_cardinality.rs");

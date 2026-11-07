@@ -66,6 +66,14 @@ impl LiveReaderInspection {
 }
 
 impl GeminiLiveSession {
+    /// Limits one authored loopback connection without replacing its transport.
+    #[cfg(test)]
+    pub(crate) fn loopback_send_limit_for_test(
+        endpoint: &str,
+    ) -> std::io::Result<super::socket::loopback::Registration> {
+        super::socket::loopback::install(endpoint)
+    }
+
     /// Leaves a fail-fast session in the room while its owner retires the
     /// transport. Metadata and unconsumed usage stay with the returned socket.
     pub(crate) fn retire(&mut self) -> Self {

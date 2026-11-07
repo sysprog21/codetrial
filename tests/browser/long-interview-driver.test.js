@@ -539,6 +539,12 @@ test("the duration is claimed only from the server clock", async () => {
   assert.equal(viaToken.report.full_interview, false);
   assert.equal(finalize(played).report.anchor.source, "server_clock");
   assert.equal(finalize(played).report.schedule_start_delay_s, 5);
+  assert.equal(finalize(played).report.schedule_mode, played.prepared.mode);
+  // The origin a later reader needs to read the interview clock against.
+  assert.equal(
+    finalize(played).report.schedule_origin_unix_ms,
+    played.joinedAtMs,
+  );
 });
 
 test("a stimulus whose page action throws still spends its timestamp", async () => {
@@ -1084,6 +1090,33 @@ test("a run the page's countdown ended is reported as such, and its capture is k
   assert.match(cjs, /longCaptureWritten = true;\s*fs\.writeFileSync/);
 });
 
+test("the long interview shares the soak's swap marker and keeps the generic Jim audio assertion off", () => {
+  const cjs = fs.readFileSync(
+    path.join(ROOT, "scripts", "browser-check.cjs"),
+    "utf8",
+  );
+  // The probe is installed for the long flow, but only the soak, voice and
+  // barge flows assert Jim's whole track.
+  assert.match(
+    cjs,
+    /probingSwapAudio = credentialed && flow === "long-interview"/,
+  );
+  assert.match(cjs, /\["voice", "barge", "soak"\]\.includes\(flow\)/);
+  // One marker and one settle-and-judge owner serve both flows.
+  // It lives in scripts/swap-audio-owner.cjs (tested in swap-audio-owner.test.js);
+  // the two flows call it and neither keeps a copy of its own.
+  assert.match(cjs, /require\("\.\/swap-audio-owner\.cjs"\)/);
+  assert.match(cjs, /startSwapMarker\(\{/);
+  assert.match(cjs, /judgeSettledSwapAudio\(/);
+  assert.equal(cjs.match(/__markJimSwap|__settleJimSwapAudio/g), null);
+  // The verdict reaches the report, and any failure still stops the probe.
+  assert.match(cjs, /\n\s+audio,\n\s+replies,\n\s+logs: \{ truncated: false/);
+  assert.match(
+    cjs,
+    /if \(probingSwapAudio\) \{[^}]*__finishJimAudioProbe\(true\)/,
+  );
+});
+
 test("a completed long interview reports structural scope without claiming qualification", async () => {
   const finished = finalize(await play(SMOKE), { cleanup: undefined });
   assert.equal(finished.exitCode, EXIT.pass);
@@ -1099,6 +1132,145 @@ test("a completed long interview reports structural scope without claiming quali
   assert.ok(
     finished.report.not_exercised.some((n) => /^decoded signal:/.test(n)),
   );
+});
+
+const swapRow = (status, reasons = []) => ({
+  swap: "1:2:1",
+  episode: 1,
+  status,
+  reasons,
+});
+
+test("a decoded-signal verdict from the media probe is reported apart from the structural result", async () => {
+  const played = await play(SMOKE);
+  const cases = [
+    [{ ok: true, episodes: [swapRow("verified")], reasons: [] }, "verified"],
+    [
+      { ok: true, episodes: [swapRow("covered_by_later_swap")], reasons: [] },
+      "verified",
+    ],
+    [
+      { ok: true, episodes: [swapRow("not_required")], reasons: [] },
+      "not_required",
+    ],
+    [{ ok: true, episodes: [], reasons: [] }, "not_required"],
+  ];
+  for (const [audio, expected] of cases) {
+    const finished = finalize(played, { audio });
+    assert.equal(finished.report.decoded_signal, expected);
+    assert.equal(finished.exitCode, EXIT.pass);
+    assert.equal(finished.report.qualification, "not_evaluated");
+    assert.equal(finished.report.reply_content, "not_assessed");
+    assert.ok(
+      !finished.report.not_exercised.some((n) => /^decoded signal:/.test(n)),
+    );
+  }
+});
+
+test("the judged swap rows and their samples are kept in the report, bounded", async () => {
+  const played = await play(SMOKE);
+  const sample = { seq: 1, status: "ok", peakRms: 0.2 };
+  const rows = Array.from({ length: 600 }, (_, i) => ({
+    ...swapRow("verified"),
+    episode: i + 1,
+    samples: [sample],
+    samples_dropped: 3,
+    extra: "not copied",
+  }));
+  const kept = finalize(played, {
+    audio: { ok: true, episodes: rows, reasons: [] },
+  }).report;
+  assert.equal(kept.decoded_signal_rows.length, 512);
+  assert.equal(kept.decoded_signal_rows_dropped, 88);
+  assert.deepEqual(kept.decoded_signal_rows[0], {
+    swap: "1:2:1",
+    episode: 1,
+    status: "verified",
+    reasons: [],
+    samples: [sample],
+    samples_dropped: 3,
+  });
+  const covered = finalize(played, {
+    audio: {
+      ok: true,
+      episodes: [
+        {
+          ...swapRow("covered_by_later_swap"),
+          covered_by: { swap: "1:2:2", seq: 2 },
+        },
+      ],
+      reasons: [],
+    },
+  }).report;
+  assert.deepEqual(covered.decoded_signal_rows[0].covered_by, {
+    swap: "1:2:2",
+    seq: 2,
+  });
+  const none = finalize(played, { audio: undefined }).report;
+  assert.deepEqual(none.decoded_signal_rows, []);
+  assert.equal(none.decoded_signal_rows_dropped, 0);
+});
+
+test("a missing or failed decoded sample is a failed signal, never a pass", async () => {
+  const played = await play(SMOKE);
+  const reasons = ["no post-swap audio sample was taken for episode 1"];
+  const finished = finalize(played, {
+    audio: {
+      ok: false,
+      episodes: [swapRow("missing_sample", reasons)],
+      reasons,
+    },
+  });
+  assert.equal(finished.report.decoded_signal, "failed");
+  assert.deepEqual(finished.report.decoded_signal_reasons, reasons);
+  assert.equal(finished.report.qualification, "not_evaluated");
+  assert.equal(
+    finished.report.full_interview,
+    finalize(played).report.full_interview,
+  );
+});
+
+test("an unplaced reply keeps a clean-looking signal from being reported", async () => {
+  const played = await play(SMOKE);
+  const audio = { episodes: [swapRow("verified")] };
+  for (const [replies, expected] of [
+    [{ ok: false, episodes: [] }, "not_assessed"],
+    [{ ok: true, episodes: [] }, "verified"],
+    [null, "verified"],
+  ]) {
+    const finished = finalize(played, { audio, replies });
+    assert.equal(finished.report.decoded_signal, expected);
+  }
+});
+
+test("a status the judge does not accept is a failed signal", async () => {
+  const played = await play(SMOKE);
+  const finished = finalize(played, {
+    audio: { episodes: [swapRow("bogus", ["odd"])] },
+  });
+  assert.equal(finished.report.decoded_signal, "failed");
+  assert.deepEqual(finished.report.decoded_signal_reasons, ["odd"]);
+});
+
+test("an unusable decoded-signal verdict leaves the signal not assessed", async () => {
+  const played = await play(SMOKE);
+  for (const audio of [
+    null,
+    {},
+    { ok: true },
+    { ok: true, episodes: "x" },
+    { ok: true, episodes: [{}], reasons: [] },
+    { ok: true, episodes: [null], reasons: [] },
+    { ok: true, episodes: [{ status: 1, reasons: [] }] },
+    { ok: true, episodes: [{ status: "verified", reasons: [7] }] },
+    { ok: true, episodes: [{ status: "verified" }] },
+  ]) {
+    const finished = finalize(played, { audio });
+    assert.equal(finished.report.decoded_signal, "not_assessed");
+    assert.ok(
+      finished.report.not_exercised.some((n) => /^decoded signal:/.test(n)),
+    );
+  }
 });
 
 for (const plan of [

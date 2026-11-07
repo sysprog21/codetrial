@@ -30,7 +30,7 @@ pub(super) enum Terminal {
 
 #[cfg(test)]
 impl Terminal {
-    pub(super) fn name(&self) -> &'static str {
+    fn name(&self) -> &'static str {
         match self {
             Self::End { .. } => "End",
             Self::Deadline => "Deadline",
@@ -44,9 +44,9 @@ impl Terminal {
 pub(super) struct Cancelled;
 
 pub(super) struct Packet {
-    pub(super) topic: Option<String>,
-    pub(super) sender: Option<String>,
-    pub(super) payload: Vec<u8>,
+    topic: Option<String>,
+    sender: Option<String>,
+    payload: Vec<u8>,
 }
 
 /// How many unsent context summaries a recovery keeps, and their total size.
@@ -181,29 +181,28 @@ struct Action {
 /// A test-only barrier after input preparation and before transport polling.
 #[cfg(test)]
 pub(super) struct WriteBarrier {
-    pub(super) phase: &'static str,
-    pub(super) entered: std::sync::Arc<tokio::sync::Notify>,
-    pub(super) release: std::sync::Arc<tokio::sync::Notify>,
+    phase: &'static str,
+    entered: std::sync::Arc<tokio::sync::Notify>,
+    release: std::sync::Arc<tokio::sync::Notify>,
 }
 
 /// A test-only action run in the poll that completes a labelled write, before
 /// the driver can observe any later input.
 #[cfg(test)]
 pub(super) struct AfterWrite {
-    pub(super) phase: &'static str,
-    pub(super) action: Box<dyn FnOnce() + Send>,
+    phase: &'static str,
+    action: Box<dyn FnOnce() + Send>,
 }
 
 pub(super) struct Driver<'r, 'c, 'i> {
-    pub(super) room: &'r RoomLink,
-    pub(super) context: &'r mut GeminiEventContext<'c>,
-    pub(super) loops: &'r mut RoomLoop,
-    pub(super) interview: InterviewContext<'i>,
-    pub(super) ingress: Ingress,
-    pub(super) revision: u64,
-    pub(super) terminal: Option<Terminal>,
+    room: &'r RoomLink,
+    context: &'r mut GeminiEventContext<'c>,
+    loops: &'r mut RoomLoop,
+    interview: InterviewContext<'i>,
+    ingress: Ingress,
+    revision: u64,
+    terminal: Option<Terminal>,
     held_contexts: VecDeque<String>,
-    held_bytes: usize,
     held_omitted: usize,
     held_omitted_total: usize,
     held_steps: Vec<&'static str>,
@@ -236,7 +235,6 @@ impl<'r, 'c, 'i> Driver<'r, 'c, 'i> {
             revision: 0,
             terminal: None,
             held_contexts: VecDeque::new(),
-            held_bytes: 0,
             held_omitted: 0,
             held_omitted_total: 0,
             held_steps: Vec::new(),
@@ -343,17 +341,17 @@ impl<'r, 'c, 'i> Driver<'r, 'c, 'i> {
             self.held_omitted_total += 1;
             return;
         }
+        let mut held_bytes = self.held_contexts.iter().map(String::len).sum::<usize>();
         while self.held_contexts.len() >= MAX_HELD_CONTEXTS
-            || self.held_bytes + context.len() > MAX_HELD_BYTES
+            || held_bytes + context.len() > MAX_HELD_BYTES
         {
             let Some(old) = self.held_contexts.pop_front() else {
                 break;
             };
-            self.held_bytes -= old.len();
+            held_bytes -= old.len();
             self.held_omitted += 1;
             self.held_omitted_total += 1;
         }
-        self.held_bytes += context.len();
         self.held_contexts.push_back(context);
     }
 
@@ -505,7 +503,7 @@ impl<'r, 'c, 'i> Driver<'r, 'c, 'i> {
         }
     }
 
-    pub(super) async fn wait<T>(&mut self, op: impl Future<Output = T>) -> Result<T, Cancelled> {
+    async fn wait<T>(&mut self, op: impl Future<Output = T>) -> Result<T, Cancelled> {
         tokio::pin!(op);
         loop {
             if self.terminal.is_some() {
@@ -635,7 +633,7 @@ impl<'r, 'c, 'i> Driver<'r, 'c, 'i> {
         }
     }
 
-    pub(super) async fn flush_notices(&mut self) -> Result<(), Cancelled> {
+    async fn flush_notices(&mut self) -> Result<(), Cancelled> {
         if let Some(round) = self.round {
             let message =
                 serde_json::json!({"type":"round_state", "round":"behavioral", "status":round});
@@ -703,7 +701,6 @@ impl<'r, 'c, 'i> Driver<'r, 'c, 'i> {
     async fn flush_contexts(&mut self, session: &mut GeminiLiveSession) -> Result<bool, Cancelled> {
         while !self.held_contexts.is_empty() || self.held_omitted != 0 {
             let contexts = std::mem::take(&mut self.held_contexts);
-            self.held_bytes = 0;
             let steps = std::mem::take(&mut self.held_steps);
             let omitted = std::mem::take(&mut self.held_omitted);
             let mut body = contexts.into_iter().collect::<Vec<_>>().join("\n");

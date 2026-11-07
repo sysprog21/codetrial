@@ -10,6 +10,7 @@ src/gemini* room.md
 src/gemini* agent.md
 src/dispatch.rs room.md
 src/main.rs room.md
+src/launch.rs room.md
 src/config* room.md
 src/web/setup.rs room.md
 src/web/token.rs room.md

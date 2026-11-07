@@ -348,6 +348,8 @@ impl ReplyLatency {
         self.session = session;
         self.socket = socket;
         self.silence_window_ms = silence_window_ms;
+        #[cfg(test)]
+        super::probe::acquisition::bound(room, session);
     }
 
     /// A microphone frame was dequeued at `now`.
@@ -385,6 +387,17 @@ impl ReplyLatency {
     /// Milliseconds on the assessment clock, `None` before it is anchored.
     pub(super) fn interview_ms(&self, now: Instant) -> Option<i64> {
         self.anchor.map(|anchor| offset_ms(now, anchor))
+    }
+
+    #[cfg(test)]
+    pub(super) fn acquisition_identity(&self) -> super::probe::acquisition::IdentityView<'_> {
+        super::probe::acquisition::IdentityView {
+            room: &self.room,
+            session: self.session,
+            socket: self.socket,
+            trace_turn: self.trace.as_ref().map(|trace| trace.turn),
+            clock: self.observation_clock(),
+        }
     }
 
     /// A fresh wall/monotonic pair for joining local harness observations.

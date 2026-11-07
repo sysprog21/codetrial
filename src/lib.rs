@@ -4,6 +4,7 @@ pub mod config;
 pub mod delivery;
 pub mod dispatch;
 pub mod gemini;
+pub mod launch;
 pub mod livekit;
 mod peer_audio;
 pub mod recording;
@@ -11,6 +12,10 @@ pub mod runtime;
 pub mod tasks;
 pub mod token;
 pub mod web;
+
+#[cfg(test)]
+#[path = "../tests/unit/isolation.rs"]
+mod test_isolation;
 
 /// Lives here rather than in one of the modules because `accounts` stamps rows
 /// with it and `web` stamps tokens with it, and neither should have to depend

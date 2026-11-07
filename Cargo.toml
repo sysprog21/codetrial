@@ -128,12 +128,15 @@ windows-permissions = "0.2.4"
 # Independent implementations verify production signatures and digest fixtures.
 hmac = "0.13.0"
 sha2 = "0.11.1"
+# Borrowed socket inspection for real loopback transport fixtures.
+socket2 = "0.6.5"
 livekit-protocol = "0.8.2"
 # LiveKit's transport, reached directly to check the vendored proxy path.
 livekit-net = "0.1.4"
 # The paused clock, so the Live socket's keepalive and idle limits are tested
-# at their real values instead of waiting them out.
-tokio = { version = "1.54.1", features = ["test-util"] }
+# at their real values instead of waiting them out; signals, so the serving
+# fixture can treat TERM as a stop request.
+tokio = { version = "1.54.1", features = ["signal", "test-util"] }
 # The continuity fixture installs a logger to read the SDK's queue-overflow
 # line; the SDK already depends on this crate.
 log = "0.4.34"

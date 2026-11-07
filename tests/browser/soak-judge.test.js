@@ -874,6 +874,42 @@ test("a swap that owed no audio is not made to speak, whatever its sample says",
   assert.deepEqual(statuses(held), [[1, "not_required"]]);
 });
 
+test("a covering sample its own row's cap drops is still carried by the row it covers", () => {
+  const log = owedSwap(1) + owedSwap(2);
+  const superseded = rearm(1, {
+    seq: 1,
+    status: "superseded",
+    reason: "superseded-by-later-swap",
+    windowEdge: null,
+    counterPairs: 0,
+    bytesReceived: null,
+    packetsReceived: null,
+    peakRms: null,
+  });
+  // Swap 2's own verdict rests on its first sample (seq 0, before swap 1's);
+  // the one that covers swap 1 is its fifth, past the cap of four.
+  const stale = { windowEdge: 4 };
+  const second = [
+    rearm(2, { seq: 0 }),
+    rearm(2, { seq: 2, ...stale }),
+    rearm(2, { seq: 3, ...stale }),
+    rearm(2, { seq: 4, ...stale }),
+    rearm(2, { seq: 5, pageSecret: "not kept", reason: "r".repeat(300) }),
+  ];
+  const audio = audioOf(log, [superseded, ...second]);
+  const [first, other] = audio.episodes;
+  assert.equal(first.status, "covered_by_later_swap");
+  assert.equal(first.covered_by.seq, 5);
+  assert.equal(first.covered_by.sample.seq, 5);
+  // Carried through the same whitelist and cut as a row's own samples.
+  assert.ok(!("pageSecret" in first.covered_by.sample));
+  assert.equal(first.covered_by.sample.reason.length, 200);
+  assert.ok(
+    !other.samples.some((s) => s.seq === 5),
+    "the cap dropped it there",
+  );
+});
+
 test("a swap superseded by a later swap is covered only by that swap's fresh sample", () => {
   const log = owedSwap(1) + owedSwap(2);
   const superseded = rearm(1, {
@@ -887,6 +923,13 @@ test("a swap superseded by a later swap is covered only by that swap's fresh sam
   });
   const covered = audioOf(log, [superseded, rearm(2)]);
   assert.equal(covered.ok, true);
+  // The row names the other swap's sample that covers it, and carries it.
+  assert.deepEqual(covered.episodes[0].covered_by, {
+    swap: "7:1:2",
+    seq: 2,
+    sample: covered.episodes[1].samples[0],
+  });
+  assert.equal(covered.episodes[1].covered_by, undefined);
   assert.deepEqual(statuses(covered), [
     [1, "covered_by_later_swap"],
     [2, "verified"],
@@ -1166,6 +1209,50 @@ test("the carried reply in the series rejects audio accepted on the old socket",
   );
 });
 
+test("a judged row keeps the samples behind it, whitelisted and bounded", () => {
+  const replies = seriesReplies();
+  const samples = [1, 2, 3, 4, 5, 6].map((n) =>
+    rearm(2, { seq: n, pageSecret: "not kept", windowEdge: 5 + n }),
+  );
+  const row = judge
+    .judgeSwapAudio(replies, samples)
+    .episodes.find((e) => e.episode === 2);
+  assert.equal(row.status, "verified");
+  assert.equal(row.samples.length, judge.MAX_SAMPLES_PER_SWAP);
+  assert.equal(row.samples_dropped, 2);
+  assert.deepEqual(
+    row.samples.map((sample) => sample.seq),
+    [1, 2, 3, 4],
+  );
+  assert.ok(row.samples.every((sample) => !("pageSecret" in sample)));
+  assert.equal(row.samples[0].peakRms, 0.2);
+  // The sample a verdict rests on survives the cap even when it comes last.
+  const stale = [1, 2, 3, 4].map((n) =>
+    rearm(2, { seq: n, windowEdge: 4, status: "ok" }),
+  );
+  const fifth = judge
+    .judgeSwapAudio(replies, [...stale, rearm(2, { seq: 5 })])
+    .episodes.find((e) => e.episode === 2);
+  assert.equal(fifth.status, "verified");
+  assert.ok(fifth.samples.some((sample) => sample.seq === 5));
+  assert.equal(fifth.samples.length, judge.MAX_SAMPLES_PER_SWAP);
+  assert.deepEqual(
+    fifth.samples.map((sample) => sample.seq),
+    [1, 2, 3, 5],
+  );
+  // A page-supplied reason is cut rather than carried whole.
+  const long = judge
+    .judgeSwapAudio(replies, [rearm(2, { reason: "x".repeat(5000) })])
+    .episodes.find((e) => e.episode === 2);
+  assert.equal(long.samples[0].reason.length, 200);
+  // A swap that owed nothing keeps what was sampled for it too, and one with no
+  // sample keeps none rather than inventing them.
+  const none = judge
+    .judgeSwapAudio(replies, [])
+    .episodes.find((e) => e.episode === 2);
+  assert.deepEqual([none.samples, none.samples_dropped], [[], 0]);
+});
+
 test("native capture records in the series do not prove fresh decoded audio", () => {
   const replies = seriesReplies();
   assert.equal(replies.ok, true);
@@ -1185,5 +1272,31 @@ test("native capture records in the series do not prove fresh decoded audio", ()
   assert.equal(
     fresh.episodes.filter((e) => e.status === "not_required").length,
     5,
+  );
+});
+
+test("a swap whose reply left no record is not assessed, never read as no sample owed", () => {
+  const gap =
+    fixtures.start(1, { obligation: 3, origin: "prompt" }) +
+    fixtures.end(1, "installed", { obligation: 3 });
+  const replies = replyTo(gap + owedSwap(2));
+  assert.equal(replies.ok, false);
+  // The audio judge skips what the reply judge could not place, so on its own
+  // it reports the gap as nothing owed and a verified neighbor hides it.
+  const audio = judge.judgeSwapAudio(replies, [rearm(2)]);
+  assert.deepEqual(statuses(audio), [
+    [1, "not_required"],
+    [2, "verified"],
+  ]);
+  assert.equal(judge.summarizeSwapAudio(audio).status, "verified");
+  assert.equal(judge.summarizeSwapAudio(audio, replies).status, "not_assessed");
+  // A demonstrated signal failure is still a failure, whatever else is missing.
+  const unsampled = judge.judgeSwapAudio(replies, []);
+  assert.equal(judge.summarizeSwapAudio(unsampled, replies).status, "failed");
+  // With every reply placed the replies argument changes nothing.
+  const clean = replyTo(owedSwap(1));
+  assert.equal(
+    judge.summarizeSwapAudio(audioOf(owedSwap(1), [rearm(1)]), clean).status,
+    "verified",
   );
 });

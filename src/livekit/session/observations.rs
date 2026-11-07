@@ -1,15 +1,20 @@
-//! Content-free tool context for the observational replay harness.
+//! Production tool telemetry stays content-free; cfg(test) acquisition
+//! separately
+//! captures private authored-fixture answers before subsequent asynchronous
+//! work.
 use std::time::Instant;
 
 use serde_json::Value;
 
 use crate::agent::RuntimeState;
-use crate::gemini::GeminiFunctionCall;
+use crate::gemini::{GeminiEvent, GeminiFunctionCall};
 use crate::livekit::turn::RuntimeActivity;
 use crate::runtime::{
     TOOL_END_INTERVIEW, TOOL_LOG_HINT, TOOL_READ_BOARD, TOOL_READ_CONVERSATION, TOOL_READ_EDITOR,
     TOOL_RECORD_FRAMEWORK_EVIDENCE,
 };
+
+use super::{GeminiEventContext, RoomLink, Segment};
 
 /// A declared tool's name, never the model's text for an undeclared one.
 pub(super) fn known_tool_name(name: &str) -> &'static str {
@@ -32,8 +37,9 @@ pub(super) fn execute_timed_tool_batch(
     calls: Vec<GeminiFunctionCall>,
     reviewed_revision: u64,
     timed: bool,
+    #[cfg(test)] ticket: &mut Option<super::super::probe::acquisition::Ticket>,
 ) -> Vec<(GeminiFunctionCall, Value)> {
-    super::execute_tool_batch_observed(
+    let answers = super::execute_tool_batch_observed(
         state,
         calls,
         reviewed_revision,
@@ -46,7 +52,45 @@ pub(super) fn execute_timed_tool_batch(
                 activity.latency.closing_requested(started, finished);
             }
         },
-    )
+    );
+    #[cfg(test)]
+    {
+        *ticket = super::super::probe::acquisition::observe(&activity.latency, &answers);
+    }
+    answers
+}
+
+/// Publishes a transcript segment, noting the interviewer's for the
+/// acquisition capture on the way.
+pub(super) fn publish_segment(
+    room: &RoomLink,
+    context: &mut GeminiEventContext<'_>,
+    segment: Segment,
+) {
+    #[cfg(test)]
+    // The id, not the identity: a candidate's final is published as the agent
+    // when the candidate has already left.
+    if segment.identity.is_none() && segment.id.starts_with("interviewer-") {
+        super::super::probe::acquisition::reply(
+            &context.activity.latency,
+            &segment.id,
+            &segment.text,
+            segment.final_segment,
+        );
+    }
+    context.transcripts.publish(room, segment);
+}
+
+/// What a completion with nothing in it answered, if this event is one.
+pub(super) fn silent_completion_kind(
+    event: &GeminiEvent,
+    activity: &RuntimeActivity,
+) -> Option<&'static str> {
+    if matches!(event, GeminiEvent::TurnComplete) && !activity.generating {
+        activity.debt_silence_answers()
+    } else {
+        None
+    }
 }
 
 pub(super) struct HintCounters {

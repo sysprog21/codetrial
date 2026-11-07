@@ -12,13 +12,7 @@ import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createServer } from "node:net";
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 import { launchChromium, root } from "./source.js";
@@ -42,7 +36,10 @@ async function freePort() {
 
 let PORT = 0;
 let BASE = "";
-const binary = resolve(root, "target/debug/codetrial");
+const targetDir = resolve(
+  process.env.CARGO_TARGET_DIR || resolve(root, "target"),
+);
+const binary = join(targetDir, "debug/codetrial");
 let server = null;
 let browser = null;
 
@@ -79,12 +76,7 @@ before(async () => {
     server = null;
     return;
   }
-  // `target/` is missing on a clean checkout, and `mkdtemp` needs its parent.
-  // Creating it keeps a missing build a skipped suite, which is what the
-  // chromium guard above already does, rather than an ENOENT thrown out of
-  // `before`.
-  mkdirSync(resolve(root, "target"), { recursive: true });
-  workDir = mkdtempSync(join(root, "target", "face-detector-"));
+  workDir = mkdtempSync(join(targetDir, "face-detector-"));
   const configPath = join(workDir, "codetrial.env.local");
   writeFileSync(
     configPath,
@@ -322,7 +314,10 @@ test("a VideoFrame is not a frame this detector can read", async (t) => {
 /// and the check reads "unavailable" as ready: no face is ever required.
 /// Detection has to go through `face-worker.js`, the one response granted eval.
 test("the setup face check detects a face under the page's own policy", async (t) => {
-  if (!browser) return t.skip("playwright chromium unavailable");
+  if (!browser || !server) {
+    t.skip("playwright browser or built server binary unavailable");
+    return;
+  }
   const page = await browser.newPage();
   try {
     await page.goto(BASE, { waitUntil: "domcontentloaded" });

@@ -1,3 +1,5 @@
+use crate::test_isolation as isolation;
+
 use super::*;
 use crate::livekit::session::{execute_tool_batch_observed, execute_tool_call};
 use serde_json::json;
@@ -147,6 +149,7 @@ fn accepted_close_request_is_observed_before_tool_batch_response_timing() {
             ],
             0,
             true,
+            &mut None,
         );
         assert_eq!(answers.len(), 2);
         assert!(
@@ -215,4 +218,113 @@ fn accepted_close_request_is_observed_before_tool_batch_response_timing() {
                 <= records[0]["clock"]["emitted_ms"].as_i64().unwrap()
         );
     }
+}
+
+#[test]
+fn executed_tool_capture_precedes_send_and_telemetry_gates() {
+    if isolation::isolated!("CODETRIAL_ACQUISITION_CAPTURE_TEST") {
+        return;
+    }
+    use crate::livekit::probe::acquisition::{Capture, Failure, Limits, install};
+    let capture = Capture::new(
+        "acquisition-fixture",
+        7,
+        Limits {
+            batches: 3,
+            calls: 4,
+            bytes: 16384,
+        },
+    )
+    .unwrap();
+    let installed = install(&capture).unwrap();
+    assert!(install(&capture).is_err());
+    let mut state = RuntimeState {
+        code: "def solve(items):\n    return 'authored-result-sentinel'\n".into(),
+        ..RuntimeState::default()
+    };
+    state.evidence_ledger.code.parser_observation = Some(crate::agent::CodeObservation::Parsed);
+    state.evidence_ledger.code.substantive_revision = 1;
+    let now = Instant::now();
+    let mut activity = RuntimeActivity::for_interview(now, 0, 7);
+    activity.latency.bind("acquisition-fixture", 7, 1, 1500);
+    activity.latency.anchor(now);
+    activity.latency.prompt(now);
+    let call = |id: &str| GeminiFunctionCall {
+        id: id.into(),
+        name: TOOL_READ_EDITOR.into(),
+        args: json!({"fromLine":1}),
+    };
+    let answers = execute_timed_tool_batch(
+        &mut state,
+        &mut activity,
+        vec![call("actual-received-call-id"), call("second-id")],
+        0,
+        false,
+        &mut None,
+    );
+    let snapshot = capture.snapshot();
+    assert_eq!(
+        snapshot.batches.len(),
+        1,
+        "executed answers must survive without any later send/timing observation"
+    );
+    let batch = &snapshot.batches[0];
+    for (captured, (executed, result)) in batch.calls.iter().zip(&answers) {
+        assert_eq!(captured.id, executed.id);
+        assert_eq!(captured.name, executed.name);
+        assert_eq!(&captured.result, result);
+    }
+    assert_eq!(batch.calls.len(), 2);
+    assert!(
+        batch.calls[0].result["result"]
+            .as_str()
+            .unwrap()
+            .contains("authored-result-sentinel")
+    );
+    assert!(batch.calls[0].result.get("editorReview").is_none());
+    assert!(batch.calls[1].result["editorReview"].as_str().is_some());
+    assert_eq!(batch.local_send_completed, None);
+    assert_eq!(batch.identity.socket, 1);
+    assert!(batch.identity.trace_turn.is_some());
+    let record = tool_timing(
+        &mut activity,
+        &state,
+        &answers,
+        HintCounters::capture(&state),
+        timing(false),
+    );
+    assert!(!record.to_string().contains("actual-received-call-id"));
+    assert!(!record.to_string().contains("authored-result-sentinel"));
+    activity.latency.set_socket(2);
+    execute_timed_tool_batch(
+        &mut state,
+        &mut activity,
+        vec![call("replacement-id")],
+        1,
+        false,
+        &mut None,
+    );
+    assert_eq!(capture.snapshot().batches[1].identity.socket, 2);
+    activity.latency.bind("foreign-room", 8, 3, 1500);
+    execute_timed_tool_batch(
+        &mut state,
+        &mut activity,
+        vec![call("foreign-id")],
+        1,
+        false,
+        &mut None,
+    );
+    assert_eq!(capture.snapshot().failure, Some(Failure::Scope));
+    assert_eq!(capture.snapshot().batches.len(), 2);
+    drop(installed);
+    execute_timed_tool_batch(
+        &mut state,
+        &mut activity,
+        vec![call("uninstalled-id")],
+        1,
+        false,
+        &mut None,
+    );
+    assert_eq!(capture.snapshot().batches.len(), 2);
+    let _reinstalled = install(&capture).unwrap();
 }

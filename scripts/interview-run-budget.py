@@ -1385,6 +1385,9 @@ def launch(args, command):
     os.chmod(socket_dir, 0o700)
     socket_path = os.path.join(socket_dir, "permit.sock")
     t0 = time.monotonic()
+    # When the reap begins, on the wall clock, for a worker that must be done
+    # before it (the serving fixture's own deadline).
+    reap_at = int(time.time() + reap_start)
     faults = []
     service = PermitService(
         manifest,
@@ -1405,6 +1408,7 @@ def launch(args, command):
         BROWSER_CHECK_BUDGET_SOCKET=socket_path,
         BROWSER_CHECK_BUDGET_TELEMETRY=telemetry_path,
         BROWSER_CHECK_BUDGET_STOP=stop_file,
+        BROWSER_CHECK_BUDGET_REAP_AT=str(reap_at),
     )
     # A launcher that is told to stop must stop the worker with it: the worker
     # sits in its own session and would otherwise keep spending.
@@ -1698,6 +1702,8 @@ def command_validate(args):
         print(digest)
     elif args.print_field == "run_id":
         print(manifest["run_id"])
+    elif args.print_field == "cleanup_reserve_s":
+        print(manifest["cleanup_reserve_s"])
     else:
         print(f"ok {manifest['run_id']} {digest}")
     return 0
@@ -1725,7 +1731,9 @@ def main(argv=None):
     validate = commands.add_parser("validate", help="check a manifest")
     validate.add_argument("--manifest", required=True)
     validate.add_argument("--verify-binaries", action="store_true")
-    validate.add_argument("--print", dest="print_field", choices=("sha", "run_id"))
+    validate.add_argument(
+        "--print", dest="print_field", choices=("sha", "run_id", "cleanup_reserve_s")
+    )
     validate.add_argument(
         "--min-cleanup-reserve-s", type=int, default=MIN_CLEANUP_RESERVE_S
     )

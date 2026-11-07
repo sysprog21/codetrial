@@ -9,7 +9,6 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest import mock
 from unittest.mock import Mock
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts/check-rust-style.py"
@@ -257,39 +256,167 @@ class RustStyle(unittest.TestCase):
             self.findings("src/lib.rs", f'const S: &str = "{greek}";\n'), []
         )
 
-    def test_a_file_cannot_pass_its_ceiling(self):
-        body = "fn f() {}\n" * 1501
-        self.assertFires("ceiling", "src/big.rs", body)
-        self.write("scripts/rust-style-ceilings.json", json.dumps({"src/big.rs": 1501}))
-        self.assertEqual(run(self.root).stdout, "")
-        self.write("src/big.rs", body + "fn g() {}\n")
-        grown = run(self.root)
-        self.assertIn("src/big.rs: ceiling", grown.stdout)
-        self.assertEqual(grown.returncode, 1)
+    def test_a_new_file_cannot_exceed_the_default_ceiling(self):
+        self.assertEqual(self.findings("src/big.rs", "// line\n" * 1500), [])
+        self.assertFires("ceiling", "src/big.rs", "// line\n" * 1501)
 
-    def test_a_ceiling_above_the_file_is_refused_until_ratcheted(self):
-        self.write("src/big.rs", "fn f() {}\n" * 1600)
-        self.write("scripts/rust-style-ceilings.json", json.dumps({"src/big.rs": 1700}))
-        self.assertIn("run --ratchet", run(self.root).stdout)
-        run(self.root, "--ratchet")
-        self.assertEqual(run(self.root).stdout, "")
+    def start_history(self):
+        self.git("init", "-q")
+        self.git("symbolic-ref", "HEAD", "refs/heads/main")
+        self.commit_tree("base")
+        self.git("tag", "base")
 
-    def test_a_ceiling_for_a_deleted_file_is_refused(self):
-        self.write(
-            "scripts/rust-style-ceilings.json", json.dumps({"src/gone.rs": 2000})
+    def commit_tree(self, message):
+        self.git("add", "-A")
+        self.git("commit", "-qm", message)
+
+    def test_git_history_provides_ceilings_without_a_table(self):
+        self.write("src/big.rs", "// line\n" * 1600)
+        self.start_history()
+        self.assertEqual(self.style.run(self.root, "HEAD"), [])
+        self.assertFalse((self.root / "scripts/rust-style-ceilings.json").exists())
+        self.assertEqual(self.git("status", "--porcelain").stdout, b"")
+        self.write("src/big.rs", "// line\n" * 1601)
+        self.assertTrue(any("over 1600" in x for x in self.style.run(self.root)))
+
+    def test_committed_shrink_cannot_grow_back(self):
+        self.write("src/big.rs", "// line\n" * 1600)
+        self.start_history()
+        self.write("src/big.rs", "// line\n" * 1550)
+        self.assertEqual(self.style.run(self.root, "base"), [])
+        self.commit_tree("shrink")
+        self.write("src/big.rs", "// line\n" * 1560)
+        self.commit_tree("regrow")
+        self.assertEqual(
+            self.style.run(self.root), []
+        )  # HEAD checks uncommitted growth.
+        self.assertTrue(
+            any("over 1550" in x for x in self.style.run(self.root, "base"))
         )
-        self.assertIn("src/gone.rs no longer exists", run(self.root).stdout)
 
-    def test_ratchet_lowers_and_never_raises(self):
-        self.write("src/big.rs", "fn f() {}\n" * 1600)
-        self.write(
-            "scripts/rust-style-ceilings.json",
-            json.dumps({"src/big.rs": 1700, "src/small.rs": 1800}),
+    def test_new_committed_and_renamed_paths_get_no_exemption(self):
+        self.write("src/big.rs", "// line\n" * 1600)
+        self.start_history()
+        self.git("mv", "src/big.rs", "src/renamed.rs")
+        self.write("src/new.rs", "// line\n" * 1600)
+        self.commit_tree("new paths")
+        findings = self.style.run(self.root, "base")
+        for name in ["renamed.rs", "new.rs"]:
+            self.assertTrue(any(name in x and "over 1500" in x for x in findings))
+
+    def test_deletion_retires_the_allowance(self):
+        self.write("src/big.rs", "// line\n" * 1600)
+        self.start_history()
+        (self.root / "src/big.rs").unlink()
+        self.assertEqual(self.style.run(self.root, "base"), [])
+        self.commit_tree("delete")
+        self.write("src/big.rs", "// line\n" * 1600)
+        self.commit_tree("recreate")
+        self.assertTrue(
+            any("over 1500" in x for x in self.style.run(self.root, "base"))
         )
-        self.write("src/small.rs", "fn f() {}\n")
-        run(self.root, "--ratchet")
-        kept = json.loads((self.root / "scripts/rust-style-ceilings.json").read_text())
-        self.assertEqual(kept, {"src/big.rs": 1600})
+
+    def test_shrinking_below_default_keeps_the_general_default(self):
+        self.write("src/big.rs", "// line\n" * 1600)
+        self.start_history()
+        self.write("src/big.rs", "// line\n" * 1400)
+        self.commit_tree("shrink")
+        self.write("src/big.rs", "// line\n" * 1500)
+        self.assertEqual(self.style.run(self.root, "base"), [])
+        # One past the default is checked against the default, rather than
+        # against the 1600 the base allowed.
+        self.write("src/big.rs", "// line\n" * 1501)
+        findings = self.style.run(self.root, "base")
+        self.assertTrue(any("over 1500" in x for x in findings), findings)
+
+    def test_merge_history_cannot_hide_a_smaller_version(self):
+        self.write("src/big.rs", "// line\n" * 1600)
+        self.start_history()
+        self.git("checkout", "-qb", "side")
+        self.write("src/big.rs", "// line\n" * 1550)
+        self.commit_tree("shrink on side")
+        self.git("checkout", "main")
+        self.git("merge", "--no-ff", "-s", "ours", "side", "-m", "merge")
+        self.assertTrue(
+            any("over 1550" in x for x in self.style.run(self.root, "base"))
+        )
+
+    def test_a_merge_deletion_retires_the_allowance(self):
+        self.write("src/big.rs", "// line\n" * 1600)
+        self.start_history()
+        self.git("checkout", "-qb", "side")
+        self.write("src/other.rs", "// other\n")
+        self.commit_tree("side changes")
+        self.git("checkout", "main")
+        self.git("merge", "--no-ff", "--no-commit", "side")
+        self.git("rm", "src/big.rs")
+        self.commit_tree("merge deletes")
+        self.write("src/big.rs", "// line\n" * 1600)
+        self.commit_tree("recreate")
+        self.assertTrue(
+            any("over 1500" in x for x in self.style.run(self.root, "base"))
+        )
+
+    def test_unrelated_history_cannot_supply_an_allowance(self):
+        self.start_history()
+        self.git("checkout", "--orphan", "unrelated")
+        self.commit_tree("other root")
+        self.assertTrue(
+            any(
+                "cannot read Git size baseline" in x
+                for x in self.style.run(self.root, "base")
+            )
+        )
+
+    def test_diverged_baseline_keeps_branch_history(self):
+        self.write("src/big.rs", "// line\n" * 1600)
+        self.start_history()
+        self.git("checkout", "-qb", "side")
+        self.write("src/big.rs", "// line\n" * 1550)
+        self.commit_tree("shrink")
+        self.git("checkout", "main")
+        self.write("src/other.rs", "// other\n")
+        self.commit_tree("main advances")
+        self.git("checkout", "side")
+        self.write("src/big.rs", "// line\n" * 1560)
+        self.assertTrue(
+            any("over 1550" in x for x in self.style.run(self.root, "main"))
+        )
+
+    def test_git_and_worktree_count_newlines_the_same_way(self):
+        name = "src/large name " + chr(0x3B1) + ".rs"
+        self.write(name, "// line\r\n" * 1500 + "// last")
+        self.start_history()
+        self.assertEqual(self.style.run(self.root, "HEAD"), [])
+        self.write(name, "// line\n" * 1500 + "// last\n")
+        self.assertEqual(self.style.run(self.root, "HEAD"), [])
+        self.write(name, "// line\n" * 1500 + "// last\n// added")
+        self.assertTrue(
+            any("over 1501" in x for x in self.style.run(self.root, "HEAD"))
+        )
+
+    def test_a_descendant_baseline_cannot_relax_head(self):
+        self.write("src/big.rs", "// line\n" * 1600)
+        self.start_history()
+        self.git("checkout", "-qb", "ahead")
+        self.write("src/big.rs", "// line\n" * 2000)
+        self.commit_tree("ahead grows")
+        self.git("checkout", "main")
+        self.write("src/big.rs", "// line\n" * 1900)
+        self.assertTrue(
+            any("over 1600" in x for x in self.style.run(self.root, "ahead"))
+        )
+
+    def test_a_baseline_only_path_is_still_new_in_the_worktree(self):
+        self.start_history()
+        self.git("checkout", "-qb", "ahead")
+        self.write("src/new.rs", "// line\n" * 1600)
+        self.commit_tree("ahead adds")
+        self.git("checkout", "main")
+        self.write("src/new.rs", "// line\n" * 1600)
+        self.assertTrue(
+            any("over 1500" in x for x in self.style.run(self.root, "ahead"))
+        )
 
     def test_every_required_lint_refuses_weakening_or_removal(self):
         for group, lints in self.style.REQUIRED_LINTS.items():
@@ -445,36 +572,28 @@ class RustStyle(unittest.TestCase):
             check=True,
         )
 
-    def test_a_ceiling_cannot_rise_or_appear_since_the_baseline(self):
-        body = "fn f() {}\n" * 1600
-        ceilings = "scripts/rust-style-ceilings.json"
-        self.write("src/big.rs", body)
-        self.write(ceilings, json.dumps({"src/big.rs": 1600}))
-        self.git("init", "-q")
-        self.git("add", "-A")
-        self.git("commit", "-qm", "base")
-        self.assertEqual(self.style.run(self.root, "HEAD"), [])
-        self.write("src/big.rs", body + "fn g() {}\n" * 100)
-        self.write(ceilings, json.dumps({"src/big.rs": 1700}))
+    def test_explicit_missing_baseline_fails(self):
+        # The checker reads no CI variable, so there is one answer. The test
+        # does not set one: the runner executes cases in threads, and a changed
+        # os.environ under a thread that is spawning git makes the spawn fail
+        # with EFAULT. A repository with history, so the refusal is of the
+        # absent ref and not of the directory.
+        self.write("src/big.rs", "// line\n" * 1600)
+        self.start_history()
         self.assertTrue(
-            any(
-                "rose from 1600 to 1700" in x for x in self.style.run(self.root, "HEAD")
-            )
+            any("not fetched" in x for x in self.style.run(self.root, "no-such-ref"))
         )
-        self.write("src/big.rs", body)
-        self.write("src/new.rs", body)
-        self.write(ceilings, json.dumps({"src/big.rs": 1600, "src/new.rs": 1600}))
-        self.assertTrue(
-            any("new exemption" in x for x in self.style.run(self.root, "HEAD"))
-        )
-        with mock.patch.dict(os.environ, {"CI": ""}):
-            self.assertEqual(self.style.run(self.root, "no-such-ref"), [])
-        with mock.patch.dict(os.environ, {"CI": "true"}):
-            self.assertTrue(
-                any(
-                    "not fetched" in x for x in self.style.run(self.root, "no-such-ref")
-                )
-            )
+
+    def test_shallow_history_cannot_claim_a_ratchet(self):
+        self.write("src/big.rs", "// line\n" * 1600)
+        self.start_history()
+        with tempfile.TemporaryDirectory() as clone:
+            self.git("clone", "-q", "--depth", "1", self.root.as_uri(), clone)
+            findings = self.style.run(Path(clone), "HEAD")
+        self.assertTrue(any("complete history" in x for x in findings))
+
+    def test_legacy_ratchet_command_is_removed(self):
+        self.assertEqual(run(self.root, "--ratchet").returncode, 2)
 
 
 if __name__ == "__main__":

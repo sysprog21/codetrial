@@ -195,10 +195,21 @@ locks held across await and `mem::forget` are explicit denials too.
 `unsafe` count at zero — `forbid` rather than `deny`, so a local `#[allow]`
 cannot reintroduce it. `scripts/check-rust-style.py` holds what a lint cannot
 ask: that this table stays strict, that no `allow` or bare `#[ignore]` appears,
-that no marker or CJK text lands in Rust or `web/`, and that no file passes the
-line ceiling in `scripts/rust-style-ceilings.json`, which `--ratchet` only
-lowers. The rules and the lints left off on purpose are in the Rust profile of
-codetrial-improve, `.claude/skills/codetrial-improve/rust.md`.
+that no marker or CJK text lands in Rust or `web/`, and that no file passes its
+Git-derived line ceiling. By default, a file may not exceed 1500 lines or its
+committed size at the same path in HEAD, whichever is larger. Without Git
+every file gets the 1500-line limit and the explicit baseline below cannot be
+read, so a source archive fails this gate; run it from a clone. The gate passes
+`--baseline origin/main`: larger files present in both the baseline and HEAD
+are limited by their smallest size across those two trees and every reachable
+commit in `origin/main..HEAD`, with a floor of 1500. Committed shrinking
+automatically ratchets the limit; new or renamed paths get 1500, and deletion
+retires an allowance. An explicit baseline requires resolvable HEAD and
+baseline refs, common history and a complete, non-shallow repository; missing
+history fails locally and in CI. Diverged refs are supported, but the branch
+must still satisfy any smaller baseline limit. The rules and the lints left
+off on purpose are in the Rust profile of codetrial-improve,
+`.claude/skills/codetrial-improve/rust.md`.
 
 The compiler those lints run on is pinned in `rust-toolchain.toml`, so a new
 Rust release cannot fail an unchanged tree: Dependabot proposes each bump as
@@ -1131,8 +1142,10 @@ python3 scripts/interview-run-budget.py run \
 `validate` is free and should always precede `run`. `run` passes the worker
 `BROWSER_CHECK_RUN_MANIFEST`, `BROWSER_CHECK_RUN_ID`,
 `BROWSER_CHECK_RUN_MANIFEST_SHA256` (the hash of the manifest bytes),
-`BROWSER_CHECK_BUDGET_SOCKET`, `BROWSER_CHECK_BUDGET_TELEMETRY` and
-`BROWSER_CHECK_BUDGET_STOP`. `scripts/browser-check.sh` refuses a partial set, a
+`BROWSER_CHECK_BUDGET_SOCKET`, `BROWSER_CHECK_BUDGET_TELEMETRY`,
+`BROWSER_CHECK_BUDGET_STOP` and `BROWSER_CHECK_BUDGET_REAP_AT` (when its reap
+begins, in Unix seconds, which the serving fixture's own deadline is set
+before). `scripts/browser-check.sh` refuses a partial set, a
 run ID or hash that disagrees with the manifest, a binary whose sha256 changed,
 and `CODETRIAL_WEB_URL`, since an external server is shared and was not built
 from the pinned executable. With `BROWSER_CHECK_VALIDATE_ENV_ONLY=1` it stops
@@ -1193,6 +1206,36 @@ reserve is revalidated before launch against the resolved handover grace
 (`BROWSER_CHECK_HANDOVER_GRACE_S`, 90 when unset). A GoAway rotation that begins
 at or after the boundary is `late_idle` or `late_terminal_preempted` and never
 counts toward the two completed rotations a run needs.
+
+`scripts/long-interview-evidence.cjs` reads the acquisition report the test
+fixture leaves (receipts, executed batches, interviewer segments and turn
+endings, each with its socket and how many of the others preceded it) and gives
+`judgeCheckpoint` its evidence. It claims an association only when the facts
+leave one reading: a reply cites the calls received on its own socket after the
+previous ending, executed before it began, and not received while output was
+being discarded. A swallowed or missing ending, a segment sealed by a cut, a
+reply that spans a tool call, a socket replacement, a rewritten segment, two
+replies in one window, a window edge inside the clock uncertainty, a reply
+that began after the question but before its estimated end (a recording can
+finish speaking sooner than its word count says) or a latched capture failure
+makes the checkpoint `not_assessed` with the reason, never a pass. The
+interview is `verified` only when every checkpoint passed.
+`tests/fixtures/acquisition-report.json` is real producer output, regenerated
+with `CODETRIAL_UPDATE_FIXTURES=1` on the test that writes it.
+
+What a reply is judged on is what its question asks and no more
+(`scripts/long-interview-schedule.cjs`). An inspect question asks about the
+duplicate case, so the revision is judged in what the tool read (the answer
+key's `tool.result_fact_ids`), and a reply may state the current revision
+without penalty but not an earlier one. A board has no marker a model can read
+back: `read_board` gives it a count and an image, never text, so a whiteboard
+revision is told apart by the stroke count the tool reports (four strokes are
+drawn per revision and the board keeps them, so revision n reads `4n strokes`),
+its questions do not ask for a revision, and `tests/agent/whiteboard.rs` pins
+the wording the judge reads, which the judge's own test takes from
+`tests/golden/prompts.json`. The rubrics are lexical and were checked against
+the first pilot's real replies. Changing any of this changes the catalogue, so
+`SCHEDULE_VERSION`, the pins and every clip manifest move with it.
 
 `run` also samples the owned process tree (RSS, open descriptors and threads
 for every process, keyed by PID and start time so a reused PID is another
