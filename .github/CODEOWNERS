@@ -1,5 +1,9 @@
 # The files that decide whether a change is reviewed are the maintainer's to
 # approve. Pair this with "Require review from Code Owners" on main.
+#
+# Every login named here may also skip the interactive review of a large
+# change that is wholly their own (docs/large-change-explanation.md says when);
+# the check reads this file from the base, and a team is not expanded.
 /.github/                         @jserv
 /scripts/                         @jserv
 /.claude/skills/codetrial-review/ @jserv

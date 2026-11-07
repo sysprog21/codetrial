@@ -1,38 +1,42 @@
-# Decide whether a pull request needs the interactive review, and whether a
-# maintainer has marked it explained.
+# Measure a pull request and, for a large change, check that the interactive
+# review was done before it was pushed.
 #
-# check.yml cannot re-run on every label change without paying for the whole
-# matrix, so this one carries only that check. It measures the commits and the
-# diff itself and reads nothing the author writes: a change over the thresholds
-# passes only with the maintainer's label. The review itself is local evidence
-# this job never sees. The file keeps its name from when it read the
-# description.
+# check.yml carries the whole matrix; this job carries only this check. It reads
+# the commits and the diff and nothing the author writes in the description. A
+# large change passes when the pre-push hook sent a completed review record for
+# exactly its code, signed on the contributor's machine with an SSH key that
+# GitHub lists for the pull request's author, read here from the fork as data,
+# and fails with how to fix it when not. The answers stay local evidence this
+# job never sees. The file keeps its name from when it read the description.
 #
 # PR events run on pull_request_target, so their workflow is the base branch's
 # and a pull request cannot edit or remove it. The same reason makes this job
 # the dangerous kind: it has the base repository's token. It therefore asks for
-# read access only, checks the pull request out as data, and runs only the base
-# branch's checker, never a script from the pull request. While the base has no
-# gate (the pull request that adds it) there is nothing to compare, and this
-# workflow does not exist on the base either until that pull request merges.
-# Merge groups recheck each included PR with the group base's checker, but run
-# the workflow file as the queue ref has it, edits from the pull request
-# included, and a job its own condition skips counts as passing. So no job here
-# may have an `if:`, and the pull-request run's --guard step refuses a change to
-# this file (or another workflow naming this check) without an approved head.
-# See docs/development.md.
+# read access only, fetches the pull request's commits by identity into a bare
+# repository (objects only: no working tree, no hooks, no file from the pull
+# request on disk), and runs only the base branch's checker. actions/checkout
+# refuses a fork's head under this trigger, so it checks out only the base.
+# While the base has no checker (the pull request that adds it) there is nothing
+# to compare, and this workflow does not exist on the base either until that
+# pull request merges. A merge group runs the workflow file as the queue ref has
+# it, edits from the pull request included, and a job its own condition skips
+# counts as passing. So no job here may have an `if:`, and the pull-request
+# run's guard refuses a change to this file (or another workflow naming this
+# check) without an approved head. See docs/development.md.
 # Changing the trigger or the token's scope needs the review that
 # .claude/skills/codetrial-triage/apply-pr-actions.sh names for this file.
 name: pr-description
 
 on:
   pull_request_target:
-    types: [opened, synchronize, reopened, labeled, unlabeled]
+    # edited: a pull request moved to another base is measured again.
+    types: [opened, synchronize, reopened, edited]
   merge_group:
     types: [checks_requested]
 
 permissions:
   contents: read
+  # Read only, to list the pull request's commits with their authors.
   pull-requests: read
 
 concurrency:
@@ -49,46 +53,119 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
-          fetch-depth: 0
-          persist-credentials: false
-          path: head
-      - uses: actions/checkout@v7
-        with:
           ref: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
           persist-credentials: false
           path: base
       - name: Measure the change
         env:
+          # Read-only, for the public list of the author's signing keys.
           GH_TOKEN: ${{ github.token }}
           EVENT: ${{ github.event_name }}
           REPOSITORY: ${{ github.repository }}
-          BASE_REF: ${{ github.event.merge_group.base_ref }}
-          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
           AUTHOR_LOGIN: ${{ github.event.pull_request.user.login }}
           AUTHOR_TYPE: ${{ github.event.pull_request.user.type }}
           APPROVED_HEAD: ${{ vars.CODETRIAL_POLICY_APPROVED_HEAD }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           set -eu
           export GIT_TERMINAL_PROMPT=0
+          if [ "$EVENT" = merge_group ]; then
+              # A queue head is GitHub's merge of pull requests the queue took
+              # only once this check passed on each one's own head; it has no
+              # review record of its own to read.
+              echo "Each pull request in this group passed this check on its own head."
+              exit 0
+          fi
           if [ ! -f base/scripts/check-interactive-review.py ] \
               || [ ! -f base/scripts/check-queue-review.py ] \
               || [ ! -f base/.claude/skills/codetrial-review/commit-sizes.py ]; then
-              echo "The base branch has no interactive review gate yet; nothing to compare."
+              echo "The base branch has no interactive review check yet; nothing to compare."
               exit 0
           fi
-          cd head
-          if [ "$EVENT" = merge_group ]; then
-            python3 ../base/scripts/check-queue-review.py \
-                --base "$BASE_SHA" --head "$HEAD_SHA" \
-                --branch "${BASE_REF#refs/heads/}" --repo "$REPOSITORY"
-          else
-            python3 ../base/scripts/check-queue-review.py \
-                --base "$BASE_SHA" --head "$HEAD_SHA" --guard \
-                --approved "$APPROVED_HEAD"
-            python3 ../base/scripts/check-interactive-review.py pr \
-                --base "$BASE_SHA" --head "$HEAD_SHA" --labels "$LABELS" \
-                --author-login "$AUTHOR_LOGIN" --author-type "$AUTHOR_TYPE"
+          for sha in "$BASE_SHA" "$HEAD_SHA"; do
+              printf '%s\n' "$sha" | grep -Eqx '[0-9a-f]{40}'
+          done
+          # A fork's head is reachable from the base repository through the pull
+          # request.
+          git init -q --bare head.git
+          if ! git -C head.git fetch -q --no-tags \
+              "https://github.com/$REPOSITORY" "$BASE_SHA" "$HEAD_SHA"; then
+              echo "::error title=Cannot fetch the change::Commit $HEAD_SHA is no longer available, usually because the branch was pushed again after this run started. The newer push starts its own run; if none appears, push again."
+              exit 1
           fi
+          # The pre-push hook sent the review record to the repository the branch
+          # came from. It is data for the base's checker, and only a large change
+          # needs one; the checker says so when it is missing, so a failed fetch
+          # is silent here.
+          if printf '%s\n' "$HEAD_REPOSITORY" | grep -Eqx '[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+'; then
+              timeout 120 git -C head.git fetch -q --no-tags \
+                  "https://github.com/$HEAD_REPOSITORY" \
+                  "+refs/notes/codetrial-review:refs/notes/codetrial-review" \
+                  2> /dev/null || true
+          fi
+          # A code owner's pull request is exempt only when every commit is a
+          # code owner's too; GitHub links each commit's author to an account.
+          # A list it did not return is not passed, and the exemption then does
+          # not apply.
+          authors="$RUNNER_TEMP/commit.authors"
+          if printf '%s\n' "$PR_NUMBER" | grep -Eqx '[0-9]+' \
+              && timeout 30 gh api "repos/$REPOSITORY/pulls/$PR_NUMBER/commits" \
+                  --paginate --jq '.[] | .sha + " " + (.author.login // "")' > "$authors" 2> /dev/null; then
+              listed=$authors
+          else
+              listed=
+          fi
+          # The record is signed on the contributor's machine; the keys GitHub
+          # publishes for the author are what the signature is checked against:
+          # authentication keys, and signing keys, which a contributor can add
+          # for this alone without touching how they push.
+          # A list GitHub did not return is said to be unavailable, so the
+          # checker does not mistake an outage for a missing key.
+          keys="$RUNNER_TEMP/author.keys"
+          : > "$keys"
+          unavailable=
+          # The opener's keys, and those of up to nine of the commits' authors,
+          # so a contributor whose work a code owner opened can sign its record.
+          valid='[A-Za-z0-9][A-Za-z0-9-]{0,38}'
+          opener=
+          printf '%s\n' "$AUTHOR_LOGIN" | grep -Eqx "$valid" && opener=$AUTHOR_LOGIN
+          others=
+          if [ -n "$listed" ]; then
+              others=$(awk '{ print $2 }' "$authors" | grep -Ex "$valid" \
+                  | grep -vixF -- "${opener:-.}" | sort -fu | head -n 9) || true
+          fi
+          # Fetched side by side, each into its own file, so a slow answer
+          # costs one timeout, not one per login.
+          fetched="$RUNNER_TEMP/keys.d"
+          mkdir -p "$fetched"
+          for login in $opener $others; do
+              (
+                  curl -fsS --max-time 30 "https://github.com/$login.keys" \
+                      > "$fetched/$login.auth" 2> /dev/null \
+                      || : > "$fetched/unavailable"
+                  timeout 30 gh api "users/$login/ssh_signing_keys" \
+                      --paginate --jq '.[].key' > "$fetched/$login.signing" 2> /dev/null \
+                      || : > "$fetched/unavailable"
+              ) &
+          done
+          wait
+          for list in "$fetched"/*.auth "$fetched"/*.signing; do
+              [ ! -f "$list" ] || { cat "$list"; echo; } >> "$keys"
+          done
+          # Without the commit list, the authors' keys were never fetched.
+          [ -n "$listed" ] && [ ! -e "$fetched/unavailable" ] \
+              || unavailable=--keys-unavailable
+          # Only the gh calls above needed the token; nothing that reads the
+          # pull request's data below gets it.
+          unset GH_TOKEN
+          cd head.git
+          python3 ../base/scripts/check-queue-review.py \
+              --base "$BASE_SHA" --head "$HEAD_SHA" --approved "$APPROVED_HEAD"
+          python3 ../base/scripts/check-interactive-review.py pr \
+              --base "$BASE_SHA" --head "$HEAD_SHA" \
+              --author-login "$AUTHOR_LOGIN" --author-type "$AUTHOR_TYPE" \
+              --author-keys "$keys" $unavailable \
+              ${listed:+--commit-authors "$listed"}
