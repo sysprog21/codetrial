@@ -89,6 +89,9 @@ test("P E T switch, cycle, restore, and ignore unsafe cases", async (t) => {
 
     await pressToolKey(page, "p", { repeat: true });
     assert.deepEqual(await pressed(page), ["Eraser", "Large eraser"]);
+    await page.locator("#problem-tab").focus();
+    await pressToolKey(page, "p");
+    assert.deepEqual(await pressed(page), ["Eraser", "Large eraser"]);
     await page.evaluate(() => {
       const field = document.createElement("input");
       field.id = "board-shortcut-trap";
