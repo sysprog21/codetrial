@@ -75,6 +75,13 @@ test("P E T switch, cycle, restore, and ignore unsafe cases", async (t) => {
         .evaluateAll((nodes) => nodes.map((n) => n.textContent.trim())),
       ["P", "E", "T"],
     );
+    assert.equal(
+      await page
+        .locator(".board-color")
+        .first()
+        .getAttribute("aria-keyshortcuts"),
+      "P",
+    );
     assert.deepEqual(await pressed(page), ["Black pen"]);
     await pressToolKey(page, "p");
     assert.deepEqual(await pressed(page), ["Red pen"]);

@@ -240,9 +240,9 @@ what you can draw, say aloud and defend by tracing an example by hand.
 
    | Control | What it does |
    |---|---|
-   | Pen colors | Black, red, blue and green. Write in black and mark up in the others. |
-   | Eraser | Rubs out what it passes over. The three size buttons beside it pick a size and the eraser together: small for one character, medium for one line, large for a region. Pick a pen color, or press Eraser again, to draw again. |
-   | Text | Click or drag on the board to create a text draft. Enter inserts a newline; Ctrl+Enter or Confirm places the label; Escape or Cancel discards it. Committed labels cannot be edited, moved or resized. |
+   | Pen colors | Black, red, blue and green. Write in black and mark up in the others. With focus in the whiteboard canvas or drawing toolbar and no modifier, P selects the pen; press P again to cycle colours. |
+   | Eraser | Rubs out what it passes over. The three size buttons beside it pick a size and the eraser together: small for one character, medium for one line, large for a region. Pick a pen color, or press Eraser again, to draw again. With focus in the whiteboard canvas or drawing toolbar and no modifier, E selects the eraser; press E again to cycle sizes. |
+   | Text | Click or drag on the board to create a text draft. Enter inserts a newline; Ctrl+Enter or Confirm places the label; Escape or Cancel discards it. Committed labels cannot be edited, moved or resized. With focus in the whiteboard canvas or drawing toolbar and no modifier, T selects Text; press T again to restore the previous pen or eraser. |
    | Undo, Redo | Step back and forward one stroke, erasure or confirmed text label at a time. With focus in the whiteboard canvas or drawing toolbar, use Ctrl+Z to undo and Ctrl+Y or Ctrl+Shift+Z to redo on Windows/Linux, or Cmd+Z / Cmd+Shift+Z on macOS. Tab reaches the drawing toolbar; the canvas is not a Tab stop. |
    | Clear board | Wipes the board in one step, which Undo brings back. |
 

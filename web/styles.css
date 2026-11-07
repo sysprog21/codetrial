@@ -2401,6 +2401,9 @@ table.phase-scores {
    its own coordinates, so what the candidate draws is where the interviewer
    sees it whatever the two screens are. */
 .board-panel {
+  /* Paper ink and edge shared by the toolbar keycaps and text drafts. */
+  --paper-edge: #d6d9df;
+  --paper-ink: #252a32;
   display: flex;
   min-height: 34rem;
   flex-direction: column;
@@ -2427,10 +2430,10 @@ table.phase-scores {
   min-width: 1.25rem;
   height: 1.25rem;
   padding: 0 0.2rem;
-  border: 1px solid var(--hairline);
+  border: 1px solid var(--paper-edge);
   border-radius: 0.25rem;
   background: var(--paper);
-  color: var(--sub);
+  color: var(--paper-ink);
   font: inherit;
   font-size: 0.6875rem;
   font-weight: 600;
@@ -2537,9 +2540,7 @@ table.phase-scores {
 }
 
 .board-text-draft {
-  /* The toolbar's edge and ink and the grip on a text box, paper's own. */
-  --paper-edge: #d6d9df;
-  --paper-ink: #252a32;
+  /* Grip stays local; edge and ink come from .board-panel. */
   --paper-grip: #686868;
   position: absolute;
   z-index: 3;

@@ -5448,6 +5448,7 @@ function initWhiteboard() {
     swatch.style.background = color;
     swatch.dataset.color = color;
     swatch.setAttribute("aria-label", `${name} pen`);
+    swatch.setAttribute("aria-keyshortcuts", "P");
     swatch.title = swatch.getAttribute("aria-label");
     swatch.addEventListener("click", () => selectPen(color));
     nodes.boardPens.append(swatch);
@@ -5661,11 +5662,7 @@ function selectPen(color) {
 }
 
 function selectTool(tool) {
-  if (tool === "text" && board.tool !== "text") {
-    board.lastDrawTool = board.tool === "eraser" ? "eraser" : "pen";
-  } else if (tool === "pen" || tool === "eraser") {
-    board.lastDrawTool = tool;
-  }
+  if (tool !== "text") board.lastDrawTool = tool;
   board.tool = tool;
   paintToolState();
 }
