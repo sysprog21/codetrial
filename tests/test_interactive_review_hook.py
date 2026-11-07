@@ -1596,6 +1596,19 @@ class QueueReviewTests(unittest.TestCase):
         self.assertNotIn("head.sha", text[: text.index("- name: Measure the change")])
         self.assertIn("git init -q --bare head.git", run)
         self.assertIn('"$BASE_SHA" "$HEAD_SHA"', run)
+        # The scripts and the base measured against are the workflow's own
+        # commit: a reopened pull request's base.sha may predate this file.
+        self.assertNotIn("pull_request.base.sha", text)
+        self.assertRegex(
+            text,
+            r"\n +ref: \$\{\{ github\.event_name == 'merge_group'"
+            r" && github\.event\.merge_group\.base_sha \|\| github\.sha \}\}\n",
+        )
+        self.assertRegex(
+            text,
+            r"\n +BASE_SHA: \$\{\{ github\.event_name =="
+            r" 'pull_request_target' && github\.sha \|\| '' \}\}\n",
+        )
         self.assertNotIn("labels", text.lower())
         # The review record comes from the repository the branch came from, by
         # its validated name, and only after the change itself was fetched.
