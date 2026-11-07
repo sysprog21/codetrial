@@ -3869,6 +3869,107 @@ body:not([data-recording]) .replay-detail > :not(header) {
   margin: 1.25rem 0 0;
 }
 
+.session-presets {
+  width: min(32rem, calc(100% - 2rem));
+  padding: 1.25rem;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: var(--shadow-card);
+}
+
+.session-presets::backdrop {
+  background: color-mix(in srgb, var(--ink) 42%, transparent);
+}
+
+.session-presets-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.session-presets-heading h3 {
+  margin: 0;
+}
+
+.session-presets > p {
+  margin-top: 0.5rem;
+}
+
+.session-presets-trigger {
+  position: absolute;
+  top: 0.25rem;
+  right: 0;
+  margin: 0;
+}
+
+.session-panel .setup-heading {
+  position: relative;
+}
+
+.session-panel .setup-heading > div {
+  padding-right: 4.5rem;
+}
+
+.session-preset-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.session-presets > .session-preset-row {
+  margin-top: 0.75rem;
+}
+
+.lobby #session-preset,
+.lobby #session-preset-name {
+  flex: 1 1 10rem;
+  min-width: 0;
+  min-height: 2.5rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+}
+
+.session-preset-form {
+  margin-top: 0.75rem;
+}
+
+.session-preset-form > label {
+  display: block;
+  margin-bottom: 0.35rem;
+  color: var(--sub);
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.session-preset-button {
+  min-height: 2.5rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--sub);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.session-preset-button:not(:disabled):hover {
+  border-color: var(--accent);
+}
+
+.session-preset-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
 /* Chips: a checkbox or a choice button. Selected ones are tinted, so the one
    solid purple control on the page is Start. */
 .lobby .difficulty-row label,
