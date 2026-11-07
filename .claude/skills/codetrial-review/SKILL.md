@@ -294,7 +294,8 @@ same lines, keeping the strongest wording and the highest level any confirmed
 version earned; note how many reviewers raised it, but agreement ranks
 nothing, a concrete failure does.
 
-A diff past about 500 changed lines gets one more round, and only one: a
+A diff past about 500 changed lines (a review-effort budget, not the
+interactive-review threshold) gets one more round, and only one: a
 reviewer handed the confirmed findings ("do not repeat these") and the
 boundaries and protected subjects above that no verdict covers yet, including
 those in files that already produced a finding, since one finding does not

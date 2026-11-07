@@ -458,7 +458,9 @@ test(
     );
     const notice = await page.locator("#completion-notice").innerText();
     assert.match(notice, /close this window and continue submitting/i);
-    assert.match(notice, /explained/);
+    assert.match(notice, /signs this review and sends its/);
+    assert.doesNotMatch(notice, /explain one passage/);
+    assert.doesNotMatch(notice, /label/);
     assert.equal(await page.locator("#close-window").isVisible(), true);
     assert.equal(
       await page.locator("#reflect-save").textContent(),
@@ -850,7 +852,10 @@ test(
     await page.locator("#finished").waitFor({ state: "visible" });
     assert.equal(await page.locator("#workspace").isVisible(), false);
     assert.doesNotMatch(page.url(), /token=/);
-    assert.match(await page.locator("#finished").innerText(), /explained/);
+    assert.match(
+      await page.locator("#finished").innerText(),
+      /signs this review and sends its/,
+    );
     if (server.exitCode === null)
       await once(server, "exit", { signal: AbortSignal.timeout(8000) });
     assert.equal(server.exitCode, 0);

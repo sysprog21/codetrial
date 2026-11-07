@@ -244,8 +244,9 @@ pull request, tells the reviewer little, and leaves open whether the issue is
 finished. When the issue is too large for this change, split it into sub-issues
 and close one with each pull request.
 
-Working with Claude Code, run `/codetrial-review` on the committed branch
-before opening the pull request. It reads what the gate cannot: the scope the
+Run `/codetrial-review` (in Codex, `$codetrial-review`) on the committed
+branch before opening the pull request; a large change needs Claude Code or
+Codex for its interactive review. It reads what the gate cannot: the scope the
 issue accepted, the contracts in `docs/`, and what maintainers already decided
 about the same files. Fix what it confirms; its report stays out of the pull
 request. The pre-push hook prints one line when the head being pushed has no
@@ -272,8 +273,8 @@ maintainer approval of the exact verifier commit. See
 [the hashchain trust boundary](docs/development.md#git-hooks).
 
 Before opening a pull request, use the interactive review web page if any
-commit has at least 200 added plus deleted reviewable lines, or the whole PR
-has more than 500. Explain the change and its design choices in your own words,
+commit has at least 200 added plus deleted text lines, or the whole PR has more
+than 500 (raw counts; nothing is excluded). Explain the change and its design choices in your own words,
 and answer
 questions grounded in the diff. Follow [the large-change explanation
 requirement](docs/large-change-explanation.md) for counting, coverage, and what
@@ -281,8 +282,46 @@ belongs in the PR body. An agent-written summary or approval alone does not
 meet this requirement; submission waits for your explanation and any material
 corrections.
 The pull request carries no review block. The `interactive-review` check measures
-the change itself, and a change over the thresholds passes once a maintainer adds
-the `explained` label.
+the change itself; over the thresholds it passes only when the pre-push hook
+sent the record of a completed interactive review for that code, signed with an
+SSH key on your GitHub account. Only the people `.github/CODEOWNERS` names may
+skip the interactive review, and only for their own work: the account that
+opens the pull request and the GitHub account of every commit's author must all
+be listed there. A pull request whose every commit is Dependabot's needs no
+record either, and the maintainer's ruleset bypass covers the maintainer's own
+pull requests. Everyone else goes through it for every large change. When
+the hook or the check refuses, [the troubleshooting
+list](docs/large-change-explanation.md#troubleshooting) has the fix for each
+message, including sending the record for a branch already pushed
+(`--publish-review`).
+
+**Before your first large change**, once:
+
+- `make hooks`, and an `upstream` remote fetched
+  (`git remote add upstream https://github.com/sysprog21/codetrial && git fetch
+  upstream`): the hook measures the change against `upstream/main`.
+- A signing key, below. The record is signed on your machine, so a large change
+  needs an SSH key registered on your GitHub account. A key of its own, registered as a Signing Key, leaves the way you push
+(HTTPS or another SSH key) untouched:
+
+1. Generate it: `ssh-keygen -t ed25519 -f ~/.ssh/codetrial_signing`
+   ([Generating a new SSH key](https://docs.github.com/en/authentication/connecting-to-github-with-ssh/generating-a-new-ssh-key-and-adding-it-to-the-ssh-agent)).
+2. Register it: on GitHub, Settings, SSH and GPG keys, New SSH key, choose
+   **Key type: Signing Key**, and paste `~/.ssh/codetrial_signing.pub`
+   ([Adding a new SSH key to your account](https://docs.github.com/en/authentication/connecting-to-github-with-ssh/adding-a-new-ssh-key-to-your-github-account)).
+3. Point the hook at it: `git config codetrial.signingKey ~/.ssh/codetrial_signing`
+
+A key you already push with over SSH works too, without these steps when it is
+in `ssh-agent`; the hook then signs with the first key the agent offers, so with more than one
+key loaded, set `codetrial.signingKey` to the one on your account. The
+push prints the fingerprint it signed with, and `ssh-keygen -lf <key>` beside
+your keys on GitHub shows that it is one of them.
+
+`git config codetrial.codeOwner <login>` is for the people `.github/CODEOWNERS`
+names, to tell the hook they skip the review. It is not a way around it: the
+pull request's check never reads this setting, and judges the account that
+opens the pull request and each commit's author instead, so on anyone else's
+branch it only moves the refusal from the push to the pull request.
 
 A review thread carries a correction, a measurement, or nothing: no pasted
 agent walkthroughs, no severity tables, no re-summarizing a diff that GitHub

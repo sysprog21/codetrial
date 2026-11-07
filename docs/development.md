@@ -428,8 +428,8 @@ small changes get one advisory line when the head has no `/codetrial-review`
 record. A topic branch with any commit at least 200 added plus deleted text
 lines, or a net PR diff over 500, is refused without matching durable code-review
 and interactive-explanation evidence. The hook uses raw text counts
-conservatively, without automatically exempting generated or vendored paths;
-record any exclusion evidence during the review. It resolves the PR base from
+conservatively and exempts no path; generated or vendored paths may be named
+for the reviewer, which does not lower the count. It resolves the PR base from
 the canonical upstream's local `main` tracking ref, falling back to the push
 remote's `main` when no canonical upstream is configured. Missing history
 is refused when there is no remote-tracking `main` to measure against (for
@@ -453,9 +453,9 @@ A commit authored by `dependabot[bot]` continues the chain without a
 Change-Id trailer, because the bot cannot run the hooks; the author line is
 unauthenticated, so locally this is a convenience and not a trust boundary.
 `scripts/hashchain.py` is the only place that decides who Dependabot is: the
-commit-log check asks it for the commits to skip, and the description check
-excuses a pull request only when GitHub reports `dependabot[bot]` (account type
-`Bot`) as its opener and every commit in it is Dependabot's. A forged author
+commit-log check asks it for the commits to skip, and the interactive-review
+check excuses a pull request only when GitHub reports `dependabot[bot]` (account
+type `Bot`) as its opener and every commit in it is Dependabot's. A forged author
 address therefore buys nothing there for a contributor who cannot push to
 Dependabot's branches, and a person's commit on the branch is read like any
 other. The hashchain and commit-log checks in CI still go by the author line
@@ -500,9 +500,9 @@ instead is layer three things, each closing a different gap:
   given the same rule in its own configuration.
 - **CI recomputes everything it can** and is the only part a contributor cannot
   edit locally: the Change-Id chain, the size of every commit and of the whole
-  pull request, and that a change over the review thresholds carries a
-  maintainer's `explained` label. It reads nothing the author writes in the
-  description. It runs the base branch's checker, so a pull request cannot weaken it.
+  pull request, and, for a change over the review thresholds, that the pre-push
+  hook sent a completed review record for exactly that code. It reads nothing
+  the author writes in the description. It runs the base branch's checker, so a pull request cannot weaken it.
   It holds only if the repository requires it: make `check` and
   `interactive-review` required status checks, merge only through the merge queue,
   let only the maintainer bypass them, from a pull request and never by pushing
@@ -511,28 +511,98 @@ instead is layer three things, each closing a different gap:
   `scripts/check-queue-review.py`, `.claude/skills/codetrial-review/commit-sizes.py`,
   `scripts/agent-guard.py`, `.claude/settings.json` and `.github/workflows/`.
 
+Repository setup, done once by an admin; the reasons follow below:
+
+1. A ruleset on `main` requiring `check` and `interactive-review`, the merge
+   queue (merge method), one approval that a push dismisses, code-owner review,
+   and a maintainer bypass from a pull request only.
+2. The Actions event policy that keeps `pull_request_target` running for
+   `pr-description.yml` (the command is below).
+3. Approval required for first-time contributors' runs (Settings, Actions,
+   General); a maintainer grants it, through
+   `.claude/skills/codetrial-triage/apply-pr-actions.sh` in a sweep.
+4. Before merging a pull request that edits `pr-description.yml`,
+   `CODETRIAL_POLICY_APPROVED_HEAD` set to its head (the guard below).
+5. Once the review record replaces the old label gate: delete the label named
+   `explained`, and tell each open pull request over the thresholds that its next run needs the
+   signing key and a record ([the troubleshooting
+   list](large-change-explanation.md#troubleshooting)).
+
 `pr-description.yml` runs on `pull_request_target`, so the workflow that runs is
 the base branch's and a pull request cannot edit or remove it. That trigger runs
 with the base repository's token, which is why the job asks for read access
-only, checks the pull request out as data and runs only the base branch's
-checker. It is also why `apply-pr-actions.sh` otherwise sends every approval of
+only, fetches the pull request's commits by identity into a bare repository (no
+working tree, so no file from the pull request is checked out; its objects
+stay in that repository, read only by the checker) and runs only
+the base branch's checker. `actions/checkout` refuses a fork's head under this
+trigger, so it checks out only the base. It is also why `apply-pr-actions.sh` otherwise sends every approval of
 a first-time contributor's run to the confirmed list while a workflow uses that
 trigger: `pr-description.yml` is the one workflow it names as reviewed, and only
 for `pull_request_target`. A new workflow on either base-token trigger needs the
 same review, and the script's tests fail until it has one.
 
+From December 2, 2026, GitHub blocks `pull_request_target` in a public
+repository that has no Actions event policy allowing it, and the check would
+then never run. The repository keeps the trigger, because it is what stops a
+pull request from editing its own check, with one repository policy (Settings,
+Actions, Policies) that targets only this workflow and allows the two events it
+runs on. A repository admin creates it once:
+
+```sh
+gh api -X POST repos/sysprog21/codetrial/actions/policies \
+    -H 'X-GitHub-Api-Version: 2026-03-10' --input - << 'EOF'
+{"name": "pr-description: pull_request_target",
+ "enforcement": "active",
+ "conditions": {"workflow_path": {
+     "include": [".github/workflows/pr-description.yml"], "exclude": []}},
+ "rules": [{"type": "restrict_action_events",
+     "parameters": {"allowed_events": ["pull_request_target", "merge_group"]}}]}
+EOF
+```
+
+`merge_group` is listed too because the rule reads as an allow list for the
+workflows it targets. `gh api repos/sysprog21/codetrial/actions/policies` shows
+it; a run that no longer carries GitHub's notice about the default policy
+confirms it applies. Renaming the workflow file needs the policy's path changed
+with it.
+
 The required job is named `interactive-review` (the workflow is
 `pr-description`); require that job and `check` in the branch ruleset. The
-workflow also handles `merge_group`: using the base branch's checker, it lists
-open PRs targeting that branch, selects heads present in the group but absent
-from its base, and rechecks each one's size against its own head and its group
-base, and its labels. Every ordinary commit in the group must belong to one of
-those heads; missing PRs, a missing label and API errors fail the check. Merge commits are
-verified by the separate hashchain gate. This requires the merge method described
-below; squash and rebase queues are unsupported. Queue checks use a read-only
-token with `pull-requests: read` to retrieve the open PRs and their labels, never
-local answers. The `explained` label is not bound to a head, so a push keeps it;
-the ruleset's dismissal of stale approvals is what asks for a fresh review.
+check fails when the change cannot be fetched or measured, when the guard below
+refuses a workflow edit, and when a change over the thresholds has no matching
+review record: the marker note the pre-push hook signs with the contributor's
+SSH key (`ssh-keygen -Y sign`, namespace `codetrial-review`, over the review
+fingerprint) and sends to the fork. The job fetches it from `head.repo` as data,
+fetches the author's public keys, authentication keys from
+`github.com/<login>.keys` and signing keys from the public
+`users/<login>/ssh_signing_keys` API with the job's read-only token, and the base's checker recomputes the diff hash and the review fingerprint and
+verifies the signature against those keys. The signed record attributes the
+declaration to the author's key; it is not proof of authorship or understanding,
+what the approver does about that is not settled yet.
+<!-- FIXME: decide how an approver confirms the contributor can explain a
+large change; the earlier rule (ask about one passage before approving) is
+withdrawn until then. -->
+Who needs no record, and whose keys may sign one, is
+[the large-change page's](large-change-explanation.md#what-reaches-the-pull-request)
+to say. For the code-owner exemption the job reads the commits' authors from
+`repos/<repo>/pulls/<n>/commits` (hence `pull-requests: read`), and a list that
+does not name exactly the commits checked (the branch moved, or it has more
+than the 250 that endpoint returns) withholds the exemption. GitHub links a
+commit to an account by its author email, which anyone can write, so the
+exemption keeps an honest code owner from excusing a contributor's work and is
+not proof of authorship. The hook's `codetrial.codeOwner` cannot map an email to
+an account either; a false claim only moves the refusal to CI. The hook sends the whole notes ref, so markers it wrote for other local
+branches, pending ones included, reach the fork too; they hold no answers. A
+record is read up to 64 KiB and a key list up to 256 KiB, and what the check
+prints carries counts, commit identities and key fingerprints only, never text
+from the branch. Passing a merge group without a record is safe only while the
+ruleset makes the queue the one way to merge. A
+merge group passes at once: the queue takes a pull request only after this
+check passed on its own head, and the queue's merge commit has no record of its
+own. Merge commits are verified by the separate hashchain gate. This requires the merge method described below; squash and
+rebase queues are unsupported. The required approval, which a push dismisses,
+is bound to a head; what it confirms about a large change's explanation is not
+settled yet.
 
 Use GitHub's required-review rules as the independent approval boundary: require
 at least one non-author maintainer approval, require code-owner review for the
@@ -545,8 +615,7 @@ the maintainer. A merge group
 runs the workflow file as the queue ref has it, edits from the pull request
 included, and a job its own `if:` skips counts as passing, so loading the checker
 from base is not enough. The pull-request run is the base branch's workflow, so
-it is where such an edit is stopped: the `--guard` step of
-`scripts/check-queue-review.py` fails when the pull request changes
+it is where such an edit is stopped: `scripts/check-queue-review.py` fails when the pull request changes
 `pr-description.yml` from where its branch began, or adds another workflow that mentions
 `interactive-review` anywhere, or removes one of the checker scripts the workflow
 runs (it skips itself while the base has none of them, so a deletion would switch
@@ -579,13 +648,15 @@ machines, and have CI verify the signature, issuer, policy, repository and every
 snapshot field against current data. Reject receipts copied between PRs or
 replayed after any snapshot change. Keep answers private. Such a receipt proves
 what the service observed, not comprehension. This service and receipt verifier
-are future work; the current `explained` label remains a maintainer's word.
+are future work. Today the contributor signs a review marker on their own
+machine, which shows whose key declared the review and not what the service
+above would observe.
 
 The chain is a checksum of each parent link and tree, not proof of review: a
 commit made with `--no-verify` can be restamped by `rechain` and still verify.
 It catches accidental history edits. Interactive-review evidence lives under
-`.git/codetrial-review/` on the contributor's machine, so the pre-push check is
-local deterrence and CI does not see it.
+`.git/codetrial-review/` on the contributor's machine and CI does not see it;
+CI sees only the signed marker the pre-push hook sends with a large branch.
 
 Each ordinary commit continues the link of its own parent, including commits
 on both sides of a merge. GitHub's two-parent integration commits need no
@@ -670,10 +741,10 @@ large-change requirement.
 To inspect the interactive requirement without pushing, run:
 
 ```sh
-python3 scripts/check-interactive-review.py status --base origin/main --head HEAD
+python3 scripts/check-interactive-review.py status --base upstream/main --head HEAD
 ```
 
-Use the intended upstream PR base when it differs from `origin/main`. The JSON
+Use the intended upstream PR base when it differs from `upstream/main`. The JSON
 names every triggering full commit SHA and its added plus deleted text lines,
 the final PR text total, and `not_required`, `pending`, or `complete`. A large
 commit remains a trigger when later commits undo it. `coverage_complete` is
@@ -697,8 +768,10 @@ and whether the matching workbench server started. View it with
 Only certificate verification can produce the generated complete state, and
 the push hook never trusts the note as proof. Editing answers revokes the
 certificate and refreshes the note to pending. The note contains no private
-explanation or feedback. Notes preserve commit identities and are not pushed
-automatically. See [the marker lifecycle](../.claude/skills/codetrial-review/workbench.md#inspect-the-requirement).
+explanation or feedback. Notes preserve commit identities. The pre-push hook
+sends the notes ref to the remote a large branch goes to, once the evidence
+verifies, merging what that remote already holds rather than overwriting it, so
+the `interactive-review` check can read the head's marker. See [the marker lifecycle](../.claude/skills/codetrial-review/workbench.md#inspect-the-requirement).
 
 ## Releases and the embedded web tree
 

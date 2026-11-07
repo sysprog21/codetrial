@@ -561,7 +561,7 @@ class HashchainTests(unittest.TestCase):
         # A job its own condition skips counts as passing, so none may have one.
         self.assertNotRegex(text, r"(?m)^    if:")
         self.assertNotIn("continue-on-error", text)
-        self.assertIn("--guard", text)
+        self.assertIn("--approved", text)
 
     def test_one_definition_decides_who_dependabot_is(self):
         chain = importlib.util.module_from_spec(

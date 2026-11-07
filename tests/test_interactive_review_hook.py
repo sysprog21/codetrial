@@ -11,10 +11,24 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from types import SimpleNamespace
+
+SPEC = importlib.util.spec_from_file_location(
+    "support", Path(__file__).with_name("support.py")
+)
+support = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(support)
 
 ROOT = Path(__file__).resolve().parents[1]
 GATE = ROOT / "scripts/check-interactive-review.py"
+
+
+def load_gate(name="gate_under_test"):
+    spec = importlib.util.spec_from_file_location(name, GATE)
+    gate = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gate)
+    return gate
+
+
 SKILL = ROOT / ".claude/skills/codetrial-review"
 
 
@@ -35,11 +49,25 @@ class InteractiveHookTests(unittest.TestCase):
         self.git("config", "user.email", "review@example.test")
         self.git("config", "commit.gpgsign", "false")
         self.git("config", "codetrial.hookSuite", "true")
+        # The contributor's own SSH key, the one on their GitHub account.
+        self.key = self.root / "id_ed25519"
+        subprocess.run(
+            ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "contributor"]
+            + ["-f", str(self.key)],
+            check=True,
+        )
+        self.git("config", "codetrial.signingKey", str(self.key))
+        self.author_keys = self.root / "contributor.keys"
+        self.author_keys.write_text(Path(str(self.key) + ".pub").read_text())
         (self.repo / "change.txt").write_text("base\n")
         self.commit("Create the review fixture")
         self.base = self.git("rev-parse", "HEAD").stdout.strip()
         self.git("remote", "add", "upstream", "https://github.com/sysprog21/codetrial")
         self.git("update-ref", "refs/remotes/upstream/main", self.base)
+        # Where the branch goes: the pre-push hook sends the review record here.
+        self.fork = self.root / "fork.git"
+        self.git("init", "--bare", "-q", str(self.fork))
+        self.git("remote", "add", "fork", str(self.fork))
         (self.repo / "scripts").mkdir()
         for name in [
             "git-pre-push.sh",
@@ -86,7 +114,7 @@ class InteractiveHookTests(unittest.TestCase):
     def push(self, check=False):
         head = self.git("rev-parse", "HEAD").stdout.strip()
         return self.run_command(
-            ["sh", "scripts/git-pre-push.sh", "fork", "local-fixture"],
+            ["sh", "scripts/git-pre-push.sh", "fork", str(self.fork)],
             data=f"refs/heads/topic {head} refs/heads/topic {'0' * 40}\n",
             check=check,
         )
@@ -251,47 +279,680 @@ print(json.dumps(seen))
         self.assertLess(seen.index(parent), seen.index(str(bundle)))
         self.assertNotEqual(self.push().returncode, 0)
 
-    def gate(self, command, *args):
+    def gate(self, command, *args, base=None):
         return self.run_command(
-            [
-                sys.executable,
-                "scripts/check-interactive-review.py",
-                command,
-                "--base",
-                self.base,
-                *args,
-            ],
+            [sys.executable, "scripts/check-interactive-review.py", command]
+            + ["--base", base or self.base, *args],
             check=False,
         )
 
-    def labelled(self, *names):
-        return self.gate("pr", "--labels", json.dumps(list(names)))
-
-    def test_a_small_change_needs_no_label(self):
+    def test_a_small_change_is_under_the_thresholds(self):
         self.large(10)
-        result = self.labelled()
+        result = self.gate("pr")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("under the interactive review thresholds", result.stdout)
+        self.assertNotIn("::notice", result.stdout)
 
-    def test_a_large_change_passes_only_with_the_maintainers_label(self):
-        self.large()
-        for names in ((), ("bug",), ("not-explained",)):
-            refused = self.labelled(*names)
-            self.assertNotEqual(refused.returncode, 0, names)
-            self.assertIn("[interactive-review/required]", refused.stderr)
-        self.assertEqual(self.labelled("bug", "explained").returncode, 0)
-        malformed = self.gate("pr", "--labels", '{"explained": true}')
-        self.assertNotEqual(malformed.returncode, 0)
-        self.assertNotIn("Traceback", malformed.stderr)
+    def fork_notes(self, *args):
+        return self.git(
+            "--git-dir",
+            str(self.fork),
+            "notes",
+            "--ref=codetrial-review",
+            *args,
+            check=False,
+        )
 
-    def test_the_label_does_not_replace_the_local_review_at_push(self):
+    def fork_note(self, head):
+        found = self.fork_notes("show", head)
+        return json.loads(found.stdout) if found.returncode == 0 else None
+
+    def as_ci(self):
+        """Keep only what CI sees: the record the fork holds, not this clone's."""
+        self.git("update-ref", "-d", "refs/notes/codetrial-review")
+        self.git(
+            "fetch",
+            "-q",
+            "fork",
+            "+refs/notes/codetrial-review:refs/notes/codetrial-review",
+            check=False,
+        )
+
+    def pr(
+        self,
+        base=None,
+        head="HEAD",
+        keys=None,
+        login="contributor",
+        authors=None,
+        unavailable=False,
+    ):
+        """`authors`: the GitHub login of each commit's author, in rev-list
+        order, as GitHub lists them; None when GitHub did not. Entries past the
+        branch's commits stand for commits it does not have."""
+        extra = []
+        if authors is not None:
+            commits = self.git(
+                "rev-list", f"{base or self.base}..{head}"
+            ).stdout.split()
+            commits += [f"{n:040x}" for n in range(len(authors) - len(commits))]
+            listed = self.root / "commit.authors"
+            listed.write_text(
+                "".join(f"{sha} {name}\n" for sha, name in zip(commits, authors))
+            )
+            extra = ["--commit-authors", str(listed)]
+        return self.gate(
+            "pr",
+            *["--head", head, "--author-login", login, "--author-type", "User"],
+            *["--author-keys", str(keys or self.author_keys)],
+            *extra,
+            *(["--keys-unavailable"] if unavailable else []),
+            base=base,
+        )
+
+    def other_key(self):
+        other = self.root / "other_ed25519"
+        if not other.exists():
+            subprocess.run(
+                ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(other)],
+                check=True,
+            )
+        return other
+
+    def reviewed_push(self):
         self.large()
-        self.assertEqual(self.labelled("explained").returncode, 0)
+        self.prepare()
+        pushed = self.push()
+        self.assertEqual(pushed.returncode, 0, pushed.stderr)
+        return self.git("rev-parse", "HEAD").stdout.strip()
+
+    def test_pushing_the_same_review_again_does_not_sign_it_again(self):
+        head = self.reviewed_push()
+        signed = self.git("rev-parse", "refs/notes/codetrial-review").stdout
+        self.assertEqual(self.push().returncode, 0)
+        self.assertEqual(
+            self.git("rev-parse", "refs/notes/codetrial-review").stdout, signed
+        )
+        # Another key still signs it again.
+        self.git("config", "codetrial.signingKey", str(self.other_key()))
+        self.assertEqual(self.push().returncode, 0)
+        self.assertNotEqual(
+            self.review_note(head)["signature"],
+            json.loads(self.git("show", f"{signed.strip()}:{head}").stdout)[
+                "signature"
+            ],
+        )
+
+    def test_a_large_change_without_a_review_record_says_how_to_fix_it(self):
+        self.large()
+        head = self.git("rev-parse", "HEAD").stdout.strip()
+        result = self.pr()
+        self.assertEqual(result.returncode, 1, result.stdout)
+        error = result.stdout.strip()
+        self.assertEqual(len(error.splitlines()), 1, error)
+        self.assertTrue(
+            error.startswith("::error title=Interactive review missing::"), error
+        )
+        self.assertIn(head[:12], error)
+        self.assertIn("make hooks", error)
+        self.assertIn("/codetrial-review", error)
+        # The record can be sent alone, but that does not rerun the check.
+        self.assertIn("--publish-review <fork-remote>", error)
+        self.assertIn("close and reopen the pull request", error)
+        self.assertNotIn("if nothing changed", error)
+        self.assertNotIn("Traceback", result.stderr)
+
+    def publish(self, *args):
+        return self.run_command(
+            ["sh", "scripts/git-pre-push.sh", "--publish-review", "fork", *args],
+            check=False,
+        )
+
+    def pushed_without_record(self):
+        """A reviewed branch pushed with no hook installed: no record went."""
+        self.large()
+        self.prepare()
+        head = self.git("rev-parse", "HEAD").stdout.strip()
+        self.git("push", "-q", "fork", "HEAD:refs/heads/topic")
+        self.assertIsNone(self.fork_note(head))
+        return head
+
+    def test_publish_review_sends_the_record_a_pushed_branch_lacks(self):
+        head = self.pushed_without_record()
+        result = self.publish("topic")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(
+            f"Sent the interactive review record for {head[:12]}", result.stderr
+        )
+        self.assertIn("Close and reopen the pull request", result.stderr)
+        self.assertEqual(self.fork_note(head)["status"], "complete")
+        self.assertEqual(self.git("rev-parse", "HEAD").stdout.strip(), head)
+        # The fork's branch was left alone; CI now accepts the record.
+        self.assertEqual(
+            self.git("--git-dir", str(self.fork), "rev-parse", "topic").stdout.strip(),
+            head,
+        )
+        self.as_ci()
+        self.assertEqual(self.pr().returncode, 0)
+
+    def test_publish_review_replaces_a_record_signed_with_another_key(self):
+        head = self.pushed_without_record()
+        self.git("config", "codetrial.signingKey", str(self.other_key()))
+        self.assertEqual(self.publish("topic").returncode, 0)
+        wrong = self.fork_note(head)["key_fingerprint"]
+        self.as_ci()
+        result = self.pr()
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("does not verify", result.stdout)
+        self.assertIn("--publish-review <fork-remote>", result.stdout)
+        self.assertIn("close and reopen the pull request", result.stdout)
+        self.git("config", "codetrial.signingKey", str(self.key))
+        result = self.publish("topic")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotEqual(self.fork_note(head)["key_fingerprint"], wrong)
+        self.as_ci()
+        self.assertEqual(self.pr().returncode, 0)
+
+    def test_publish_review_refuses_a_head_the_fork_does_not_have(self):
+        self.large()
+        self.prepare()
+        result = self.publish("topic")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("fork has no branch topic.", result.stderr)
+        self.assertIn("--publish-review fork <branch>", result.stderr)
+        self.git("push", "-q", "fork", f"{self.base}:refs/heads/topic")
+        result = self.publish("topic")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn(f"fork has {self.base[:12]} on topic, not HEAD", result.stderr)
+        self.assertIn("Push the branch instead", result.stderr)
+        self.assertEqual(self.fork_notes("list").stdout, "")
+
+    def test_publish_review_finds_the_fork_branch_by_its_exact_name(self):
+        head = self.pushed_without_record()
+        # Only a branch of exactly that name counts, not one ending in it.
+        self.git("push", "-q", "fork", f"{head}:refs/heads/x/refs/heads/other")
+        self.assertIn("fork has no branch other.", self.publish("other").stderr)
+        # The local branch has another name; the fork's is given, as a name or
+        # as a full ref.
+        for name in ("topic", "refs/heads/topic"):
+            with self.subTest(name=name):
+                self.git("push", "fork", ":refs/notes/codetrial-review", check=False)
+                result = self.publish(name)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(self.fork_note(head)["status"], "complete")
+
+    def test_publish_review_says_when_the_fork_cannot_be_read(self):
+        self.large()
+        self.prepare()
+        self.git("remote", "set-url", "fork", str(self.root / "missing.git"))
+        result = self.publish("topic")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("Cannot read topic from fork", result.stderr)
+        self.assertNotIn("has no branch", result.stderr)
+
+    def test_publish_review_says_nothing_was_sent_when_the_check_fails(self):
+        self.large()
+        self.git("push", "-q", "fork", "HEAD:refs/heads/topic")
+        result = self.publish("topic")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("Interactive review required", result.stdout + result.stderr)
+        self.assertIn(
+            "Nothing was sent; the branch on fork is unchanged.", result.stderr
+        )
+
+    def test_publish_review_says_why_it_sends_nothing(self):
+        self.large(10)
+        self.git("push", "-q", "fork", "HEAD:refs/heads/topic")
+        result = self.publish("topic")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(
+            "has no completed interactive review record to send", result.stderr
+        )
+        self.git("checkout", "-q", "--detach")
+        result = self.publish("topic")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("HEAD is detached", result.stderr)
+        self.git("checkout", "-q", "-")
+        result = self.publish("main")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("not main", result.stderr)
+        result = self.publish("fork", "topic", "extra")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("Usage:", result.stderr)
+
+    def test_a_reviewed_push_sends_the_record_the_check_reads(self):
+        head = self.reviewed_push()
+        record = self.fork_note(head)
+        self.assertEqual(record["status"], "complete")
+        # The record says that a review happened, never what was said in it.
+        for private in ("answers", "feedback", "questions", "reflection"):
+            self.assertNotIn(private, record)
+        self.as_ci()
+        result = self.pr()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        notice = result.stdout.strip()
+        self.assertEqual(len(notice.splitlines()), 1, notice)
+        self.assertTrue(notice.startswith("::notice title=Large change::"), notice)
+        self.assertIn(head[:12], notice)
+        self.assertIn("recorded at push", notice)
+        self.assertNotIn("explain one passage", notice)
+
+    def test_a_push_keeps_the_records_the_fork_holds_for_other_branches(self):
+        subprocess.run(
+            ["git", "--git-dir", str(self.fork), "-c", "user.name=Other"]
+            + ["-c", "user.email=other@example.test", "notes"]
+            + ["--ref=codetrial-review", "add", "-m", '{"other": true}', self.base],
+            check=True,
+            capture_output=True,
+            env=self.env,
+        )
+        head = self.reviewed_push()
+        self.assertEqual(self.fork_note(self.base), {"other": True})
+        self.assertEqual(self.fork_note(head)["status"], "complete")
+
+    def test_the_record_carries_two_fingerprints_and_a_signature(self):
+        head = self.reviewed_push()
+        record = self.fork_note(head)
+        self.assertRegex(record["review_fingerprint"], "^[0-9a-f]{64}$")
+        self.assertRegex(record["answer_digest"], "^[0-9a-f]{64}$")
+        listed = subprocess.run(
+            ["ssh-keygen", "-lf", str(self.key) + ".pub"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+        self.assertIn(record["key_fingerprint"], listed)
+        self.assertTrue(record["signature"].startswith("-----BEGIN SSH SIGNATURE-----"))
+
+    def test_a_record_signed_by_a_key_not_on_the_account_is_refused(self):
+        self.reviewed_push()
+        self.as_ci()
+        elsewhere = self.root / "elsewhere.keys"
+        elsewhere.write_text(Path(str(self.other_key()) + ".pub").read_text())
+        result = self.pr(keys=elsewhere)
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn(
+            "does not verify against any SSH key on GitHub of contributor",
+            result.stdout,
+        )
+        self.assertIn(self.review_note()["key_fingerprint"], result.stdout)
+        for step in ("ssh-keygen -t ed25519", "Key type: Signing Key"):
+            self.assertIn(step, result.stdout)
+        self.assertIn("codetrial.signingKey", result.stdout)
+        nobody = self.root / "none.keys"
+        nobody.write_text("")
+        result = self.pr(keys=nobody)
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("neither contributor nor the commits' authors", result.stdout)
+
+    def test_signing_with_a_key_on_the_account_fixes_the_record(self):
+        self.git("config", "codetrial.signingKey", str(self.other_key()))
+        self.reviewed_push()
+        self.as_ci()
+        self.assertEqual(self.pr().returncode, 1)
+        self.git("config", "codetrial.signingKey", str(self.key))
+        self.assertEqual(self.push().returncode, 0)
+        self.as_ci()
+        result = self.pr()
+        self.assertEqual(result.returncode, 0, result.stdout)
+
+    def test_a_record_altered_after_signing_is_refused(self):
+        head = self.reviewed_push()
+        original = self.review_note()
+        unsigned = {k: v for k, v in original.items() if k != "signature"}
+        header, body, *rest = original["signature"].split("\n")
+        corrupt = "\n".join(
+            [header, ("B" if body[0] != "B" else "C") + body[1:], *rest]
+        )
+        for record, reason in (
+            (unsigned, "is not signed"),
+            ({**original, "answer_digest": "0" * 64}, "made for different code"),
+            ({**original, "review_fingerprint": "0" * 64}, "made for different code"),
+            ({**original, "signature": corrupt}, "does not verify"),
+        ):
+            with self.subTest(reason=reason):
+                self.git(
+                    "notes",
+                    "--ref=codetrial-review",
+                    "add",
+                    "-f",
+                    "-m",
+                    json.dumps(record),
+                    head,
+                )
+                result = self.pr()
+                self.assertEqual(result.returncode, 1, result.stdout)
+                self.assertIn(reason, result.stdout)
+                self.assertNotIn("Traceback", result.stderr)
+
+    def test_a_push_without_a_signing_key_is_refused_with_how_to_set_one(self):
+        self.git("config", "--unset", "codetrial.signingKey")
+        self.env = {k: v for k, v in self.env.items() if k != "SSH_AUTH_SOCK"}
+        self.large()
+        self.prepare()
+        refused = self.push()
+        self.assertNotEqual(refused.returncode, 0)
+        # The three one-time steps, spelled out where the contributor hits it.
+        for step in (
+            "ssh-keygen -t ed25519 -f ~/.ssh/codetrial_signing",
+            "Key type: Signing Key",
+            "git config codetrial.signingKey ~/.ssh/codetrial_signing",
+        ):
+            self.assertIn(step, refused.stderr)
+        self.assertIsNone(self.fork_note(self.git("rev-parse", "HEAD").stdout.strip()))
+
+    def owners(self):
+        # The list counts as the base has it, so it is committed there.
+        (self.repo / ".github").mkdir(exist_ok=True)
+        (self.repo / ".github/CODEOWNERS").write_text(
+            "# @commented-out\n/src/ @Owner @org/team\n/web/ @owner2\n"
+        )
+        self.git("add", "-f", ".github/CODEOWNERS")
+        self.git("commit", "-qm", "Name the owners", "-m", "Fixture owners.")
+        self.base = self.git("rev-parse", "HEAD").stdout.strip()
+        self.git("update-ref", "refs/remotes/upstream/main", self.base)
+
+    def test_a_branch_cannot_name_its_own_author_a_code_owner(self):
+        self.owners()
+        (self.repo / ".github/CODEOWNERS").write_text("/src/ @contributor\n")
+        self.git("add", "-f", ".github/CODEOWNERS")
+        self.large()
+        commits = int(self.git("rev-list", "--count", f"{self.base}..HEAD").stdout)
+        # GitHub lists every commit as the contributor's, so only the owner
+        # list decides; the branch's own CODEOWNERS must not count.
+        result = self.pr(login="contributor", authors=["contributor"] * commits)
+        self.assertEqual(result.returncode, 1)
+        self.git("config", "codetrial.codeOwner", "contributor")
+        self.assertNotEqual(self.push().returncode, 0)
+
+    def test_an_unreadable_key_list_is_not_reported_as_missing_setup(self):
+        self.reviewed_push()
+        self.as_ci()
+        empty = self.root / "none.keys"
+        empty.write_text("")
+        result = self.pr(keys=empty, unavailable=True)
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("could not read the SSH keys of contributor", result.stdout)
+        self.assertNotIn("ssh-keygen -t ed25519", result.stdout)
+        # Keys that were read but do not match are still an outage while some
+        # were not read: the matching one may be among those.
+        elsewhere = self.root / "elsewhere.keys"
+        elsewhere.write_text(Path(str(self.other_key()) + ".pub").read_text())
+        result = self.pr(keys=elsewhere, unavailable=True)
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("could not read the SSH keys of contributor", result.stdout)
+        self.assertNotIn("ssh-keygen -t ed25519", result.stdout)
+
+    def test_a_record_made_against_a_commit_of_the_branch_is_refused(self):
+        # Signed honestly, but against the branch's own first commit, so it
+        # covers only what came after it.
+        (self.repo / "early.txt").write_text("early\n")
+        self.git("add", "early.txt")
+        self.git("commit", "-qm", "Add an early file", "-m", "Fixture commit.")
+        start, self.base = self.base, self.git("rev-parse", "HEAD").stdout.strip()
+        self.git("update-ref", "refs/remotes/upstream/main", self.base)
+        self.reviewed_push()
+        self.base = start
+        self.git("update-ref", "refs/remotes/upstream/main", start)
+        self.as_ci()
+        result = self.pr()
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("was made against another base", result.stdout)
+
+    def test_an_owner_list_naming_another_commit_withholds_the_exemption(self):
+        self.owners()
+        self.large()
+        listed = self.root / "stale.authors"
+        listed.write_text(f"{'0' * 40} owner\n")
+        result = self.gate(
+            "pr",
+            *["--head", "HEAD", "--author-login", "owner", "--author-type", "User"],
+            *["--author-keys", str(self.author_keys), "--commit-authors", str(listed)],
+        )
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("are not the 1 checked here", result.stdout)
+
+    def test_a_push_replaces_a_different_record_the_fork_holds_for_its_head(self):
+        head = self.reviewed_push()
+        subprocess.run(
+            ["git", "--git-dir", str(self.fork), "-c", "user.name=Other"]
+            + ["-c", "user.email=other@example.test", "notes"]
+            + ["--ref=codetrial-review", "add", "-f", "-m", '{"stale": true}', head],
+            check=True,
+            capture_output=True,
+            env=self.env,
+        )
+        self.assertEqual(self.push().returncode, 0)
+        self.assertEqual(self.fork_note(head)["status"], "complete")
+
+    def test_publish_review_sends_to_the_push_url(self):
+        # Fetched from one repository and pushed to another, as a clone of
+        # upstream that pushes to a fork is set up; only the fork has the branch.
+        head = self.pushed_without_record()
+        fetched = self.root / "fetched.git"
+        self.git("init", "-q", "--bare", str(fetched))
+        self.git("config", "remote.fork.pushurl", str(self.fork))
+        self.git("config", "remote.fork.url", str(fetched))
+        result = self.publish("topic")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.fork_note(head)["status"], "complete")
+
+    def test_a_push_whose_record_cannot_be_sent_is_refused(self):
+        self.large()
+        self.prepare()
+        self.git("remote", "set-url", "fork", str(self.root / "missing.git"))
+        refused = self.push()
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("cannot send the interactive review record", refused.stderr)
+
+    def test_git_ssh_signing_key_is_used_when_none_is_set_for_the_review(self):
+        self.git("config", "--unset", "codetrial.signingKey")
+        self.git("config", "user.signingKey", str(self.key))
+        self.env = {k: v for k, v in self.env.items() if k != "SSH_AUTH_SOCK"}
+        self.large()
+        self.prepare()
+        # Without gpg.format=ssh, user.signingKey names a GPG key: not used.
+        self.assertNotEqual(self.push().returncode, 0)
+        self.git("config", "gpg.format", "ssh")
+        pushed = self.push()
+        self.assertEqual(pushed.returncode, 0, pushed.stderr)
+        head = self.git("rev-parse", "HEAD").stdout.strip()
+        self.assertTrue(self.fork_note(head)["key_fingerprint"].startswith("SHA256:"))
+        self.as_ci()
+        self.assertEqual(self.pr().returncode, 0)
+
+    def test_the_documents_state_what_the_checker_enforces(self):
+        gate = load_gate("gate_constants")
+        steps = (
+            "ssh-keygen -t ed25519 -f ~/.ssh/codetrial_signing",
+            "Key type: Signing Key",
+            "git config codetrial.signingKey ~/.ssh/codetrial_signing",
+        )
+        for step in steps:
+            self.assertIn(step, gate.SETUP)
+        documents = {
+            "CONTRIBUTING.md": (
+                f"at least {gate.LARGE_COMMIT} added plus deleted",
+                f"more than {gate.PR_TOTAL}",
+                "Key type: Signing Key",
+                "git config codetrial.codeOwner",
+                "docs/large-change-explanation.md#troubleshooting",
+                *steps[::2],
+            ),
+            "docs/large-change-explanation.md": (
+                f"at least {gate.LARGE_COMMIT} added plus deleted",
+                f"more than {gate.PR_TOTAL}",
+                gate.NAMESPACE,
+                "CODEOWNERS",
+                gate.PUBLISH,
+            ),
+            ".claude/skills/codetrial-contribute/SKILL.md": (
+                "large-change-explanation.md#troubleshooting",
+            ),
+            "docs/development.md": (gate.NAMESPACE, gate.NOTES),
+            ".claude/skills/codetrial-review/workbench.md": (gate.NOTES,),
+        }
+        for name, phrases in documents.items():
+            # Compared with whitespace folded, so rewrapping a paragraph passes.
+            text = " ".join((ROOT / name).read_text().split())
+            for phrase in phrases:
+                with self.subTest(document=name, phrase=phrase):
+                    self.assertIn(phrase, text)
+        # The removed label is gone from everything a contributor reads.
+        for path in [ROOT / "CONTRIBUTING.md", *(ROOT / "docs").glob("*.md")] + [
+            *(ROOT / ".claude/skills/codetrial-review").rglob("*.*")
+        ]:
+            if path.suffix in (".md", ".html", ".js", ".py"):
+                with self.subTest(path=path.name):
+                    self.assertNotIn("`explained` label", path.read_text())
+                    self.assertNotIn("<code>explained</code>", path.read_text())
+
+    def test_a_code_owner_may_skip_the_review_and_others_may_not(self):
+        self.owners()
+        self.large()
+        for login in ("owner", "OWNER2"):
+            with self.subTest(login=login):
+                result = self.pr(login=login, authors=[login])
+                self.assertEqual(result.returncode, 0, result.stdout)
+                self.assertIn("every commit's author are code owners", result.stdout)
+                self.assertIn("::notice title=Large change::", result.stdout)
+        for login in ("contributor", "commented-out", "org", "team", "own"):
+            with self.subTest(login=login):
+                self.assertEqual(self.pr(login=login, authors=[login]).returncode, 1)
+
+    def test_a_code_owner_opening_someone_elses_work_does_not_excuse_it(self):
+        self.owners()
+        self.large()
+        for authors, said in (
+            (["contributor"], "commits here are by contributor"),
+            ([""], "an author linked to no GitHub account"),
+            (None, "GitHub did not list the commits' authors"),
+            (["owner", "owner"], "the 2 commits GitHub listed are not the 1"),
+            ([], "the 0 commits GitHub listed are not the 1"),
+        ):
+            with self.subTest(authors=authors):
+                result = self.pr(login="owner", authors=authors)
+                self.assertEqual(result.returncode, 1, result.stdout)
+                self.assertIn(
+                    "::error title=Interactive review missing::", result.stdout
+                )
+                self.assertIn("owner is a code owner, but", result.stdout)
+                self.assertIn(said, result.stdout)
+        # Every commit by one code owner or another, in any case, is exempt.
+        self.assertEqual(self.pr(login="owner", authors=["OWNER2"]).returncode, 0)
+        # The review itself still lets it through.
+        self.prepare()
+        pushed = self.push()
+        self.assertEqual(pushed.returncode, 0, pushed.stderr)
+        self.as_ci()
+        result = self.pr(login="owner", authors=["contributor"])
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("recorded at push", result.stdout)
+
+    def test_a_code_owner_pushes_without_the_review_after_saying_who_they_are(self):
+        self.owners()
+        self.large()
+        refused = self.push()
+        self.assertNotEqual(refused.returncode, 0)
+        self.git("config", "codetrial.codeOwner", "someone-else")
+        self.assertNotEqual(self.push().returncode, 0)
+        self.git("config", "codetrial.codeOwner", "owner")
+        pushed = self.push()
+        self.assertEqual(pushed.returncode, 0, pushed.stderr)
+        self.assertIn("code owner", pushed.stdout + pushed.stderr)
+        # Said at the moment it could mislead: the pull request judges accounts.
+        self.assertIn("does not read this setting", pushed.stdout + pushed.stderr)
+        head = self.git("rev-parse", "HEAD").stdout.strip()
+        self.assertIsNone(self.fork_note(head))
+
+    def test_a_code_owner_who_opts_in_still_gets_a_signed_record(self):
+        self.owners()
+        self.git("config", "codetrial.codeOwner", "owner")
+        head = self.reviewed_push()
+        self.assertEqual(self.fork_note(head)["status"], "complete")
+        self.assertIn("signature", self.fork_note(head))
+
+    def test_a_record_that_does_not_match_the_change_is_refused(self):
+        head = self.reviewed_push()
+        original = self.review_note()
+        for field, value in (
+            ("status", "pending"),
+            ("diff_hash", "0" * 64),
+            ("head", self.base),
+            ("base", "f" * 40),
+        ):
+            with self.subTest(field=field):
+                self.git(
+                    "notes",
+                    "--ref=codetrial-review",
+                    "add",
+                    "-f",
+                    "-m",
+                    json.dumps({**original, field: value}),
+                    head,
+                )
+                result = self.pr()
+                self.assertEqual(result.returncode, 1, result.stdout)
+                self.assertIn(
+                    "::error title=Interactive review missing::", result.stdout
+                )
+                self.assertNotIn("Traceback", result.stderr)
+        self.git("notes", "--ref=codetrial-review", "add", "-f", "-m", "not json", head)
+        self.assertEqual(self.pr().returncode, 1)
+
+    def test_updating_the_branch_from_main_keeps_the_record(self):
+        head = self.reviewed_push()
+        # Main moves on, and GitHub's "Update branch" merges it in.
+        self.git("checkout", "-q", "--detach", self.base)
+        (self.repo / "other.txt").write_text("main moved\n")
+        self.git("add", "other.txt")
+        self.git("commit", "-qm", "Move main", "-m", "Advance the fixture main.")
+        main = self.git("rev-parse", "HEAD").stdout.strip()
+        self.git("checkout", "-q", "--detach", head)
+        self.git("merge", "-q", "--no-ff", "--no-edit", main)
+        merged = self.git("rev-parse", "HEAD").stdout.strip()
+        self.as_ci()
+        result = self.pr(base=main, head=merged)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        # A merge that also changes something of its own is not just an update.
+        (self.repo / "change.txt").write_text("edited in the merge\n")
+        self.git("add", "change.txt")
+        self.git("commit", "-q", "--amend", "--no-edit")
+        amended = self.git("rev-parse", "HEAD").stdout.strip()
+        self.assertEqual(self.pr(base=main, head=amended).returncode, 1)
+        # Nor is a merge of something that is not on main.
+        self.git("checkout", "-q", "--detach", head)
+        (self.repo / "side.txt").write_text("side\n")
+        self.git("add", "side.txt")
+        self.git("commit", "-qm", "Side work", "-m", "Not on main.")
+        side = self.git("rev-parse", "HEAD").stdout.strip()
+        self.git("checkout", "-q", "--detach", head)
+        self.git("merge", "-q", "--no-ff", "--no-edit", side)
+        self.assertEqual(self.pr(base=main).returncode, 1)
+
+    def test_the_notice_carries_no_text_from_the_branch(self):
+        # The workflow prints the result as a workflow command, so a path that
+        # held one would be read as a second command.
+        name = "notes-%0A::error::forged.bin"
+        (self.repo / name).write_bytes(b"\0binary\0" * 10)
+        self.git("add", "--", name)
+        self.large(1)
+        for result in (self.pr(), self.gate("pr")):
+            self.assertIn("cannot be counted as text", result.stdout)
+            self.assertNotIn("forged", result.stdout)
+            self.assertEqual(len(result.stdout.strip().splitlines()), 1)
+
+    def test_only_a_reviewed_push_produces_the_record(self):
+        self.large()
+        self.assertEqual(self.pr().returncode, 1)
         refused = self.push()
         self.assertNotEqual(refused.returncode, 0)
         self.assertIn("Interactive review required", refused.stderr)
+        self.assertIsNone(self.fork_note(self.git("rev-parse", "HEAD").stdout.strip()))
         self.prepare()
         self.assertEqual(self.push().returncode, 0)
+        self.as_ci()
+        self.assertEqual(self.pr().returncode, 0)
 
     def test_a_push_writes_no_description_block(self):
         self.large(10)
@@ -372,6 +1033,13 @@ print(json.dumps(seen))
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("0 commits >=200 lines; PR diff 501", result.stderr)
 
+    def test_exactly_500_with_small_commits_needs_no_record(self):
+        for count in [167, 334, 500]:
+            self.large(count)
+        result = self.pr()
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("under the interactive review thresholds", result.stdout)
+
     def test_plain_reviewed_marker_cannot_bypass_the_large_gate(self):
         self.large()
         marker = self.repo / ".git/codetrial-review/reviewed"
@@ -445,11 +1113,9 @@ print(json.dumps(seen))
             path.unlink()
 
     def review_status(self):
-        return json.loads(
-            self.run_command(
-                [sys.executable, str(GATE), "status", "--base", self.base]
-            ).stdout
-        )
+        result = self.gate("status")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return json.loads(result.stdout)
 
     def review_note(self, head="HEAD"):
         return json.loads(
@@ -655,10 +1321,10 @@ app.save({'identity':s['identity'],'revision':s['revision'],'answers':s['answers
         self.assertEqual(self.push().returncode, 0)
         self.assertEqual(self.review_note()["change_id"], change_id)
         self.assertEqual(self.git("rev-parse", "HEAD").stdout.strip(), head)
-        remote = self.root / "remote.git"
-        self.git("init", "--bare", "-q", str(remote))
-        self.git("remote", "add", "fork", str(remote))
+        # Through the installed hook: the record goes with the branch, and the
+        # hook's own push of the notes ref does not loop back into the checks.
         self.git("push", "-q", "fork", "HEAD:refs/heads/topic")
+        self.assertEqual(self.fork_note(head)["status"], "complete")
 
 
 class QueueReviewTests(unittest.TestCase):
@@ -681,8 +1347,6 @@ class QueueReviewTests(unittest.TestCase):
         self.git("config", "user.email", "queue@example.test")
         self.git("config", "commit.gpgsign", "false")
         self.base = self.commit("base")
-        self.first = self.commit("first")
-        self.second = self.commit("second")
         # Bind the subprocess cwd without changing the test runner's process.
         self.queue.git = self.git
 
@@ -701,190 +1365,6 @@ class QueueReviewTests(unittest.TestCase):
         self.git("commit", "-qm", value)
         return self.git("rev-parse", "HEAD")
 
-    def pull(self, number, tip, labels=("explained",)):
-        return {
-            "number": number,
-            "head": {"sha": tip},
-            "user": {"login": "contributor", "type": "User"},
-            "labels": [{"name": name} for name in labels],
-        }
-
-    def checker(self):
-        calls = []
-
-        def check_labels(base, tip, labels):
-            calls.append((base, tip, labels))
-            if "explained" not in labels:
-                raise ValueError("unlabeled")
-
-        return (
-            SimpleNamespace(
-                check_labels=check_labels,
-                dependabot_exempt=lambda *a: a[2] == "dependabot[bot]",
-            ),
-            calls,
-        )
-
-    def test_every_included_head_is_checked_separately(self):
-        checker, calls = self.checker()
-        result = self.queue.check(
-            self.base,
-            self.second,
-            [
-                self.pull(1, self.first),
-                self.pull(2, self.second),
-                self.pull(3, self.base),
-            ],
-            checker,
-        )
-        self.assertEqual(result, [1, 2])
-        self.assertEqual(
-            calls,
-            [
-                (self.base, self.first, ["explained"]),
-                (self.base, self.second, ["explained"]),
-            ],
-        )
-
-    def test_a_missing_label_in_any_pr_fails_the_group(self):
-        checker, _ = self.checker()
-        with self.assertRaisesRegex(ValueError, "unlabeled"):
-            self.queue.check(
-                self.base,
-                self.second,
-                [
-                    self.pull(1, self.first, ()),
-                    self.pull(2, self.second),
-                ],
-                checker,
-            )
-
-    def test_missing_or_moved_pr_head_fails_closed(self):
-        checker, _ = self.checker()
-        for pulls in ([], [self.pull(1, self.first)], [self.pull(1, "0" * 40)]):
-            with self.subTest(pulls=pulls):
-                with self.assertRaisesRegex(ValueError, "matching"):
-                    self.queue.check(self.base, self.second, pulls, checker)
-
-    def test_a_group_that_does_not_descend_from_its_base_is_refused(self):
-        checker, _ = self.checker()
-        self.git("checkout", "-q", "--orphan", "unrelated")
-        self.git("commit", "-q", "--allow-empty", "-m", "unrelated")
-        stray = self.git("rev-parse", "HEAD")
-        with self.assertRaises(subprocess.CalledProcessError):
-            self.queue.check(self.base, stray, [self.pull(1, stray)], checker)
-
-    def test_merge_commit_is_not_treated_as_a_pr_commit(self):
-        checker, calls = self.checker()
-        self.git("checkout", "-qb", "queue", self.base)
-        self.git("merge", "--no-ff", "--no-edit", self.second)
-        merged = self.git("rev-parse", "HEAD")
-        self.assertEqual(
-            self.queue.check(
-                self.base,
-                merged,
-                [
-                    self.pull(2, self.second),
-                ],
-                checker,
-            ),
-            [2],
-        )
-        self.assertEqual(len(calls), 1)
-
-    def run_queue(self, labels=("explained",), head=None, api_failure=False):
-        head = head or self.second
-        binary = self.repo / "bin"
-        binary.mkdir(exist_ok=True)
-        stub = binary / "gh"
-        stub.write_text(
-            '#!/bin/sh\nif [ "$QUEUE_API_FAILURE" = 1 ]; then exit 1; fi\n'
-            'printf "%s" "$QUEUE_API_PAGES"\n'
-        )
-        stub.chmod(0o755)
-        return subprocess.run(
-            [
-                sys.executable,
-                str(ROOT / "scripts/check-queue-review.py"),
-                "--base",
-                self.base,
-                "--head",
-                head,
-                "--branch",
-                "main",
-                "--repo",
-                "owner/repo",
-            ],
-            cwd=self.repo,
-            text=True,
-            capture_output=True,
-            env={
-                **self.env,
-                "PATH": str(binary) + os.pathsep + self.env["PATH"],
-                "QUEUE_API_FAILURE": "1" if api_failure else "0",
-                "QUEUE_API_PAGES": json.dumps([[], [self.pull(2, head, labels)]]),
-            },
-        )
-
-    def big(self):
-        (self.repo / "file").write_text("line\n" * 600)
-        self.git("add", "file")
-        self.git("commit", "-qm", "A change over the threshold")
-        return self.git("rev-parse", "HEAD")
-
-    def test_cli_checks_the_real_labels_from_later_api_page(self):
-        result = self.run_queue()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("[2]", result.stdout)
-
-    def test_cli_rejects_a_large_change_without_the_label(self):
-        head = self.big()
-        refused = self.run_queue(labels=(), head=head)
-        self.assertNotEqual(refused.returncode, 0)
-        self.assertIn("interactive-review/required", refused.stderr)
-        accepted = self.run_queue(labels=("other", "explained"), head=head)
-        self.assertEqual(accepted.returncode, 0, accepted.stderr)
-
-    def test_cli_does_not_pass_when_github_cannot_be_read(self):
-        result = self.run_queue(api_failure=True)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertNotIn("Verified", result.stdout)
-
-    def test_group_with_independent_pr_branches_checks_both(self):
-        checker, calls = self.checker()
-        self.git("checkout", "-qb", "other", self.base)
-        (self.repo / "other").write_text("independent change")
-        self.git("add", "other")
-        self.git("commit", "-qm", "other branch")
-        other = self.git("rev-parse", "HEAD")
-        self.git("checkout", "-qb", "queue", self.base)
-        self.git("merge", "--no-ff", "--no-edit", self.first)
-        self.git("merge", "--no-ff", "--no-edit", other)
-        merged = self.git("rev-parse", "HEAD")
-        self.assertEqual(
-            self.queue.check(
-                self.base,
-                merged,
-                [
-                    self.pull(1, self.first),
-                    self.pull(2, other),
-                ],
-                checker,
-            ),
-            [1, 2],
-        )
-        self.assertEqual([call[1] for call in calls], [self.first, other])
-
-    def test_dependabot_pull_request_skips_only_its_own_label_check(self):
-        checker, calls = self.checker()
-        bot = self.pull(1, self.first, ())
-        bot["user"] = {"login": "dependabot[bot]", "type": "Bot"}
-        result = self.queue.check(
-            self.base, self.second, [bot, self.pull(2, self.second)], checker
-        )
-        self.assertEqual(result, [1, 2])
-        self.assertEqual([call[1] for call in calls], [self.second])
-
     def commit_by(self, author, parent, text, *more):
         tree = self.git("rev-parse", f"{parent}^{{tree}}")
         parents = [arg for p in (parent, *more) for arg in ("-p", p)]
@@ -899,7 +1379,7 @@ class QueueReviewTests(unittest.TestCase):
         ).stdout.strip()
 
     def test_dependabot_exemption_needs_the_opener_and_every_commit(self):
-        gate = self.queue_checker()
+        gate = self.checker()
         bot = "49699333+dependabot[bot]@users.noreply.github.com"
         mine = self.commit_by(bot, self.base, "Bump a")
         mixed = self.commit_by("person@example.test", mine, "Add a change")
@@ -923,10 +1403,8 @@ class QueueReviewTests(unittest.TestCase):
                     gate.dependabot_exempt(self.base, tip, login, kind), exempt
                 )
 
-    def queue_checker(self):
-        spec = importlib.util.spec_from_file_location("gate_under_test", GATE)
-        gate = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(gate)
+    def checker(self):
+        gate = load_gate()
         gate.git = lambda *args, data=None: self.git(*args).encode()
         gate.module(ROOT / "scripts/hashchain.py").git = lambda *a, **k: (
             subprocess.run(
@@ -1043,7 +1521,6 @@ class QueueReviewTests(unittest.TestCase):
                     start,
                     "--head",
                     head,
-                    "--guard",
                     *extra,
                 ],
                 cwd=self.repo,
@@ -1071,7 +1548,7 @@ class QueueReviewTests(unittest.TestCase):
         def run(head, login, kind):
             return subprocess.run(
                 [sys.executable, str(GATE), "pr", "--base", self.base]
-                + ["--head", head, "--labels", "[]"]
+                + ["--head", head]
                 + ["--author-login", login, "--author-type", kind],
                 cwd=self.repo,
                 env=self.env,
@@ -1088,15 +1565,15 @@ class QueueReviewTests(unittest.TestCase):
             (theirs, "contributor", "User"),
         ):
             with self.subTest(login=login, kind=kind, human=head == mine):
-                # A small change needs no label, so only the message tells
-                # whether the exemption applied.
+                # A small change gets no notice either way, so only the
+                # message tells whether the exemption applied.
                 result = run(head, login, kind)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertNotIn("Dependabot's own", result.stdout)
 
     def test_the_workflow_passes_only_flags_and_variables_that_exist(self):
         text = (ROOT / ".github/workflows/pr-description.yml").read_text()
-        step = text[text.index("- name: Measure the change") :]
+        step = support.step(text, "Measure the change")
         env, run = step.split("        run: |", 1)
         declared = set(re.findall(r"^          (\w+):", env, re.M))
         for name in set(re.findall(r"\$\{?([A-Z_]+)", run)):
@@ -1110,6 +1587,38 @@ class QueueReviewTests(unittest.TestCase):
             self.assertTrue(calls, script)
             for flag in set(re.findall(r" (--[a-z-]+)", "".join(calls))):
                 self.assertIn(f'"{flag}"', source.read_text(), (script, flag))
-        # The guard runs on pull requests, and the branch name loses refs/heads/.
-        self.assertRegex(run, r"check-queue-review\.py[^\n]*\\\n[^\n]*--guard")
-        self.assertIn('--branch "${BASE_REF#refs/heads/}"', run)
+        # The guard runs on pull requests, with the head a maintainer approved.
+        self.assertRegex(run, r"check-queue-review\.py[^\n]*\\\n[^\n]*--approved")
+        # actions/checkout refuses a fork's head under pull_request_target, and
+        # the head is data here anyway: only the base is checked out, and the
+        # pull request's commits are fetched by identity into a bare repository.
+        self.assertEqual(text.count("uses: actions/checkout"), 1)
+        self.assertNotIn("head.sha", text[: text.index("- name: Measure the change")])
+        self.assertIn("git init -q --bare head.git", run)
+        self.assertIn('"$BASE_SHA" "$HEAD_SHA"', run)
+        self.assertNotIn("labels", text.lower())
+        # The review record comes from the repository the branch came from, by
+        # its validated name, and only after the change itself was fetched.
+        self.assertIn(
+            "HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}",
+            text,
+        )
+        self.assertIn('"+refs/notes/codetrial-review:refs/notes/codetrial-review"', run)
+        self.assertLess(run.index('"$BASE_SHA" "$HEAD_SHA"'), run.index("refs/notes/"))
+        # The signature is checked against the keys GitHub lists for the
+        # author, fetched by a validated login without a token.
+        self.assertIn('"https://github.com/$login.keys"', run)
+        self.assertIn("for login in $opener $others; do", run)
+        # Signing keys too, so a dedicated key leaves an HTTPS push untouched.
+        self.assertIn('"users/$login/ssh_signing_keys"', run)
+        self.assertIn('--author-keys "$keys"', run)
+        # A code owner's exemption needs every commit's author from GitHub.
+        self.assertIn('"repos/$REPOSITORY/pulls/$PR_NUMBER/commits"', run)
+        self.assertIn("listed=$authors", run)
+        self.assertIn('${listed:+--commit-authors "$listed"}', run)
+        # The workflow and the checker accept the same logins.
+        valid = re.search(r"valid='([^']+)'", run).group(1)
+        self.assertEqual(valid, load_gate().LOGIN.pattern)
+        self.assertIn('"--commit-authors"', GATE.read_text())
+        # A queue head has no record of its own; each pull request had to pass.
+        self.assertLess(run.index('"$EVENT" = merge_group'), run.index("git init"))

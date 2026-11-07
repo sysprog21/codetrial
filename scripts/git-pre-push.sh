@@ -18,7 +18,53 @@ url=${2:-}
 
 # Read the pushed refs first: the tag sync below decides from them, and the
 # transport must not get a chance to consume them.
-refs=$(cat)
+publish_only=0
+if [ "$remote" = --publish-review ]; then
+
+    # Run by hand, for a branch already pushed: judge its head as a push would
+    # and send the record, which only a push of the branch carries otherwise.
+    [ "$#" -eq 2 ] || [ "$#" -eq 3 ] || {
+        echo "Usage: $0 --publish-review <remote> [<branch on the remote>]" >&2
+        exit 1
+    }
+    publish_only=1
+    remote=$2
+    url=$(git remote get-url --push "$remote") || exit 1
+    branch=$(git symbolic-ref --quiet HEAD) || {
+        echo "HEAD is detached; check out the topic branch the pull request is from." >&2
+        exit 1
+    }
+    target=${3:-$branch}
+    target=refs/heads/${target#refs/heads/}
+    [ "$target" != refs/heads/main ] || {
+        echo "A pull request comes from a topic branch, not main; name it: $0 --publish-review $remote <branch>" >&2
+        exit 1
+    }
+    head=$(git rev-parse HEAD) || exit 1
+
+    # The record is for the head the pull request has, so the two must agree,
+    # read from where the record goes: the push URL, which may differ from the
+    # one fetched from.
+    listed=$(GIT_TERMINAL_PROMPT=0 git ls-remote "$url" "$target") || {
+        echo "Cannot read ${target#refs/heads/} from $remote; check that you can reach it." >&2
+        exit 1
+    }
+    there=$(printf '%s\n' "$listed" | awk -v ref="$target" '$2 == ref { print $1; exit }')
+    if [ -z "$there" ]; then
+        echo "$remote has no branch ${target#refs/heads/}." >&2
+        echo "If the pull request's branch has another name there, name it: $0 --publish-review $remote <branch>" >&2
+        echo "If it was never pushed, push it, which sends the record with it." >&2
+        exit 1
+    fi
+    if [ "$there" != "$head" ]; then
+        echo "$remote has $(printf %.12s "$there") on ${target#refs/heads/}, not HEAD $(printf %.12s "$head")." >&2
+        echo "Push the branch instead, which sends the record with it: git push $remote HEAD:$target" >&2
+        exit 1
+    fi
+    refs="$branch $head $target $head"
+else
+    refs=$(cat)
+fi
 
 # Release tags follow origin, and only a push to origin is held up by it, so an
 # origin that is slow or unreachable cannot block a push elsewhere. A push that
@@ -108,10 +154,17 @@ git rev-parse --verify --quiet "$review_policy^{commit}" > /dev/null 2>&1 \
 review_path=.claude/skills/codetrial-review/SKILL.md
 note=
 test_note=
+review_notes=refs/notes/codetrial-review
+publish_review=0
+review_heads=
 
 while read -r local_ref local_sha remote_ref remote_sha; do
     [ -n "${local_ref:-}" ] || continue
     [ "$local_sha" != "$zero" ] || continue
+
+    # The review record this hook sends below carries no code and no commit
+    # message to judge, and judging it would loop back into this hook.
+    [ "$remote_ref" != "$review_notes" ] || continue
     git cat-file -e "${local_sha}^{commit}" 2> /dev/null || continue
     # A published upstream policy must not be reset by the outgoing branch.
     set -- verify --tip "$local_sha"
@@ -228,6 +281,16 @@ while read -r local_ref local_sha remote_ref remote_sha; do
                     failed=1
                     continue
                 fi
+
+                # A large change that passed has a completed, signed marker on
+                # its head; CI reads it from this remote. A code owner who
+                # skipped the review leaves only a pending one, which stays
+                # here.
+                if [ "$(python3 "$script_dir/check-interactive-review.py" marker \
+                    --head "$local_sha")" = complete ]; then
+                    publish_review=1
+                    review_heads="$review_heads $local_sha"
+                fi
             fi
             if [ -z "$note" ] && [ "$review_enabled" -eq 1 ] \
                 && ! grep -qx "$local_sha" "$reviewed" 2> /dev/null; then
@@ -252,6 +315,60 @@ while read -r local_ref local_sha remote_ref remote_sha; do
 done << EOF
 $refs
 EOF
+
+# The interactive-review check reads the marker from the remote the branch goes
+# to, so it is sent first and the pull request event finds it there. Records the
+# remote already holds for other branches are merged in, not overwritten. A
+# record that cannot be sent would turn the check red, so the push stops here.
+if [ "$failed" -eq 0 ] && [ "$publish_review" -eq 1 ]; then
+    incoming=refs/notes/codetrial-review-incoming
+
+    # The records signed here are kept by blob: when the remote is ahead, the
+    # merge fast-forwards to its notes, and -s ours never sees a conflict.
+    signed=
+    for sha in $review_heads; do
+        signed="$signed $sha:$(git notes --ref="$review_notes" list "$sha")"
+    done
+    if GIT_TERMINAL_PROMPT=0 git fetch -q --no-tags "$url" \
+        "+$review_notes:$incoming" 2> /dev/null; then
+
+        # A merge left half done would block every later push, so it is
+        # abandoned on failure; the records here are unchanged by it.
+        if ! git notes --ref="$review_notes" merge -q -s ours "$incoming"; then
+            git notes --ref="$review_notes" merge --abort 2> /dev/null
+            failed=1
+        fi
+        for pair in $signed; do
+            sha=${pair%%:*}
+            [ "$failed" -eq 0 ] || break
+            [ "$(git notes --ref="$review_notes" list "$sha" 2> /dev/null)" = "${pair#*:}" ] \
+                || git notes --ref="$review_notes" add -f -C "${pair#*:}" "$sha" \
+                || failed=1
+        done
+        git update-ref -d "$incoming"
+    fi
+    if [ "$failed" -ne 0 ] \
+        || ! GIT_TERMINAL_PROMPT=0 git push -q "$remote" "$review_notes:$review_notes"; then
+        echo "Push rejected: cannot send the interactive review record to $remote." >&2
+        echo "Check that you can push to $remote, then push again." >&2
+        failed=1
+    fi
+fi
+
+# By hand, say what happened: nothing else would, and a check that has already
+# failed does not rerun for a record alone. The messages above say "Push
+# rejected", but here no branch was pushed.
+if [ "$publish_only" -eq 1 ]; then
+    if [ "$failed" -ne 0 ]; then
+        echo "Nothing was sent; the branch on $remote is unchanged." >&2
+    elif [ "$publish_review" -eq 1 ]; then
+        echo "Sent the interactive review record for $(printf %.12s "$head") to $remote." >&2
+        echo "Close and reopen the pull request to rerun its interactive-review check." >&2
+    else
+        # The check above said why, when a code owner skipped the review.
+        echo "Nothing sent: $(printf %.12s "$head") has no completed interactive review record to send, and its push check passed without one." >&2
+    fi
+fi
 
 # Said once the whole push is judged, so a push refused over another ref does
 # not also advise a review of a head that is not going anywhere.

@@ -172,16 +172,22 @@ a PR is not ready for review until CI is green.
 Before handing the draft to gh-submit or opening it directly, apply
 [the large-change explanation requirement](../../../docs/large-change-explanation.md)
 to the complete committed PR diff and every proposed commit. If any commit
-has at least 200 reviewable added plus deleted lines, or the whole PR has more
-than 500, the local review must include the contributor's explanation and
+has at least 200 added plus deleted text lines, or the whole PR has more than
+500 (raw counts, as the hook and CI measure them), and the pull request is not
+a code owner's own work (opener and every commit's author in CODEOWNERS)
+or Dependabot's alone, the local review must include the contributor's explanation and
 follow-up answers checked against this base and head. If absent, incorrect, or
 stale, ask for the missing account and keep submission pending while continuing
 independent preparation. An approval to publish or an agent-written summary
 does not replace the answers. Preserve the useful rationale and reading order
 in the PR body, but keep the private report and transcript out. The pull
 request has no review block to fill in: CI measures the change itself, and a
-change over the thresholds passes once a maintainer adds the `explained` label.
-A later code or
+change over the thresholds still needs the interactive review before the push;
+the check fails unless the pre-push hook sent its completed record, signed with
+an SSH key on the contributor's GitHub account. For a refusal by the hook or
+the check, quote the fix from [the troubleshooting
+list](../../../docs/large-change-explanation.md#troubleshooting) rather than
+restating it. A later code or
 base change requires rechecking the count, and a new review session: the
 evidence is bound to the exact base, head and diff, so the earlier session is
 refused and the answers are written and sent again, which can start from the

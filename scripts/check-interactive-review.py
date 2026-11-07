@@ -54,6 +54,7 @@ def resolve(ref):
     )
 
 
+@functools.lru_cache(maxsize=None)
 def common():
     return Path(git("rev-parse", "--git-common-dir").decode().strip()).resolve()
 
@@ -415,28 +416,33 @@ def status(base, head):
     return result
 
 
+def read_marker(head):
+    """The marker note on `head` as a JSON object, or None.
+
+    In CI the note comes from the fork, so it is data of any shape and size.
+    """
+    try:
+        found = git("notes", "--ref=" + NOTES, "show", head)
+    except subprocess.CalledProcessError:
+        return None
+    if len(found) > 64 * 1024:
+        return None
+    try:
+        value = json.loads(found)
+    except ValueError:
+        return None
+    return value if isinstance(value, dict) else None
+
+
 def record_marker(base, head, *, started=False):
     result = status(base, head)
     if not result["required"]:
         return
     head, base = result["head"], result["base"]
     with evidence_lock(head):
-        old = subprocess.run(
-            ["git", "--no-lazy-fetch", "notes", "--ref=" + NOTES, "show", head],
-            capture_output=True,
-            env={
-                **os.environ,
-                "GIT_NO_REPLACE_OBJECTS": "1",
-                "GIT_TERMINAL_PROMPT": "0",
-            },
-        )
-        try:
-            old = json.loads(old.stdout) if old.returncode == 0 else {}
-        except ValueError:
-            old = {}
+        old = read_marker(head) or {}
         started = started or (
-            isinstance(old, dict)
-            and old.get("head") == head
+            old.get("head") == head
             and old.get("base") == base
             and old.get("workbench_started") is True
         )
@@ -445,31 +451,231 @@ def record_marker(base, head, *, started=False):
             git("show", "--no-notes", "-s", "--format=%B", head),
         )
         marker = {k: v for k, v in result.items() if k != "evidence"}
+        if result["status"] == "complete":
+            # What CI compares with the diff it computes itself, and the
+            # answers by digest only, so the review fingerprint covers them
+            # without the note carrying a word of them.
+            marker["diff_hash"] = hashlib.sha256(patch(base, head)).hexdigest()
+            marker["answer_digest"] = load(evidence_path(head))["answer_digest"]
+            marker["review_fingerprint"] = review_fingerprint(
+                head, base, marker["diff_hash"], marker["answer_digest"]
+            )
         marker.update(
             schema_version=1,
             change_id=ids[0].decode() if len(ids) == 1 else None,
             workbench_started=bool(started),
         )
-        payload = (json.dumps(marker, indent=2) + "\n").encode()
-        if old == marker:
-            return
-        try:
-            git(
-                "-c",
-                "commit.gpgsign=false",
-                "notes",
-                "--ref=" + NOTES,
-                "add",
-                "-f",
-                "-F",
-                "-",
-                head,
-                data=payload,
+        if marker.get("review_fingerprint") and old.get(
+            "review_fingerprint"
+        ) == marker.get("review_fingerprint"):
+            # The same review of the same code: its signature still holds, and
+            # signing it again on every push would only move the notes ref.
+            for field in ("signature", "key_fingerprint"):
+                if field in old:
+                    marker[field] = old[field]
+        if old != marker:
+            write_marker(head, marker)
+
+
+def write_marker(head, marker):
+    payload = (json.dumps(marker, indent=2) + "\n").encode()
+    try:
+        git(
+            "-c",
+            "commit.gpgsign=false",
+            "notes",
+            "--ref=" + NOTES,
+            "add",
+            "-f",
+            "-F",
+            "-",
+            head,
+            data=payload,
+        )
+    except subprocess.CalledProcessError as error:
+        raise ValueError(
+            "Cannot record interactive-review Git note; check Git identity and note-ref locks"
+        ) from error
+
+
+# The review is signed on the contributor's machine with the SSH key already on
+# their GitHub account: one signature over one fingerprint, checked in CI
+# against the keys GitHub publishes for the pull request's author.
+PROJECT = "sysprog21/codetrial"
+NAMESPACE = "codetrial-review"
+KEY_FINGERPRINT = re.compile(r"SHA256:[A-Za-z0-9+/]{43}")
+LOGIN = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{0,38}")
+# A key of its own, registered as a Signing Key, leaves an HTTPS push or the
+# key a contributor pushes with untouched; the check accepts both kinds.
+# A record sent without a push of the branch does not rerun the check.
+PUBLISH = "sh scripts/git-pre-push.sh --publish-review <fork-remote> [<branch>]"
+RERUN = "then close and reopen the pull request to rerun this check"
+SETUP = (
+    "Set up a signing key once: (1) ssh-keygen -t ed25519 -f"
+    " ~/.ssh/codetrial_signing; (2) on GitHub, Settings > SSH and GPG keys >"
+    " New SSH key, Key type: Signing Key, paste ~/.ssh/codetrial_signing.pub;"
+    " (3) git config codetrial.signingKey ~/.ssh/codetrial_signing."
+)
+
+
+@functools.lru_cache(maxsize=4)
+def code_owners(base):
+    """The GitHub logins .github/CODEOWNERS names at `base`, lowercased.
+
+    Read from the base commit, in the hook as in CI, so a branch cannot name
+    its own author. Teams (@org/team) are not resolved.
+    """
+    try:
+        text = git("show", f"{base}:.github/CODEOWNERS").decode(errors="replace")
+    except subprocess.CalledProcessError:
+        return frozenset()
+    names = set()
+    for line in text.splitlines():
+        for token in line.split("#", 1)[0].split()[1:]:
+            if token.startswith("@") and "/" not in token:
+                names.add(token[1:].lower())
+    return frozenset(names)
+
+
+def is_code_owner(login, base):
+    """Code owners may skip the interactive review; for them it is opt-in."""
+    return bool(login and LOGIN.fullmatch(login) and login.lower() in code_owners(base))
+
+
+def review_fingerprint(head, base, diff_hash, answer_digest):
+    """What is signed: this project, this exact code, these answers."""
+    return digest(
+        {
+            "project": PROJECT,
+            "head": head,
+            "base": base,
+            "diff_hash": diff_hash,
+            "answer_digest": answer_digest,
+        }
+    )
+
+
+def config(name):
+    try:
+        return git("config", "--get", name).decode().strip()
+    except subprocess.CalledProcessError:
+        return ""
+
+
+def signing_key(scratch):
+    """The key to sign with: codetrial.signingKey, then user.signingKey when Git
+    already signs with SSH, then the first key in ssh-agent."""
+    value = config("codetrial.signingKey")
+    if not value and config("gpg.format") == "ssh":
+        value = config("user.signingKey")
+    if value.startswith("key::"):
+        literal = scratch / "literal.pub"
+        literal.write_text(value[5:] + "\n")
+        return literal
+    if value:
+        return Path(value).expanduser()
+    agent = subprocess.run(["ssh-add", "-L"], capture_output=True, text=True)
+    if agent.returncode == 0 and agent.stdout.strip():
+        first = scratch / "agent.pub"
+        first.write_text(agent.stdout.splitlines()[0] + "\n")
+        return first
+    raise ValueError(f"No SSH key to sign the interactive review with. {SETUP}")
+
+
+def sign_marker(head):
+    """Sign the completed marker on `head` on this machine."""
+    with evidence_lock(head):
+        marker = read_marker(head)
+        if not marker or marker.get("status") != "complete":
+            raise ValueError("No completed review marker to sign")
+        with tempfile.TemporaryDirectory(prefix="codetrial-sign-") as scratch:
+            key = signing_key(Path(scratch))
+            listed = subprocess.run(
+                ["ssh-keygen", "-lf", str(key)], capture_output=True, text=True
             )
-        except subprocess.CalledProcessError as error:
-            raise ValueError(
-                "Cannot record interactive-review Git note; check Git identity and note-ref locks"
-            ) from error
+            found = KEY_FINGERPRINT.search(listed.stdout)
+            if not found:
+                raise ValueError(
+                    f"Cannot sign the interactive review with {key}. {SETUP}"
+                )
+            # record_marker keeps a signature only while the review it covers
+            # is unchanged, so the same key need not sign it again.
+            if marker.get("signature") and marker.get("key_fingerprint") == found.group(
+                0
+            ):
+                return found.group(0)
+            made = subprocess.run(
+                ["ssh-keygen", "-Y", "sign", "-f", str(key), "-n", NAMESPACE],
+                input=marker["review_fingerprint"].encode(),
+                capture_output=True,
+            )
+        if made.returncode != 0:
+            raise ValueError(f"Cannot sign the interactive review with {key}. {SETUP}")
+        marker.update(signature=made.stdout.decode(), key_fingerprint=found.group(0))
+        write_marker(head, marker)
+    return found.group(0)
+
+
+class Problem(str):
+    """Why a review record does not pass; `kind` picks the advice for it:
+    "outage" (GitHub did not answer), "no_key" or "mismatch" (the signing
+    setup), or "missing" (the review itself)."""
+
+    def __new__(cls, text, kind="missing"):
+        problem = super().__new__(cls, text)
+        problem.kind = kind
+        return problem
+
+
+def signed_by(fingerprint, signature, login, keys, unavailable=False):
+    """Why `signature` over `fingerprint` is not the author's, or None.
+
+    `unavailable` says GitHub did not answer for some of the keys, so a failure
+    is reported as that and not as the contributor's missing setup.
+    """
+    who = login if LOGIN.fullmatch(login or "") else "the author"
+    lines = [
+        line.strip()
+        for line in (keys or "").splitlines()
+        if line.strip().startswith(("ssh-", "ecdsa-", "sk-"))
+    ]
+    outage = Problem(
+        f"could not read the SSH keys of {who} and the commits' authors from"
+        " GitHub to check the signature",
+        "outage",
+    )
+    if not lines:
+        return (
+            outage
+            if unavailable
+            else Problem(
+                f"neither {who} nor the commits' authors have an SSH key on GitHub"
+                " to check the signature against",
+                "no_key",
+            )
+        )
+    with tempfile.TemporaryDirectory(prefix="codetrial-verify-") as scratch:
+        allowed = Path(scratch) / "allowed_signers"
+        allowed.write_text(
+            "".join(f'author namespaces="{NAMESPACE}" {line}\n' for line in lines)
+        )
+        sig = Path(scratch) / "review.sig"
+        sig.write_text(signature)
+        checked = subprocess.run(
+            ["ssh-keygen", "-Y", "verify", "-f", str(allowed), "-I", "author"]
+            + ["-n", NAMESPACE, "-s", str(sig)],
+            input=fingerprint.encode(),
+            capture_output=True,
+        )
+    if checked.returncode == 0:
+        return None
+    if unavailable:
+        return outage
+    return Problem(
+        f"does not verify against any SSH key on GitHub of {who} or the"
+        " commits' authors",
+        "mismatch",
+    )
 
 
 def record_workbench(bundle):
@@ -494,29 +700,216 @@ def record_workbench(bundle):
 
 
 DOC = "docs/large-change-explanation.md#troubleshooting"
-# A maintainer adds this label to a pull request they have seen explained. Only
-# people with triage access can, so an author cannot add or strip it.
-LABEL = "explained"
 
 
-def check_labels(base, head, labels):
-    """Refuse a change that needs the interactive review and has no label.
+def report(base, head):
+    """Why the change is large, or None when it is under the thresholds.
 
-    CI measures the change itself, from the commits and the diff, so nothing in
-    the description can be edited out. It cannot see the contributor's local
-    evidence, so the proof that the change was explained is a maintainer's label.
+    The text holds only counts and commit identities, never a path or other
+    text from the branch, because the workflow prints it as a workflow command.
     """
     base, head, total, large, unknown = scope(base, head)
     if not needs_review(total, large, unknown):
-        return False
-    if LABEL not in labels:
-        raise ValueError(
-            "[interactive-review/required] This change needs the interactive "
-            f"review ({len(large)} commits at {LARGE_COMMIT} lines or more, "
-            f"PR diff {total} lines, {len(unknown)} unmeasured). A maintainer "
-            f"adds the '{LABEL}' label once it has been explained. See {DOC}"
+        return None
+    reasons = []
+    if total > PR_TOTAL:
+        reasons.append(f"the pull request changes {total} lines (more than {PR_TOTAL})")
+    if large:
+        commits = ", ".join(f"{c['sha'][:12]} ({c['known_lines']})" for c in large)
+        reasons.append(
+            f"{len(large)} commit(s) change {LARGE_COMMIT} lines or more: {commits}"
         )
+    if unknown:
+        reasons.append(
+            f"{len(unknown)} commit(s) change files that cannot be counted as text"
+        )
+    return "This is a large change: " + "; ".join(reasons)
+
+
+def is_ancestor(older, newer):
+    try:
+        git("merge-base", "--is-ancestor", older, newer)
+    except subprocess.CalledProcessError:
+        return False
     return True
+
+
+def updated_from(sha, base):
+    """The commit `sha` merged `base`'s history into, when that is all it did.
+
+    GitHub's "Update branch" makes such a merge, which carries no record of its
+    own. It counts only when its second parent is on the pull request's base
+    and its tree is the clean merge of its parents.
+    """
+    chain = module(ROOT / "scripts/hashchain.py")
+    _, _, tree, parents = chain.commit(sha)
+    if len(parents) != 2 or not is_ancestor(parents[1], base):
+        return None
+    try:
+        chain.check_merge(tree, parents)
+    except (ValueError, subprocess.CalledProcessError):
+        return None
+    return parents[0]
+
+
+def recorded(base, head, login=None, keys=None, unavailable=False):
+    """Why no completed review was pushed for `head`, or None when one was.
+
+    The pre-push hook writes the marker once the local evidence verifies,
+    signs it and sends it with the branch. CI reads it from the fork as data:
+    it is a declaration, signed with a key on the author's account, of a
+    completed review of exactly this code. It does not show who wrote the
+    answers or that anyone understood them.
+    """
+    # FIXME: nothing yet checks that the author can explain the change; the
+    # approver's question about one passage was withdrawn until a replacement
+    # is decided.
+    tip = head
+    marker = read_marker(tip)
+    while marker is None:
+        earlier = updated_from(tip, base)
+        if earlier is None:
+            return Problem(f"no review record was pushed for {head[:12]}")
+        tip, marker = earlier, read_marker(earlier)
+    start = marker.get("base")
+    if marker.get("head") != tip or marker.get("status") != "complete":
+        return Problem(
+            f"the record on {tip[:12]} is not a completed review of that commit"
+        )
+    if not (
+        isinstance(start, str)
+        and re.fullmatch("[0-9a-f]{40}", start)
+        and is_ancestor(start, base)
+        and is_ancestor(start, tip)
+    ):
+        return Problem(f"the record on {tip[:12]} was made against another base")
+    diff_hash = hashlib.sha256(patch(start, tip)).hexdigest()
+    answers = marker.get("answer_digest")
+    fingerprint = (
+        review_fingerprint(tip, start, diff_hash, answers)
+        if isinstance(answers, str) and re.fullmatch("[0-9a-f]{64}", answers)
+        else None
+    )
+    if (
+        fingerprint is None
+        or marker.get("diff_hash") != diff_hash
+        or marker.get("review_fingerprint") != fingerprint
+    ):
+        return Problem(f"the record on {tip[:12]} was made for different code")
+    signature = marker.get("signature")
+    if (
+        not isinstance(signature, str)
+        or "-----BEGIN SSH SIGNATURE-----" not in signature
+    ):
+        return Problem(f"the record on {tip[:12]} is not signed")
+    problem = signed_by(fingerprint, signature, login, keys, unavailable)
+    if problem is None:
+        return None
+    if problem.kind == "mismatch":
+        key = marker.get("key_fingerprint")
+        key = (
+            key if isinstance(key, str) and KEY_FINGERPRINT.fullmatch(key) else "a key"
+        )
+        return Problem(
+            f"the record on {tip[:12]} is signed with {key}, which {problem}",
+            problem.kind,
+        )
+    return problem
+
+
+def owner_exempt(base, head, login, authors):
+    """Why a code owner's pull request still needs the review, or None.
+
+    The exemption is for a code owner's own work: the opener and the GitHub
+    account of every commit's author must be code owners, so a contributor's
+    commits do not pass by a code owner opening the pull request. `authors`
+    maps each commit of the pull request, as GitHub lists them, to the login
+    GitHub links its author to ("" for none); None when GitHub did not say.
+    The list must name exactly the commits checked here, so one read after the
+    branch moved, or cut off at GitHub's 250 commits, does not count.
+
+    GitHub links an author by the email in the commit, which anyone can write;
+    this keeps an honest code owner from excusing someone else's work by
+    opening it, and is not proof of who wrote a commit.
+    """
+    if authors is None:
+        return (
+            f"{login} is a code owner, but GitHub did not list the commits'"
+            " authors, so the exemption could not be confirmed"
+        )
+    commits = set(git("rev-list", f"{base}..{head}").decode().split())
+    if set(authors) != commits:
+        return (
+            f"{login} is a code owner, but the {len(authors)} commits GitHub"
+            f" listed are not the {len(commits)} checked here (the branch"
+            " moved, or it has more than GitHub lists), so the exemption could"
+            " not be confirmed"
+        )
+    others = [
+        name or "an author linked to no GitHub account" for name in authors.values()
+    ]
+    others = sorted({name for name in others if not is_code_owner(name, base)})
+    if others:
+        return (
+            f"{login} is a code owner, but commits here are by {', '.join(others)},"
+            " so the interactive review applies"
+        )
+    return None
+
+
+def pr_result(base, head, login=None, keys=None, unavailable=False, authors=None):
+    """The one line the workflow prints, and whether the check passes."""
+    base, head = resolve(base), resolve(head)
+    reasons = report(base, head)
+    if reasons is None:
+        return "This change is under the interactive review thresholds.", True
+    not_exempt = None
+    if is_code_owner(login, base):
+        not_exempt = owner_exempt(base, head, login, authors)
+        if not_exempt is None:
+            return (
+                "::notice title=Large change::"
+                + reasons
+                + f". {login} and every commit's author are code owners, for"
+                f" whom the interactive review is optional. See {DOC}"
+            ), True
+    problem = recorded(base, head, login, keys, unavailable)
+    if problem is not None:
+        if problem.kind == "outage":
+            advice = (
+                " This is GitHub not answering, not your setup: close and reopen"
+                " the pull request to rerun this check."
+            )
+        elif problem.kind in ("no_key", "mismatch"):
+            advice = (
+                " The review is signed on your machine with an SSH key on your"
+                f" GitHub account. {SETUP} Then sign and send the record again"
+                f" with {PUBLISH}, and {RERUN}."
+            )
+        else:
+            advice = (
+                " A large change needs the interactive review before it is"
+                " pushed; the pre-push hook checks for it, signs its record and"
+                " sends it with the branch, so a missing record usually means the"
+                " hooks were not installed or were skipped. Run make hooks and"
+                " finish /codetrial-review on this branch. If that changed the"
+                " branch, push it: the record goes with it. If not, send the"
+                f" record with {PUBLISH}, and {RERUN}."
+            )
+        return (
+            "::error title=Interactive review missing::"
+            + reasons
+            + (f"; {not_exempt}" if not_exempt else "")
+            + f", and {problem}."
+            + advice
+            + f" See {DOC}"
+        ), False
+    return (
+        "::notice title=Large change::"
+        + reasons
+        + ". Its interactive review was recorded at push."
+        f" See {DOC}"
+    ), True
 
 
 def dependabot_exempt(base, head, login, kind):
@@ -533,23 +926,44 @@ def dependabot_exempt(base, head, login, kind):
     return bool(commits) and len(chain.bots(commits)) == len(commits)
 
 
+def read_capped(path, limit=256 * 1024):
+    """A file the workflow wrote from GitHub's answers, read up to `limit`."""
+    with open(path, "rb") as source:
+        return source.read(limit).decode(errors="replace")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "command",
-        choices=["staged", "push", "certify", "status", "mark", "pr"],
+        choices=["staged", "push", "certify", "status", "mark", "pr", "marker"],
     )
     parser.add_argument("--base")
     parser.add_argument("--head", default="HEAD")
     parser.add_argument("--bundle")
-    parser.add_argument(
-        "--labels", default="[]", help="pr: the pull request's labels, as a JSON list"
-    )
     parser.add_argument("--author-login", help="pr: the pull request opener")
     parser.add_argument("--author-type", help="pr: the opener's account type")
+    parser.add_argument(
+        "--author-keys",
+        help="pr: a file of the public SSH keys of the opener and commit authors",
+    )
+    parser.add_argument(
+        "--commit-authors",
+        help="pr: a file of '<sha> <login>' lines, each commit of the pull"
+        " request and the GitHub login its author is linked to; absent when"
+        " GitHub did not list them",
+    )
+    parser.add_argument(
+        "--keys-unavailable",
+        action="store_true",
+        help="pr: GitHub did not answer for some of those keys",
+    )
     args = parser.parse_args()
     try:
-        if args.command == "staged":
+        if args.command == "marker":
+            # For the pre-push hook, which sends only a completed record.
+            print((read_marker(resolve(args.head)) or {}).get("status", ""))
+        elif args.command == "staged":
             count, _ = lines(
                 git(
                     "diff",
@@ -579,14 +993,24 @@ def main():
                 ):
                     print("Dependabot's own pull request; no explanation to ask for.")
                     return 0
-                labels = json.loads(args.labels)
-                if not isinstance(labels, list):
-                    raise ValueError("--labels must be a JSON list of names")
-                if check_labels(args.base, args.head, labels):
-                    print(f"A maintainer's '{LABEL}' label covers this change.")
-                else:
-                    print("This change is under the interactive review thresholds.")
-                return 0
+                keys = read_capped(args.author_keys) if args.author_keys else None
+                authors = None
+                if args.commit_authors:
+                    entries = (
+                        line.strip().partition(" ")
+                        for line in read_capped(args.commit_authors).splitlines()
+                    )
+                    authors = {sha: name.strip() for sha, _, name in entries if sha}
+                line, passed = pr_result(
+                    args.base,
+                    args.head,
+                    args.author_login,
+                    keys,
+                    args.keys_unavailable,
+                    authors,
+                )
+                print(line)
+                return 0 if passed else 1
             if args.command == "mark":
                 record_marker(args.base, args.head)
             else:
@@ -600,12 +1024,30 @@ def main():
                 try:
                     verify(head, base)
                 except VERIFY_ERRORS as error:
+                    owner = config("codetrial.codeOwner")
+                    if is_code_owner(owner, base):
+                        print(
+                            f"Interactive review skipped: {owner} is a code owner,"
+                            " for whom it is optional; /codetrial-review still"
+                            " runs it and this push then sends its record. The"
+                            " pull request's check does not read this setting: it"
+                            " passes without a record only when the account that"
+                            " opens the pull request and the GitHub account of"
+                            " every commit's author are code owners."
+                        )
+                        return 0
                     triggers = ", ".join(
                         f"{c['sha']} ({c['known_lines']} lines)" for c in large
                     ) or ("unmeasured changes" if unknown else "PR aggregate only")
                     raise ValueError(
                         f"Interactive review required ({len(large)} commits >=200 lines; PR diff {total} lines). Unmeasured commits: {len(unknown)}. Trigger: {triggers}. Run /codetrial-review on the full committed branch; finish its web explanation and durable report before retrying. {error} See {DOC}"
                     ) from error
+                key = sign_marker(head)
+                print(
+                    f"Interactive review of {head[:12]} signed with {key}; the"
+                    " pull request check accepts it only if this key is on your"
+                    " GitHub account, as an authentication or a signing key."
+                )
     except (
         OSError,
         ValueError,
@@ -615,10 +1057,20 @@ def main():
         subprocess.CalledProcessError,
     ) as error:
         # Do not print Git stderr, answer text or database records from a hook.
-        parser.exit(
-            1,
-            f"Interactive review check failed: {error if not isinstance(error, subprocess.CalledProcessError) else 'cannot inspect local history; fetch the PR base first'}\n",
+        if args.command == "pr":
+            # Printed as a workflow command, so nothing from the branch goes in.
+            parser.exit(
+                1,
+                "::error title=Cannot check the interactive review::The change's"
+                " history could not be read; rerun the job, and if it fails again"
+                f" a maintainer looks at the job log. See {DOC}\n",
+            )
+        detail = (
+            "cannot inspect local history; fetch the PR base first"
+            if isinstance(error, subprocess.CalledProcessError)
+            else error
         )
+        parser.exit(1, f"Interactive review check failed: {detail}\n")
     return 0
 
 
