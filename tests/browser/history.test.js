@@ -466,6 +466,8 @@ test("the response window panel says what the number is worth, in words a test c
       // Wiring: selectors, module paths, tags, classes, dataset and event names.
       "",
       "/lib.js",
+      "./problem-picker.js",
+      "./audio-output.js",
       "/render.js",
       "/report-original-problem.js",
       "/api/reports",
@@ -477,6 +479,9 @@ test("the response window panel says what the number is worth, in words a test c
       "aria-current",
       "true",
       "[data-moment]",
+      "[data-practice-focus]",
+      "[data-practice-focus-status]",
+      "sessionStorage",
       "replay-item",
       "replay-line",
       "2d",
@@ -522,6 +527,7 @@ test("the response window panel says what the number is worth, in words a test c
       "Could not load the replay for this interview.",
       "Could not load the report.",
       "Could not read your recordings.",
+      "Could not save this practice focus.",
       "No report was saved for this interview.",
       "Sign in to see your recordings.",
       "No test run before this point.",
@@ -540,6 +546,7 @@ test("the response window panel says what the number is worth, in words a test c
       // page calls and the separators it joins values with. The events request
       // is here in the shape it is sent, which is the other half of the done
       // condition for this feature.
+      "/",
       "/api/recordings",
       "/api/recordings/",
       "/api/recordings//events?avatar=history",
@@ -567,6 +574,13 @@ test("the response window panel says what the number is worth, in words a test c
   // every value the server supplies and reads what comes out, which has no such
   // edge. What is left here is the copy itself, which is worth naming where a
   // person reading the test can see it.
+});
+
+test("replay practice actions carry the selected improvement to the lobby", () => {
+  const loadReport = functionBody(script, "loadReport");
+  assert.match(loadReport, /data-practice-focus/);
+  assert.match(loadReport, /storeSelectedPracticeFocus/);
+  assert.match(loadReport, /window\.location\.href = "\/"/);
 });
 
 test("the replay page asks for the avatar history and renders it beside the moments", () => {

@@ -16,7 +16,7 @@ use crate::accounts::{
 };
 use crate::current_epoch_seconds_i64;
 
-use super::auth::Owner;
+use super::auth::{Owner, account_owner_id};
 use super::recordings::finish_recording;
 use super::{
     AppState, MAX_BODY_BYTES, MAX_REPORT_BYTES, json_response, rate_limited_response,
@@ -33,8 +33,15 @@ use super::{
 pub const REPLAY_RATE_LIMIT: u32 = 120;
 
 pub(crate) async fn list_reports_handler(Owner { accounts, user }: Owner) -> Response {
+    let account_id = account_owner_id(&accounts, user.account_identity);
     match blocking(move || list_reports(&accounts, user.id)).await {
-        Ok(reports) => json_response(StatusCode::OK, json!({ "reports": reports })),
+        Ok(reports) => json_response(
+            StatusCode::OK,
+            json!({
+                "accountId": account_id,
+                "reports": reports,
+            }),
+        ),
         Err(_) => json_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             json!({ "error": "Could not read reports." }),

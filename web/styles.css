@@ -2227,7 +2227,8 @@ table.phase-scores {
 }
 
 .report-actions button,
-.final-code button {
+.final-code button,
+.practice-focus-button {
   border: 1px solid var(--hairline);
   border-radius: var(--radius-sm);
   background: var(--accent-fill);
@@ -2237,13 +2238,20 @@ table.phase-scores {
   font-weight: 700;
 }
 
-/* Done is the way on; the download is a copy to keep, so it is outlined
-   rather than a second filled button of equal weight beside it. */
+/* Done is the way on; the download is a copy to keep, and Practice this
+   selects the next focus, so both stay outlined rather than competing with
+   Done. Practice this fills with the accent on hover. */
+
 .report-actions .secondary,
-.final-code .secondary {
+.final-code .secondary,
+.practice-focus-button {
   border-color: var(--control-border);
   background: transparent;
   color: var(--ink);
+}
+
+.practice-focus-button {
+  margin: 0.75rem 0 0.5rem;
 }
 
 .report-actions .secondary:hover,
@@ -2251,9 +2259,16 @@ table.phase-scores {
   border-color: var(--accent);
 }
 
+.practice-focus-button:not(:disabled):hover {
+  border-color: var(--accent);
+  background: var(--accent-deep);
+  color: var(--on-accent);
+}
+
 /* Saving and copying both keep their controls visibly waiting. */
 .report-actions button:disabled,
-.final-code button[aria-disabled="true"] {
+.final-code button[aria-disabled="true"],
+.practice-focus-button:disabled {
   opacity: 0.55;
   cursor: progress;
 }

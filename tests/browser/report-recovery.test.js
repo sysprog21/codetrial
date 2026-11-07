@@ -309,6 +309,7 @@ function pageHarness(phase = "live") {
       saves.push(report);
     },
     renderReport: () => events.push("render"),
+    setPracticeFocusButtonsDisabled: () => {},
     renderReportSaveStatus: () => {},
     interviewLoop: "coding_only",
     roomParticipants: () => [],

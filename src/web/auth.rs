@@ -52,6 +52,15 @@ pub(crate) fn github_oauth_scope(recording: bool) -> &'static str {
     }
 }
 
+/// A stable browser-facing account identifier without exposing the sequential
+/// `users.id`. The page only compares owner ids for equality.
+pub(crate) fn account_owner_id(accounts: &Accounts, account_identity: i64) -> String {
+    crate::token::sign_hs256(
+        &accounts.config().session_secret,
+        &format!("account-owner:{account_identity}"),
+    )
+}
+
 pub fn login_config(config: &WebServerConfig) -> Option<GitHubLoginConfig> {
     let (Some(session_secret), Some(db_path)) = (
         config
@@ -561,32 +570,40 @@ pub(crate) async fn session_handler(
         .as_ref()
         .and_then(|dispatcher| dispatcher.candidate_video());
     match current_user(state.accounts.as_ref(), request.headers()).await {
-        Ok(Some(user)) => json_response(
-            StatusCode::OK,
-            super::tasks::with_built_in_task(
-                &state,
-                with_peer_flags(
+        Ok(Some(user)) => {
+            let Some(accounts) = state.accounts.as_ref() else {
+                return state.accounts_error();
+            };
+            let account_id = account_owner_id(accounts, user.account_identity);
+            json_response(
+                StatusCode::OK,
+                super::tasks::with_built_in_task(
                     &state,
-                    json!({
-                        "signedIn": true,
-                        "identityVerified": user.identity_verified,
+                    with_peer_flags(
+                        &state,
+                        json!({
+                            "signedIn": true,
+                            "identityVerified": user.identity_verified,
 
-                        // Task mode admits only a login GitHub vouched for; the
-                        // task page asks before the learner types a PIN.
-                        "githubSignedIn": user.github_id.is_some(),
-                        "loginRequired": login_required,
-                        "guestModeAvailable": state.guest_mode_available(),
-                        "deviceLogin": device_client_id(&state.config).is_some(),
-                        "maxDurationMin": max_duration_min,
-                        "candidateVideo": candidate_video,
-                        "user": {
-                            "login": user.login,
-                            "avatarUrl": user.avatar_url
-                        }
-                    }),
+                            // Task mode admits only a login GitHub vouched for;
+                            // the task page asks before the learner types a
+                            // PIN.
+                            "githubSignedIn": user.github_id.is_some(),
+                            "loginRequired": login_required,
+                            "guestModeAvailable": state.guest_mode_available(),
+                            "deviceLogin": device_client_id(&state.config).is_some(),
+                            "maxDurationMin": max_duration_min,
+                            "candidateVideo": candidate_video,
+                            "user": {
+                                "id": account_id,
+                                "login": user.login,
+                                "avatarUrl": user.avatar_url
+                            }
+                        }),
+                    ),
                 ),
-            ),
-        ),
+            )
+        }
         Ok(None) => json_response(
             StatusCode::OK,
             super::tasks::with_built_in_task(

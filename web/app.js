@@ -20,6 +20,11 @@ import {
   sequelSuggestion,
   storeSharedFocus,
   suggestDifficulty,
+  clearSelectedPracticeFocus,
+  practiceFocusFrom,
+  readSelectedPracticeFocusSelection,
+  storeSelectedPracticeFocus,
+  practiceFocusOwner,
 } from "./problem-picker.js";
 import {
   normalizeProgressEntries,
@@ -91,6 +96,10 @@ let mode = "coding";
 let retryLanguage = null;
 let reports = [];
 let historyCategories = null;
+const selectedPracticeFocusStorage = storageArea("sessionStorage");
+let selectedPracticeFocus = null;
+let selectedPracticeFocusOwner = null;
+let selectedPracticeFocusSourceReportId = null;
 /// The practice focus the share box currently refers to.
 let sharedFocus = null;
 let manualProblem = false;
@@ -621,6 +630,7 @@ const selectedProgressPhases = new Map();
 /// answers, and never assumed false, because a browser that cannot ask is not a
 /// browser that knows there is nothing on the server.
 let accountHistory = null;
+let accountHistoryOwnerId = null;
 
 for (const filter of [
   nodes.progressProblem,
@@ -804,8 +814,8 @@ start.addEventListener("click", async () => {
     destination.searchParams.set("seniority", profile.seniority);
   if (profile.targetCompany)
     destination.searchParams.set("company", profile.targetCompany);
-  const focus = nodes.practiceFocusShareInput.checked
-    ? practiceFocus(reports)
+  let focus = nodes.practiceFocusShareInput.checked
+    ? (selectedPracticeFocus ?? practiceFocus(reports))
     : null;
   let packet;
   try {
@@ -837,12 +847,30 @@ start.addEventListener("click", async () => {
     // below, and spent a second /api/login doing it.
     signInFirst = false;
   }
+  if (focus) {
+    try {
+      const currentSession = await fetchJson("/api/session");
+      const currentOwner = practiceFocusOwner(currentSession);
+      if (!currentOwner || currentOwner !== selectedPracticeFocusOwner) {
+        focus = null;
+        nodes.practiceFocusShareInput.checked = false;
+      }
+    } catch {
+      // If ownership cannot be verified, starting without sharing is safer
+      // than handing another account's practice focus to the interviewer.
+      focus = null;
+      nodes.practiceFocusShareInput.checked = false;
+    }
+  }
   start.textContent = "Starting...";
   if (!nodes.groundingConsent.checked) packet = null;
   try {
     if (strict) resetAssignments(sessionStorage);
     storeGroundingPacket(sessionStorage, packet);
-    storeSharedFocus(sessionStorage, focus?.weakness ?? null);
+    storeSharedFocus(
+      sessionStorage,
+      nodes.practiceFocusShareInput.checked ? (focus?.weakness ?? null) : null,
+    );
   } catch (error) {
     nodes.groundingError.textContent = error.message;
     starting = false;
@@ -850,6 +878,7 @@ start.addEventListener("click", async () => {
     setStartGate(signInFirst);
     return;
   }
+  clearSelectedPracticeFocus(selectedPracticeFocusStorage);
   window.location.href = destination.toString();
 });
 
@@ -937,6 +966,8 @@ window.addEventListener("pageshow", (event) => {
   // late enough to re-enable a button the candidate already pressed and hand
   // them a second navigation.
   if (!event.persisted) return;
+  nodes.practiceFocusShareInput.checked = false;
+  sharedFocus = null;
   nodes.problemSearch.value = "";
   nodes.problemSearchModes[0].checked = true;
   nodes.problemSearch.placeholder = "Search scenario titles";
@@ -1039,6 +1070,10 @@ function setStartGate(blocked) {
 
 nodes.logout.addEventListener("click", async () => {
   nodes.logout.disabled = true;
+  clearSelectedPracticeFocus(selectedPracticeFocusStorage);
+  selectedPracticeFocus = null;
+  selectedPracticeFocusOwner = null;
+  selectedPracticeFocusSourceReportId = null;
   try {
     await fetch("/api/logout", { method: "POST" });
   } finally {
@@ -1055,17 +1090,29 @@ applyDifficulties();
 // for good.
 refreshHistory();
 
-function refreshHistory() {
+function refreshHistory(retryOwnerMismatch = true) {
   renderProblemAttempts([]);
   const generation = ++historyLoad;
   historyRefreshing = generation > 1;
   historyReady = false;
+  selectedPracticeFocus = null;
+  selectedPracticeFocusOwner = null;
+  selectedPracticeFocusSourceReportId = null;
+  sharedFocus = null;
+  nodes.practiceFocusShareInput.checked = false;
+  nodes.practiceFocus.hidden = true;
+  nodes.practiceFocusShare.hidden = true;
+  for (const button of nodes.attemptHistory.querySelectorAll(
+    "[data-practice-focus]",
+  )) {
+    button.disabled = true;
+  }
   nodes.reportDeleteStatus.textContent = "";
   syncLobbyControls();
   // A cached page may retain its selection while its account is unknown.
   start.disabled = true;
   // A restored page can start a second load before the first one finishes.
-  return loadAccount(generation).finally(() => {
+  return loadAccount(generation, retryOwnerMismatch).finally(() => {
     if (generation === historyLoad) {
       historyRefreshing = false;
       settle();
@@ -1106,12 +1153,20 @@ function settle() {
   if (focusedCard?.button.hidden) focusPickerSummary();
 }
 
-async function loadAccount(generation) {
+async function loadAccount(generation, retryOwnerMismatch = true) {
   accountHistory = null;
+  accountHistoryOwnerId = null;
   let signedOutMessage = "Signed out";
   try {
     const session = await fetchJson("/api/session");
     if (generation !== historyLoad) return;
+    selectedPracticeFocusOwner = practiceFocusOwner(session);
+    const selected = readSelectedPracticeFocusSelection(
+      selectedPracticeFocusStorage,
+      selectedPracticeFocusOwner,
+    );
+    selectedPracticeFocus = selected?.focus ?? null;
+    selectedPracticeFocusSourceReportId = selected?.sourceReportId ?? null;
     if (
       typeof session?.signedIn !== "boolean" ||
       (session.signedIn && typeof session.user?.login !== "string")
@@ -1133,6 +1188,7 @@ async function loadAccount(generation) {
         : null;
     applyCostNote();
     if (session.signedIn) {
+      accountHistoryOwnerId = session.user.id;
       loginResult = null;
       accountHistory = true;
       nodes.loginLink.textContent = "Use GitHub";
@@ -1141,7 +1197,11 @@ async function loadAccount(generation) {
       nodes.loginLink.hidden = true;
       nodes.logout.hidden = false;
       setStartGate(false);
-      await renderServerHistory(generation);
+      await renderServerHistory(
+        generation,
+        accountHistoryOwnerId,
+        retryOwnerMismatch,
+      );
       return;
     }
     const unconfirmedLogin = loginResult !== null;
@@ -1238,10 +1298,26 @@ async function recordGitHubLogin() {
   }
 }
 
-async function renderServerHistory(generation) {
+async function renderServerHistory(
+  generation,
+  expectedAccountId,
+  retryOwnerMismatch = true,
+) {
   try {
     const data = await fetchJson("/api/reports");
     if (generation !== historyLoad) return;
+    if (
+      typeof data?.accountId !== "string" ||
+      data.accountId !== expectedAccountId
+    ) {
+      if (generation !== historyLoad) return;
+      if (retryOwnerMismatch) {
+        void refreshHistory(false);
+        return;
+      }
+      showProgressError("Could not load saved account progress.");
+      return;
+    }
     // The picker needs the account row's timestamp for review scheduling and
     // the verdict as it was saved; the progress panel normalizes its own.
     // The server reads its rows back under page names, so no map is needed.
@@ -1356,6 +1432,11 @@ async function deleteSavedReports() {
         "Saved reports and progress were deleted.",
         "good small",
       );
+      clearSelectedPracticeFocus(selectedPracticeFocusStorage);
+      selectedPracticeFocus = null;
+      selectedPracticeFocusSourceReportId = null;
+      nodes.practiceFocusShareInput.checked = false;
+      sharedFocus = null;
       reports = [];
       showProgress([], "saved");
       settle();
@@ -1403,6 +1484,17 @@ async function deleteSavedReport(attempt, when, button) {
       account: accountHistory === true,
     });
     if (result !== "failed") {
+      if (
+        result !== "missing" &&
+        selectedPracticeFocusSourceReportId &&
+        selectedPracticeFocusSourceReportId === attempt.id
+      ) {
+        clearSelectedPracticeFocus(selectedPracticeFocusStorage);
+        selectedPracticeFocus = null;
+        selectedPracticeFocusSourceReportId = null;
+        nodes.practiceFocusShareInput.checked = false;
+        sharedFocus = null;
+      }
       if (result === "account-deleted-local-failed") {
         message =
           "The report was deleted from your account, but its copy on this device could not be deleted.";
@@ -1441,8 +1533,15 @@ async function reloadAfterDelete(local) {
     return;
   }
   const generation = ++historyLoad;
-  if (accountHistory && !local) await renderServerHistory(generation);
-  else await renderLocalHistory(generation);
+  if (accountHistory && !local) {
+    if (!accountHistoryOwnerId) {
+      await refreshHistory();
+      return;
+    }
+    await renderServerHistory(generation, accountHistoryOwnerId);
+  } else {
+    await renderLocalHistory(generation);
+  }
   if (generation === historyLoad) settle();
 }
 
@@ -1627,13 +1726,15 @@ function recommend(note = "", mode = "recommend") {
     : `${note}Selected problem: ${title(choice.picked)}.`;
 }
 
-/// Read off `reports` alone, so it is rendered wherever those change: the two
-/// history paths below, and nowhere the selection moves.
+/// Render the selected focus when one was carried explicitly; otherwise derive
+/// the automatic focus from reports.
 function renderPracticeFocus() {
-  const focus = practiceFocus(reports);
-  nodes.practiceFocus.textContent = focus
-    ? `Carry forward${focus.occurrences === 1 ? "" : ` (${focus.occurrences} reports)`}: ${focus.weakness}. Drill: ${focus.drill}. Success: ${focus.successCriterion}.`
-    : "";
+  const focus = selectedPracticeFocus ?? practiceFocus(reports);
+  nodes.practiceFocus.textContent = selectedPracticeFocus
+    ? `Selected practice focus · ${focus.phase}: ${focus.weakness}. Drill: ${focus.drill}. Success: ${focus.successCriterion}.`
+    : focus
+      ? `Carry forward${focus.occurrences === 1 ? "" : ` (${focus.occurrences} reports)`}: ${focus.weakness}. Drill: ${focus.drill}. Success: ${focus.successCriterion}.`
+      : "";
   nodes.practiceFocus.hidden = focus === null;
   nodes.practiceFocusShare.hidden = focus === null;
   // Consent is to share this text. Reloaded history can change it, and a box
@@ -2114,6 +2215,38 @@ function renderAttemptHistory(attempts) {
       unclearLines: attempt.unclearLines,
     });
     mountFinalCodeCopy(report, attempt.code);
+    const reportGeneration = historyLoad;
+    for (const button of report.querySelectorAll("[data-practice-focus]")) {
+      button.addEventListener("click", () => {
+        if (
+          !historyReady ||
+          reportGeneration !== historyLoad ||
+          !selectedPracticeFocusOwner
+        ) {
+          return;
+        }
+        const item =
+          attempt.report.improvementPlan?.[
+            Number(button.dataset.practiceFocus)
+          ];
+        if (!item) return;
+        const focus = practiceFocusFrom(item, attempt.interviewMode);
+        if (!focus) return;
+        selectedPracticeFocus = focus;
+        selectedPracticeFocusSourceReportId = attempt.id || null;
+        storeSelectedPracticeFocus(
+          selectedPracticeFocusStorage,
+          selectedPracticeFocusOwner,
+          item,
+          attempt.interviewMode,
+          selectedPracticeFocusSourceReportId,
+        );
+        nodes.practiceFocusShareInput.checked = false;
+        sharedFocus = null;
+        renderPracticeFocus();
+        nodes.practiceFocus.scrollIntoView({ block: "nearest" });
+      });
+    }
     report.querySelector(".report-actions")?.remove();
     report.hidden = true;
     open.addEventListener("click", () => {

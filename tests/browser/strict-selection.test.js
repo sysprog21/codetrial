@@ -74,7 +74,11 @@ async function interview(
   query,
   handler,
   context = browser,
-  session = { signedIn: true, loginRequired: true },
+  session = {
+    signedIn: true,
+    loginRequired: true,
+    user: { id: "A", login: "candidate" },
+  },
 ) {
   return openInterview({ browser, base }, t, query, handler, context, session);
 }
@@ -623,19 +627,54 @@ test("a join finishing after a report's receipt went out does not take the room 
   await context.route(`${base}/`, (route) =>
     route.fulfill({ contentType: "text/html", body: "<p>Lobby</p>" }),
   );
+  const mapped = Promise.withResolvers();
+  t.after(() => mapped.resolve());
+  await context.route("**/problem-pages.json", async (route) => {
+    await mapped.promise;
+    await route.continue();
+  });
   const page = await interview(
     t,
     "problem=chargeback-pair-match",
     (route) =>
       route.fulfill({
-        json: grant("chargeback-pair-match", "receipt-before-join"),
+        json: {
+          ...grant("chargeback-pair-match", "receipt-before-join"),
+          accountId: "B",
+          guest: false,
+        },
       }),
     context,
   );
   await holdTrackPublishes(page);
   await preflight(page, { pause: true });
   await page.waitForFunction(() => window.roomJoins.length === 1);
-  await deliverReport(page, { summary: "Delivered before the join finished." });
+  await deliverReport(page, {
+    codingScore: 60,
+    communicationScore: 60,
+    decision: "NO_HIRE",
+    summary: "Delivered before the join finished.",
+    codingFeedback: {
+      strengths: [],
+      improvements: ["Test boundaries"],
+    },
+    communicationFeedback: {
+      strengths: [],
+      improvements: [],
+    },
+    improvementPlan: [
+      {
+        phase: "Test",
+        weakness: "Test boundaries",
+        impact: "high",
+        frequency: 1,
+        drill: "Build a test table",
+        durationMin: 10,
+        successCriterion: "Predict each output",
+        selfReview: ["Name a boundary"],
+      },
+    ],
+  });
   await page.locator("#report-modal").waitFor({ state: "visible" });
   // The receipt is hashed before it is published. Wait for the publish, so
   // the clock below moves the receipt on rather than running out its bound.
@@ -659,8 +698,33 @@ test("a join finishing after a report's receipt went out does not take the room 
   await tracksReleased(page);
   save();
   await page.locator("#done:not([disabled])").waitFor();
-  await page.locator("#done").click();
+  const practice = page.getByRole("button", { name: "Practice this" });
+  const download = page.waitForEvent("download");
+  await page.locator("#download-report").click();
+  assert.equal(await practice.isDisabled(), true);
+  mapped.resolve();
+  await download;
+  await page.waitForFunction(
+    () => !document.querySelector("[data-practice-focus]").disabled,
+  );
+  assert.equal(await practice.isEnabled(), true);
+  await practice.click();
   await page.waitForURL(`${base}/`);
+  const selectedFocus = await page.evaluate(() =>
+    JSON.parse(sessionStorage.getItem("codetrial.selectedPracticeFocus")),
+  );
+  const { sourceReportId, ...selection } = selectedFocus;
+  assert.deepEqual(selection, {
+    owner: "account:B",
+    focus: {
+      phase: "Test",
+      weakness: "Test boundaries",
+      drill: "Build a test table",
+      successCriterion: "Predict each output",
+    },
+  });
+  assert.equal(typeof sourceReportId, "string");
+  assert.ok(sourceReportId.length > 0);
   assert.equal(
     await page.evaluate(() => sessionStorage.getItem("leftAfterReport")),
     null,
@@ -1737,11 +1801,19 @@ test("the lobby defaults to Practice and starts Strict without a selected proble
   t.after(() => page.close());
   await page.route("**/api/session", (route) =>
     route.fulfill({
-      json: { signedIn: true, user: { login: "candidate" } },
+      json: {
+        signedIn: true,
+        user: { id: "A", login: "candidate" },
+      },
     }),
   );
   await page.route("**/api/reports", (route) =>
-    route.fulfill({ json: { reports: [] } }),
+    route.fulfill({
+      json: {
+        accountId: "A",
+        reports: [],
+      },
+    }),
   );
   await page.route("**/interview?**", (route) =>
     route.fulfill({
@@ -2204,11 +2276,19 @@ test("Practice still filters by difficulty and opens a specifically chosen probl
   t.after(() => page.close());
   await page.route("**/api/session", (route) =>
     route.fulfill({
-      json: { signedIn: true, user: { login: "candidate" } },
+      json: {
+        signedIn: true,
+        user: { id: "A", login: "candidate" },
+      },
     }),
   );
   await page.route("**/api/reports", (route) =>
-    route.fulfill({ json: { reports: [] } }),
+    route.fulfill({
+      json: {
+        accountId: "A",
+        reports: [],
+      },
+    }),
   );
   await page.route("**/interview?**", (route) =>
     route.fulfill({

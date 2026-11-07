@@ -36,7 +36,12 @@ import {
   loadProblem,
 } from "./problem-data.js";
 import { downloadMarkdown, reportFilename } from "./download.js";
-import { consumeSharedFocus } from "./problem-picker.js";
+import {
+  consumeSharedFocus,
+  practiceFocusFrom,
+  practiceFocusAccountOwner,
+  storeSelectedPracticeFocus,
+} from "./problem-picker.js";
 import { normalizeProgressEntries } from "./progress.js";
 import { compareCategoryAttempt } from "./practice-insights.js";
 import {
@@ -218,6 +223,7 @@ import { consumeGroundingPacket } from "./document-grounding.js";
 /// here because `codingClosed` reads it and `init` runs before the rest of the
 /// module body does, so a declaration beside its other readers would be in the
 /// temporal dead zone for the first paint.
+let admittedPracticeFocusOwner = null;
 let frameworkRound = "coding";
 let exampleBoard = null;
 let drawingTurn = null;
@@ -524,6 +530,7 @@ const state = {
   categoryComparison: null,
   categoryComparisonReady: Promise.resolve(),
   downloadingReport: false,
+  leaving: false,
   reportSaveComplete: false,
   reportReceiving: false,
   reportSkipped: false,
@@ -1201,7 +1208,7 @@ function bindEvents() {
   nodes.retryReport.addEventListener("click", () => reportRecovery.retry());
   nodes.skipReport.addEventListener("click", () => void skipReport());
   nodes.forceReport.addEventListener("click", showReport);
-  nodes.leaveRoom.addEventListener("click", leaveRoom);
+  nodes.leaveRoom.addEventListener("click", () => void leaveRoom());
   nodes.candidateCaseAdd.addEventListener("click", () => {
     if (state.candidateCaseEdit) {
       void saveCandidateCaseEdit();
@@ -1414,6 +1421,16 @@ function bindEvents() {
     },
   });
   nodes.report.addEventListener("click", (event) => {
+    const practiceButton = event.target.closest("[data-practice-focus]");
+    if (practiceButton) {
+      const index = Number(practiceButton.dataset.practiceFocus);
+      const item = state.report?.improvementPlan?.[index];
+      if (item) {
+        const focus = practiceFocusFrom(item, mode);
+        if (focus) void leaveRoom(focus, practiceButton);
+      }
+      return;
+    }
     if (event.target.closest("#done")) leaveRoom();
     if (event.target.closest("#download-report")) void downloadReport();
   });
@@ -2021,6 +2038,10 @@ async function connect(preflight, presenting = false) {
       );
     }
     const connection = await response.json();
+    admittedPracticeFocusOwner = practiceFocusAccountOwner(
+      connection.accountId,
+      connection.guest === true,
+    );
     // First, before anything below can throw: from here the server holds an
     // interviewer for this start, and only this token can let it go early.
     grantedStart = { roomName: connection.roomName, token: connection.token };
@@ -2774,6 +2795,7 @@ async function receiveReport(room, payload, flushed = Promise.resolve()) {
     // Done navigates away, which would drop a receipt still leaving.
     const [saved] = await Promise.all([saving, flushed]);
     state.reportReceiving = false;
+    setPracticeFocusButtonsDisabled(false);
     renderReportSaveStatus(saved);
   } catch (error) {
     reportRecovery.stop();
@@ -2787,6 +2809,7 @@ async function receiveReport(room, payload, flushed = Promise.resolve()) {
       // has had its chance to leave, even if saving the report failed.
       await flushed.catch(() => {});
       state.reportReceiving = false;
+      setPracticeFocusButtonsDisabled(false);
       return;
     }
     // The interview is over whether or not the report drew, and only the
@@ -4543,8 +4566,8 @@ async function skipReport() {
   await leaveRoom();
 }
 
-async function leaveRoom() {
-  if (state.downloadingReport) return;
+async function leaveRoom(selectedFocus = null, practiceButton = null) {
+  if (state.downloadingReport || state.leaving) return;
   if (state.phase === "report_recovery") {
     if (state.reportSkipped) {
       reportRecovery.stop();
@@ -4560,6 +4583,27 @@ async function leaveRoom() {
     !window.confirm("This report may not be saved. Leave this page anyway?")
   ) {
     return;
+  }
+  state.leaving = true;
+  if (selectedFocus) {
+    const stored = storeSelectedPracticeFocus(
+      tabStorage,
+      admittedPracticeFocusOwner,
+      selectedFocus,
+      mode,
+      state.reportId,
+    );
+    if (!stored) {
+      state.leaving = false;
+      const status = practiceButton?.parentElement?.querySelector(
+        "[data-practice-focus-status]",
+      );
+      if (status) {
+        status.hidden = false;
+        status.textContent = "Could not save this practice focus.";
+      }
+      return;
+    }
   }
   beforeUnloadGuard.dispose();
   stopEndingClock();
@@ -4675,6 +4719,16 @@ function reportRenderFailed(error, { offlineSummary }) {
   nodes.skipReport.hidden = true;
 }
 
+function setPracticeFocusButtonsDisabled(disabled) {
+  for (const button of nodes.report.querySelectorAll("[data-practice-focus]")) {
+    button.disabled =
+      disabled ||
+      state.reportReceiving ||
+      state.downloadingReport ||
+      !state.reportSaveComplete;
+  }
+}
+
 function renderReport() {
   if (strict) updateRunAvailability();
   // The interview is over. Both report paths, agent-sent and offline, land
@@ -4707,6 +4761,7 @@ function renderReport() {
     unclearLines: unclearLines(),
     categoryComparison: state.categoryComparison,
   });
+  setPracticeFocusButtonsDisabled(state.reportReceiving);
   mountFinalCodeCopy(nodes.report, currentCode());
   void loadOriginalProblem(nodes.report, problem.page);
   localRecording.finish(nodes.report);
@@ -4801,7 +4856,9 @@ function renderReportSaveStatus(result) {
   node.textContent = status.message;
   node.className = status.className;
   state.reportSaveComplete = true;
-  nodes.report.querySelector("#done").disabled = state.downloadingReport;
+  nodes.report.querySelector("#done").disabled =
+    state.reportReceiving || state.downloadingReport;
+  setPracticeFocusButtonsDisabled(false);
 }
 
 // Overlapping saves may finish out of order. Only the newest one may decide
@@ -4881,6 +4938,7 @@ async function downloadReport() {
   state.downloadingReport = true;
   if (button) button.disabled = true;
   if (done) done.disabled = true;
+  setPracticeFocusButtonsDisabled(true);
   let timer;
   try {
     const [problemPages] = await Promise.all([
@@ -4903,7 +4961,9 @@ async function downloadReport() {
     if (button) button.disabled = false;
     // Saving and exporting can finish in either order. Both must settle
     // before Done can leave the report without interrupting either one.
-    if (done) done.disabled = !state.reportSaveComplete;
+    if (done)
+      done.disabled = state.reportReceiving || !state.reportSaveComplete;
+    setPracticeFocusButtonsDisabled(false);
   }
 }
 
