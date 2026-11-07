@@ -408,6 +408,7 @@ const board = {
   }),
   color: PEN_COLORS[0].color,
   tool: "pen",
+  lastDrawTool: "pen",
   eraserWidth: ERASER_WIDTH,
   /// Whether the board takes edits yet; see `boardLocked`.
   ready: false,
@@ -5506,9 +5507,7 @@ function initWhiteboard() {
       event.defaultPrevented ||
       event.repeat ||
       event.isComposing ||
-      event.keyCode === 229 ||
-      event.altKey ||
-      (mac ? !event.metaKey || event.ctrlKey : !event.ctrlKey || event.metaKey)
+      event.keyCode === 229
     )
       return;
     const target = event.target;
@@ -5524,6 +5523,21 @@ function initWhiteboard() {
     const key = printable
       ? event.key.toLowerCase()
       : event.code.replace(/^Key/, "").toLowerCase();
+    if (
+      !event.altKey &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      !event.shiftKey &&
+      (key === "p" || key === "e" || key === "t")
+    ) {
+      if (handleBoardToolShortcut(key)) event.preventDefault();
+      return;
+    }
+    if (
+      event.altKey ||
+      (mac ? !event.metaKey || event.ctrlKey : !event.ctrlKey || event.metaKey)
+    )
+      return;
     let action = "";
     if (key === "z" && !event.shiftKey) action = "undo";
     else if (
@@ -5535,6 +5549,43 @@ function initWhiteboard() {
   });
   bindBoardPointer();
   paintBoard();
+}
+
+function handleBoardToolShortcut(key) {
+  if (key === "p") {
+    if (board.tool === "pen") {
+      const index = PEN_COLORS.findIndex((pen) => pen.color === board.color);
+      const next = PEN_COLORS[(index < 0 ? 0 : index + 1) % PEN_COLORS.length];
+      selectPen(next.color);
+    } else {
+      selectPen(board.color);
+    }
+    return true;
+  }
+  if (key === "e") {
+    if (board.tool === "eraser") {
+      const index = ERASER_WIDTHS.indexOf(board.eraserWidth);
+      const next =
+        ERASER_WIDTHS[(index < 0 ? 0 : index + 1) % ERASER_WIDTHS.length];
+      selectEraserWidth(next);
+    } else {
+      selectEraserWidth(board.eraserWidth);
+    }
+    return true;
+  }
+  if (key === "t") {
+    if (board.tool === "text") {
+      if (board.lastDrawTool === "eraser") {
+        selectEraserWidth(board.eraserWidth);
+      } else {
+        selectPen(board.color);
+      }
+    } else {
+      selectTool("text");
+    }
+    return true;
+  }
+  return false;
 }
 
 /// Mouse, pen and finger alike; `createPointerGate` decides which pointer
@@ -5605,10 +5656,16 @@ function bindBoardPointer() {
 function selectPen(color) {
   board.color = color;
   board.tool = "pen";
+  board.lastDrawTool = "pen";
   paintToolState();
 }
 
 function selectTool(tool) {
+  if (tool === "text" && board.tool !== "text") {
+    board.lastDrawTool = board.tool === "eraser" ? "eraser" : "pen";
+  } else if (tool === "pen" || tool === "eraser") {
+    board.lastDrawTool = tool;
+  }
   board.tool = tool;
   paintToolState();
 }
@@ -5616,6 +5673,7 @@ function selectTool(tool) {
 function selectEraserWidth(width) {
   board.eraserWidth = width;
   board.tool = "eraser";
+  board.lastDrawTool = "eraser";
   paintToolState();
 }
 

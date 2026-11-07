@@ -478,17 +478,20 @@
            with, so the board and the swatches cannot come to disagree. -->
       <section id="board-panel" class="board-panel" hidden>
         <div class="board-toolbar" role="toolbar" aria-label="Whiteboard tools">
+          <kbd class="board-key" title="Pen (P)" aria-hidden="true">P</kbd>
           <div
             id="board-pens"
             class="board-pens"
             role="group"
             aria-label="Pen colour"
           ></div>
+          <kbd class="board-key" title="Eraser (E)" aria-hidden="true">E</kbd>
           <button
             id="board-eraser"
             class="board-tool"
             type="button"
             aria-pressed="false"
+            aria-keyshortcuts="E"
           >
             Eraser
           </button>
@@ -501,11 +504,13 @@
             role="group"
             aria-label="Eraser size"
           ></div>
+          <kbd class="board-key" title="Text (T)" aria-hidden="true">T</kbd>
           <button
             id="board-text"
             class="board-tool"
             type="button"
             aria-pressed="false"
+            aria-keyshortcuts="T"
             title="Drag on the board to create a text label"
           >
             Text

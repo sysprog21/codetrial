@@ -2411,6 +2411,7 @@ table.phase-scores {
 
 .board-toolbar {
   justify-content: flex-start;
+  align-items: center;
   border-bottom: 1px solid var(--hairline);
   background: var(--surface);
   padding: 0.5rem 0.75rem;
@@ -2418,6 +2419,22 @@ table.phase-scores {
 
 .board-toolbar .sync-state {
   margin-left: auto;
+}
+
+.board-key {
+  display: inline-grid;
+  place-items: center;
+  min-width: 1.25rem;
+  height: 1.25rem;
+  padding: 0 0.2rem;
+  border: 1px solid var(--hairline);
+  border-radius: 0.25rem;
+  background: var(--paper);
+  color: var(--sub);
+  font: inherit;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  line-height: 1;
 }
 
 /* The pens sit on a strip of the board's own white, so each swatch looks like
