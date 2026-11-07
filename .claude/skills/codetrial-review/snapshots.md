@@ -57,8 +57,9 @@ commit are explicit inputs; no timestamp is substituted for a sync checkpoint.
 
 A stored record keeps only the payload fields memory reads (`SOURCE_FIELDS` in
 memory.py): the identity, author, timestamps, text, diff locators and patches.
-API links, avatars, reactions and the head and base repository objects are
-dropped on the way in, so the derived tables are unchanged by the trim. A store
+The rest is dropped on the way in: the API links memory does not follow (such as
+`_links`, `comments_url` and `blob_url`), avatars, reactions and the head and base
+repository objects, so the derived tables are unchanged by the trim. A store
 or snapshot built before index version 11 is trimmed once when opened, and an
 imported redaction count drops with any placeholder the trim removed; a field
 the trim does not keep needs a fresh collection to come back. Public copies apply a deterministic,

@@ -1108,7 +1108,8 @@ def listing(repo, endpoint, size, since=None):
 
 # What a stored record keeps of a GitHub payload: the fields the sync, the
 # rebuild and the snapshot checks read, and nothing else. The rest of a payload
-# (API links, avatars, the head and base repository objects, reactions) is
+# (API links it never follows such as _links and comments_url, avatars, the
+# head and base repository objects, reactions) is
 # most of its bytes and none of what memory knows. A nested dict names the
 # fields kept of a nested object; files and commits are lists of such records.
 # A rebuild that reads a field not named here finds it missing in every stored
