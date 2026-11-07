@@ -448,6 +448,60 @@ refuses it with the reason when a citation does not hold. The managed worker is
 not refused: it cannot be asked again, so its note is stored as written, and a
 note that does not read is shown as the text it is.
 
+## Three debts: what the change leaves behind
+
+The workspace ends with **Keep the why**, which reads the change as the three
+debts of Storey's triple debt model
+([arXiv 2603.22106](https://arxiv.org/abs/2603.22106)): technical debt lives in
+the code, cognitive debt in people (shared understanding eroding), and intent
+debt in artifacts (the rationale that was never written down). Osmani's
+[intent debt](https://addyosmani.com/blog/intent-debt/) gives the case this
+answers: a guard clause is deleted, nobody can say whether it was load-bearing,
+and the tests only encode the old behavior, never the intent. Intent is cheapest
+to capture at the moment of the decision, which is the moment this review is.
+
+| Layer | What the page shows | Where it comes from |
+|---|---|---|
+| Code | files and tests changed; removed lines that look like a check or early exit, each a citation into the old file | the pinned diff (`intentdebt.py`) |
+| People | whether your explanation names code from the change; your own recorded assessment of the reference | what you did in this session |
+| Intent | no changed test recognized for changed source; more assertion-like lines removed from tests than added; no changed document for changed source | the pinned diff |
+
+What it deliberately does not do:
+
+- **It gives no score.** The paper offers no validated measure of any of the three
+  debts, so none is invented. A signal is an observation or a question.
+- **It writes nothing for the contributor.** The paper warns against automating
+  understanding: an AI-written rationale looks like understanding and is not.
+  Naming a gap is the page's job; answering it is the contributor's.
+- **Its patterns are heuristics.** Tests, documents and checks are told apart by
+  path and by the first word of a line. They miss things and mis-file others, so
+  each signal says what was found, not what it means. A diff the page cannot read
+  line by line points at no line.
+
+The **intent record** is five short answers and a choice, in the contributor's
+own words: what the change must keep doing and why it exists, what must stay
+true, what was not done and why, which check fails if it breaks, who else could
+explain it, and where the why will live afterwards. It is saved beside the
+review in `$bundle/intent-record-<snapshot>.json`, one file for each snapshot so a
+new head starts empty and a window left open on an older one cannot replace the
+newer record, and is **not** part of the answers: it changes neither their
+digest nor the identity, and the gate and the signed record never read it.
+**Copy for the pull request** turns what was written into a short English section
+for the PR body, which already has to carry the rationale
+([the large-change rules](../../../docs/large-change-explanation.md)): the five
+answers under plain labels, in the contributor's words. The "where will the why
+live" choice is a reminder for the contributor and is not copied. The download
+includes the record too.
+
+The record is also **not handed to the reviewing agent**: `inspect`, `wait` and
+`feedback` print the snapshot without it, since the page says it stays on this
+computer. Do not read `intent-record-*.json` from the bundle either; the agent
+that needs the contributor's reasons asks for them in the one reference note.
+
+A reviewer reads the three cards before writing the one reference note. Where a
+card names a removed check or unpinned behavior, ask that in the note ("what did
+this guard against?") instead of resolving it for the contributor.
+
 ## Use the contributor's explanation in later adjustments
 
 ```sh

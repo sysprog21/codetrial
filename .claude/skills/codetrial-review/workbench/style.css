@@ -884,3 +884,86 @@ mark.del {
     }
   }
 }
+
+/* The change as three debts, and the contributor's intent record. */
+.debt-panel {
+  margin-top: 1.5rem;
+}
+.debt-layers {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1rem;
+  margin-block: 1.25rem;
+}
+.debt-card {
+  padding: 1rem 1.25rem;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  background: var(--step-surface);
+}
+.debt-card h3,
+.debt-where {
+  margin: 0.25rem 0 0;
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+.debt-asks {
+  margin: 0.75rem 0 0;
+  color: var(--ink);
+  font-weight: 600;
+  text-wrap: balance;
+}
+.debt-signals {
+  display: grid;
+  gap: 0.6rem;
+  margin: 0.75rem 0 0;
+  padding-left: 1.1rem;
+  color: var(--sub);
+  font-size: 0.875rem;
+  line-height: 1.55;
+}
+.intent-form {
+  display: grid;
+  gap: 0.5rem;
+  max-width: 44rem;
+}
+.intent-form h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+.intent-form label {
+  display: block;
+  margin-top: 0.75rem;
+  color: var(--ink);
+  font-weight: 600;
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+.intent-form textarea {
+  display: block;
+  width: 100%;
+  min-height: 4.5rem;
+  resize: vertical;
+  margin-top: 0.4rem;
+  padding: 0.75rem;
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.875rem;
+  line-height: 1.6;
+}
+#intent-status {
+  color: var(--sub);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+#intent-copy:disabled {
+  cursor: not-allowed;
+}
+@media (max-width: 960px) {
+  .debt-layers {
+    grid-template-columns: 1fr;
+  }
+}

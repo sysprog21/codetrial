@@ -1,5 +1,6 @@
 import { DiffView } from "/diffview.js";
 import { renderNote } from "/explainer.js";
+import { renderDebt, intentMarkdown } from "/debtlens.js";
 
 const $ = (id) => document.getElementById(id);
 const token = new URLSearchParams(location.hash.slice(1)).get("token");
@@ -26,6 +27,8 @@ let answers = {};
 let selected;
 let reflectionDigest;
 let renderedNotes;
+let renderedDebt;
+let intentDirty = false;
 let reflectionSaving = false;
 let reflectionDirty = false;
 let completionAnnounced = false;
@@ -318,6 +321,7 @@ function renderWaiting() {
 
 function renderFeedback() {
   refreshCoach();
+  renderDebtPanel();
   const feedback = session.feedback;
   const current =
     !dirty &&
@@ -427,6 +431,74 @@ function renderNotes(feedback) {
     $("feedback-list").append(item);
   });
 }
+
+// The change as three debts, and the contributor's own intent record. The layers
+// are rebuilt only when they change, so a citation keeps its focus across polls;
+// the form is filled only while nothing typed is unsaved.
+const intentInputs = () =>
+  [...$("intent-form").elements].filter((input) => input.name);
+
+function readIntent() {
+  return Object.fromEntries(
+    intentInputs().map((input) => [input.name, input.value]),
+  );
+}
+
+function renderDebtPanel() {
+  const key = JSON.stringify(session.debt);
+  if (key !== renderedDebt) {
+    renderedDebt = key;
+    renderDebt($("debt-layers"), session.debt, showCitation);
+  }
+  if (!intentDirty)
+    for (const input of intentInputs())
+      input.value = session.intent?.[input.name] ?? "";
+  syncIntentCopy();
+}
+
+// Copy needs something written, and says so while it is off.
+const COPY_HINT = "Write an answer to enable copying.";
+function syncIntentCopy() {
+  const empty = !intentMarkdown(readIntent());
+  $("intent-copy").disabled = empty;
+  const status = $("intent-status");
+  if (empty && !status.textContent) status.textContent = COPY_HINT;
+  else if (!empty && status.textContent === COPY_HINT) status.textContent = "";
+}
+
+$("intent-form").addEventListener("input", () => {
+  intentDirty = true;
+  $("intent-status").textContent = "Unsaved changes";
+  syncIntentCopy();
+});
+
+$("intent-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const sent = JSON.stringify(readIntent());
+  try {
+    const saved = await api("/api/intent", { method: "PUT", body: sent });
+    session.intent = saved.intent;
+    // Typing during the request is not saved: keep it, and keep saying so.
+    const same = JSON.stringify(readIntent()) === sent;
+    intentDirty = !same;
+    $("intent-status").textContent = same
+      ? "Saved on this computer"
+      : "Unsaved changes";
+  } catch (error) {
+    $("intent-status").textContent = error.message;
+  }
+});
+
+$("intent-copy").addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText(intentMarkdown(readIntent()));
+    $("intent-status").textContent =
+      "Copied. Paste it into your pull request description.";
+  } catch {
+    $("intent-status").textContent =
+      "Copying was blocked. Select the text in the fields and copy it.";
+  }
+});
 
 // A citation in a reference note opens the line it names in the diff.
 function showCitation(ev) {
@@ -673,6 +745,7 @@ $("download").addEventListener("click", () => {
     `Snapshot: ${session.manifest.head}`,
     `\nReview record:\n${JSON.stringify({ localReflection: { feedback_digest: reflectionDigest, grade: $("self-grade").value, correction: $("correction").value, unsaved: reflectionDirty }, questions: session.questions, submission: session.submission, feedback: session.feedback, reflection: session.reflection, history: session.history }, null, 2)}`,
     ...Object.entries(answers).map(([key, value]) => `\n## ${key}\n\n${value}`),
+    `\n## Intent record\n\n${intentMarkdown(readIntent()) || "(none written)"}`,
   ].join("\n");
   const url = URL.createObjectURL(
     new Blob([text], { type: "text/markdown;charset=utf-8" }),
@@ -684,7 +757,7 @@ $("download").addEventListener("click", () => {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 });
 window.addEventListener("beforeunload", (event) => {
-  if (dirty || reflectionUnsaved()) {
+  if (dirty || reflectionUnsaved() || intentDirty) {
     event.preventDefault();
     event.returnValue = "";
   }
@@ -709,7 +782,7 @@ $("close-window").addEventListener("click", async () => {
   if (finished || $("close-window").getAttribute("aria-disabled") === "true")
     return;
   // Nothing typed since the last save may be left behind by a closed server.
-  if (dirty) {
+  if (dirty || intentDirty) {
     showError(new Error("Save your latest edit before finishing."));
     return;
   }

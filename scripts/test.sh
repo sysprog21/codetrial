@@ -658,6 +658,7 @@ gate review-memory-experience-tests unittest_gate "$ROOT/tests/test_review_memor
 gate review-lifecycle-tests unittest_gate --jobs 1 "$ROOT/tests/test_review_lifecycle.py"
 gate review-workbench-tests unittest_gate --jobs 1 "$ROOT/tests/test_review_workbench.py"
 gate review-explainer-tests unittest_gate --jobs 1 "$ROOT/tests/test_review_explainer.py"
+gate review-intentdebt-tests unittest_gate --jobs 1 "$ROOT/tests/test_review_intentdebt.py"
 gate review-worker-tests unittest_gate --jobs 1 "$ROOT/tests/test_review_worker.py"
 gate interactive-review-hook-tests unittest_gate "$ROOT/tests/test_interactive_review_hook.py"
 gate hashchain-tests unittest_gate "$ROOT/tests/test_hashchain.py"

@@ -289,6 +289,81 @@
             tests, and final approval still belong in the submission workflow.
           </p>
         </section>
+        <section class="setup-panel debt-panel" aria-labelledby="debt-heading">
+          <div class="setup-heading">
+            <span class="step-number" aria-hidden="true">4</span>
+            <div>
+              <h2 id="debt-heading">Keep the why</h2>
+              <p>
+                Code, people and intent each carry debt. This is what the change
+                shows for each: observations and questions, never a score.
+              </p>
+            </div>
+          </div>
+          <div id="debt-layers" class="debt-layers"></div>
+          <form id="intent-form" class="intent-form">
+            <h3>Your intent record</h3>
+            <p class="field-hint">
+              Write it now, while you know why. It is yours: nothing here is
+              generated, and it stays on this computer until you copy it.
+            </p>
+            <label for="intent-goal"
+              >What must this keep doing, and why does it exist?</label
+            >
+            <textarea id="intent-goal" name="goal" maxlength="2000"></textarea>
+            <label for="intent-constraints">What must stay true?</label>
+            <textarea
+              id="intent-constraints"
+              name="constraints"
+              maxlength="2000"
+            ></textarea>
+            <label for="intent-alternatives"
+              >What did you not do, and why?</label
+            >
+            <textarea
+              id="intent-alternatives"
+              name="alternatives"
+              maxlength="2000"
+            ></textarea>
+            <label for="intent-check"
+              >Which check fails if this breaks? Name the test or
+              command.</label
+            >
+            <textarea
+              id="intent-check"
+              name="check"
+              maxlength="2000"
+            ></textarea>
+            <label for="intent-backup"
+              >Who else could explain this change?</label
+            >
+            <textarea
+              id="intent-backup"
+              name="backup"
+              maxlength="2000"
+            ></textarea>
+            <label for="intent-home"
+              >Where will the why live after this review?</label
+            >
+            <select id="intent-home" name="home">
+              <option value="">Not decided</option>
+              <option value="pr">The pull request description</option>
+              <option value="commit">A commit message</option>
+              <option value="docs">A document or decision record</option>
+              <option value="comment">A code comment</option>
+              <option value="none">Nowhere yet</option>
+            </select>
+            <div class="save-row">
+              <button id="intent-save" class="duration-button" type="submit">
+                Save record
+              </button>
+              <button id="intent-copy" class="save-button" type="button">
+                Copy for the pull request
+              </button>
+              <span id="intent-status" role="status"></span>
+            </div>
+          </form>
+        </section>
       </div>
     </main>
   </body>

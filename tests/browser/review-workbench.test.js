@@ -900,6 +900,18 @@ test(
     assert.equal(await page.locator("#finished").isVisible(), false);
     assert.equal(server.exitCode, null);
     assert.equal(inspect().status, "explanation_complete");
+    // The intent record is edited beside the notice, which it leaves showing:
+    // finishing must not close the server on what was typed there either.
+    await box.fill(text);
+    await page.locator("#save").click();
+    await page.locator("#completion-notice").waitFor({ state: "visible" });
+    await page.locator("#intent-goal").fill("Keep the why next to the change.");
+    await page.locator("#close-window").click();
+    await page
+      .getByText("Save your latest edit before finishing", { exact: false })
+      .waitFor();
+    assert.equal(await page.locator("#finished").isVisible(), false);
+    assert.equal(server.exitCode, null);
   },
 );
 
@@ -1604,4 +1616,217 @@ test("a citation finds its own file when two files share a line number", async (
   });
   assert.equal(marked.length, 1);
   assert.match(marked[0], /b\.rs two/);
+});
+
+const GUARD_DIFF = `diff --git a/src/cache.rs b/src/cache.rs
+--- a/src/cache.rs
++++ b/src/cache.rs
+@@ -1,6 +1,3 @@
+ fn get(key: &str) -> Option<Value> {
+-    if key.is_empty() {
+-        return None;
+-    }
+     db.load(key)
+ }
+`;
+const GUARD_FILES = [{ path: "src/cache.rs", additions: 0, deletions: 3 }];
+
+test("the change is shown as three debts, and a removed check opens at its old line", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const { page } = await start(t, [], false, GUARD_DIFF, GUARD_FILES);
+  await page.locator(".debt-card").first().waitFor();
+  assert.deepEqual(await page.locator(".debt-card h3").allTextContents(), [
+    "Code",
+    "People",
+    "Intent",
+  ]);
+  const code = page.locator(".debt-card").nth(0);
+  assert.match(
+    (await code.textContent()) ?? "",
+    /2 removed lines look like a check or an early exit/,
+  );
+  assert.match(
+    (await page.locator(".debt-card").nth(2).textContent()) ?? "",
+    /No changed test file was recognized/,
+  );
+  // Observations and questions, never a score: look at the cards, not the heading
+  // that says so.
+  assert.doesNotMatch(
+    (await page.locator("#debt-layers").textContent()) ?? "",
+    /score|rating|\d+\s*\/\s*10/i,
+  );
+  await code.locator(".ex-cite").first().click();
+  await page.locator("#diff .cited").first().waitFor();
+  assert.match(
+    (await page.locator("#diff .cited").first().textContent()) ?? "",
+    /key\.is_empty\(\)/,
+  );
+  assert.match(
+    (await page.locator("#diff-notice").textContent()) ?? "",
+    /Showing src\/cache\.rs, old line 2\./,
+  );
+});
+
+test("the intent record is the contributor's own, survives a reload and copies as text", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const { page, inspect } = await start(t, [], false, GUARD_DIFF, GUARD_FILES);
+  await page.locator("#intent-form").waitFor();
+  const before = inspect();
+  await page.evaluate(() => {
+    window.__copied = null;
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText: async (text) => (window.__copied = text) },
+      configurable: true,
+    });
+  });
+  assert.equal(
+    await page.locator("#intent-copy").isDisabled(),
+    true,
+    "nothing written yet",
+  );
+  await page
+    .locator("#intent-goal")
+    .fill("A miss must still reach the database.");
+  await page
+    .locator("#intent-check")
+    .fill("tests/cache_test.rs::miss_reaches_db");
+  await page.locator("#intent-home").selectOption("pr");
+  // A poll must not overwrite what is being typed: wait for one, and for the page to handle it.
+  await afterPoll(page);
+  assert.equal(
+    await page.locator("#intent-goal").inputValue(),
+    "A miss must still reach the database.",
+  );
+  await page.locator("#intent-save").click();
+  await page.getByText("Saved on this computer", { exact: true }).waitFor();
+  await page.reload();
+  await page.locator("#intent-goal").waitFor();
+  await page.waitForFunction(
+    () => document.getElementById("intent-goal").value !== "",
+  );
+  assert.equal(
+    await page.locator("#intent-goal").inputValue(),
+    "A miss must still reach the database.",
+  );
+  assert.equal(await page.locator("#intent-home").inputValue(), "pr");
+  await page.evaluate(() => {
+    window.__copied = null;
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText: async (text) => (window.__copied = text) },
+      configurable: true,
+    });
+  });
+  await page.locator("#intent-copy").click();
+  const copied = await page.evaluate(() => window.__copied);
+  assert.equal(
+    copied,
+    "### Why this change exists\n\n- **Goal:** A miss must still reach the database.\n- **Checked by:** tests/cache_test.rs::miss_reaches_db\n",
+  );
+  // It is not part of the answers, so nothing the gate reads has moved.
+  const after = inspect();
+  for (const key of ["answer_digest", "identity", "revision", "status"])
+    assert.equal(after[key], before[key], key);
+});
+
+test("typing during a save is kept, not overwritten by the save or the next poll", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const { page } = await start(t, [], false, GUARD_DIFF, GUARD_FILES);
+  await page.locator("#intent-form").waitFor();
+  // The save is held in flight until the test has typed, then released.
+  let release;
+  const held = new Promise((resolve) => (release = resolve));
+  await page.route("**/api/intent", async (route) => {
+    await held;
+    await route.continue();
+  });
+  await page.locator("#intent-goal").fill("First draft.");
+  await page.locator("#intent-save").click();
+  await page.locator("#intent-goal").pressSequentially(" More.");
+  await page.waitForFunction(
+    () =>
+      document.getElementById("intent-status").textContent ===
+      "Unsaved changes",
+    null,
+    { timeout: 5000 },
+  );
+  release();
+  await page.waitForResponse((r) => r.url().endsWith("/api/intent"));
+  await afterPoll(page);
+  assert.equal(
+    await page.locator("#intent-goal").inputValue(),
+    "First draft. More.",
+  );
+  assert.equal(
+    await page.locator("#intent-status").textContent(),
+    "Unsaved changes",
+  );
+});
+
+test("the intent record copies every answer under its label, in one line each", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const { page } = await start(t);
+  const [full, blank] = await page.evaluate(async () => {
+    const { intentMarkdown } = await import("/debtlens.js");
+    return [
+      intentMarkdown({
+        goal: "A\n   B",
+        constraints: "C",
+        alternatives: "D",
+        check: "E",
+        backup: "F",
+        home: "pr",
+      }),
+      intentMarkdown({ goal: "  ", home: "pr" }),
+    ];
+  });
+  assert.equal(
+    full,
+    "### Why this change exists\n\n- **Goal:** A B\n- **Must stay true:** C\n- **Not done, and why:** D\n- **Checked by:** E\n- **Also understood by:** F\n",
+  );
+  assert.equal(blank, "", "nothing written, nothing to copy");
+});
+
+test("the copy button says why it is off, and a citation jump is announced", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const { page } = await referenced(
+    t,
+    CACHE_DIFF,
+    CACHE_FILES,
+    "The lookup comes first, see @src/cache.rs:11.",
+  );
+  await page.locator("#intent-form").waitFor();
+  assert.equal(await page.locator("#intent-copy").isDisabled(), true);
+  assert.equal(
+    await page.locator("#intent-status").textContent(),
+    "Write an answer to enable copying.",
+  );
+  await page.locator("#intent-goal").fill("x");
+  assert.equal(await page.locator("#intent-copy").isDisabled(), false);
+  await page.locator(".ex-note-body .ex-cite").click();
+  await page.waitForFunction(
+    () =>
+      /Showing src\/cache\.rs, line 11\./.test(
+        document.getElementById("diff-live").textContent,
+      ),
+    null,
+    { timeout: 5000 },
+  );
+});
+
+test("unsaved intent text asks before the page is left, and saving clears it", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const { page } = await start(t, [], false, GUARD_DIFF, GUARD_FILES);
+  await page.locator("#intent-form").waitFor();
+  const prevented = () =>
+    page.evaluate(() => {
+      const event = new Event("beforeunload", { cancelable: true });
+      window.dispatchEvent(event);
+      return event.defaultPrevented;
+    });
+  assert.equal(await prevented(), false, "nothing typed, nothing to lose");
+  await page.locator("#intent-goal").fill("Written, not saved.");
+  assert.equal(await prevented(), true, "typed text would be lost");
+  await page.locator("#intent-save").click();
+  await page.getByText("Saved on this computer", { exact: true }).waitFor();
+  assert.equal(await prevented(), false);
 });
