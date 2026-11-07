@@ -148,7 +148,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - name: Retain verified recovery releases and clean owned drafts
+      - name: Retain the newest verified release and clean owned drafts
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 .claude/skills/codetrial-review/publish-memory.py maintain

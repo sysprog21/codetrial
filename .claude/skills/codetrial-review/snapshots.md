@@ -93,7 +93,7 @@ blocks publication until a later sweep confirms every missing record.
 ## Bootstrap and catch-up
 
 Run `memory.py ensure` from a checkout. It paginates published releases, verifies
-managed candidate manifests, and chooses among the newest three verified compatible
+managed candidate manifests, and chooses among the newest verified compatible
 memory releases by generation time. The overall ensure deadline bounds discovery;
 a repository with many product releases can require multiple API pages.
 It then verifies memory.db.gz against the repository's publisher workflow,
