@@ -55,7 +55,14 @@ PR detail and unfinished passes, and requires a successful sweep within seven
 days. It refuses an existing output directory. The release ID and generator
 commit are explicit inputs; no timestamp is substituted for a sync checkpoint.
 
-Local raw GitHub payloads remain verbatim. Public copies apply a deterministic,
+A stored record keeps only the payload fields memory reads (`SOURCE_FIELDS` in
+memory.py): the identity, author, timestamps, text, diff locators and patches.
+The rest is dropped on the way in: the API links memory does not follow (such as
+`_links`, `comments_url` and `blob_url`), avatars, reactions and the head and base
+repository objects, so the derived tables are unchanged by the trim. A store
+or snapshot built before index version 11 is trimmed once when opened, and an
+imported redaction count drops with any placeholder the trim removed; a field
+the trim does not keep needs a fresh collection to come back. Public copies apply a deterministic,
 credential-only projection across decoded strings, including patches and hunks.
 Matched spans are replaced with typed placeholders; unrelated text, CRLF and
 model delimiters remain byte-for-byte unchanged. Matching also examines the
@@ -93,7 +100,7 @@ blocks publication until a later sweep confirms every missing record.
 ## Bootstrap and catch-up
 
 Run `memory.py ensure` from a checkout. It paginates published releases, verifies
-managed candidate manifests, and chooses among the newest three verified compatible
+managed candidate manifests, and chooses among the newest verified compatible
 memory releases by generation time. The overall ensure deadline bounds discovery;
 a repository with many product releases can require multiple API pages.
 It then verifies memory.db.gz against the repository's publisher workflow,

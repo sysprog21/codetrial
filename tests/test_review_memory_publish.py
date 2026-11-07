@@ -222,7 +222,9 @@ class PublisherTests(unittest.TestCase):
             self.base,
         )
 
-    def test_retention_ignores_unverified_releases_and_keeps_three_usable_ones(self):
+    def test_retention_ignores_unverified_releases_and_keeps_the_newest_usable_one(
+        self,
+    ):
         releases = [
             {
                 "tag_name": "review-memory-20261025T00000{}Z-{}".format(i, i),
@@ -254,44 +256,11 @@ class PublisherTests(unittest.TestCase):
             patch.object(self.publisher, "remove_release") as command,
         ):
             result = self.publisher.maintain(self.memory.REPO)
-        self.assertEqual(
-            set(result["removed"]), {releases[0]["tag_name"], releases[1]["tag_name"]}
-        )
-        self.assertEqual(command.call_count, 2)
+        self.assertEqual(set(result["removed"]), {r["tag_name"] for r in releases[:4]})
+        self.assertEqual(command.call_count, 4)
         self.assertEqual(
             result["unverified_untouched"][0]["tag"], releases[-1]["tag_name"]
         )
-
-    def test_latest_pointer_is_never_a_managed_release(self):
-        pointer = {"tag_name": self.publisher.LATEST_TAG}
-        with patch.object(self.memory, "gh", return_value=[pointer]):
-            self.assertEqual(self.publisher.managed_releases(self.memory.REPO), [])
-
-    def test_refresh_pointer_replaces_release_and_stale_tag_then_creates(self):
-        calls = []
-        with (
-            patch.object(
-                self.memory,
-                "gh",
-                side_effect=[
-                    [{"tag_name": self.publisher.LATEST_TAG}],
-                    [{"ref": "refs/tags/" + self.publisher.LATEST_TAG}],
-                ],
-            ),
-            patch.object(
-                self.publisher,
-                "command",
-                side_effect=lambda *a, **k: calls.append(a),
-            ),
-        ):
-            self.publisher.refresh_pointer(
-                self.memory.REPO, "a" * 40, self.base, self.base / "n", "title"
-            )
-        self.assertEqual(
-            [call[:2] for call in calls],
-            [("release", "delete"), ("api", "--method"), ("release", "create")],
-        )
-        self.assertEqual(calls[2][2], self.publisher.LATEST_TAG)
 
     def test_memory_discovery_crosses_more_than_one_hundred_product_releases(self):
         managed = {"tag_name": "review-memory-20261025T000001Z-1"}
@@ -564,72 +533,6 @@ class PublisherTests(unittest.TestCase):
         for call in command.call_args_list:
             if call.args[:2] in (("release", "create"), ("release", "edit")):
                 self.assertIn("--latest=false", call.args)
-
-    def assert_pointer_failure_keeps_publication(self, error):
-        with patch.object(self.publisher, "refresh_pointer", side_effect=error):
-            result, state, command = self.exercise_promotion()
-        self.assertEqual(result["outcome"], "published")
-        self.assertTrue(state["published"])
-        self.assertNotIn(
-            ("release", "delete"), [c.args[:2] for c in command.call_args_list]
-        )
-
-    def test_pointer_fail_keeps_publication(self):
-        self.assert_pointer_failure_keeps_publication(
-            self.memory.Fail("boom", code="network")
-        )
-
-    def test_pointer_oserror_keeps_publication(self):
-        self.assert_pointer_failure_keeps_publication(OSError("disk"))
-
-    def test_pointer_budget_exhaustion_keeps_publication(self):
-        self.assert_pointer_failure_keeps_publication(self.memory.BudgetExhausted())
-
-    def test_pointer_malformed_api_json_keeps_publication(self):
-        self.assert_pointer_failure_keeps_publication(ValueError("bad json"))
-
-    def test_pointer_timeout_keeps_publication(self):
-        self.assert_pointer_failure_keeps_publication(
-            subprocess.TimeoutExpired("gh", 600)
-        )
-
-    def test_refresh_pointer_never_creates_after_a_failed_deletion(self):
-        pointer = [{"tag_name": self.publisher.LATEST_TAG}]
-        stale = [{"ref": "refs/tags/" + self.publisher.LATEST_TAG}]
-        cases = {
-            "release delete": ([pointer], "release", "delete"),
-            "tag delete": ([pointer, stale], "api", "--method"),
-            "absent release, stale tag": ([[], stale], "api", "--method"),
-        }
-        for name, (listings, *failing) in cases.items():
-            calls = []
-
-            def command(*a, **k):
-                calls.append(a[:2])
-                if (
-                    tuple(a[:2]) == tuple(failing)
-                    and name != "absent release, stale tag"
-                ):
-                    raise self.memory.Fail("boom", code="network")
-
-            with (
-                self.subTest(name),
-                patch.object(self.memory, "gh", side_effect=listings),
-                patch.object(self.publisher, "command", side_effect=command),
-            ):
-                if name == "absent release, stale tag":
-                    self.publisher.refresh_pointer(
-                        self.memory.REPO, "a" * 40, self.base, self.base / "n", "t"
-                    )
-                    self.assertEqual(
-                        calls, [("api", "--method"), ("release", "create")]
-                    )
-                else:
-                    with self.assertRaises(self.memory.Fail):
-                        self.publisher.refresh_pointer(
-                            self.memory.REPO, "a" * 40, self.base, self.base / "n", "t"
-                        )
-                    self.assertNotIn(("release", "create"), calls)
 
     def test_timed_out_upload_cleans_its_draft_even_when_tag_is_already_missing(self):
         _, state, command = self.exercise_promotion(fail_create=True)

@@ -127,12 +127,9 @@ fingerprints. A missing patch remains unknown rather than evidence of absence.
 
 ## Releases, retries and rollback
 
-Tags are `review-memory-<UTC timestamp>-<run ID>`. After a versioned release is
-published, the same three assets are mirrored to the fixed `review-memory-latest`
-release (`releases/download/review-memory-latest/memory.db.gz`). It is a download
-convenience only: it never matches the managed-name pattern, so retention,
-discovery and rollback ignore it, and a failed refresh warns without undoing the
-publication. Takedown must delete it too.
+Tags are `review-memory-<UTC timestamp>-<run ID>`. No second copy is published
+under a fixed tag: the versioned release is the only one, and the one clients
+discover.
 
 Attestation and validation precede draft creation. Uploads are checked against exact digests before the
 draft is published with `--latest=false`. The product latest pointer stays with
@@ -140,11 +137,12 @@ product releases; both discovery paths paginate past more than 100 releases.
 An interrupted publication attempts to delete only its still-draft release.
 A late main-head check refuses promotion by superseded producer code.
 
-Maintenance keeps three verified usable releases of the current source format.
+Maintenance keeps the newest verified usable release of the current source
+format and removes every older verified one.
 A signed manifest alone is insufficient: the database asset must exist and its
 size and GitHub digest must match, or its bytes are downloaded and verified.
 Unverified or incompatible entries are left for deliberate inspection and do
-not consume the three-release recovery allowance. Only exact managed memory
+not count as the retained release. Only exact managed memory
 names are candidates. A draft is removed after manifest provenance is established,
 or after proving that it is at least an hour old, authored by github-actions[bot],
 and tied by its tag run ID and full target SHA to a completed upstream-main run
@@ -155,8 +153,10 @@ a missing tag does not make an already-deleted release look like a failed purge.
 An interruption between those operations can leave an orphan tag requiring
 manual inspection.
 
-For rollback, first disable and drain the publisher as described below. Verify
-a retained older release using the client provenance rules, then remove only
+Only one release is retained, so an older release to roll back to exists only
+until maintenance runs after a newer publication; otherwise use the complete
+takedown below. For rollback, first disable and drain the publisher as described
+below. Verify a retained older release using the client provenance rules, then remove only
 the affected newer releases using the ID/ref commands in takedown step 2. For a content rollback, also delete every checkpoint
 and ready handoff newer than the retained release; otherwise the next preparation
 can republish the rejected content. Correct upstream source or the projection
@@ -194,8 +194,9 @@ records and releases. Do not leave a publisher running while purging inputs.
    Repeat the listing until empty before continuing; cancellation is asynchronous.
 
 2. Inventory every Actions artifact page and every managed memory release,
-   including drafts, unverified and incompatible releases. For a complete
-   takedown, purge the entire exact managed release namespace; maintenance
+   including drafts, unverified and incompatible releases, and the legacy
+   `review-memory-latest` release. For a complete takedown, purge the legacy
+   release and the entire exact managed release namespace; maintenance
    deliberately leaves unverifiable inputs alone and cannot perform this step. Delete
    all retained `review-memory-checkpoint-<run>-<attempt>` and
    `review-memory-ready-<run>-<attempt>` artifacts, including unsigned handoffs,
@@ -217,7 +218,7 @@ records and releases. Do not leave a publisher running while purging inputs.
 
    Substitute reviewed IDs/tags; never delete product releases or unrelated
    artifacts. Repeat both listings and confirm no matching handoff or managed
-   release remains before re-enabling. A signature proves origin, not revocation.
+   or legacy release remains before re-enabling. A signature proves origin, not revocation.
 
 3. Correct or remove the source upstream. Review and merge any collector or
    projection fix. Re-enable the workflow and immediately dispatch with
