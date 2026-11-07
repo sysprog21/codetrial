@@ -54,9 +54,12 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
+      # The checkers come from the commit this workflow file came from, the
+      # base branch's tip; the event's base.sha can be older (it moves only
+      # when the head does), and its scripts then do not take these flags.
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          ref: ${{ github.event_name == 'merge_group' && github.event.merge_group.base_sha || github.sha }}
           persist-credentials: false
           path: base
       - name: Measure the change
@@ -68,7 +71,7 @@ jobs:
           AUTHOR_LOGIN: ${{ github.event.pull_request.user.login }}
           AUTHOR_TYPE: ${{ github.event.pull_request.user.type }}
           APPROVED_HEAD: ${{ vars.CODETRIAL_POLICY_APPROVED_HEAD }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_SHA: ${{ github.event_name == 'pull_request_target' && github.sha || '' }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
