@@ -30,6 +30,7 @@ ASSETS = {
     "/": ("index.html", "text/html"),
     "/app.js": ("app.js", "text/javascript"),
     "/diffview.js": ("diffview.js", "text/javascript"),
+    "/explainer.js": ("explainer.js", "text/javascript"),
     "/style.css": ("style.css", "text/css"),
     "/styles.css": ("shared", "text/css"),
 }
@@ -89,21 +90,25 @@ def file_patch(diff, path):
 
 
 @functools.lru_cache(maxsize=None)
+def load_sibling(name):
+    """A module that sits beside this file, loaded by path and kept."""
+    path = Path(__file__).with_name(f"{name}.py")
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def load_diffmodel():
-    path = Path(__file__).with_name("diffmodel.py")
-    spec = importlib.util.spec_from_file_location("diffmodel", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return load_sibling("diffmodel")
 
 
-@functools.lru_cache(maxsize=None)
 def load_understanding():
-    path = Path(__file__).with_name("understanding.py")
-    spec = importlib.util.spec_from_file_location("understanding", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return load_sibling("understanding")
+
+
+def load_explainer():
+    return load_sibling("explainer")
 
 
 def reflected(value, identity, answer_digest, feedback):
@@ -162,6 +167,10 @@ class Workbench:
         self.identity = digest([self.manifest, self.diff, self.questions])
         self.state_path = self.bundle / "explanation.json"
         self.presence_path = self.bundle / "explanation-agent.json"
+        self._reading = None
+        self._notes = {}
+        # Handler threads share these caches.
+        self._cache_lock = threading.Lock()
 
     @contextmanager
     def locked(self):
@@ -239,13 +248,43 @@ class Workbench:
 
         Read once: the diff is part of the session's identity and never changes.
         """
-        if getattr(self, "_reading", None) is None:
+        if self._reading is None:
             self._reading = load_diffmodel().reading(
                 self.diff,
                 self.manifest["files"],
                 self.manifest.get("files_complete") is not False,
             )
         return self._reading
+
+    def read_note(self, text):
+        """A reference note as blocks, every citation held against the pinned diff."""
+        # The same note is read by every snapshot, and the diff never changes.
+        read = self._notes.get(text)
+        if read is None:
+            reading = self.diff_reading()
+            read = load_explainer().read(
+                text, reading["files"], trusted=not reading["problems"]
+            )
+            # A second thread may have read it too: the inputs are pinned, so
+            # either result is the same, and the lock only guards the dict.
+            with self._cache_lock:
+                if len(self._notes) >= 32:
+                    self._notes.pop(next(iter(self._notes)))
+                read = self._notes.setdefault(text, read)
+        return read
+
+    def reference_view(self, feedback):
+        """What the page draws for each note, or None for a note it cannot read.
+
+        A stored note that no longer parses is shown as the text it is.
+        """
+        if not feedback:
+            return []
+        views = []
+        for note in feedback["notes"]:
+            read = self.read_note(note["text"])
+            views.append(None if read["problems"] else read["blocks"])
+        return views
 
     def checks(self, answers):
         """The deterministic checks on the core answer; see understanding.py."""
@@ -339,6 +378,18 @@ class Workbench:
             "reviewer_error": presence.get("error") if reviewer == "error" else None,
             "large_commits": large_commits,
             "commit_coverage_complete": commit_coverage,
+        }
+
+    def page_snapshot(self):
+        """The snapshot with what is drawn for the contributor alone.
+
+        The agent CLI and the managed worker read snapshot(), which never holds
+        the drawn note, so the worker does not compute what it would discard.
+        """
+        snapshot = self.snapshot()
+        return {
+            **snapshot,
+            "reference_view": self.reference_view(snapshot["feedback"]),
         }
 
     def finish(self):
@@ -545,6 +596,20 @@ class Workbench:
             if task:
                 self.presence("offline", 0)
             raise
+
+    def check_note(self, feedback):
+        """Refuse a note whose drawn parts the diff does not hold.
+
+        For the agent that wrote it and can fix it. The managed worker cannot be
+        asked again, so it is not checked: it stores what it wrote, and a note
+        that does not read is shown as the text it is.
+        """
+        notes = feedback.get("notes") if isinstance(feedback, dict) else None
+        for note in notes if isinstance(notes, list) else []:
+            text = note.get("text") if isinstance(note, dict) else None
+            problems = self.read_note(text)["problems"] if isinstance(text, str) else []
+            if problems:
+                raise ValueError("Reference note: " + "; ".join(problems[:3]))
 
     def feedback(self, feedback, *, request=None, replace=False):
         if not isinstance(feedback, dict) or set(feedback) != {
@@ -767,7 +832,7 @@ def server(workbench, port, *, reviewer="manual", token=None):
                 # The diff is fetched once from /api/diff, not on every poll.
                 self.reply(
                     200,
-                    {k: v for k, v in workbench.snapshot().items() if k != "diff"},
+                    {k: v for k, v in workbench.page_snapshot().items() if k != "diff"},
                 )
             except (ValueError, OSError, subprocess.SubprocessError) as error:
                 self.reply(409, {"error": str(error)})
@@ -973,8 +1038,10 @@ def main():
                 parser.error("feedback requires --request-id from the wait result")
             # The agent may refine its reference for the request it answers;
             # the workers never replace one.
+            note = load(Path(args.file))
+            workbench.check_note(note)
             workbench.feedback(
-                load(Path(args.file)),
+                note,
                 request={"request_id": args.request_id},
                 replace=True,
             )

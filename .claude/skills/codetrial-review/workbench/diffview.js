@@ -50,17 +50,20 @@ function asks(line, quote) {
 }
 
 export class DiffView {
-  constructor({ root, notice, summary, position }) {
+  constructor({ root, notice, summary, position, live }) {
     this.root = root;
     this.notice = notice;
     this.summary = summary;
     this.position = position;
+    this.live = live;
     this.model = null;
     this.split = false;
     this.hideWhitespace = false;
     this.generation = 0;
     this.current = -1;
     this.last = null;
+    this.drawing = false;
+    this.pendingCitation = null;
   }
 
   setModel(model) {
@@ -86,11 +89,27 @@ export class DiffView {
     this.notice.hidden = !text;
   }
 
+  // Said on the page, and to a screen reader, both.
+  tell(text) {
+    this.say(text);
+    this.announce(text);
+  }
+
+  // A line is announced through a region that is always in the page: one that
+  // appears together with its text is often skipped the first time.
+  announce(text) {
+    if (!this.live) return;
+    this.live.textContent = "";
+    setTimeout(() => (this.live.textContent = text), 50);
+  }
+
   // Draw the files whose path is `path`, or all of them. Returns how many
   // files matched, so the caller can say when none did.
   show({ path, asked }) {
     this.last = { path, asked };
     this.generation += 1;
+    this.drawing = false;
+    this.pendingCitation = null;
     const generation = this.generation;
     this.current = -1;
     this.root.replaceChildren();
@@ -147,6 +166,7 @@ export class DiffView {
   }
 
   draw(files, asked, generation) {
+    this.drawing = true;
     const units = [];
     for (const file of files) {
       const section = el("section", "diff-file");
@@ -174,8 +194,10 @@ export class DiffView {
         );
         requestAnimationFrame(() => next(CHUNK));
       } else {
+        this.drawing = false;
         if (this.notice.textContent.startsWith("Drawing")) this.say("");
         this.finish(asked);
+        if (this.pendingCitation) this.reveal(this.pendingCitation);
       }
     };
     next(CHUNK);
@@ -329,6 +351,8 @@ export class DiffView {
 
   single(line, start, quote) {
     const row = el("div", `row k-${line.k}`);
+    if (line.o != null) row.dataset.o = line.o;
+    if (line.n != null) row.dataset.n = line.n;
     if (start) row.classList.add("change-start");
     const { code, sign } = this.cell(line, quote);
     row.append(
@@ -350,6 +374,8 @@ export class DiffView {
     ]) {
       const half = el("div", `half ${side}`);
       if (line) {
+        if (line.o != null) half.dataset.o = line.o;
+        if (line.n != null) half.dataset.n = line.n;
         half.classList.add(`k-${line.k}`);
         const { code, sign } = this.cell(line, quote);
         half.append(
@@ -364,6 +390,46 @@ export class DiffView {
       row.append(half);
     }
     return row;
+  }
+
+  // Bring cited lines into view and mark them. The rows are drawn in pieces, so
+  // lines not drawn yet are waited for. `side` is "new" or "old"; `path` limits
+  // the search to that file, since two files can hold the same line number.
+  reveal({ path, side, start, end }) {
+    this.pendingCitation = { path, side, start, end };
+    const key = side === "old" ? "o" : "n";
+    for (const old of this.root.querySelectorAll(".cited"))
+      old.classList.remove("cited");
+    if (this.drawing) return;
+    this.pendingCitation = null;
+    const scope = path
+      ? [...this.root.querySelectorAll(".diff-file")].find(
+          (section) => section.dataset.file === path,
+        )
+      : this.root;
+    const rows = [...(scope?.querySelectorAll(`[data-${key}]`) ?? [])].filter(
+      (row) =>
+        Number(row.dataset[key]) >= start && Number(row.dataset[key]) <= end,
+    );
+    const where = `${side === "old" ? "old " : ""}line${
+      end > start ? `s ${start}\u2013${end}` : ` ${start}`
+    }`;
+    if (!rows.length) {
+      this.tell(
+        `${path ? `${path}, ` : ""}${where} is not shown. A filter may be hiding it.`,
+      );
+      return;
+    }
+    const body = rows[0].closest(".file-body");
+    if (body?.hidden)
+      body.previousElementSibling.querySelector(".file-toggle").click();
+    for (const row of rows) row.classList.add("cited");
+    rows[0].scrollIntoView({ block: "center" });
+    // Keyboard and screen-reader users follow the jump: focus lands on the line,
+    // and the status line names it.
+    rows[0].tabIndex = -1;
+    rows[0].focus({ preventScroll: true });
+    this.tell(`Showing ${path ? `${path}, ` : ""}${where}.`);
   }
 
   changes() {

@@ -1224,3 +1224,384 @@ test(
     );
   },
 );
+
+const CACHE_DIFF = `diff --git a/src/cache.rs b/src/cache.rs
+--- a/src/cache.rs
++++ b/src/cache.rs
+@@ -10,5 +10,6 @@ fn get
+ fn get(key: &str) -> Option<Value> {
+-    db.load(key)
++    let hit = cache.lookup(key);
++    hit.or_else(|| db.load(key))
+ }
+${" "}
+ fn put() {}
+`;
+
+test(
+  "a reference note with a diagram, table and quoted code is drawn from the pinned diff",
+  { timeout: 30000 },
+  async (t) => {
+    if (!browser) return t.skip("playwright chromium unavailable");
+    const { page, args, bundle, inspect } = await start(
+      t,
+      [],
+      false,
+      CACHE_DIFF,
+      [{ path: "src/cache.rs", additions: 2, deletions: 1 }],
+    );
+    await page
+      .locator('textarea[name="motivation"]')
+      .fill(
+        "Every get reached the database, so the cache lookup has to come first and only a miss may fall through to it.",
+      );
+    await page.locator("#send").click();
+    await page.getByText("Sent to your review task", { exact: true }).waitFor();
+    const sent = inspect();
+    const note = [
+      "The lookup now precedes the database, see @src/cache.rs:11.",
+      "",
+      "```flow LR",
+      "get -> cache: looked up first @src/cache.rs:11",
+      "cache --> <img src=x onerror=alert(1)>: on a miss",
+      "```",
+      "",
+      "| Option | Cost |",
+      "| --- | --- |",
+      "| Read through | one lookup @src/cache.rs:12 |",
+      "",
+      "```code src=src/cache.rs lines=11-12",
+      "```",
+    ].join("\n");
+    const feedback = join(bundle, "feedback.json");
+    writeFileSync(
+      feedback,
+      JSON.stringify({
+        identity: sent.identity,
+        answer_digest: sent.answer_digest,
+        notes: [{ field: "motivation", text: note }],
+      }),
+    );
+    execFileSync(python, [
+      helper,
+      "feedback",
+      ...args,
+      "--request-id",
+      sent.request_id,
+      "--file",
+      feedback,
+    ]);
+    await page.locator(".ex-figure svg").waitFor();
+    // The picture has a text equivalent, and the guess is named as one.
+    assert.match(
+      (await page.locator(".ex-figure svg").getAttribute("aria-label")) ?? "",
+      /get to cache/,
+    );
+    assert.equal(await page.locator(".ex-edges li").count(), 2);
+    assert.equal(await page.locator(".ex-edge.ex-inferred").count(), 1);
+    assert.equal(await page.locator(".ex-edge:not(.ex-inferred)").count(), 1);
+    assert.match(
+      (await page.locator(".ex-edges li .ex-tag").textContent()) ?? "",
+      /inferred/,
+    );
+    // A citation in prose is a button too, not the raw "@path:N" text.
+    assert.equal(await page.locator(".ex-note-body > p .ex-cite").count(), 1);
+    assert.equal(await page.getByText("@src/cache.rs").count(), 0);
+    assert.equal(await page.locator(".ex-table tbody tr").count(), 1);
+    assert.equal(await page.locator(".ex-code .ex-row.k-a").count(), 2);
+    // A note is data: its markup is shown, never parsed.
+    assert.equal(await page.locator("#feedback-list img").count(), 0);
+    await page.getByText("<img src=x onerror=alert(1)>").first().waitFor();
+    // A citation opens its line in the diff.
+    await page.locator("#diff .file-toggle").click();
+    await page.locator(".ex-edges .ex-cite").first().click();
+    await page.locator("#diff .cited").first().waitFor();
+    assert.equal(await page.locator("#diff .file-body").isVisible(), true);
+    assert.match(
+      (await page.locator("#diff .cited").first().textContent()) ?? "",
+      /cache\.lookup/,
+    );
+  },
+);
+
+test("citation waits for all chunks and the latest request wins", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const { page } = await start(t);
+  const result = await page.evaluate(async () => {
+    const { DiffView } = await import("/diffview.js");
+    const frames = [];
+    const original = window.requestAnimationFrame;
+    window.requestAnimationFrame = (callback) => frames.push(callback);
+    try {
+      const root = document.createElement("div");
+      document.body.append(root);
+      const view = new DiffView({
+        root,
+        notice: document.createElement("div"),
+        summary: document.createElement("div"),
+        position: document.createElement("div"),
+      });
+      const lines = Array.from({ length: 500 }, (_, i) => ({
+        k: "a",
+        n: i + 1,
+        t: `line ${i + 1}`,
+      }));
+      view.setModel({
+        problems: [],
+        files: [
+          {
+            path: "a",
+            status: "modified",
+            additions: 500,
+            deletions: 0,
+            hunks: [
+              {
+                old_start: 1,
+                old_count: 0,
+                new_start: 1,
+                new_count: 500,
+                lines,
+              },
+            ],
+          },
+        ],
+      });
+      view.show({ path: "a" });
+      view.reveal({ side: "new", start: 2, end: 3 });
+      view.reveal({ side: "new", start: 398, end: 402 });
+      while (frames.length) frames.shift()();
+      return [...root.querySelectorAll(".cited")].map((row) =>
+        Number(row.dataset.n),
+      );
+    } finally {
+      window.requestAnimationFrame = original;
+    }
+  });
+  assert.deepEqual(result, [398, 399, 400, 401, 402]);
+});
+
+test("a poll that changes nothing leaves a focused citation where it was", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const { page, args, bundle, inspect } = await start(
+    t,
+    [],
+    false,
+    CACHE_DIFF,
+    [{ path: "src/cache.rs", additions: 2, deletions: 1 }],
+  );
+  await page
+    .locator('textarea[name="motivation"]')
+    .fill(
+      "The lookup has to come first, and only a miss may fall through to the database.",
+    );
+  await page.locator("#send").click();
+  await page.getByText("Sent to your review task", { exact: true }).waitFor();
+  const sent = inspect();
+  const feedback = join(bundle, "feedback.json");
+  writeFileSync(
+    feedback,
+    JSON.stringify({
+      identity: sent.identity,
+      answer_digest: sent.answer_digest,
+      notes: [
+        {
+          field: "motivation",
+          text: "The lookup comes first, see @src/cache.rs:11.",
+        },
+      ],
+    }),
+  );
+  execFileSync(python, [
+    helper,
+    "feedback",
+    ...args,
+    "--request-id",
+    sent.request_id,
+    "--file",
+    feedback,
+  ]);
+  const chip = page.locator(".ex-note-body .ex-cite");
+  await chip.waitFor();
+  await chip.focus();
+  await page.evaluate(() => {
+    window.__chip = document.activeElement;
+  });
+  // The page polls every five seconds; wait for one that carries no new feedback.
+  // Wait for an actual poll, and for the page to have handled it.
+  await afterPoll(page);
+  const kept = await page.evaluate(
+    () => document.activeElement === window.__chip && window.__chip.isConnected,
+  );
+  assert.equal(kept, true, "the citation button was rebuilt and lost focus");
+});
+
+// Starts a review, answers it, and has the reviewer reply with `note`.
+async function referenced(t, patch, files, note) {
+  const ctx = await start(t, [], false, patch, files);
+  await ctx.page
+    .locator('textarea[name="motivation"]')
+    .fill(
+      "The lookup has to come first, and only a miss may fall through to the database.",
+    );
+  await ctx.page.locator("#send").click();
+  await ctx.page
+    .getByText("Sent to your review task", { exact: true })
+    .waitFor();
+  const sent = ctx.inspect();
+  const feedback = join(ctx.bundle, "feedback.json");
+  writeFileSync(
+    feedback,
+    JSON.stringify({
+      identity: sent.identity,
+      answer_digest: sent.answer_digest,
+      notes: [{ field: "motivation", text: note }],
+    }),
+  );
+  execFileSync(python, [
+    helper,
+    "feedback",
+    ...ctx.args,
+    "--request-id",
+    sent.request_id,
+    "--file",
+    feedback,
+  ]);
+  return ctx;
+}
+// The page polls every five seconds: wait for one, and for the page to have handled it.
+async function afterPoll(page) {
+  const response = await page.waitForResponse(
+    (r) => r.request().method() === "GET" && r.url().endsWith("/api/session"),
+    { timeout: 15000 },
+  );
+  await response.finished();
+  // The page renders what it received before its next two frames.
+  await page.evaluate(
+    () =>
+      new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve)),
+      ),
+  );
+}
+const CACHE_FILES = [{ path: "src/cache.rs", additions: 2, deletions: 1 }];
+
+test("a label of the widest letters still fits inside its picture", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const wide = "W".repeat(48);
+  const note = ["LR", "TB"]
+    .flatMap((dir) => [
+      "```flow " + dir,
+      `a -> b: ${wide} @src/cache.rs:11`,
+      "```",
+      "",
+    ])
+    .join("\n");
+  const { page } = await referenced(t, CACHE_DIFF, CACHE_FILES, note);
+  await page.locator(".ex-figure svg").first().waitFor();
+  const out = await page.evaluate(() =>
+    [...document.querySelectorAll(".ex-figure svg")].map((svg) => {
+      const [x, y, w, h] = svg.getAttribute("viewBox").split(" ").map(Number);
+      return [...svg.querySelectorAll("text")]
+        .map((text) => text.getBBox())
+        .filter(
+          (b) =>
+            b.x < x - 0.5 ||
+            b.y < y - 0.5 ||
+            b.x + b.width > x + w + 0.5 ||
+            b.y + b.height > y + h + 0.5,
+        ).length;
+    }),
+  );
+  assert.deepEqual(
+    out,
+    [0, 0],
+    "text drawn outside the viewBox, so it would be clipped",
+  );
+});
+
+test("a citation jump moves focus to the line and says where it went", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const { page } = await referenced(
+    t,
+    CACHE_DIFF,
+    CACHE_FILES,
+    "The lookup comes first, see @src/cache.rs:11-12.",
+  );
+  await page.locator(".ex-note-body .ex-cite").click();
+  await page.locator("#diff .cited").first().waitFor();
+  const state = await page.evaluate(() => ({
+    focused: document.activeElement?.classList.contains("cited"),
+    status: document.getElementById("diff-notice").textContent,
+    live: document.getElementById("diff-notice").getAttribute("role"),
+  }));
+  assert.equal(state.focused, true, "focus stayed on the citation");
+  assert.match(state.status, /Showing src\/cache\.rs, lines 11\u201312\./);
+  assert.equal(state.live, "status");
+});
+
+test("a citation to a line the whitespace filter hides turns the filter off", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const patch = `diff --git a/src/ws.rs b/src/ws.rs
+--- a/src/ws.rs
++++ b/src/ws.rs
+@@ -1,3 +1,3 @@
+ fn f() {
+-    return 1;
++        return 1;
+ }
+`;
+  const { page } = await referenced(
+    t,
+    patch,
+    [{ path: "src/ws.rs", additions: 1, deletions: 1 }],
+    "It only re-indents @src/ws.rs:o2.",
+  );
+  await page.locator("#diff-ws").check();
+  await page.locator(".ex-note-body .ex-cite").click();
+  await page.locator("#diff .cited").first().waitFor();
+  assert.equal(await page.locator("#diff-ws").isChecked(), false);
+  assert.match(
+    (await page.locator("#diff .cited").first().textContent()) ?? "",
+    /return 1/,
+  );
+});
+
+test("a citation finds its own file when two files share a line number", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const { page } = await start(t);
+  const marked = await page.evaluate(async () => {
+    const { DiffView } = await import("/diffview.js");
+    const root = document.createElement("div");
+    document.body.append(root);
+    const view = new DiffView({
+      root,
+      notice: document.createElement("div"),
+      summary: document.createElement("div"),
+      position: document.createElement("div"),
+    });
+    const file = (path) => ({
+      path,
+      status: "modified",
+      additions: 1,
+      deletions: 0,
+      hunks: [
+        {
+          old_start: 1,
+          old_count: 0,
+          new_start: 1,
+          new_count: 2,
+          lines: [
+            { k: "c", n: 1, o: 1, t: "one" },
+            { k: "a", n: 2, o: null, t: `${path} two` },
+          ],
+        },
+      ],
+    });
+    view.setModel({ problems: [], files: [file("a.rs"), file("b.rs")] });
+    view.show({});
+    view.reveal({ path: "b.rs", side: "new", start: 2, end: 2 });
+    return [...root.querySelectorAll(".cited")].map((row) => row.textContent);
+  });
+  assert.equal(marked.length, 1);
+  assert.match(marked[0], /b\.rs two/);
+});

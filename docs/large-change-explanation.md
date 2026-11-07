@@ -51,9 +51,12 @@ explanation. Do not hide a checklist inside a compound question.
 AI returns one grounded reference note after the contributor submits. A clear
 author goal guides later code adjustments; it need not be rewritten to justify
 an implementation that misses it. Ask at most one clarification when intent is
-ambiguous. The contributor compares the reference with their explanation and
-records their own assessment. A partial or missed answer requires a correction
-or a remaining uncertainty. AI does not grade or approve this interaction.
+ambiguous. The reference may include a diagram, a table and quoted code: every
+line it cites is checked against the reviewed diff. A link it could not cite is
+written as an inferred (dashed) arrow; an uncited solid one is refused. The
+contributor compares the reference with their explanation and records their own
+assessment. A partial or missed answer requires a correction or a remaining
+uncertainty. AI does not grade or approve this interaction.
 The original question, submitted explanation and reflection stay bound to the
 review snapshot as context for subsequent agent work.
 

@@ -343,7 +343,8 @@ from the received submission:
 }
 ```
 
-`field` is `motivation`. Return exactly one plain-text reference note. Do not
+`field` is `motivation`. Return exactly one reference note, prose or, when a
+picture or table carries the point better, [drawn](#draw-the-reference-note-optional). Do not
 return an `approved` field or grade the author. If their goal is clear but the
 code does not achieve it, identify that gap as a possible code adjustment;
 do not keep demanding a different motivation.
@@ -375,6 +376,77 @@ a new explicit submission. Do not silently answer for
 them. For code/base/question changes, prepare a new bundle/session, retain the
 old record and revisit affected answers; do not overwrite the old identity or
 reuse its completed reflection.
+
+## Draw the reference note (optional)
+
+When the point of the key change is a path, a before and after, or a choice
+between designs, the note may carry a diagram, a table and quoted code besides
+prose. The page draws them after the contributor has submitted, in the feedback
+panel; it reveals nothing earlier. The note is still the one `text` of the one
+note, so the feedback file, its digest, the head binding and the reflection are
+unchanged, and a note without this syntax is prose and stays valid.
+
+The syntax follows [answer-me-with-html](https://github.com/QingYunA/answer-me-with-html)
+(MIT), cut to what a review needs:
+
+````markdown
+The hook now refuses a push that has no review evidence.
+
+```flow LR
+pre-push hook -> status check: measures the branch @scripts/check-interactive-review.py:41
+status check --> push: refuses without evidence
+```
+
+| Option | Cost |
+| --- | --- |
+| Check in the hook | catches it before the pull request @scripts/check-interactive-review.py:44 |
+| Check only in CI | the contributor learns after pushing |
+
+```code src=scripts/check-interactive-review.py lines=40-44
+```
+````
+
+- **Every line cited is in the pinned diff.** `@path:42` is a line of the new
+  file, `@path:o42` of the old one, `@path:42-47` a range of at most 40. A line
+  outside the diff's hunks, or any citation when the diff could not be read line
+  by line, is refused when the note is written, with the line of the note and
+  the reason. A cited line is a button that opens that line in the diff.
+- **Code is never typed.** A `code` block names `src=` and `lines=` (and
+  `side=old` for the old file), and its body stays empty. The rows come from the
+  diff, so the snippet cannot differ from it.
+- **A solid arrow needs a citation; a guess is dashed.** `->` requires an
+  `@path:line` on its line. An edge you inferred and cannot cite is written
+  `-->` with no citation (a cited `-->` is refused), drawn dashed and named
+  "inferred", so a picture does not state a guess as a fact. Say in prose what
+  was not verified.
+- **A citation grounds an edge; it does not prove it.** The check is that the
+  line exists in the diff, not that the line says what the arrow says. Cite the
+  line that shows the call or the data flow, and read the cited line before
+  trusting the arrow.
+- Limits keep a note on one screen: 12 nodes, 16 edges, 48 characters a label,
+  8 table rows of up to 5 columns, 3 code blocks of up to 30 lines, 24 blocks.
+  `flow` takes `LR` (default) or `TB`; an edge joins two different nodes.
+  A dense graph can still lay a label over a neighbor; the numbered list under
+  the picture is the reading. A diagram wider than the panel scrolls instead of
+  shrinking its text.
+- Anything else stays prose: a fence that is not `flow` or `code`, a `|` line
+  with no `|---|` row under it, an address such as `git@host:22`. A note written
+  as free text therefore remains valid, which the managed worker relies on. In a
+  paragraph, heading or list, `@name:123` that names no file of the diff (such as
+  `@localhost:8080`) stays text, and a backtick span is kept as written; a table
+  cell, a diagram and a `code` block are strict. A real file at a missing line is
+  refused everywhere.
+
+The renderer is part of the page and needs nothing beyond what the workbench
+already needs: the diagram's layout is computed in the browser, not by Node.js.
+The external tool needs Node.js 20 and would add a required dependency to a
+workflow that otherwise needs Python's standard library and Git; its output is
+also a finished page, which could not be bound to the pinned diff or made to
+reveal only after submission. Managed mode's Codex worker still writes prose.
+An agent that wants a drawn note writes it with `feedback` as above, which
+refuses it with the reason when a citation does not hold. The managed worker is
+not refused: it cannot be asked again, so its note is stored as written, and a
+note that does not read is shown as the text it is.
 
 ## Use the contributor's explanation in later adjustments
 

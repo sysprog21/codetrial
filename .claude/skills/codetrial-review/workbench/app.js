@@ -1,4 +1,5 @@
 import { DiffView } from "/diffview.js";
+import { renderNote } from "/explainer.js";
 
 const $ = (id) => document.getElementById(id);
 const token = new URLSearchParams(location.hash.slice(1)).get("token");
@@ -7,6 +8,7 @@ const diffView = new DiffView({
   notice: $("diff-notice"),
   summary: $("diff-summary"),
   position: $("diff-position"),
+  live: $("diff-live"),
 });
 const MOTIVATION = {
   prompt: "Why is this change needed?",
@@ -23,6 +25,7 @@ let session;
 let answers = {};
 let selected;
 let reflectionDigest;
+let renderedNotes;
 let reflectionSaving = false;
 let reflectionDirty = false;
 let completionAnnounced = false;
@@ -388,17 +391,58 @@ function renderFeedback() {
   if ($("reviewer-presence").textContent !== presence)
     $("reviewer-presence").textContent = presence;
   renderWaiting();
+  renderNotes(feedback);
+}
+
+function renderNotes(feedback) {
+  // Rebuilt only when the notes change: every poll renders, and a rebuild would
+  // drop the focus of a citation button and restart a diagram.
+  const notesKey = JSON.stringify([feedback?.notes, session.reference_view]);
+  if (notesKey === renderedNotes) return;
+  renderedNotes = notesKey;
   $("feedback-list").replaceChildren();
-  for (const note of feedback?.notes || []) {
+  (feedback?.notes || []).forEach((note, i) => {
     const item = document.createElement("li");
     const label = document.createElement("strong");
     const reading = session.questions.find(
       (q) => `reading:${q.id}` === note.field,
     );
     label.textContent = `${reading ? reading.path : "Motivation"} — `;
-    item.append(label, document.createTextNode(note.text));
+    // A note the server read is drawn with its diagram, table and quoted
+    // code; any other note is shown as the text it is.
+    const blocks = session.reference_view?.[i];
+    // Prose with no citation or markup is the text it is; anything else is drawn.
+    const drawn = (b) =>
+      b.t !== "p" ||
+      b.parts.some(
+        (part) =>
+          typeof part !== "string" || part.includes("**") || part.includes("`"),
+      );
+    if (blocks?.some(drawn)) {
+      item.classList.add("explainer");
+      item.append(label, renderNote(blocks, showCitation));
+    } else {
+      item.append(label, document.createTextNode(note.text));
+    }
     $("feedback-list").append(item);
+  });
+}
+
+// A citation in a reference note opens the line it names in the diff.
+function showCitation(ev) {
+  const files = diffView.model?.files || [];
+  const file =
+    files.find((f) => f.path === ev.path) ||
+    files.find((f) => f.old_path === ev.path);
+  // A file the diff does not hold must not light up lines of another one.
+  if (!file) return;
+  // A citation names exact lines, so a whitespace filter must not hide them.
+  if (diffView.hideWhitespace) {
+    $("diff-ws").checked = false;
+    diffView.setHideWhitespace(false);
   }
+  if (selected !== file.path) selectFile(file.path);
+  diffView.reveal({ ...ev, path: file.path });
 }
 
 async function loadSession() {

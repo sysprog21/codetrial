@@ -366,6 +366,248 @@ mark.del {
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
+/* A reference note drawn from the explainer draft: prose, a flow diagram, a
+   comparison table and code quoted from the diff. Solid arrows cite the diff;
+   dashed amber ones are the reviewer's inference. */
+.feedback-panel li.explainer {
+  white-space: normal;
+  color: var(--ink);
+}
+.explainer li {
+  margin-block: 0.25rem;
+  white-space: normal;
+}
+.ex-note-body {
+  display: grid;
+  gap: 1rem;
+  margin-top: 0.5rem;
+}
+.ex-note-body p,
+.ex-note-body ul {
+  margin: 0;
+  color: var(--sub);
+  text-wrap: pretty;
+}
+.ex-note-body ul {
+  padding-left: 1.25rem;
+}
+.ex-note-body code {
+  font-family: var(--font-mono);
+  font-size: 0.875em;
+  padding: 0.05rem 0.3rem;
+  border-radius: 4px;
+  background: var(--inset-surface);
+}
+.ex-heading {
+  margin: 0.5rem 0 0;
+  font-size: 0.9375rem;
+}
+.ex-cite {
+  display: inline-block;
+  max-width: 100%;
+  margin-inline: 0.15rem;
+  padding: 0.25rem 0.6rem;
+  /* 24 px tall at least, and the edge a control is identified by, as elsewhere. */
+  border: 1px solid var(--control-border);
+  border-radius: 999px;
+  background: var(--inset-surface);
+  color: var(--accent-ink);
+  font: inherit;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  line-height: 1.4;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.ex-cite:hover {
+  border-color: var(--accent);
+}
+.ex-figure,
+.ex-code {
+  margin: 0;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  background: var(--step-surface);
+  overflow: hidden;
+}
+.ex-scroll {
+  overflow-x: auto;
+  padding: 0.5rem;
+}
+.ex-scroll svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  margin-inline: auto;
+}
+.ex-node rect {
+  fill: var(--inset-surface);
+  stroke: var(--control-border);
+  stroke-width: 1;
+}
+.ex-node text {
+  fill: var(--ink);
+  font-size: 13px;
+}
+.ex-edge {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.75;
+}
+.ex-arrow {
+  fill: var(--accent);
+}
+/* Dashed and gray, not a hue: an inference must read as one without color. */
+.ex-edge.ex-inferred {
+  stroke: var(--sub);
+  stroke-dasharray: 6 4;
+}
+.ex-arrow.ex-inferred {
+  fill: var(--sub);
+}
+.ex-badge circle {
+  fill: var(--step-surface);
+  stroke: var(--accent);
+}
+.ex-badge.ex-inferred circle {
+  stroke: var(--sub);
+  stroke-dasharray: 2 2;
+}
+.ex-badge text {
+  fill: var(--ink);
+  font-size: 10px;
+  font-weight: 600;
+}
+.ex-badge .ex-label {
+  fill: var(--sub);
+  font-size: 12px;
+  font-weight: 400;
+  paint-order: stroke;
+  stroke: var(--step-surface);
+  stroke-width: 4px;
+}
+.ex-edges {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0.75rem 1rem;
+  list-style: none;
+  border-top: 1px solid var(--hairline);
+  font-size: 0.8125rem;
+}
+.ex-edges li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.6rem;
+  margin: 0;
+  color: var(--sub);
+}
+.ex-num {
+  display: inline-grid;
+  place-items: center;
+  min-width: 1.25rem;
+  height: 1.25rem;
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  font-size: 0.6875rem;
+  color: var(--ink);
+}
+.ex-step {
+  color: var(--ink);
+  font-family: var(--font-mono);
+}
+.ex-tag {
+  padding: 0 0.4rem;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  font-size: 0.75rem;
+  color: var(--sub);
+}
+.ex-edges .ex-tag {
+  border-style: dashed;
+}
+.ex-caption {
+  padding: 0 1rem 0.75rem;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+.ex-code-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.75rem;
+  border-bottom: 1px solid var(--hairline);
+}
+.ex-code-body {
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+.ex-row {
+  display: grid;
+  grid-template-columns: 3rem 1.25rem max-content;
+  width: max-content;
+  min-width: 100%;
+}
+.ex-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+}
+.ex-table {
+  width: 100%;
+  min-width: 36rem;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+.ex-table th,
+.ex-table td {
+  padding: 0.6rem 0.85rem;
+  border-bottom: 1px solid var(--hairline);
+  text-align: left;
+  vertical-align: top;
+  color: var(--sub);
+  line-height: 1.5;
+}
+.ex-table thead th {
+  background: var(--step-surface);
+  color: var(--ink);
+  font-weight: 650;
+  font-size: 0.8125rem;
+}
+.ex-table tbody th {
+  color: var(--ink);
+  font-weight: 600;
+}
+.ex-table tbody tr:last-child > * {
+  border-bottom: 0;
+}
+/* These boxes clip their contents, so a ring drawn outside would be cut off. */
+.ex-scroll:focus-visible,
+.ex-code-body:focus-visible,
+.ex-table-wrap:focus-visible {
+  outline-offset: -3px;
+}
+/* The line a citation opened in the diff. */
+.cited {
+  outline: 2px solid var(--accent-ink);
+  outline-offset: -2px;
+  background: color-mix(in srgb, var(--accent-ink) 14%, transparent);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .cited {
+    animation: cited-in 0.6s ease-out;
+  }
+}
+@keyframes cited-in {
+  from {
+    outline-offset: 6px;
+    outline-color: transparent;
+  }
+}
 .feedback-actions {
   display: flex;
   flex-wrap: wrap;
