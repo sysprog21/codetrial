@@ -1220,6 +1220,39 @@ test("a report the account kept stays on this device too", async () => {
   );
 });
 
+// A device copy that cannot be reached is a failed delete, not a missing report.
+// Guards the null `storageArea` answers: passed through, `storedList` reads it
+// as an empty store and the delete answers "missing".
+test("deleting a report says so when local storage cannot be reached", async () => {
+  const original = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    get() {
+      throw new DOMException("blocked", "SecurityError");
+    },
+  });
+  try {
+    assert.equal(
+      await deleteReport("keep", {
+        fetcher: async () => response({ signedIn: false }),
+      }),
+      "failed",
+    );
+    assert.equal(
+      await deleteReport("keep", {
+        fetcher: async (url) =>
+          url === "/api/session"
+            ? response({ signedIn: true })
+            : response({ deleted: 1 }),
+      }),
+      "account-deleted-local-failed",
+    );
+  } finally {
+    if (original) Object.defineProperty(globalThis, "localStorage", original);
+    else delete globalThis.localStorage;
+  }
+});
+
 test("deleting an id no store holds says so instead of claiming a removal", async () => {
   // A pre-id row whose assigned id never reached storage: the rows are still
   // there, so answering "deleted" named a removal the next read undoes.
