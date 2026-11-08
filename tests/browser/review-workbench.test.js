@@ -905,6 +905,7 @@ test(
     await box.fill(text);
     await page.locator("#save").click();
     await page.locator("#completion-notice").waitFor({ state: "visible" });
+    await openIntent(page);
     await page.locator("#intent-goal").fill("Keep the why next to the change.");
     await page.locator("#close-window").click();
     await page
@@ -1481,6 +1482,15 @@ async function referenced(t, patch, files, note) {
   return ctx;
 }
 // The page polls every five seconds: wait for one, and for the page to have handled it.
+// The intent record is a disclosure: open it the way a reader does.
+async function openIntent(page) {
+  const details = page.locator("#intent-details");
+  await details.waitFor({ state: "attached" });
+  if (!(await details.evaluate((node) => node.open)))
+    await page.locator("#intent-details > summary").click();
+  await page.locator("#intent-form").waitFor();
+}
+
 async function afterPoll(page) {
   const response = await page.waitForResponse(
     (r) => r.request().method() === "GET" && r.url().endsWith("/api/session"),
@@ -1670,7 +1680,7 @@ test("the change is shown as three debts, and a removed check opens at its old l
 test("the intent record is the contributor's own, survives a reload and copies as text", async (t) => {
   if (!browser) return t.skip("playwright chromium unavailable");
   const { page, inspect } = await start(t, [], false, GUARD_DIFF, GUARD_FILES);
-  await page.locator("#intent-form").waitFor();
+  await openIntent(page);
   const before = inspect();
   await page.evaluate(() => {
     window.__copied = null;
@@ -1700,7 +1710,12 @@ test("the intent record is the contributor's own, survives a reload and copies a
   await page.locator("#intent-save").click();
   await page.getByText("Saved on this computer", { exact: true }).waitFor();
   await page.reload();
+  // A record already started opens by itself, so it is not hidden on return.
   await page.locator("#intent-goal").waitFor();
+  assert.equal(
+    await page.locator("#intent-details").evaluate((node) => node.open),
+    true,
+  );
   await page.waitForFunction(
     () => document.getElementById("intent-goal").value !== "",
   );
@@ -1731,7 +1746,7 @@ test("the intent record is the contributor's own, survives a reload and copies a
 test("typing during a save is kept, not overwritten by the save or the next poll", async (t) => {
   if (!browser) return t.skip("playwright chromium unavailable");
   const { page } = await start(t, [], false, GUARD_DIFF, GUARD_FILES);
-  await page.locator("#intent-form").waitFor();
+  await openIntent(page);
   // The save is held in flight until the test has typed, then released.
   let release;
   const held = new Promise((resolve) => (release = resolve));
@@ -1794,7 +1809,7 @@ test("the copy button says why it is off, and a citation jump is announced", asy
     CACHE_FILES,
     "The lookup comes first, see @src/cache.rs:11.",
   );
-  await page.locator("#intent-form").waitFor();
+  await openIntent(page);
   assert.equal(await page.locator("#intent-copy").isDisabled(), true);
   assert.equal(
     await page.locator("#intent-status").textContent(),
@@ -1816,7 +1831,7 @@ test("the copy button says why it is off, and a citation jump is announced", asy
 test("unsaved intent text asks before the page is left, and saving clears it", async (t) => {
   if (!browser) return t.skip("playwright chromium unavailable");
   const { page } = await start(t, [], false, GUARD_DIFF, GUARD_FILES);
-  await page.locator("#intent-form").waitFor();
+  await openIntent(page);
   const prevented = () =>
     page.evaluate(() => {
       const event = new Event("beforeunload", { cancelable: true });
@@ -1830,3 +1845,125 @@ test("unsaved intent text asks before the page is left, and saving clears it", a
   await page.getByText("Saved on this computer", { exact: true }).waitFor();
   assert.equal(await prevented(), false);
 });
+
+test(
+  "the rail follows the review, and the reference sits beside the explanation it answers",
+  { timeout: 30000 },
+  async (t) => {
+    if (!browser) return t.skip("playwright chromium unavailable");
+    const { page } = await start(t, [], true);
+    await page.setViewportSize({ width: 1400, height: 900 });
+    const step = (name) =>
+      page.locator(`#review-rail button[data-step="${name}"]`);
+    const current = () =>
+      page
+        .locator('#review-rail button[aria-current="step"]')
+        .getAttribute("data-step");
+    assert.equal(await current(), "read");
+    const box = page.locator('[name="motivation"]');
+    const text =
+      "Keep earlier evidence available when a write fails, which is why the previous record has to stay readable after a failed write.";
+    await box.fill(text);
+    assert.equal(await current(), "explain");
+    assert.match(await step("read").textContent(), /\(done\)/);
+    // Ctrl with Enter sends from the answer; plain Enter would only add a line.
+    await box.press("Control+Enter");
+    await page.locator("#feedback-list li").first().waitFor();
+    await page.waitForFunction(
+      () =>
+        document.querySelector('#review-rail [aria-current="step"]')?.dataset
+          .step === "compare",
+    );
+    // The reply is said once and marked on the rail; focus stays where it was.
+    assert.match(
+      await page.locator("#rail-live").textContent(),
+      /Reviewer feedback arrived/,
+    );
+    assert.equal(
+      await step("compare").evaluate((b) => b.classList.contains("rail-new")),
+      true,
+    );
+    // Beside the reference: the explanation exactly as the reviewer received it.
+    const yours = page.locator("#your-explanation");
+    await yours.waitFor({ state: "visible" });
+    assert.equal(await page.locator("#yours-text").textContent(), text);
+    const ref = await page.locator("#feedback-list").boundingBox();
+    const aside = await yours.boundingBox();
+    assert.ok(
+      aside.x >= ref.x + ref.width,
+      "beside, not below, on a wide screen",
+    );
+    // A step is a heading to land on, and visiting Compare clears the mark.
+    await step("compare").click();
+    assert.equal(
+      await page.evaluate(() => document.activeElement.id),
+      "feedback-heading",
+    );
+    assert.equal(
+      await step("compare").evaluate((b) => b.classList.contains("rail-new")),
+      false,
+    );
+    await page.locator("#self-grade").selectOption("got");
+    await page.locator("#reflect-save").click();
+    await page.locator("#completion-notice").waitFor({ state: "visible" });
+    assert.equal(await current(), "keep");
+    // The intent record is closed until wanted; its summary says how far it is.
+    assert.equal(
+      await page.locator("#intent-summary-state").textContent(),
+      "Optional · not started",
+    );
+    await openIntent(page);
+    // A record that only says where the why will live is still a record.
+    await page.locator("#intent-home").selectOption("pr");
+    await page.locator("#intent-save").click();
+    await page.getByText("Saved on this computer", { exact: true }).waitFor();
+    assert.equal(await step("keep").getAttribute("data-state"), "done");
+    await page.locator("#intent-goal").fill("Keep the why next to the change.");
+    assert.match(
+      await page.locator("#intent-summary-state").textContent(),
+      /^2 of \d+ answered · unsaved changes$/,
+    );
+    assert.equal(await step("keep").getAttribute("data-state"), "current");
+    // Cmd with Enter saves as Ctrl does.
+    await page.locator("#intent-goal").press("Meta+Enter");
+    await page.waitForFunction(() =>
+      /· saved$/.test(
+        document.getElementById("intent-summary-state").textContent,
+      ),
+    );
+    assert.match(
+      await page.locator("#intent-summary-state").textContent(),
+      /^2 of \d+ answered · saved$/,
+    );
+    assert.equal(await step("keep").getAttribute("data-state"), "done");
+    // An edit after feedback: the quote stays, and says it is the older text.
+    await box.fill(text + " Edited.");
+    assert.equal(await current(), "explain");
+    assert.match(
+      await page.locator("#yours-note").textContent(),
+      /changed it since/,
+    );
+    // Sent again, the new reply is said again and the quote is current.
+    await page.evaluate(() => {
+      document.getElementById("rail-live").textContent = "";
+    });
+    await box.press("Meta+Enter");
+    await page.waitForFunction(() =>
+      /Reviewer feedback arrived/.test(
+        document.getElementById("rail-live").textContent,
+      ),
+    );
+    assert.equal(await page.locator("#yours-note").textContent(), "");
+    // On a narrow screen the explanation follows the reference instead.
+    await page.setViewportSize({ width: 600, height: 900 });
+    const narrowRef = await page.locator("#feedback-list").boundingBox();
+    const narrowAside = await yours.boundingBox();
+    assert.ok(narrowAside.y >= narrowRef.y + narrowRef.height - 1);
+    assert.equal(
+      await page
+        .locator("#review-rail")
+        .evaluate((rail) => getComputedStyle(rail).position),
+      "static",
+    );
+  },
+);

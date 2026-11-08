@@ -29,6 +29,8 @@ let reflectionDigest;
 let renderedNotes;
 let renderedDebt;
 let intentDirty = false;
+let intentOpened = false;
+let feedbackSeen;
 let reflectionSaving = false;
 let reflectionDirty = false;
 let completionAnnounced = false;
@@ -213,6 +215,77 @@ function renderProgress() {
     : reflectionUnsaved()
       ? "Your reflection has unsaved changes"
       : statusLabels[session.status];
+  renderRail();
+}
+
+// The four steps, from the state the page already keeps: nothing written is
+// reading, an answer not yet answered by the reviewer is explaining, feedback
+// is comparing, and a confirmed review leaves only the intent record. An edit
+// after feedback reopens the explanation, as the server does.
+const STEPS = ["read", "explain", "compare", "keep"];
+const STEP_STATE = {
+  done: " (done)",
+  current: " (current step)",
+  todo: "",
+};
+// Any answer counts, the choice of where the why lives included, as the
+// summary counts it.
+const intentWritten = (fields) =>
+  Object.values(fields ?? {}).some((value) => String(value ?? "").trim());
+function intentSaved() {
+  return !intentDirty && intentWritten(session.intent);
+}
+function renderRail() {
+  const written = Boolean(answers.motivation?.trim());
+  const status = dirty ? "draft" : session.status;
+  const current = !written
+    ? "read"
+    : ["draft", "ready_to_send"].includes(status)
+      ? "explain"
+      : status === "explanation_complete"
+        ? "keep"
+        : "compare";
+  const at = STEPS.indexOf(current);
+  for (const button of $("review-rail").querySelectorAll("button")) {
+    const i = STEPS.indexOf(button.dataset.step);
+    const state =
+      i < at || (i === at && current === "keep" && intentSaved())
+        ? "done"
+        : i === at
+          ? "current"
+          : "todo";
+    if (button.dataset.state === state) continue;
+    button.dataset.state = state;
+    if (state === "current") button.setAttribute("aria-current", "step");
+    else button.removeAttribute("aria-current");
+    button.querySelector(".rail-state").textContent = STEP_STATE[state];
+  }
+}
+
+// A step is a heading to land on: it takes focus, so a keyboard or screen
+// reader user arrives where a sighted one looks. Buttons, not links: the
+// session token lives in the address fragment and a link would replace it.
+const quietMotion = matchMedia("(prefers-reduced-motion: reduce)");
+$("review-rail").addEventListener("click", (event) => {
+  const button = event.target.closest("button[data-target]");
+  if (!button) return;
+  const heading = $(button.dataset.target);
+  heading.tabIndex = -1;
+  heading.scrollIntoView({
+    block: "start",
+    behavior: quietMotion.matches ? "auto" : "smooth",
+  });
+  heading.focus({ preventScroll: true });
+  if (button.dataset.step === "compare") clearNewFeedback();
+});
+
+document
+  .querySelector(".feedback-panel")
+  .addEventListener("focusin", () => clearNewFeedback());
+function clearNewFeedback() {
+  $("review-rail")
+    .querySelector('[data-step="compare"]')
+    .classList.remove("rail-new");
 }
 
 function renderFiles() {
@@ -396,11 +469,38 @@ function renderFeedback() {
     $("reviewer-presence").textContent = presence;
   renderWaiting();
   renderNotes(feedback);
+  renderYours(feedback, current);
+}
+
+// The explanation the reviewer answered, as it was sent, beside the reference,
+// so the self-assessment is made with both in view.
+function renderYours(feedback, current) {
+  const sent = session.submission?.answers?.motivation ?? "";
+  const show = Boolean(feedback?.notes?.length && sent.trim());
+  $("your-explanation").hidden = !show;
+  if (!show) return;
+  if ($("yours-text").textContent !== sent) $("yours-text").textContent = sent;
+  const note = current
+    ? ""
+    : "You have changed it since. The reference above answers this version.";
+  if ($("yours-note").textContent !== note) $("yours-note").textContent = note;
 }
 
 function renderNotes(feedback) {
   // Rebuilt only when the notes change: every poll renders, and a rebuild would
   // drop the focus of a citation button and restart a diagram.
+  // Feedback that arrives while the page is open is said once and marked on
+  // the rail, without moving focus: the contributor may be typing elsewhere.
+  // A new reply is known by its digest, so one worded like the last still counts.
+  const digest = feedback?.notes?.length ? session.feedback_digest : null;
+  if (feedbackSeen !== undefined && digest && digest !== feedbackSeen) {
+    $("rail-live").textContent =
+      "Reviewer feedback arrived. Step 3, Compare, shows it beside your explanation.";
+    $("review-rail")
+      .querySelector('[data-step="compare"]')
+      .classList.add("rail-new");
+  }
+  feedbackSeen = digest;
   const notesKey = JSON.stringify([feedback?.notes, session.reference_view]);
   if (notesKey === renderedNotes) return;
   renderedNotes = notesKey;
@@ -453,7 +553,25 @@ function renderDebtPanel() {
   if (!intentDirty)
     for (const input of intentInputs())
       input.value = session.intent?.[input.name] ?? "";
+  // A record already started is shown open once; after that the reader decides.
+  if (!intentOpened && intentWritten(session.intent)) {
+    intentOpened = true;
+    $("intent-details").open = true;
+  }
   syncIntentCopy();
+  renderIntentSummary();
+}
+
+function renderIntentSummary() {
+  const filled = intentInputs().filter((input) => input.value.trim()).length;
+  const total = intentInputs().length;
+  const text = intentDirty
+    ? `${filled} of ${total} answered · unsaved changes`
+    : filled
+      ? `${filled} of ${total} answered · saved`
+      : "Optional · not started";
+  if ($("intent-summary-state").textContent !== text)
+    $("intent-summary-state").textContent = text;
 }
 
 // Copy needs something written, and says so while it is off.
@@ -470,6 +588,11 @@ $("intent-form").addEventListener("input", () => {
   intentDirty = true;
   $("intent-status").textContent = "Unsaved changes";
   syncIntentCopy();
+  renderIntentSummary();
+  renderRail();
+});
+$("intent-details").addEventListener("toggle", () => {
+  intentOpened = true;
 });
 
 $("intent-form").addEventListener("submit", async (event) => {
@@ -484,6 +607,8 @@ $("intent-form").addEventListener("submit", async (event) => {
     $("intent-status").textContent = same
       ? "Saved on this computer"
       : "Unsaved changes";
+    renderIntentSummary();
+    renderRail();
   } catch (error) {
     $("intent-status").textContent = error.message;
   }
@@ -641,6 +766,23 @@ async function saveAnswers() {
 $("answers-form").addEventListener("submit", (event) => {
   event.preventDefault();
   saveAnswers();
+});
+// Ctrl or Cmd with Enter in a box does what finishing that box means: the
+// answer is sent, the intent record saved. Plain Enter still writes a newline.
+const commitKey = (event) =>
+  event.key === "Enter" &&
+  (event.ctrlKey || event.metaKey) &&
+  !event.isComposing &&
+  event.target instanceof HTMLTextAreaElement;
+$("answers-form").addEventListener("keydown", (event) => {
+  if (!commitKey(event)) return;
+  event.preventDefault();
+  $("send").click();
+});
+$("intent-form").addEventListener("keydown", (event) => {
+  if (!commitKey(event)) return;
+  event.preventDefault();
+  $("intent-form").requestSubmit();
 });
 $("send").addEventListener("click", async () => {
   if (

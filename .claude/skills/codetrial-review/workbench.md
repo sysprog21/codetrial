@@ -171,8 +171,9 @@ words, and a change it cannot classify stays an ordinary edit.
   gets line matching only.
 - **Whitespace only:** a pair that differs only in spacing is dimmed and can be
   hidden. A file whose every change is moved or whitespace-only says so.
-- **Side by side** and unified views; `]` and `[` (or the arrows) step through
-  changes. The choice is remembered.
+- **Side by side** and unified views; `n` and `p`, `]` and `[` (or the arrows)
+  step through changes, and the page says so above the diff. The choice of view
+  is remembered.
 
 Nothing is dropped to keep the page quick: a large diff is drawn in pieces, with
 a percentage, until every line is there. The reading is checked against the hunk
@@ -299,8 +300,14 @@ same time as the managed worker.
 ## The agent/browser interaction loop
 
 The contributor reads the highlighted key change, answers the single question,
-and chooses **Send to reviewer**. **Save explanation**
-only saves a draft; it does not notify the agent to review it. Both persist in
+and chooses **Send to reviewer** (or presses Ctrl or Cmd with Enter in the
+answer). **Save explanation** only saves a draft; it does not notify the agent
+to review it. A rail of four steps (Read, Explain, Compare, Keep the why) stays
+at the top of the page and marks where the contributor is, from the same state
+the summary line reads; choosing a step moves focus to its heading. Feedback
+that arrives while the page is open is announced once and marked on the rail,
+without moving focus, and is shown beside the explanation exactly as it was
+sent, so the self-assessment is made with both in view. Both persist in
 `$bundle/explanation.json`. Browser clients use revision checks, so an old tab
 cannot overwrite a newer answer. Saving changed answers invalidates earlier
 feedback; sending identifies the exact saved answer digest to review.
@@ -483,8 +490,10 @@ What it deliberately does not do:
   each signal says what was found, not what it means. A diff the page cannot read
   line by line points at no line.
 
-The **intent record** is five short answers and a choice, in the contributor's
-own words: what the change must keep doing and why it exists, what must stay
+The **intent record** sits closed under the three layers until wanted, or opens
+by itself once one has been saved; its summary says how many answers are written
+and whether they are saved, and Ctrl or Cmd with Enter saves it. It is five
+short answers and a choice, in the contributor's own words: what the change must keep doing and why it exists, what must stay
 true, what was not done and why, which check fails if it breaks, who else could
 explain it, and where the why will live afterwards. It is saved beside the
 review in `$bundle/intent-record-<snapshot>.json`, one file for each snapshot so a

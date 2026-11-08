@@ -1,6 +1,12 @@
 /* The shared lobby owns the palette, type, themes, cards and focus treatment. */
 .review-workbench {
   width: min(100%, 112rem);
+  /* The progress rail's height: what sticks below it, and where a jump lands. */
+  --rail-h: 3.25rem;
+}
+.review-workbench h2,
+.review-workbench h3 {
+  scroll-margin-top: calc(var(--rail-h) + 1rem);
 }
 .workbench-caption {
   color: var(--sub);
@@ -51,7 +57,131 @@
 }
 .file-panel {
   position: sticky;
-  top: 1rem;
+  top: calc(var(--rail-h) + 1rem);
+}
+
+/* Where the contributor is: four steps, the current one filled, those behind
+   it checked. It stays in view so the next step is always one click away. */
+.review-rail {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  margin: 0 0 1.25rem;
+  padding: 0.5rem 0;
+  background: color-mix(in srgb, var(--page) 92%, transparent);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--hairline);
+}
+.review-rail ol {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: none;
+}
+.review-rail li {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.review-rail li + li::before {
+  content: "";
+  width: 1.5rem;
+  height: 1px;
+  background: var(--hairline);
+}
+.review-rail button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 2.25rem;
+  padding: 0.25rem 0.75rem 0.25rem 0.3rem;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: none;
+  color: var(--sub);
+  font: inherit;
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+.review-rail button:hover {
+  border-color: var(--hairline);
+  color: var(--ink);
+}
+.rail-num {
+  display: inline-grid;
+  place-items: center;
+  width: 1.625rem;
+  height: 1.625rem;
+  border: 1px solid var(--control-border);
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+.review-rail [data-state="current"] {
+  color: var(--ink);
+  font-weight: 650;
+  border-color: var(--hairline);
+  background: var(--practice-tint);
+}
+.review-rail [data-state="current"] .rail-num {
+  border-color: var(--accent-fill);
+  background: var(--accent-fill);
+  color: var(--on-accent);
+}
+.review-rail [data-state="done"] .rail-num {
+  border-color: var(--good);
+  color: var(--good);
+}
+/* A check, not a number, once a step is behind: the glyph is decoration and
+   the hidden text says "done". */
+.review-rail [data-state="done"] .rail-num {
+  font-size: 0;
+}
+.review-rail [data-state="done"] .rail-num::after {
+  content: "\2713";
+  font-size: 0.8125rem;
+}
+/* Feedback arrived while the reader was elsewhere. */
+.review-rail .rail-new .rail-num {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-fill) 35%, transparent);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .review-rail .rail-new .rail-num {
+    animation: rail-new 1.6s ease-in-out 3;
+  }
+}
+@keyframes rail-new {
+  50% {
+    box-shadow: 0 0 0 6px
+      color-mix(in srgb, var(--accent-fill) 10%, transparent);
+  }
+}
+.keys-hint kbd {
+  display: inline-block;
+  min-width: 1.25rem;
+  padding: 0 0.3rem;
+  border: 1px solid var(--control-border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--inset-surface);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  line-height: 1.5;
+  text-align: center;
+}
+.diff-keys {
+  margin: 0 0 0.5rem;
+}
+/* A keyboard hint means nothing on a touch screen with no keyboard. */
+@media (hover: none) and (pointer: coarse) {
+  .keys-hint {
+    display: none;
+  }
 }
 .file-list {
   display: grid;
@@ -356,8 +486,66 @@ mark.del {
   font-size: 0.8125rem;
   line-height: 1.5;
 }
+.save-row .keys-hint {
+  margin: 0;
+}
 .feedback-panel {
   margin-top: 1.5rem;
+}
+/* The reference and the explanation it answers, side by side, so the
+   self-assessment is made with both in view. The reflection sits under the
+   reference; the explanation stays beside both while they scroll. */
+.compare-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0 1.5rem;
+}
+.compare-grid:has(#your-explanation:not([hidden])) {
+  grid-template-columns: minmax(0, 1.7fr) minmax(16rem, 1fr);
+  grid-template-areas:
+    "ref yours"
+    "form yours";
+  align-items: start;
+}
+.compare-grid #feedback-list {
+  grid-area: ref;
+  min-width: 0;
+}
+.compare-grid #reflection-form {
+  grid-area: form;
+  min-width: 0;
+}
+.compare-yours {
+  grid-area: yours;
+  position: sticky;
+  top: calc(var(--rail-h) + 1rem);
+  margin-block: 0.75rem;
+  padding: 1rem 1.25rem;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  background: var(--step-surface);
+}
+.compare-yours[hidden] {
+  display: none;
+}
+.compare-yours h3 {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+.compare-text {
+  margin: 0.75rem 0 0;
+  max-height: 50vh;
+  overflow: auto;
+  color: var(--ink);
+  line-height: 1.65;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  text-wrap: pretty;
+}
+.compare-yours .field-hint:empty {
+  display: none;
 }
 .feedback-panel li {
   margin-block: 0.75rem;
@@ -922,14 +1110,51 @@ mark.del {
   font-size: 0.875rem;
   line-height: 1.55;
 }
+/* The record is optional work: closed until wanted, its state in the summary. */
+.intent-details {
+  border-top: 1px solid var(--hairline);
+}
+.intent-details > summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.75rem;
+  padding-block: 1rem;
+  cursor: pointer;
+  list-style: none;
+}
+.intent-details > summary::-webkit-details-marker {
+  display: none;
+}
+.intent-details > summary::before {
+  content: "";
+  align-self: center;
+  width: 0.45rem;
+  height: 0.45rem;
+  border-right: 2px solid var(--sub);
+  border-bottom: 2px solid var(--sub);
+  transform: rotate(-45deg);
+}
+.intent-details[open] > summary::before {
+  transform: rotate(45deg);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .intent-details > summary::before {
+    transition: transform 0.15s ease-out;
+  }
+}
+.intent-details > summary h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+.intent-details > summary .field-hint {
+  margin: 0;
+}
 .intent-form {
   display: grid;
   gap: 0.5rem;
   max-width: 44rem;
-}
-.intent-form h3 {
-  margin: 0;
-  font-size: 1rem;
+  padding-bottom: 0.5rem;
 }
 .intent-form label {
   display: block;
@@ -965,5 +1190,27 @@ mark.del {
 @media (max-width: 960px) {
   .debt-layers {
     grid-template-columns: 1fr;
+  }
+  .compare-grid:has(#your-explanation:not([hidden])) {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "ref"
+      "yours"
+      "form";
+  }
+  .compare-yours {
+    position: static;
+  }
+}
+@media (max-width: 680px) {
+  .review-workbench {
+    --rail-h: 0rem;
+  }
+  /* On a phone the rail scrolls away with the page rather than eat its height. */
+  .review-rail {
+    position: static;
+  }
+  .review-rail li + li::before {
+    display: none;
   }
 }
