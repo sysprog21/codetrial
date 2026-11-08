@@ -44,6 +44,17 @@ class StubElement {
     this.children = [];
     this.className = "";
     this.text = "";
+    this.classes = new Set();
+  }
+  // The page's panel always has these; the stub takes the calls plainly.
+  addEventListener() {}
+  get classList() {
+    const classes = this.classes;
+    return {
+      toggle: (name, force) =>
+        force ? classes.add(name) : classes.delete(name),
+      contains: (name) => classes.has(name),
+    };
   }
   set textContent(value) {
     this.text = String(value);
@@ -208,6 +219,117 @@ test("remote transcript text cannot inject markup", () => {
     0,
     "textContent must not parse child elements",
   );
+});
+
+// A panel laid out the way the browser lays out #transcript-panel: a row is
+// 40px plus one pixel per character, in a 200px viewport. Every change of
+// scrollTop queues one scroll event, as in Chrome; `flush` runs it, and
+// `scrollTo` is the candidate.
+class LaidOutPanel extends StubElement {
+  constructor() {
+    super("section");
+    this.append(new StubElement("div")); // the empty-state placeholder
+    this.top = 0;
+    this.pending = false;
+    this.listeners = [];
+  }
+  get clientHeight() {
+    return 200;
+  }
+  get scrollHeight() {
+    // A turn's text is in its body; the empty state holds its own text.
+    const text = (row) =>
+      row.children.length ? row.children[0].children[1].text : row.text;
+    const rows = this.children.reduce(
+      (sum, row) => sum + 40 + text(row).length,
+      0,
+    );
+    return Math.max(200, rows);
+  }
+  get scrollTop() {
+    return this.top;
+  }
+  set scrollTop(value) {
+    const before = this.top;
+    this.top = Math.min(Math.max(0, value), this.scrollHeight - 200);
+    if (this.top !== before) this.pending = true;
+  }
+  addEventListener(type, listener) {
+    if (type === "scroll") this.listeners.push(listener);
+  }
+  flush() {
+    if (!this.pending) return;
+    this.pending = false;
+    for (const listener of this.listeners) listener();
+  }
+  scrollTo(value, { queued = false } = {}) {
+    this.scrollTop = value;
+    if (!queued) this.flush();
+  }
+}
+
+const atEnd = (panel) =>
+  panel.scrollTop + panel.clientHeight >= panel.scrollHeight;
+const addTurns = (view, from, count) => {
+  for (let i = from; i < from + count; i++) {
+    view.upsert(`turn-${i}`, "interviewer", `Turn ${i}`, true, i);
+  }
+};
+
+test("the transcript follows new and growing turns", () => {
+  const panel = new LaidOutPanel();
+  const view = createTranscriptView(stubDocument, panel);
+  addTurns(view, 0, 10);
+  assert.ok(panel.scrollHeight > 200, "the panel overflows");
+  assert.ok(atEnd(panel), "a new turn is shown");
+  assert.ok(panel.classList.contains("following"), "anchoring is off");
+  // Our own follow queues a scroll event; it must not read as the candidate.
+  panel.flush();
+
+  view.upsert("open", "you", "So", false, 10);
+  panel.flush();
+  view.upsert("open", "you", `So ${"and then ".repeat(20)}`, false, 11);
+  assert.ok(atEnd(panel), "a growing turn stays in view");
+});
+
+test("the empty state is not followed, and the first turn follows", () => {
+  const panel = new LaidOutPanel();
+  const view = createTranscriptView(stubDocument, panel);
+  panel.children[0].text = "x".repeat(400); // a placeholder taller than 200px
+  view.reveal();
+  assert.equal(panel.scrollTop, 0, "the placeholder keeps its heading");
+
+  panel.scrollTo(40);
+  panel.scrollTo(0);
+  addTurns(view, 0, 10);
+  assert.ok(atEnd(panel), "reading the placeholder does not stop the follow");
+});
+
+test("a scroll still queued when a turn arrives is the candidate's", () => {
+  const panel = new LaidOutPanel();
+  const view = createTranscriptView(stubDocument, panel);
+  addTurns(view, 0, 10);
+  panel.flush();
+
+  panel.scrollTo(40, { queued: true });
+  addTurns(view, 10, 1);
+  panel.flush();
+  assert.equal(panel.scrollTop, 40);
+  assert.ok(!panel.classList.contains("following"), "anchoring is back on");
+});
+
+test("scrolling back to where the last follow started is the candidate's", () => {
+  const panel = new LaidOutPanel();
+  const view = createTranscriptView(stubDocument, panel);
+  addTurns(view, 0, 10);
+  panel.flush();
+  const before = panel.scrollTop;
+
+  addTurns(view, 10, 1);
+  panel.scrollTo(before, { queued: true });
+  addTurns(view, 11, 1);
+  panel.flush();
+  assert.equal(panel.scrollTop, before);
 });
 
 test("results markup reports counts and marks each case", () => {

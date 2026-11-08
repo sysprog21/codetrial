@@ -2029,6 +2029,13 @@ p {
   padding: 0.5rem;
 }
 
+/* Following, the transcript moves by its own rule (web/render.js), and a
+   browser anchor moving it when rows rewrap would read as the candidate
+   scrolling. Paused, that anchor is what keeps the reread line in place. */
+#transcript-panel.following {
+  overflow-anchor: none;
+}
+
 .transcript-row {
   display: flex;
   margin-bottom: 0.75rem;

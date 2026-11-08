@@ -356,6 +356,21 @@ Keeping the last turn lets the candidate reread a hint or follow-up question
 while thinking, without switching away from the problem. The Transcript tab
 still keeps every turn.
 
+The Transcript tab follows its newest turn with the checks in
+`web/scroll-follow.js` that the bar uses. A new turn, or a turn still growing,
+keeps the panel at its end until the candidate scrolls up, and scrolling back
+to the end resumes the follow. Unlike the bar, a new turn does not restart a
+follow the candidate stopped, since the earlier turns stay on the panel to
+reread. The empty state before the first turn is not followed, and scrolling it
+does not stop the follow. While the Problem tab is open the panel is hidden and
+has no range, so nothing that happens then changes the follow; opening the
+Transcript tab shows the end if the panel was following, and the place the
+candidate left otherwise. Only the panel scrolls, never the page. While it
+follows, the panel turns off the browser's scroll anchoring, whose move when
+rows rewrap would otherwise read as the candidate's scroll; paused, that
+anchoring is what keeps the line being reread in place. A resize while it
+follows, which fires no scroll event, keeps the panel at its end.
+
 An "Unclear" button beside the "Live CC:" label marks the Jim turn on screen,
 and pressing it again unmarks it. It shows only while a Jim turn is on screen,
 and once `MAX_UNCLEAR_LINES` (10) turns are marked it is disabled on any turn
