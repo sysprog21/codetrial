@@ -154,6 +154,14 @@ impl PeerFixture {
         body
     }
 
+    /// The state with the server's wall clock removed, for comparing two reads
+    /// that may straddle a second boundary.
+    async fn get_without_clock(&self, path: &str, member: usize) -> Value {
+        let mut state = self.get(path, member).await;
+        state.as_object_mut().unwrap().remove("serverNow");
+        state
+    }
+
     async fn create(&self) -> (String, Value) {
         let state = self.post("/api/peer/sessions", 0, json!({"topic":"","difficulty":"easy","language":"python","roundMinutes":25,"interviewerFirst":0})).await;
         let id = state["sessionId"].as_str().unwrap().to_string();

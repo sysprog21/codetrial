@@ -182,7 +182,7 @@ async fn an_invite_is_only_for_a_pending_session_with_its_creator_alone() {
 async fn a_session_action_with_extra_path_segments_is_not_found_and_changes_nothing() {
     let f = PeerFixture::new("peer-action-shape").await;
     let path = f.joined().await;
-    let before = f.get(&path, 0).await;
+    let before = f.get_without_clock(&path, 0).await;
     let extra = f
         .request(
             reqwest::Method::POST,
@@ -192,7 +192,7 @@ async fn a_session_action_with_extra_path_segments_is_not_found_and_changes_noth
         )
         .await;
     error(extra, 404, "not_found").await;
-    assert_eq!(f.get(&path, 0).await, before);
+    assert_eq!(f.get_without_clock(&path, 0).await, before);
     let bare = f
         .request(
             reqwest::Method::POST,
@@ -213,7 +213,7 @@ async fn a_session_action_with_extra_path_segments_is_not_found_and_changes_noth
             .await;
         error(long, 404, "not_found").await;
     }
-    assert_eq!(f.get(&path, 0).await, before);
+    assert_eq!(f.get_without_clock(&path, 0).await, before);
     f.close().await;
 }
 
