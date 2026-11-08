@@ -183,6 +183,7 @@ export function progressModelFrom(normalized, filters = {}) {
   const attempts = normalized.filter(
     (entry) =>
       matches(entry, "problemId") &&
+      matches(entry, "interviewMode") &&
       matches(entry, "difficulty") &&
       matches(entry, "language") &&
       matches(entry, "durationMin"),
@@ -330,6 +331,11 @@ function progressOptions(entries) {
           left.label.localeCompare(right.label) ||
           left.value.localeCompare(right.value),
       ),
+    interviewMode: values(
+      "interviewMode",
+      (left, right) =>
+        Number(left === "whiteboard") - Number(right === "whiteboard"),
+    ),
     difficulty: values(
       "difficulty",
       (left, right) => LEVELS.indexOf(left) - LEVELS.indexOf(right),

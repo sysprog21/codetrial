@@ -262,6 +262,74 @@ test("problem filtering combines with every existing filter for local and accoun
   }
 });
 
+test("mode filtering separates coding and whiteboard attempts and their options", () => {
+  const rows = [
+    entry("coding", "2026-01-01", 55),
+    entry("whiteboard", "2026-01-02", 65, { interviewMode: "whiteboard" }),
+    entry("legacy", "2026-01-03", 75, { interviewMode: undefined }),
+  ];
+  const model = buildProgressModel(rows);
+  assert.deepEqual(model.options.interviewMode, ["coding", "whiteboard"]);
+  assert.deepEqual(
+    buildProgressModel(rows, { interviewMode: "coding" }).attempts.map(
+      (row) => row.id,
+    ),
+    ["coding", "legacy"],
+    "a report saved before whiteboard mode existed is a coding attempt",
+  );
+  assert.deepEqual(
+    buildProgressModel(rows, { interviewMode: "whiteboard" }).attempts.map(
+      (row) => row.id,
+    ),
+    ["whiteboard"],
+  );
+  assert.equal(
+    buildProgressModel(rows, { interviewMode: "all" }).attempts.length,
+    3,
+  );
+});
+
+test("mode filtering combines with every existing filter for local and account history", () => {
+  const rows = [
+    entry("match", "2026-01-01", 55, { interviewMode: "whiteboard" }),
+    entry("coding", "2026-01-02", 60),
+    entry("difficulty", "2026-01-03", 65, {
+      interviewMode: "whiteboard",
+      difficulty: "Hard",
+    }),
+    entry("language", "2026-01-04", 70, {
+      interviewMode: "whiteboard",
+      language: "java",
+    }),
+    entry("duration", "2026-01-05", 75, {
+      interviewMode: "whiteboard",
+      durationMin: 60,
+    }),
+  ];
+  for (const account of [false, true]) {
+    const history = account
+      ? rows.map(({ problemId, ...payload }) => ({ problemId, payload }))
+      : rows;
+    const filters = {
+      interviewMode: "whiteboard",
+      difficulty: "Easy",
+      language: "python",
+      durationMin: "45",
+    };
+    assert.deepEqual(
+      buildProgressModel(history, filters).attempts.map((row) => row.id),
+      ["match"],
+    );
+    assert.deepEqual(
+      buildProgressModel(history, {
+        ...filters,
+        interviewMode: "all",
+      }).attempts.map((row) => row.id),
+      ["match", "coding"],
+    );
+  }
+});
+
 test("problem filtering preserves unassessed gaps and rubric boundaries", () => {
   const first = entry("first", "2026-01-01", 55);
   const gap = entry("gap", "2026-01-02", null);
