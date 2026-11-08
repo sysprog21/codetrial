@@ -22,6 +22,10 @@ function updateAvailability(active) {
 const requested = new URLSearchParams(location.search).get("session");
 const fragment = new URLSearchParams(location.hash.slice(1));
 if (fragment.has("invite")) {
+  // Waived per reference until this page's fix, which must find the invite token
+  // a home without storage: `storageArea(...).setItem` would pass the rule and
+  // still throw on null here. Each fix deletes its own directive.
+  // eslint-disable-next-line no-restricted-globals
   sessionStorage.setItem(INVITE_STORAGE_KEY, fragment.get("invite"));
   history.replaceState(null, "", location.pathname + location.search);
 }
@@ -179,6 +183,7 @@ async function init() {
   const account = await peerApi("/api/session");
   if (!account.signedIn) {
     byId("peer-signin").hidden = false;
+    // eslint-disable-next-line no-restricted-globals
     if (sessionStorage.getItem(INVITE_STORAGE_KEY))
       location.assign("/api/login?next=peer-join");
     status.textContent = "Sign in with GitHub to practice with a partner.";
@@ -244,6 +249,7 @@ async function enterReciprocalMode(account) {
   // the page without updates.
   clearInterval(timer);
   timer = setInterval(() => void refresh(), 5000);
+  // eslint-disable-next-line no-restricted-globals
   const invite = sessionStorage.getItem(INVITE_STORAGE_KEY);
   try {
     if (invite) {
@@ -252,9 +258,11 @@ async function enterReciprocalMode(account) {
       } catch (error) {
         // A rejected invitation never becomes valid, so a reload must not retry it.
         if (error.code === "invite_unavailable")
+          // eslint-disable-next-line no-restricted-globals
           sessionStorage.removeItem(INVITE_STORAGE_KEY);
         throw error;
       }
+      // eslint-disable-next-line no-restricted-globals
       sessionStorage.removeItem(INVITE_STORAGE_KEY);
       history.replaceState(
         null,

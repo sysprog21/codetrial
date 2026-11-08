@@ -561,6 +561,466 @@ lobbyTest(
   },
 );
 
+// Where site data is blocked, reading the `sessionStorage` global throws. Start
+// named the global in the arguments of its storage helpers, so the throw came
+// before any helper could answer it, and the candidate was left on the lobby.
+const blockSessionStorage = (page) =>
+  page.addInitScript(() => {
+    Object.defineProperty(window, "sessionStorage", {
+      get() {
+        throw new DOMException("blocked", "SecurityError");
+      },
+    });
+  });
+
+lobbyTest("Practice starts when session storage is blocked", async (page) => {
+  await blockSessionStorage(page);
+  const picked = (await lobby(page)).card;
+  await page.click("#start");
+  await page.waitForURL("**/interview?**");
+  assert.equal(new URL(page.url()).searchParams.get("problem"), picked);
+});
+
+// Unlike grounding, a ticked focus does not stop Start: `storeSharedFocus` holds
+// an unshared focus to be the safe outcome, and a refusal would land in the
+// collapsed section, leaving a Start that looks dead. The address bar must not
+// become the way round, since anyone can craft a link carrying that text.
+lobbyTest(
+  "Practice starts without a shared focus when session storage is blocked",
+  async (page) => {
+    await blockSessionStorage(page);
+    reports = [focusedAttempt(EASY[0])];
+    const state = await lobby(page);
+    assert.match(state.focus, /Test boundaries/);
+    await page.check("#practice-focus-share-input");
+    await page.click("#start");
+    await page.waitForURL("**/interview?**");
+    assert.equal(new URL(page.url()).searchParams.get("problem"), state.card);
+    assert.doesNotMatch(
+      decodeURIComponent(page.url()).replaceAll("+", " "),
+      /Test boundaries/,
+    );
+  },
+);
+
+// The packet can only reach the interview page through the tab's storage, so
+// starting without it would drop what the candidate chose. Clearing is the way
+// out the message offers, and it has to work with storage still blocked.
+lobbyTest(
+  "Practice with grounding offers clearing it when session storage is blocked",
+  async (page) => {
+    await blockSessionStorage(page);
+    await lobby(page);
+    await page.click("details.interview-context summary");
+    await page.setInputFiles("#grounding-jd", {
+      name: "jd.txt",
+      mimeType: "text/plain",
+      buffer: Buffer.from("Must know Rust"),
+    });
+    await page
+      .locator('#grounding-choices input[data-group="requirements"]')
+      .first()
+      .check();
+    await page.check("#grounding-consent");
+    await page.click("#start");
+    await page.waitForFunction(
+      () => document.querySelector("#grounding-error").textContent !== "",
+    );
+    assert.match(
+      await page.locator("#grounding-error").textContent(),
+      /Clear grounding to start normally/,
+    );
+    assert.equal(new URL(page.url()).pathname, "/");
+    await page.click("#grounding-clear");
+    await page.click("#start");
+    await page.waitForURL("**/interview?**");
+  },
+);
+
+// Where the block also refuses the session cookie, a recorded username would
+// reach the interview signed out and come straight back with its choices reset.
+// Phone-sized, because there Start sits far below the account row the reason
+// lands in, and a reason out of view is a Start that looks dead.
+lobbyTest(
+  "Start asks for site data before signing in when session storage is blocked",
+  async (page) => {
+    await blockSessionStorage(page);
+    session = {
+      signedIn: false,
+      loginRequired: true,
+      guestModeAvailable: false,
+    };
+    let logins = 0;
+    page.on("request", (request) => {
+      if (new URL(request.url()).pathname === "/api/login") logins++;
+    });
+    await lobby(page);
+    await page.fill("#github-login", "candidate");
+    await page.click("details.interview-context summary");
+    await page.setInputFiles("#grounding-jd", {
+      name: "jd.txt",
+      mimeType: "text/plain",
+      buffer: Buffer.from("Must know Rust"),
+    });
+    await page
+      .locator('#grounding-choices input[data-group="requirements"]')
+      .first()
+      .check();
+    await page.click("#start");
+    assert.match(
+      await page.locator("#grounding-error").textContent(),
+      /Agree to send/,
+    );
+    await page.check("#grounding-consent");
+    await page.click("#start");
+    await reaches(page, () =>
+      document
+        .querySelector("#account-status")
+        .textContent.includes("Signing in needs site data"),
+    );
+    assert.match(
+      await page.locator("#account-status").textContent(),
+      /Signing in needs site data/,
+    );
+    // Focus moves to the field, so a screen reader announces the field rather
+    // than the polite status update: the reason has to be its description.
+    assert.match(
+      await page.evaluate(() => {
+        const ids = document.activeElement.getAttribute("aria-describedby");
+        return `${document.activeElement.id}: ${(ids ?? "")
+          .split(/\s+/)
+          .map((id) => document.getElementById(id)?.textContent ?? "")
+          .join(" ")}`;
+      }),
+      /^github-login: Signing in needs site data/,
+    );
+    // The refusal the candidate just answered does not stay beside the reason.
+    assert.equal(await page.locator("#grounding-error").textContent(), "");
+    assert.equal(
+      await page.locator("#account-status").evaluate((node) => {
+        const box = node.getBoundingClientRect();
+        return box.top >= 0 && box.bottom <= window.innerHeight;
+      }),
+      true,
+    );
+    assert.equal(new URL(page.url()).pathname, "/");
+    assert.equal(logins, 0);
+    assert.equal(await page.isDisabled("#start"), false);
+  },
+  { viewport: { width: 375, height: 700 } },
+);
+
+// The reason belongs on the lobby as soon as the session asks for sign-in, not
+// after a press: asking for a username and then refusing it reads as a broken
+// form. Enter in the field still signs in exactly as Use GitHub does, for a
+// block on storage alone, where the cookie still holds.
+lobbyTest(
+  "the lobby says sign-in needs site data before Start when storage is blocked",
+  async (page) => {
+    await blockSessionStorage(page);
+    session = {
+      signedIn: false,
+      loginRequired: true,
+      guestModeAvailable: false,
+    };
+    let logins = 0;
+    page.on("request", (request) => {
+      if (new URL(request.url()).pathname === "/api/login") logins++;
+    });
+    await lobby(page);
+    await reaches(page, () =>
+      document
+        .querySelector("#account-status")
+        .textContent.startsWith("Signing in needs site data"),
+    );
+    assert.match(
+      await page.locator("#account-status").textContent(),
+      /^Signing in needs site data/,
+    );
+    assert.equal(await page.isVisible("#github-login"), true);
+    assert.equal(await page.isVisible("#login-link"), true);
+
+    // Held, so the login Enter starts is still open at the checks below: the
+    // Use GitHub handler disables its button before its first await, within the
+    // keypress itself, and it stays disabled while the POST waits. The request
+    // wait is armed before the press, so it cannot miss an early request, and
+    // settles into a value, so a failed check reports itself rather than this
+    // wait's rejection when the page closes.
+    let releaseLogin;
+    holdLogin = new Promise((resolve) => (releaseLogin = resolve));
+    const login = page
+      .waitForRequest(
+        (request) => new URL(request.url()).pathname === "/api/login",
+      )
+      .catch((error) => error);
+    await page.fill("#github-login", "candidate");
+    await page.press("#github-login", "Enter");
+    assert.equal(await page.isDisabled("#login-link"), true);
+    const request = await login;
+    assert.ok(!(request instanceof Error), String(request));
+    assert.equal(request.method(), "POST");
+    assert.equal(logins, 1);
+    holdLogin = null;
+    releaseLogin();
+
+    await reaches(page, () =>
+      document
+        .querySelector("#account-status")
+        .textContent.startsWith("Signed in as candidate"),
+    );
+    assert.match(
+      await page.locator("#account-status").textContent(),
+      /^Signed in as candidate/,
+    );
+    assert.equal(logins, 1);
+  },
+);
+
+// Until the session answers, the guard above cannot tell a server that requires
+// sign-in from one that admits guests, so Start waits rather than guessing.
+lobbyTest(
+  "Start waits for the session when session storage is blocked",
+  async (page) => {
+    await blockSessionStorage(page);
+    session = {
+      signedIn: false,
+      loginRequired: true,
+      guestModeAvailable: false,
+    };
+    let releaseSession;
+    holdSession = new Promise((resolve) => (releaseSession = resolve));
+    try {
+      const sessionRequest = page.waitForRequest(
+        (request) => new URL(request.url()).pathname === "/api/session",
+      );
+      await page.goto(`${base}/`, { waitUntil: "load" });
+      await sessionRequest;
+      await page.click("details.problem-picker summary");
+      await page.click(`[data-problem="${MEDIUM[0]}"]`);
+      assert.equal(await page.isDisabled("#start"), true);
+      await page.evaluate(() => {
+        document.querySelector("#start").dispatchEvent(new MouseEvent("click"));
+      });
+      await normalPageshow(page);
+      assert.equal(new URL(page.url()).pathname, "/");
+    } finally {
+      releaseSession();
+    }
+    await awaitReady(page);
+    assert.equal(new URL(page.url()).pathname, "/");
+    assert.equal(
+      (await page.locator("#start").textContent()).trim(),
+      "Use GitHub to start",
+    );
+    assert.equal(await page.isDisabled("#start"), false);
+  },
+);
+
+// A failed check cannot be waved through here as it is where storage works: a
+// server that requires sign-in would send the candidate straight back.
+lobbyTest(
+  "Start offers the account retry when the check fails and storage is blocked",
+  async (page) => {
+    await blockSessionStorage(page);
+    session = {
+      signedIn: false,
+      loginRequired: true,
+      guestModeAvailable: false,
+    };
+    failing.add("/api/session");
+    await lobby(page);
+    assert.equal(
+      await page.locator("#account-status").textContent(),
+      "Could not check your account. Retry the account check.",
+    );
+    // Nobody signed in, so there is nothing to sign out of.
+    assert.equal(await page.locator("#logout").isHidden(), true);
+    assert.equal(await page.isDisabled("#start"), true);
+    await page.evaluate(() => {
+      document.querySelector("#start").dispatchEvent(new MouseEvent("click"));
+    });
+    await normalPageshow(page);
+    assert.equal(new URL(page.url()).pathname, "/");
+
+    failing.delete("/api/session");
+    await page.click("#login-link");
+    await awaitReady(page);
+    assert.equal(
+      (await page.locator("#start").textContent()).trim(),
+      "Use GitHub to start",
+    );
+    assert.equal(await page.isDisabled("#start"), false);
+  },
+);
+
+// No login lies behind this retry, so its answer must not read as a failed one.
+lobbyTest(
+  "a retry on a guest server does not ask for a sign-in that never happened",
+  async (page) => {
+    await blockSessionStorage(page);
+    session = {
+      signedIn: false,
+      loginRequired: true,
+      guestModeAvailable: true,
+    };
+    let logins = 0;
+    page.on("request", (request) => {
+      if (new URL(request.url()).pathname === "/api/login") logins++;
+    });
+    failing.add("/api/session");
+    await lobby(page);
+    failing.delete("/api/session");
+    await page.click("#login-link");
+    await awaitReady(page);
+    assert.doesNotMatch(
+      await page.locator("#account-status").textContent(),
+      /Try signing in again/,
+    );
+    assert.equal(logins, 0);
+    assert.equal(await page.isDisabled("#start"), false);
+  },
+);
+
+// The answer that matters most: a retry that finds the candidate signed in has
+// to clear the failed check, or Start and every delete stay down for good.
+lobbyTest(
+  "a signed-in answer to the retry releases Start when storage is blocked",
+  async (page) => {
+    await blockSessionStorage(page);
+    failing.add("/api/session");
+    await lobby(page);
+    assert.equal(await page.isDisabled("#start"), true);
+    failing.delete("/api/session");
+    await page.click("#login-link");
+    await awaitReady(page);
+    assert.equal(await page.isDisabled("#start"), false);
+    assert.match(
+      await page.locator("#account-status").textContent(),
+      /Signed in as candidate/,
+    );
+  },
+);
+
+// Coming back from a Start that left: the retry state must not keep showing the
+// label of a start that is no longer on its way.
+lobbyTest(
+  "a restored lobby drops Starting when the check fails and storage is blocked",
+  async (page) => {
+    await blockSessionStorage(page);
+    session = { signedIn: false, loginRequired: false };
+    await lobby(page);
+    // Put there rather than pressed: a navigation held open stalls every later
+    // step of the test, and only what the restore does with the label is at stake.
+    await page.evaluate(() => {
+      document.querySelector("#start").textContent = "Starting...";
+    });
+    failing.add("/api/session");
+    await restore(page);
+    assert.equal(
+      await reaches(page, () =>
+        document
+          .querySelector("#account-status")
+          .textContent.includes("Could not check your account"),
+      ),
+      true,
+    );
+    assert.equal(
+      (await page.locator("#start").textContent()).trim(),
+      "Start interview",
+    );
+  },
+);
+
+// A login the server accepted stays known as recorded: only the account check
+// after it failed, and the candidate should not be told the sign-in is in doubt.
+lobbyTest(
+  "a recorded login stays recorded when the check fails and storage is blocked",
+  async (page) => {
+    await blockSessionStorage(page);
+    session = {
+      signedIn: false,
+      loginRequired: true,
+      guestModeAvailable: false,
+    };
+    await page.route("**/api/login", (route) => {
+      failing.add("/api/session");
+      return route.fulfill({ json: { ok: true } });
+    });
+    await lobby(page);
+    await page.fill("#github-login", "candidate");
+    await page.click("#login-link");
+    await reaches(page, () =>
+      document
+        .querySelector("#account-status")
+        .textContent.includes("account could not be refreshed"),
+    );
+    assert.match(
+      await page.locator("#account-status").textContent(),
+      /GitHub username recorded, but the account could not be refreshed/,
+    );
+  },
+);
+
+// The hold is for blocked storage alone: elsewhere Practice may still start on
+// a manual pick before the account answers.
+lobbyTest(
+  "Start does not wait for the session when storage works",
+  async (page) => {
+    session = {
+      signedIn: false,
+      loginRequired: true,
+      guestModeAvailable: false,
+    };
+    let releaseSession;
+    holdSession = new Promise((resolve) => (releaseSession = resolve));
+    try {
+      const sessionRequest = page.waitForRequest(
+        (request) => new URL(request.url()).pathname === "/api/session",
+      );
+      await page.goto(`${base}/`, { waitUntil: "load" });
+      await sessionRequest;
+      await page.click("details.problem-picker summary");
+      await page.click(`[data-problem="${MEDIUM[0]}"]`);
+      assert.equal(await page.isDisabled("#start"), false);
+    } finally {
+      releaseSession();
+    }
+  },
+);
+
+// A signed-out answer is an answer: where guests are admitted, blocked storage
+// is no reason to offer a retry, and Start goes on to the interview.
+lobbyTest(
+  "a guest starts when the session answers and storage is blocked",
+  async (page) => {
+    await blockSessionStorage(page);
+    session = { signedIn: false, loginRequired: false };
+    await lobby(page);
+    assert.equal(await page.isDisabled("#start"), false);
+    await page.click("#start");
+    await page.waitForURL("**/interview?**");
+  },
+);
+
+// Strict cannot run without the tab's storage, so it stays on the lobby. What is
+// pinned is that the reason is the one selection.js wrote for the candidate, not
+// the browser's own exception text.
+lobbyTest("Strict names session storage when it is blocked", async (page) => {
+  await blockSessionStorage(page);
+  await lobby(page);
+  await page.selectOption("#selection-mode", "strict");
+  await page.click("#start");
+  await page.waitForFunction(
+    () => document.querySelector("#grounding-error").textContent !== "",
+  );
+  assert.match(
+    await page.locator("#grounding-error").textContent(),
+    /Strict Interview needs session storage/,
+  );
+  assert.equal(new URL(page.url()).pathname, "/");
+  assert.equal(await page.isDisabled("#start"), false);
+});
+
 lobbyTest(
   "editor options default to all five features enabled",
   async (page) => {

@@ -1,3 +1,5 @@
+import { storageArea } from "./audio-output.js";
+
 export const historyKey = "codetrial_history";
 export const reviewHistoryKey = "codetrial_review_history";
 
@@ -13,6 +15,16 @@ const REVIEW_HISTORY_BYTES = 164 * 1024;
 /// the Delete button disabled, because the finally that re-enables it never runs.
 /// A deadline turns both into the failure they already know how to report.
 const requestTimeoutMs = 10_000;
+
+/// The store a caller passed, or this device's, and a throw where neither can be
+/// reached. `storageArea` answers null there, and `storedList` reads a null store
+/// as "no list stored", so carrying it on would let `deleteReport` claim a removal
+/// it never ran. The throw reaches each caller's catch, as the bare global's did.
+function deviceStorage(storage) {
+  const store = storage || storageArea("localStorage");
+  if (!store) throw new Error("local storage is unavailable");
+  return store;
+}
 
 /// Always a list. The key sits in the origin's local storage, which an older
 /// build, another tab, or anyone with devtools open can write, so what it holds
@@ -34,7 +46,7 @@ export function readLocalHistory(storage) {
 /// not a list, and the shape check already turns that into one.
 function storedList(key, storage) {
   try {
-    const stored = JSON.parse((storage || localStorage).getItem(key));
+    const stored = JSON.parse(deviceStorage(storage).getItem(key));
     return Array.isArray(stored) ? stored : null;
   } catch {
     return null;
@@ -43,7 +55,7 @@ function storedList(key, storage) {
 
 export function readReviewHistory(storage) {
   try {
-    storage ||= localStorage;
+    storage = deviceStorage(storage);
     const stored = storedList(reviewHistoryKey, storage);
     if (stored) return stored;
     const { retained, json } = boundedReviews(readLocalHistory(storage));
@@ -73,7 +85,7 @@ export function readReviewHistory(storage) {
 /// deduplicated within a store quietly merged them.
 export function readDeviceHistory(storage) {
   try {
-    storage ||= localStorage;
+    storage = deviceStorage(storage);
     const history = readLocalHistory(storage);
     const reviews = readReviewHistory(storage);
     // Mutates both arrays, and writes both stores when it has anything to say.
@@ -194,7 +206,7 @@ function legacyKey(entry) {
 /// from the history when it is first read, after this has run.
 export function renameLocalHistory(pages, storage, markUnmapped = false) {
   try {
-    storage ||= localStorage;
+    storage = deviceStorage(storage);
     const history = renamedEntries(
       readLocalHistory(storage),
       pages,
@@ -301,7 +313,7 @@ export async function clearReportHistory({
       return "failed";
     }
     try {
-      storage ||= localStorage;
+      storage = deviceStorage(storage);
       storage.removeItem(historyKey);
       storage.removeItem(reviewHistoryKey);
       return "cleared";
@@ -348,7 +360,7 @@ export async function deleteReport(
     }
     let removed = fromAccount;
     try {
-      storage ||= localStorage;
+      storage = deviceStorage(storage);
       // A missing review store is left missing: it is rebuilt from the short
       // history on its first read, and that no longer holds the report.
       for (const key of [historyKey, reviewHistoryKey]) {
@@ -374,7 +386,7 @@ export async function deleteReport(
 
 function saveLocalReport(entry, storage) {
   try {
-    storage ||= localStorage;
+    storage = deviceStorage(storage);
     const previous = readLocalHistory(storage);
     // The short history first, and before the review store is even read.
     // Reading it can rebuild it, and that write is the 164 KB one: spending the
