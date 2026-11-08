@@ -6,6 +6,7 @@
 /// and idle timeout.
 
 import { captionWindow, MAX_UNCLEAR_LINES } from "./lib.js";
+import { atScrollEnd, scrolledByCandidate } from "./scroll-follow.js";
 
 let nodes = null;
 
@@ -21,9 +22,6 @@ const CAPTION_CHARS_PER_TICK = 8;
 // Only the candidate's caption is windowed. Jim's turn is what the candidate
 // has to answer, so the bar scrolls rather than cutting its opening.
 const CAPTION_MAX_CHARS = 160;
-// Slack for the fractional scrollTop that zoomed layouts report against whole
-// pixels of scrollHeight and clientHeight.
-const CAPTION_END_SLACK_PX = 2;
 // Candidate captions and the listening placeholder should clear when idle.
 const CAPTION_IDLE_HIDE_MS = 12000;
 let captionIdleTimer = null;
@@ -128,8 +126,8 @@ export function paceInterviewerCaption() {
   const bar = nodes.captionsBar;
   // A scroll the candidate made since the last tick can still be queued, and
   // this tick's follow would write over it; the bar has already moved, though.
-  if (bar && jimOnBar && candidateMoved(bar)) {
-    caption.following = atCaptionEnd(bar);
+  if (bar && jimOnBar && scrolledByCandidate(bar, seenTop)) {
+    caption.following = atScrollEnd(bar);
   }
   caption.shown = Math.min(
     caption.text.length,
@@ -165,27 +163,10 @@ export function paceInterviewerCaption() {
 function trackCandidateScroll() {
   const bar = nodes.captionsBar;
   if (!jimOnBar) return;
-  if (candidateMoved(bar)) interviewerCaption.following = atCaptionEnd(bar);
+  if (scrolledByCandidate(bar, seenTop)) {
+    interviewerCaption.following = atScrollEnd(bar);
+  }
   seenTop = bar.scrollTop;
-}
-
-/// The browser moves the bar on its own only by clamping it into a range that
-/// shrank, which leaves it at the smaller of where it was and the new bottom:
-/// a bar that shrank under a follow stays put, a bar that grew taller under a
-/// candidate near the end lands on the new bottom, and a hidden bar, whose
-/// range is zero, sits at the top. Anything else is the candidate scrolling.
-function candidateMoved(bar) {
-  const bottom = Math.max(0, bar.scrollHeight - bar.clientHeight);
-  // Under zoom scrollTop is fractional while the bottom is whole pixels.
-  return (
-    Math.abs(bar.scrollTop - Math.min(seenTop, bottom)) > CAPTION_END_SLACK_PX
-  );
-}
-
-function atCaptionEnd(bar) {
-  return (
-    bar.scrollTop + bar.clientHeight >= bar.scrollHeight - CAPTION_END_SLACK_PX
-  );
 }
 
 /// Completed interviewer turns remain available while the candidate thinks.
