@@ -12,6 +12,8 @@
 #   test_diffmodel.py                  reading a diff: lines, words, moves
 #   test_interactive_review_hook.py    200-line and 500-line thresholds, evidence,
 #                                      certificates, markers, real hook runs
+#   test_review_explainer.py           the reference-note draft and its citations
+#   test_review_intentdebt.py          the three-debt signals and the intent record
 #   test_review_workbench.py           the local server, state, stale requests,
 #                                      reflections, diff and size handling
 #   test_review_worker.py              the optional Codex worker's lifecycle
@@ -72,6 +74,8 @@ suite test_agent_guard.py
 suite test_diffmodel.py
 suite test_interactive_review_hook.py
 suite test_review_workbench.py --jobs 1
+suite test_review_explainer.py --jobs 1
+suite test_review_intentdebt.py
 suite test_review_worker.py --jobs 1
 suite test_review_lifecycle.py --jobs 1
 suite test_skill_scripts.py

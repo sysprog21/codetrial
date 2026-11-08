@@ -900,6 +900,19 @@ test(
     assert.equal(await page.locator("#finished").isVisible(), false);
     assert.equal(server.exitCode, null);
     assert.equal(inspect().status, "explanation_complete");
+    // The intent record is edited beside the notice, which it leaves showing:
+    // finishing must not close the server on what was typed there either.
+    await box.fill(text);
+    await page.locator("#save").click();
+    await page.locator("#completion-notice").waitFor({ state: "visible" });
+    await openIntent(page);
+    await page.locator("#intent-goal").fill("Keep the why next to the change.");
+    await page.locator("#close-window").click();
+    await page
+      .getByText("Save your latest edit before finishing", { exact: false })
+      .waitFor();
+    assert.equal(await page.locator("#finished").isVisible(), false);
+    assert.equal(server.exitCode, null);
   },
 );
 
@@ -1221,6 +1234,736 @@ test(
     assert.deepEqual(
       marked.map((x) => x.trim()),
       ["new_one", "old_two"],
+    );
+  },
+);
+
+const CACHE_DIFF = `diff --git a/src/cache.rs b/src/cache.rs
+--- a/src/cache.rs
++++ b/src/cache.rs
+@@ -10,5 +10,6 @@ fn get
+ fn get(key: &str) -> Option<Value> {
+-    db.load(key)
++    let hit = cache.lookup(key);
++    hit.or_else(|| db.load(key))
+ }
+${" "}
+ fn put() {}
+`;
+
+test(
+  "a reference note with a diagram, table and quoted code is drawn from the pinned diff",
+  { timeout: 30000 },
+  async (t) => {
+    if (!browser) return t.skip("playwright chromium unavailable");
+    const { page, args, bundle, inspect } = await start(
+      t,
+      [],
+      false,
+      CACHE_DIFF,
+      [{ path: "src/cache.rs", additions: 2, deletions: 1 }],
+    );
+    await page
+      .locator('textarea[name="motivation"]')
+      .fill(
+        "Every get reached the database, so the cache lookup has to come first and only a miss may fall through to it.",
+      );
+    await page.locator("#send").click();
+    await page.getByText("Sent to your review task", { exact: true }).waitFor();
+    const sent = inspect();
+    const note = [
+      "The lookup now precedes the database, see @src/cache.rs:11.",
+      "",
+      "```flow LR",
+      "get -> cache: looked up first @src/cache.rs:11",
+      "cache --> <img src=x onerror=alert(1)>: on a miss",
+      "```",
+      "",
+      "| Option | Cost |",
+      "| --- | --- |",
+      "| Read through | one lookup @src/cache.rs:12 |",
+      "",
+      "```code src=src/cache.rs lines=11-12",
+      "```",
+    ].join("\n");
+    const feedback = join(bundle, "feedback.json");
+    writeFileSync(
+      feedback,
+      JSON.stringify({
+        identity: sent.identity,
+        answer_digest: sent.answer_digest,
+        notes: [{ field: "motivation", text: note }],
+      }),
+    );
+    execFileSync(python, [
+      helper,
+      "feedback",
+      ...args,
+      "--request-id",
+      sent.request_id,
+      "--file",
+      feedback,
+    ]);
+    await page.locator(".ex-figure svg").waitFor();
+    // The picture has a text equivalent, and the guess is named as one.
+    assert.match(
+      (await page.locator(".ex-figure svg").getAttribute("aria-label")) ?? "",
+      /get to cache/,
+    );
+    assert.equal(await page.locator(".ex-edges li").count(), 2);
+    assert.equal(await page.locator(".ex-edge.ex-inferred").count(), 1);
+    assert.equal(await page.locator(".ex-edge:not(.ex-inferred)").count(), 1);
+    assert.match(
+      (await page.locator(".ex-edges li .ex-tag").textContent()) ?? "",
+      /inferred/,
+    );
+    // A citation in prose is a button too, not the raw "@path:N" text.
+    assert.equal(await page.locator(".ex-note-body > p .ex-cite").count(), 1);
+    assert.equal(await page.getByText("@src/cache.rs").count(), 0);
+    assert.equal(await page.locator(".ex-table tbody tr").count(), 1);
+    assert.equal(await page.locator(".ex-code .ex-row.k-a").count(), 2);
+    // A note is data: its markup is shown, never parsed.
+    assert.equal(await page.locator("#feedback-list img").count(), 0);
+    await page.getByText("<img src=x onerror=alert(1)>").first().waitFor();
+    // A citation opens its line in the diff.
+    await page.locator("#diff .file-toggle").click();
+    await page.locator(".ex-edges .ex-cite").first().click();
+    await page.locator("#diff .cited").first().waitFor();
+    assert.equal(await page.locator("#diff .file-body").isVisible(), true);
+    assert.match(
+      (await page.locator("#diff .cited").first().textContent()) ?? "",
+      /cache\.lookup/,
+    );
+  },
+);
+
+test("citation waits for all chunks and the latest request wins", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const { page } = await start(t);
+  const result = await page.evaluate(async () => {
+    const { DiffView } = await import("/diffview.js");
+    const frames = [];
+    const original = window.requestAnimationFrame;
+    window.requestAnimationFrame = (callback) => frames.push(callback);
+    try {
+      const root = document.createElement("div");
+      document.body.append(root);
+      const view = new DiffView({
+        root,
+        notice: document.createElement("div"),
+        summary: document.createElement("div"),
+        position: document.createElement("div"),
+      });
+      const lines = Array.from({ length: 500 }, (_, i) => ({
+        k: "a",
+        n: i + 1,
+        t: `line ${i + 1}`,
+      }));
+      view.setModel({
+        problems: [],
+        files: [
+          {
+            path: "a",
+            status: "modified",
+            additions: 500,
+            deletions: 0,
+            hunks: [
+              {
+                old_start: 1,
+                old_count: 0,
+                new_start: 1,
+                new_count: 500,
+                lines,
+              },
+            ],
+          },
+        ],
+      });
+      view.show({ path: "a" });
+      view.reveal({ side: "new", start: 2, end: 3 });
+      view.reveal({ side: "new", start: 398, end: 402 });
+      while (frames.length) frames.shift()();
+      return [...root.querySelectorAll(".cited")].map((row) =>
+        Number(row.dataset.n),
+      );
+    } finally {
+      window.requestAnimationFrame = original;
+    }
+  });
+  assert.deepEqual(result, [398, 399, 400, 401, 402]);
+});
+
+test("a poll that changes nothing leaves a focused citation where it was", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const { page, args, bundle, inspect } = await start(
+    t,
+    [],
+    false,
+    CACHE_DIFF,
+    [{ path: "src/cache.rs", additions: 2, deletions: 1 }],
+  );
+  await page
+    .locator('textarea[name="motivation"]')
+    .fill(
+      "The lookup has to come first, and only a miss may fall through to the database.",
+    );
+  await page.locator("#send").click();
+  await page.getByText("Sent to your review task", { exact: true }).waitFor();
+  const sent = inspect();
+  const feedback = join(bundle, "feedback.json");
+  writeFileSync(
+    feedback,
+    JSON.stringify({
+      identity: sent.identity,
+      answer_digest: sent.answer_digest,
+      notes: [
+        {
+          field: "motivation",
+          text: "The lookup comes first, see @src/cache.rs:11.",
+        },
+      ],
+    }),
+  );
+  execFileSync(python, [
+    helper,
+    "feedback",
+    ...args,
+    "--request-id",
+    sent.request_id,
+    "--file",
+    feedback,
+  ]);
+  const chip = page.locator(".ex-note-body .ex-cite");
+  await chip.waitFor();
+  await chip.focus();
+  await page.evaluate(() => {
+    window.__chip = document.activeElement;
+  });
+  // The page polls every five seconds; wait for one that carries no new feedback.
+  // Wait for an actual poll, and for the page to have handled it.
+  await afterPoll(page);
+  const kept = await page.evaluate(
+    () => document.activeElement === window.__chip && window.__chip.isConnected,
+  );
+  assert.equal(kept, true, "the citation button was rebuilt and lost focus");
+});
+
+// Starts a review, answers it, and has the reviewer reply with `note`.
+async function referenced(t, patch, files, note) {
+  const ctx = await start(t, [], false, patch, files);
+  await ctx.page
+    .locator('textarea[name="motivation"]')
+    .fill(
+      "The lookup has to come first, and only a miss may fall through to the database.",
+    );
+  await ctx.page.locator("#send").click();
+  await ctx.page
+    .getByText("Sent to your review task", { exact: true })
+    .waitFor();
+  const sent = ctx.inspect();
+  const feedback = join(ctx.bundle, "feedback.json");
+  writeFileSync(
+    feedback,
+    JSON.stringify({
+      identity: sent.identity,
+      answer_digest: sent.answer_digest,
+      notes: [{ field: "motivation", text: note }],
+    }),
+  );
+  execFileSync(python, [
+    helper,
+    "feedback",
+    ...ctx.args,
+    "--request-id",
+    sent.request_id,
+    "--file",
+    feedback,
+  ]);
+  return ctx;
+}
+// The page polls every five seconds: wait for one, and for the page to have handled it.
+// The intent record is a disclosure: open it the way a reader does.
+async function openIntent(page) {
+  const details = page.locator("#intent-details");
+  await details.waitFor({ state: "attached" });
+  if (!(await details.evaluate((node) => node.open)))
+    await page.locator("#intent-details > summary").click();
+  await page.locator("#intent-form").waitFor();
+}
+
+async function afterPoll(page) {
+  const response = await page.waitForResponse(
+    (r) => r.request().method() === "GET" && r.url().endsWith("/api/session"),
+    { timeout: 15000 },
+  );
+  await response.finished();
+  // The page renders what it received before its next two frames.
+  await page.evaluate(
+    () =>
+      new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve)),
+      ),
+  );
+}
+const CACHE_FILES = [{ path: "src/cache.rs", additions: 2, deletions: 1 }];
+
+test("a label of the widest letters still fits inside its picture", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const wide = "W".repeat(48);
+  const note = ["LR", "TB"]
+    .flatMap((dir) => [
+      "```flow " + dir,
+      `a -> b: ${wide} @src/cache.rs:11`,
+      "```",
+      "",
+    ])
+    .join("\n");
+  const { page } = await referenced(t, CACHE_DIFF, CACHE_FILES, note);
+  await page.locator(".ex-figure svg").first().waitFor();
+  const out = await page.evaluate(() =>
+    [...document.querySelectorAll(".ex-figure svg")].map((svg) => {
+      const [x, y, w, h] = svg.getAttribute("viewBox").split(" ").map(Number);
+      return [...svg.querySelectorAll("text")]
+        .map((text) => text.getBBox())
+        .filter(
+          (b) =>
+            b.x < x - 0.5 ||
+            b.y < y - 0.5 ||
+            b.x + b.width > x + w + 0.5 ||
+            b.y + b.height > y + h + 0.5,
+        ).length;
+    }),
+  );
+  assert.deepEqual(
+    out,
+    [0, 0],
+    "text drawn outside the viewBox, so it would be clipped",
+  );
+});
+
+test("a citation jump moves focus to the line and says where it went", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const { page } = await referenced(
+    t,
+    CACHE_DIFF,
+    CACHE_FILES,
+    "The lookup comes first, see @src/cache.rs:11-12.",
+  );
+  await page.locator(".ex-note-body .ex-cite").click();
+  await page.locator("#diff .cited").first().waitFor();
+  const state = await page.evaluate(() => ({
+    focused: document.activeElement?.classList.contains("cited"),
+    status: document.getElementById("diff-notice").textContent,
+    live: document.getElementById("diff-notice").getAttribute("role"),
+  }));
+  assert.equal(state.focused, true, "focus stayed on the citation");
+  assert.match(state.status, /Showing src\/cache\.rs, lines 11\u201312\./);
+  assert.equal(state.live, "status");
+});
+
+test("a citation to a line the whitespace filter hides turns the filter off", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const patch = `diff --git a/src/ws.rs b/src/ws.rs
+--- a/src/ws.rs
++++ b/src/ws.rs
+@@ -1,3 +1,3 @@
+ fn f() {
+-    return 1;
++        return 1;
+ }
+`;
+  const { page } = await referenced(
+    t,
+    patch,
+    [{ path: "src/ws.rs", additions: 1, deletions: 1 }],
+    "It only re-indents @src/ws.rs:o2.",
+  );
+  await page.locator("#diff-ws").check();
+  await page.locator(".ex-note-body .ex-cite").click();
+  await page.locator("#diff .cited").first().waitFor();
+  assert.equal(await page.locator("#diff-ws").isChecked(), false);
+  assert.match(
+    (await page.locator("#diff .cited").first().textContent()) ?? "",
+    /return 1/,
+  );
+});
+
+test("a citation finds its own file when two files share a line number", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const { page } = await start(t);
+  const marked = await page.evaluate(async () => {
+    const { DiffView } = await import("/diffview.js");
+    const root = document.createElement("div");
+    document.body.append(root);
+    const view = new DiffView({
+      root,
+      notice: document.createElement("div"),
+      summary: document.createElement("div"),
+      position: document.createElement("div"),
+    });
+    const file = (path) => ({
+      path,
+      status: "modified",
+      additions: 1,
+      deletions: 0,
+      hunks: [
+        {
+          old_start: 1,
+          old_count: 0,
+          new_start: 1,
+          new_count: 2,
+          lines: [
+            { k: "c", n: 1, o: 1, t: "one" },
+            { k: "a", n: 2, o: null, t: `${path} two` },
+          ],
+        },
+      ],
+    });
+    view.setModel({ problems: [], files: [file("a.rs"), file("b.rs")] });
+    view.show({});
+    view.reveal({ path: "b.rs", side: "new", start: 2, end: 2 });
+    return [...root.querySelectorAll(".cited")].map((row) => row.textContent);
+  });
+  assert.equal(marked.length, 1);
+  assert.match(marked[0], /b\.rs two/);
+});
+
+const GUARD_DIFF = `diff --git a/src/cache.rs b/src/cache.rs
+--- a/src/cache.rs
++++ b/src/cache.rs
+@@ -1,6 +1,3 @@
+ fn get(key: &str) -> Option<Value> {
+-    if key.is_empty() {
+-        return None;
+-    }
+     db.load(key)
+ }
+`;
+const GUARD_FILES = [{ path: "src/cache.rs", additions: 0, deletions: 3 }];
+
+test("the change is shown as three debts, and a removed check opens at its old line", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const { page } = await start(t, [], false, GUARD_DIFF, GUARD_FILES);
+  await page.locator(".debt-card").first().waitFor();
+  assert.deepEqual(await page.locator(".debt-card h3").allTextContents(), [
+    "Code",
+    "People",
+    "Intent",
+  ]);
+  const code = page.locator(".debt-card").nth(0);
+  assert.match(
+    (await code.textContent()) ?? "",
+    /2 removed lines look like a check or an early exit/,
+  );
+  assert.match(
+    (await page.locator(".debt-card").nth(2).textContent()) ?? "",
+    /No changed test file was recognized/,
+  );
+  // Observations and questions, never a score: look at the cards, not the heading
+  // that says so.
+  assert.doesNotMatch(
+    (await page.locator("#debt-layers").textContent()) ?? "",
+    /score|rating|\d+\s*\/\s*10/i,
+  );
+  await code.locator(".ex-cite").first().click();
+  await page.locator("#diff .cited").first().waitFor();
+  assert.match(
+    (await page.locator("#diff .cited").first().textContent()) ?? "",
+    /key\.is_empty\(\)/,
+  );
+  assert.match(
+    (await page.locator("#diff-notice").textContent()) ?? "",
+    /Showing src\/cache\.rs, old line 2\./,
+  );
+});
+
+test("the intent record is the contributor's own, survives a reload and copies as text", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const { page, inspect } = await start(t, [], false, GUARD_DIFF, GUARD_FILES);
+  await openIntent(page);
+  const before = inspect();
+  await page.evaluate(() => {
+    window.__copied = null;
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText: async (text) => (window.__copied = text) },
+      configurable: true,
+    });
+  });
+  assert.equal(
+    await page.locator("#intent-copy").isDisabled(),
+    true,
+    "nothing written yet",
+  );
+  await page
+    .locator("#intent-goal")
+    .fill("A miss must still reach the database.");
+  await page
+    .locator("#intent-check")
+    .fill("tests/cache_test.rs::miss_reaches_db");
+  await page.locator("#intent-home").selectOption("pr");
+  // A poll must not overwrite what is being typed: wait for one, and for the page to handle it.
+  await afterPoll(page);
+  assert.equal(
+    await page.locator("#intent-goal").inputValue(),
+    "A miss must still reach the database.",
+  );
+  await page.locator("#intent-save").click();
+  await page.getByText("Saved on this computer", { exact: true }).waitFor();
+  await page.reload();
+  // A record already started opens by itself, so it is not hidden on return.
+  await page.locator("#intent-goal").waitFor();
+  assert.equal(
+    await page.locator("#intent-details").evaluate((node) => node.open),
+    true,
+  );
+  await page.waitForFunction(
+    () => document.getElementById("intent-goal").value !== "",
+  );
+  assert.equal(
+    await page.locator("#intent-goal").inputValue(),
+    "A miss must still reach the database.",
+  );
+  assert.equal(await page.locator("#intent-home").inputValue(), "pr");
+  await page.evaluate(() => {
+    window.__copied = null;
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText: async (text) => (window.__copied = text) },
+      configurable: true,
+    });
+  });
+  await page.locator("#intent-copy").click();
+  const copied = await page.evaluate(() => window.__copied);
+  assert.equal(
+    copied,
+    "### Why this change exists\n\n- **Goal:** A miss must still reach the database.\n- **Checked by:** tests/cache_test.rs::miss_reaches_db\n",
+  );
+  // It is not part of the answers, so nothing the gate reads has moved.
+  const after = inspect();
+  for (const key of ["answer_digest", "identity", "revision", "status"])
+    assert.equal(after[key], before[key], key);
+});
+
+test("typing during a save is kept, not overwritten by the save or the next poll", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const { page } = await start(t, [], false, GUARD_DIFF, GUARD_FILES);
+  await openIntent(page);
+  // The save is held in flight until the test has typed, then released.
+  let release;
+  const held = new Promise((resolve) => (release = resolve));
+  await page.route("**/api/intent", async (route) => {
+    await held;
+    await route.continue();
+  });
+  await page.locator("#intent-goal").fill("First draft.");
+  await page.locator("#intent-save").click();
+  await page.locator("#intent-goal").pressSequentially(" More.");
+  await page.waitForFunction(
+    () =>
+      document.getElementById("intent-status").textContent ===
+      "Unsaved changes",
+    null,
+    { timeout: 5000 },
+  );
+  release();
+  await page.waitForResponse((r) => r.url().endsWith("/api/intent"));
+  await afterPoll(page);
+  assert.equal(
+    await page.locator("#intent-goal").inputValue(),
+    "First draft. More.",
+  );
+  assert.equal(
+    await page.locator("#intent-status").textContent(),
+    "Unsaved changes",
+  );
+});
+
+test("the intent record copies every answer under its label, in one line each", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const { page } = await start(t);
+  const [full, blank] = await page.evaluate(async () => {
+    const { intentMarkdown } = await import("/debtlens.js");
+    return [
+      intentMarkdown({
+        goal: "A\n   B",
+        constraints: "C",
+        alternatives: "D",
+        check: "E",
+        backup: "F",
+        home: "pr",
+      }),
+      intentMarkdown({ goal: "  ", home: "pr" }),
+    ];
+  });
+  assert.equal(
+    full,
+    "### Why this change exists\n\n- **Goal:** A B\n- **Must stay true:** C\n- **Not done, and why:** D\n- **Checked by:** E\n- **Also understood by:** F\n",
+  );
+  assert.equal(blank, "", "nothing written, nothing to copy");
+});
+
+test("the copy button says why it is off, and a citation jump is announced", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const { page } = await referenced(
+    t,
+    CACHE_DIFF,
+    CACHE_FILES,
+    "The lookup comes first, see @src/cache.rs:11.",
+  );
+  await openIntent(page);
+  assert.equal(await page.locator("#intent-copy").isDisabled(), true);
+  assert.equal(
+    await page.locator("#intent-status").textContent(),
+    "Write an answer to enable copying.",
+  );
+  await page.locator("#intent-goal").fill("x");
+  assert.equal(await page.locator("#intent-copy").isDisabled(), false);
+  await page.locator(".ex-note-body .ex-cite").click();
+  await page.waitForFunction(
+    () =>
+      /Showing src\/cache\.rs, line 11\./.test(
+        document.getElementById("diff-live").textContent,
+      ),
+    null,
+    { timeout: 5000 },
+  );
+});
+
+test("unsaved intent text asks before the page is left, and saving clears it", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const { page } = await start(t, [], false, GUARD_DIFF, GUARD_FILES);
+  await openIntent(page);
+  const prevented = () =>
+    page.evaluate(() => {
+      const event = new Event("beforeunload", { cancelable: true });
+      window.dispatchEvent(event);
+      return event.defaultPrevented;
+    });
+  assert.equal(await prevented(), false, "nothing typed, nothing to lose");
+  await page.locator("#intent-goal").fill("Written, not saved.");
+  assert.equal(await prevented(), true, "typed text would be lost");
+  await page.locator("#intent-save").click();
+  await page.getByText("Saved on this computer", { exact: true }).waitFor();
+  assert.equal(await prevented(), false);
+});
+
+test(
+  "the rail follows the review, and the reference sits beside the explanation it answers",
+  { timeout: 30000 },
+  async (t) => {
+    if (!browser) return t.skip("playwright chromium unavailable");
+    const { page } = await start(t, [], true);
+    await page.setViewportSize({ width: 1400, height: 900 });
+    const step = (name) =>
+      page.locator(`#review-rail button[data-step="${name}"]`);
+    const current = () =>
+      page
+        .locator('#review-rail button[aria-current="step"]')
+        .getAttribute("data-step");
+    assert.equal(await current(), "read");
+    const box = page.locator('[name="motivation"]');
+    const text =
+      "Keep earlier evidence available when a write fails, which is why the previous record has to stay readable after a failed write.";
+    await box.fill(text);
+    assert.equal(await current(), "explain");
+    assert.match(await step("read").textContent(), /\(done\)/);
+    // Ctrl with Enter sends from the answer; plain Enter would only add a line.
+    await box.press("Control+Enter");
+    await page.locator("#feedback-list li").first().waitFor();
+    await page.waitForFunction(
+      () =>
+        document.querySelector('#review-rail [aria-current="step"]')?.dataset
+          .step === "compare",
+    );
+    // The reply is said once and marked on the rail; focus stays where it was.
+    assert.match(
+      await page.locator("#rail-live").textContent(),
+      /Reviewer feedback arrived/,
+    );
+    assert.equal(
+      await step("compare").evaluate((b) => b.classList.contains("rail-new")),
+      true,
+    );
+    // Beside the reference: the explanation exactly as the reviewer received it.
+    const yours = page.locator("#your-explanation");
+    await yours.waitFor({ state: "visible" });
+    assert.equal(await page.locator("#yours-text").textContent(), text);
+    const ref = await page.locator("#feedback-list").boundingBox();
+    const aside = await yours.boundingBox();
+    assert.ok(
+      aside.x >= ref.x + ref.width,
+      "beside, not below, on a wide screen",
+    );
+    // A step is a heading to land on, and visiting Compare clears the mark.
+    await step("compare").click();
+    assert.equal(
+      await page.evaluate(() => document.activeElement.id),
+      "feedback-heading",
+    );
+    assert.equal(
+      await step("compare").evaluate((b) => b.classList.contains("rail-new")),
+      false,
+    );
+    await page.locator("#self-grade").selectOption("got");
+    await page.locator("#reflect-save").click();
+    await page.locator("#completion-notice").waitFor({ state: "visible" });
+    assert.equal(await current(), "keep");
+    // The intent record is closed until wanted; its summary says how far it is.
+    assert.equal(
+      await page.locator("#intent-summary-state").textContent(),
+      "Optional · not started",
+    );
+    await openIntent(page);
+    // A record that only says where the why will live is still a record.
+    await page.locator("#intent-home").selectOption("pr");
+    await page.locator("#intent-save").click();
+    await page.getByText("Saved on this computer", { exact: true }).waitFor();
+    assert.equal(await step("keep").getAttribute("data-state"), "done");
+    await page.locator("#intent-goal").fill("Keep the why next to the change.");
+    assert.match(
+      await page.locator("#intent-summary-state").textContent(),
+      /^2 of \d+ answered · unsaved changes$/,
+    );
+    assert.equal(await step("keep").getAttribute("data-state"), "current");
+    // Cmd with Enter saves as Ctrl does.
+    await page.locator("#intent-goal").press("Meta+Enter");
+    await page.waitForFunction(() =>
+      /· saved$/.test(
+        document.getElementById("intent-summary-state").textContent,
+      ),
+    );
+    assert.match(
+      await page.locator("#intent-summary-state").textContent(),
+      /^2 of \d+ answered · saved$/,
+    );
+    assert.equal(await step("keep").getAttribute("data-state"), "done");
+    // An edit after feedback: the quote stays, and says it is the older text.
+    await box.fill(text + " Edited.");
+    assert.equal(await current(), "explain");
+    assert.match(
+      await page.locator("#yours-note").textContent(),
+      /changed it since/,
+    );
+    // Sent again, the new reply is said again and the quote is current.
+    await page.evaluate(() => {
+      document.getElementById("rail-live").textContent = "";
+    });
+    await box.press("Meta+Enter");
+    await page.waitForFunction(() =>
+      /Reviewer feedback arrived/.test(
+        document.getElementById("rail-live").textContent,
+      ),
+    );
+    assert.equal(await page.locator("#yours-note").textContent(), "");
+    // On a narrow screen the explanation follows the reference instead.
+    await page.setViewportSize({ width: 600, height: 900 });
+    const narrowRef = await page.locator("#feedback-list").boundingBox();
+    const narrowAside = await yours.boundingBox();
+    assert.ok(narrowAside.y >= narrowRef.y + narrowRef.height - 1);
+    assert.equal(
+      await page
+        .locator("#review-rail")
+        .evaluate((rail) => getComputedStyle(rail).position),
+      "static",
     );
   },
 );

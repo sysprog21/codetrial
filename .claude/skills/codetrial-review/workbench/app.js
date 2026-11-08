@@ -1,4 +1,6 @@
 import { DiffView } from "/diffview.js";
+import { renderNote } from "/explainer.js";
+import { renderDebt, intentMarkdown } from "/debtlens.js";
 
 const $ = (id) => document.getElementById(id);
 const token = new URLSearchParams(location.hash.slice(1)).get("token");
@@ -7,6 +9,7 @@ const diffView = new DiffView({
   notice: $("diff-notice"),
   summary: $("diff-summary"),
   position: $("diff-position"),
+  live: $("diff-live"),
 });
 const MOTIVATION = {
   prompt: "Why is this change needed?",
@@ -23,6 +26,11 @@ let session;
 let answers = {};
 let selected;
 let reflectionDigest;
+let renderedNotes;
+let renderedDebt;
+let intentDirty = false;
+let intentOpened = false;
+let feedbackSeen;
 let reflectionSaving = false;
 let reflectionDirty = false;
 let completionAnnounced = false;
@@ -207,6 +215,77 @@ function renderProgress() {
     : reflectionUnsaved()
       ? "Your reflection has unsaved changes"
       : statusLabels[session.status];
+  renderRail();
+}
+
+// The four steps, from the state the page already keeps: nothing written is
+// reading, an answer not yet answered by the reviewer is explaining, feedback
+// is comparing, and a confirmed review leaves only the intent record. An edit
+// after feedback reopens the explanation, as the server does.
+const STEPS = ["read", "explain", "compare", "keep"];
+const STEP_STATE = {
+  done: " (done)",
+  current: " (current step)",
+  todo: "",
+};
+// Any answer counts, the choice of where the why lives included, as the
+// summary counts it.
+const intentWritten = (fields) =>
+  Object.values(fields ?? {}).some((value) => String(value ?? "").trim());
+function intentSaved() {
+  return !intentDirty && intentWritten(session.intent);
+}
+function renderRail() {
+  const written = Boolean(answers.motivation?.trim());
+  const status = dirty ? "draft" : session.status;
+  const current = !written
+    ? "read"
+    : ["draft", "ready_to_send"].includes(status)
+      ? "explain"
+      : status === "explanation_complete"
+        ? "keep"
+        : "compare";
+  const at = STEPS.indexOf(current);
+  for (const button of $("review-rail").querySelectorAll("button")) {
+    const i = STEPS.indexOf(button.dataset.step);
+    const state =
+      i < at || (i === at && current === "keep" && intentSaved())
+        ? "done"
+        : i === at
+          ? "current"
+          : "todo";
+    if (button.dataset.state === state) continue;
+    button.dataset.state = state;
+    if (state === "current") button.setAttribute("aria-current", "step");
+    else button.removeAttribute("aria-current");
+    button.querySelector(".rail-state").textContent = STEP_STATE[state];
+  }
+}
+
+// A step is a heading to land on: it takes focus, so a keyboard or screen
+// reader user arrives where a sighted one looks. Buttons, not links: the
+// session token lives in the address fragment and a link would replace it.
+const quietMotion = matchMedia("(prefers-reduced-motion: reduce)");
+$("review-rail").addEventListener("click", (event) => {
+  const button = event.target.closest("button[data-target]");
+  if (!button) return;
+  const heading = $(button.dataset.target);
+  heading.tabIndex = -1;
+  heading.scrollIntoView({
+    block: "start",
+    behavior: quietMotion.matches ? "auto" : "smooth",
+  });
+  heading.focus({ preventScroll: true });
+  if (button.dataset.step === "compare") clearNewFeedback();
+});
+
+document
+  .querySelector(".feedback-panel")
+  .addEventListener("focusin", () => clearNewFeedback());
+function clearNewFeedback() {
+  $("review-rail")
+    .querySelector('[data-step="compare"]')
+    .classList.remove("rail-new");
 }
 
 function renderFiles() {
@@ -315,6 +394,7 @@ function renderWaiting() {
 
 function renderFeedback() {
   refreshCoach();
+  renderDebtPanel();
   const feedback = session.feedback;
   const current =
     !dirty &&
@@ -388,17 +468,178 @@ function renderFeedback() {
   if ($("reviewer-presence").textContent !== presence)
     $("reviewer-presence").textContent = presence;
   renderWaiting();
+  renderNotes(feedback);
+  renderYours(feedback, current);
+}
+
+// The explanation the reviewer answered, as it was sent, beside the reference,
+// so the self-assessment is made with both in view.
+function renderYours(feedback, current) {
+  const sent = session.submission?.answers?.motivation ?? "";
+  const show = Boolean(feedback?.notes?.length && sent.trim());
+  $("your-explanation").hidden = !show;
+  if (!show) return;
+  if ($("yours-text").textContent !== sent) $("yours-text").textContent = sent;
+  const note = current
+    ? ""
+    : "You have changed it since. The reference above answers this version.";
+  if ($("yours-note").textContent !== note) $("yours-note").textContent = note;
+}
+
+function renderNotes(feedback) {
+  // Rebuilt only when the notes change: every poll renders, and a rebuild would
+  // drop the focus of a citation button and restart a diagram.
+  // Feedback that arrives while the page is open is said once and marked on
+  // the rail, without moving focus: the contributor may be typing elsewhere.
+  // A new reply is known by its digest, so one worded like the last still counts.
+  const digest = feedback?.notes?.length ? session.feedback_digest : null;
+  if (feedbackSeen !== undefined && digest && digest !== feedbackSeen) {
+    $("rail-live").textContent =
+      "Reviewer feedback arrived. Step 3, Compare, shows it beside your explanation.";
+    $("review-rail")
+      .querySelector('[data-step="compare"]')
+      .classList.add("rail-new");
+  }
+  feedbackSeen = digest;
+  const notesKey = JSON.stringify([feedback?.notes, session.reference_view]);
+  if (notesKey === renderedNotes) return;
+  renderedNotes = notesKey;
   $("feedback-list").replaceChildren();
-  for (const note of feedback?.notes || []) {
+  (feedback?.notes || []).forEach((note, i) => {
     const item = document.createElement("li");
     const label = document.createElement("strong");
     const reading = session.questions.find(
       (q) => `reading:${q.id}` === note.field,
     );
     label.textContent = `${reading ? reading.path : "Motivation"} — `;
-    item.append(label, document.createTextNode(note.text));
+    // A note the server read is drawn with its diagram, table and quoted
+    // code; any other note is shown as the text it is.
+    const blocks = session.reference_view?.[i];
+    // Prose with no citation or markup is the text it is; anything else is drawn.
+    const drawn = (b) =>
+      b.t !== "p" ||
+      b.parts.some(
+        (part) =>
+          typeof part !== "string" || part.includes("**") || part.includes("`"),
+      );
+    if (blocks?.some(drawn)) {
+      item.classList.add("explainer");
+      item.append(label, renderNote(blocks, showCitation));
+    } else {
+      item.append(label, document.createTextNode(note.text));
+    }
     $("feedback-list").append(item);
+  });
+}
+
+// The change as three debts, and the contributor's own intent record. The layers
+// are rebuilt only when they change, so a citation keeps its focus across polls;
+// the form is filled only while nothing typed is unsaved.
+const intentInputs = () =>
+  [...$("intent-form").elements].filter((input) => input.name);
+
+function readIntent() {
+  return Object.fromEntries(
+    intentInputs().map((input) => [input.name, input.value]),
+  );
+}
+
+function renderDebtPanel() {
+  const key = JSON.stringify(session.debt);
+  if (key !== renderedDebt) {
+    renderedDebt = key;
+    renderDebt($("debt-layers"), session.debt, showCitation);
   }
+  if (!intentDirty)
+    for (const input of intentInputs())
+      input.value = session.intent?.[input.name] ?? "";
+  // A record already started is shown open once; after that the reader decides.
+  if (!intentOpened && intentWritten(session.intent)) {
+    intentOpened = true;
+    $("intent-details").open = true;
+  }
+  syncIntentCopy();
+  renderIntentSummary();
+}
+
+function renderIntentSummary() {
+  const filled = intentInputs().filter((input) => input.value.trim()).length;
+  const total = intentInputs().length;
+  const text = intentDirty
+    ? `${filled} of ${total} answered · unsaved changes`
+    : filled
+      ? `${filled} of ${total} answered · saved`
+      : "Optional · not started";
+  if ($("intent-summary-state").textContent !== text)
+    $("intent-summary-state").textContent = text;
+}
+
+// Copy needs something written, and says so while it is off.
+const COPY_HINT = "Write an answer to enable copying.";
+function syncIntentCopy() {
+  const empty = !intentMarkdown(readIntent());
+  $("intent-copy").disabled = empty;
+  const status = $("intent-status");
+  if (empty && !status.textContent) status.textContent = COPY_HINT;
+  else if (!empty && status.textContent === COPY_HINT) status.textContent = "";
+}
+
+$("intent-form").addEventListener("input", () => {
+  intentDirty = true;
+  $("intent-status").textContent = "Unsaved changes";
+  syncIntentCopy();
+  renderIntentSummary();
+  renderRail();
+});
+$("intent-details").addEventListener("toggle", () => {
+  intentOpened = true;
+});
+
+$("intent-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const sent = JSON.stringify(readIntent());
+  try {
+    const saved = await api("/api/intent", { method: "PUT", body: sent });
+    session.intent = saved.intent;
+    // Typing during the request is not saved: keep it, and keep saying so.
+    const same = JSON.stringify(readIntent()) === sent;
+    intentDirty = !same;
+    $("intent-status").textContent = same
+      ? "Saved on this computer"
+      : "Unsaved changes";
+    renderIntentSummary();
+    renderRail();
+  } catch (error) {
+    $("intent-status").textContent = error.message;
+  }
+});
+
+$("intent-copy").addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText(intentMarkdown(readIntent()));
+    $("intent-status").textContent =
+      "Copied. Paste it into your pull request description.";
+  } catch {
+    $("intent-status").textContent =
+      "Copying was blocked. Select the text in the fields and copy it.";
+  }
+});
+
+// A citation in a reference note opens the line it names in the diff.
+function showCitation(ev) {
+  const files = diffView.model?.files || [];
+  const file =
+    files.find((f) => f.path === ev.path) ||
+    files.find((f) => f.old_path === ev.path);
+  // A file the diff does not hold must not light up lines of another one.
+  if (!file) return;
+  // A citation names exact lines, so a whitespace filter must not hide them.
+  if (diffView.hideWhitespace) {
+    $("diff-ws").checked = false;
+    diffView.setHideWhitespace(false);
+  }
+  if (selected !== file.path) selectFile(file.path);
+  diffView.reveal({ ...ev, path: file.path });
 }
 
 async function loadSession() {
@@ -526,6 +767,23 @@ $("answers-form").addEventListener("submit", (event) => {
   event.preventDefault();
   saveAnswers();
 });
+// Ctrl or Cmd with Enter in a box does what finishing that box means: the
+// answer is sent, the intent record saved. Plain Enter still writes a newline.
+const commitKey = (event) =>
+  event.key === "Enter" &&
+  (event.ctrlKey || event.metaKey) &&
+  !event.isComposing &&
+  event.target instanceof HTMLTextAreaElement;
+$("answers-form").addEventListener("keydown", (event) => {
+  if (!commitKey(event)) return;
+  event.preventDefault();
+  $("send").click();
+});
+$("intent-form").addEventListener("keydown", (event) => {
+  if (!commitKey(event)) return;
+  event.preventDefault();
+  $("intent-form").requestSubmit();
+});
 $("send").addEventListener("click", async () => {
   if (
     saving ||
@@ -629,6 +887,7 @@ $("download").addEventListener("click", () => {
     `Snapshot: ${session.manifest.head}`,
     `\nReview record:\n${JSON.stringify({ localReflection: { feedback_digest: reflectionDigest, grade: $("self-grade").value, correction: $("correction").value, unsaved: reflectionDirty }, questions: session.questions, submission: session.submission, feedback: session.feedback, reflection: session.reflection, history: session.history }, null, 2)}`,
     ...Object.entries(answers).map(([key, value]) => `\n## ${key}\n\n${value}`),
+    `\n## Intent record\n\n${intentMarkdown(readIntent()) || "(none written)"}`,
   ].join("\n");
   const url = URL.createObjectURL(
     new Blob([text], { type: "text/markdown;charset=utf-8" }),
@@ -640,7 +899,7 @@ $("download").addEventListener("click", () => {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 });
 window.addEventListener("beforeunload", (event) => {
-  if (dirty || reflectionUnsaved()) {
+  if (dirty || reflectionUnsaved() || intentDirty) {
     event.preventDefault();
     event.returnValue = "";
   }
@@ -665,7 +924,7 @@ $("close-window").addEventListener("click", async () => {
   if (finished || $("close-window").getAttribute("aria-disabled") === "true")
     return;
   // Nothing typed since the last save may be left behind by a closed server.
-  if (dirty) {
+  if (dirty || intentDirty) {
     showError(new Error("Save your latest edit before finishing."));
     return;
   }

@@ -171,8 +171,9 @@ words, and a change it cannot classify stays an ordinary edit.
   gets line matching only.
 - **Whitespace only:** a pair that differs only in spacing is dimmed and can be
   hidden. A file whose every change is moved or whitespace-only says so.
-- **Side by side** and unified views; `]` and `[` (or the arrows) step through
-  changes. The choice is remembered.
+- **Side by side** and unified views; `n` and `p`, `]` and `[` (or the arrows)
+  step through changes, and the page says so above the diff. The choice of view
+  is remembered.
 
 Nothing is dropped to keep the page quick: a large diff is drawn in pieces, with
 a percentage, until every line is there. The reading is checked against the hunk
@@ -299,8 +300,14 @@ same time as the managed worker.
 ## The agent/browser interaction loop
 
 The contributor reads the highlighted key change, answers the single question,
-and chooses **Send to reviewer**. **Save explanation**
-only saves a draft; it does not notify the agent to review it. Both persist in
+and chooses **Send to reviewer** (or presses Ctrl or Cmd with Enter in the
+answer). **Save explanation** only saves a draft; it does not notify the agent
+to review it. A rail of four steps (Read, Explain, Compare, Keep the why) stays
+at the top of the page and marks where the contributor is, from the same state
+the summary line reads; choosing a step moves focus to its heading. Feedback
+that arrives while the page is open is announced once and marked on the rail,
+without moving focus, and is shown beside the explanation exactly as it was
+sent, so the self-assessment is made with both in view. Both persist in
 `$bundle/explanation.json`. Browser clients use revision checks, so an old tab
 cannot overwrite a newer answer. Saving changed answers invalidates earlier
 feedback; sending identifies the exact saved answer digest to review.
@@ -343,7 +350,8 @@ from the received submission:
 }
 ```
 
-`field` is `motivation`. Return exactly one plain-text reference note. Do not
+`field` is `motivation`. Return exactly one reference note, prose or, when a
+picture or table carries the point better, [drawn](#draw-the-reference-note-optional). Do not
 return an `approved` field or grade the author. If their goal is clear but the
 code does not achieve it, identify that gap as a possible code adjustment;
 do not keep demanding a different motivation.
@@ -375,6 +383,138 @@ a new explicit submission. Do not silently answer for
 them. For code/base/question changes, prepare a new bundle/session, retain the
 old record and revisit affected answers; do not overwrite the old identity or
 reuse its completed reflection.
+
+## Draw the reference note (optional)
+
+When the point of the key change is a path, a before and after, or a choice
+between designs, the note may carry a diagram, a table and quoted code besides
+prose. The page draws them after the contributor has submitted, in the feedback
+panel; it reveals nothing earlier. The note is still the one `text` of the one
+note, so the feedback file, its digest, the head binding and the reflection are
+unchanged, and a note without this syntax is prose and stays valid.
+
+The syntax follows [answer-me-with-html](https://github.com/QingYunA/answer-me-with-html)
+(MIT), cut to what a review needs:
+
+````markdown
+The hook now refuses a push that has no review evidence.
+
+```flow LR
+pre-push hook -> status check: measures the branch @scripts/check-interactive-review.py:41
+status check --> push: refuses without evidence
+```
+
+| Option | Cost |
+| --- | --- |
+| Check in the hook | catches it before the pull request @scripts/check-interactive-review.py:44 |
+| Check only in CI | the contributor learns after pushing |
+
+```code src=scripts/check-interactive-review.py lines=40-44
+```
+````
+
+- **Every line cited is in the pinned diff.** `@path:42` is a line of the new
+  file, `@path:o42` of the old one, `@path:42-47` a range of at most 40. A line
+  outside the diff's hunks, or any citation when the diff could not be read line
+  by line, is refused when the note is written, with the line of the note and
+  the reason. A cited line is a button that opens that line in the diff.
+- **Code is never typed.** A `code` block names `src=` and `lines=` (and
+  `side=old` for the old file), and its body stays empty. The rows come from the
+  diff, so the snippet cannot differ from it.
+- **A solid arrow needs a citation; a guess is dashed.** `->` requires an
+  `@path:line` on its line. An edge you inferred and cannot cite is written
+  `-->` with no citation (a cited `-->` is refused), drawn dashed and named
+  "inferred", so a picture does not state a guess as a fact. Say in prose what
+  was not verified.
+- **A citation grounds an edge; it does not prove it.** The check is that the
+  line exists in the diff, not that the line says what the arrow says. Cite the
+  line that shows the call or the data flow, and read the cited line before
+  trusting the arrow.
+- Limits keep a note on one screen: 12 nodes, 16 edges, 48 characters a label,
+  8 table rows of up to 5 columns, 3 code blocks of up to 30 lines, 24 blocks.
+  `flow` takes `LR` (default) or `TB`; an edge joins two different nodes.
+  A dense graph can still lay a label over a neighbor; the numbered list under
+  the picture is the reading. A diagram wider than the panel scrolls instead of
+  shrinking its text.
+- Anything else stays prose: a fence that is not `flow` or `code`, a `|` line
+  with no `|---|` row under it, an address such as `git@host:22`. A note written
+  as free text therefore remains valid, which the managed worker relies on. In a
+  paragraph, heading or list, `@name:123` that names no file of the diff (such as
+  `@localhost:8080`) stays text, and a backtick span is kept as written; a table
+  cell, a diagram and a `code` block are strict. A real file at a missing line is
+  refused everywhere.
+
+The renderer is part of the page and needs nothing beyond what the workbench
+already needs: the diagram's layout is computed in the browser, not by Node.js.
+The external tool needs Node.js 20 and would add a required dependency to a
+workflow that otherwise needs Python's standard library and Git; its output is
+also a finished page, which could not be bound to the pinned diff or made to
+reveal only after submission.
+
+Managed mode's Codex worker draws too. It is taught the draft format, is given
+the asked file's lines with the numbers a citation uses (`citable_lines`), and is
+asked for one small flow of the key change unless the change has no flow to show.
+Its note is checked like an agent's: when the diff does not hold a citation the
+worker is called once more, told the problem, and a note that still does not
+read is stored as written and shown as the text it is. It is never called a third
+time. An agent that writes a note with `feedback` is refused with the reason
+when a citation does not hold, and fixes it.
+
+## Three debts: what the change leaves behind
+
+The workspace ends with **Keep the why**, which reads the change as the three
+debts of Storey's triple debt model
+([arXiv 2603.22106](https://arxiv.org/abs/2603.22106)): technical debt lives in
+the code, cognitive debt in people (shared understanding eroding), and intent
+debt in artifacts (the rationale that was never written down). Osmani's
+[intent debt](https://addyosmani.com/blog/intent-debt/) gives the case this
+answers: a guard clause is deleted, nobody can say whether it was load-bearing,
+and the tests only encode the old behavior, never the intent. Intent is cheapest
+to capture at the moment of the decision, which is the moment this review is.
+
+| Layer | What the page shows | Where it comes from |
+|---|---|---|
+| Code | files and tests changed; removed lines that look like a check or early exit, each a citation into the old file | the pinned diff (`intentdebt.py`) |
+| People | whether your explanation names code from the change; your own recorded assessment of the reference | what you did in this session |
+| Intent | no changed test recognized for changed source; more assertion-like lines removed from tests than added; no changed document for changed source | the pinned diff |
+
+What it deliberately does not do:
+
+- **It gives no score.** The paper offers no validated measure of any of the three
+  debts, so none is invented. A signal is an observation or a question.
+- **It writes nothing for the contributor.** The paper warns against automating
+  understanding: an AI-written rationale looks like understanding and is not.
+  Naming a gap is the page's job; answering it is the contributor's.
+- **Its patterns are heuristics.** Tests, documents and checks are told apart by
+  path and by the first word of a line. They miss things and mis-file others, so
+  each signal says what was found, not what it means. A diff the page cannot read
+  line by line points at no line.
+
+The **intent record** sits closed under the three layers until wanted, or opens
+by itself once one has been saved; its summary says how many answers are written
+and whether they are saved, and Ctrl or Cmd with Enter saves it. It is five
+short answers and a choice, in the contributor's own words: what the change must keep doing and why it exists, what must stay
+true, what was not done and why, which check fails if it breaks, who else could
+explain it, and where the why will live afterwards. It is saved beside the
+review in `$bundle/intent-record-<snapshot>.json`, one file for each snapshot so a
+new head starts empty and a window left open on an older one cannot replace the
+newer record, and is **not** part of the answers: it changes neither their
+digest nor the identity, and the gate and the signed record never read it.
+**Copy for the pull request** turns what was written into a short English section
+for the PR body, which already has to carry the rationale
+([the large-change rules](../../../docs/large-change-explanation.md)): the five
+answers under plain labels, in the contributor's words. The "where will the why
+live" choice is a reminder for the contributor and is not copied. The download
+includes the record too.
+
+The record is also **not handed to the reviewing agent**: `inspect`, `wait` and
+`feedback` print the snapshot without it, since the page says it stays on this
+computer. Do not read `intent-record-*.json` from the bundle either; the agent
+that needs the contributor's reasons asks for them in the one reference note.
+
+A reviewer reads the three cards before writing the one reference note. Where a
+card names a removed check or unpinned behavior, ask that in the note ("what did
+this guard against?") instead of resolving it for the contributor.
 
 ## Use the contributor's explanation in later adjustments
 

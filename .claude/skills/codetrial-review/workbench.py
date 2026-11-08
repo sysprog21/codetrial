@@ -25,11 +25,18 @@ from urllib.parse import urlsplit
 
 
 FIELDS = ("motivation",)
+# The intent record is the contributor's own words, kept beside the review and
+# never part of the answers, so it changes neither their digest nor the gate.
+INTENT_FIELDS = ("goal", "constraints", "alternatives", "check", "backup")
+INTENT_HOMES = ("", "pr", "commit", "docs", "comment", "none")
+INTENT_LIMIT = 2000
 CONFIDENCE = ("sure", "probably", "guessing", "unknown")
 ASSETS = {
     "/": ("index.html", "text/html"),
     "/app.js": ("app.js", "text/javascript"),
     "/diffview.js": ("diffview.js", "text/javascript"),
+    "/explainer.js": ("explainer.js", "text/javascript"),
+    "/debtlens.js": ("debtlens.js", "text/javascript"),
     "/style.css": ("style.css", "text/css"),
     "/styles.css": ("shared", "text/css"),
 }
@@ -89,21 +96,29 @@ def file_patch(diff, path):
 
 
 @functools.lru_cache(maxsize=None)
+def load_sibling(name):
+    """A module that sits beside this file, loaded by path and kept."""
+    path = Path(__file__).with_name(f"{name}.py")
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def load_diffmodel():
-    path = Path(__file__).with_name("diffmodel.py")
-    spec = importlib.util.spec_from_file_location("diffmodel", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return load_sibling("diffmodel")
 
 
-@functools.lru_cache(maxsize=None)
 def load_understanding():
-    path = Path(__file__).with_name("understanding.py")
-    spec = importlib.util.spec_from_file_location("understanding", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return load_sibling("understanding")
+
+
+def load_explainer():
+    return load_sibling("explainer")
+
+
+def load_intentdebt():
+    return load_sibling("intentdebt")
 
 
 def reflected(value, identity, answer_digest, feedback):
@@ -162,6 +177,15 @@ class Workbench:
         self.identity = digest([self.manifest, self.diff, self.questions])
         self.state_path = self.bundle / "explanation.json"
         self.presence_path = self.bundle / "explanation-agent.json"
+        # One file for each snapshot, so a window left open on an older one cannot
+        # replace the record of the newer.
+        self.intent_path = self.bundle / f"intent-record-{self.identity[:16]}.json"
+        self._reading = None
+        self._notes = {}
+        # Handler threads share these caches.
+        self._cache_lock = threading.Lock()
+        self._signals = None
+        self._checked = (None, None)
 
     @contextmanager
     def locked(self):
@@ -239,13 +263,110 @@ class Workbench:
 
         Read once: the diff is part of the session's identity and never changes.
         """
-        if getattr(self, "_reading", None) is None:
+        if self._reading is None:
             self._reading = load_diffmodel().reading(
                 self.diff,
                 self.manifest["files"],
                 self.manifest.get("files_complete") is not False,
             )
         return self._reading
+
+    def debt(self, snapshot):
+        """The change seen as three debts: questions and observations, no score.
+
+        Read from the pinned diff and from what the contributor did here; see
+        intentdebt.py for what each signal is and is not.
+        """
+        reading = self.diff_reading()
+        checks = self._checked_answer(snapshot)
+        if self._signals is None:
+            found = load_intentdebt().signals(reading["files"])
+            with self._cache_lock:
+                self._signals = self._signals or found
+        return load_intentdebt().lens(
+            self._signals,
+            checks=checks,
+            reflection=snapshot.get("reflection"),
+            trusted=not reading["problems"],
+        )
+
+    def _checked_answer(self, snapshot):
+        """The checks on the answer, computed once for each text."""
+        said = snapshot["answers"].get("motivation", "")
+        cached = self._checked
+        if cached[0] != said:
+            cached = (said, self.reported_checks(snapshot["answers"]))
+            with self._cache_lock:
+                self._checked = cached
+        return cached[1]
+
+    def intent(self):
+        """The contributor's intent record for this snapshot, or empty fields."""
+        empty = {**{k: "" for k in INTENT_FIELDS}, "home": ""}
+        try:
+            saved = load(self.intent_path)
+        except (OSError, ValueError):
+            return empty
+        if saved.get("identity") != self.identity:
+            return empty
+        return {**empty, **saved.get("fields", {})}
+
+    def save_intent(self, payload):
+        """Keep what the contributor wrote about why this change is the way it is.
+
+        Nothing here is generated or checked for meaning: it is theirs, saved
+        as they typed it, and bound to this snapshot so a new one starts clean.
+        """
+        if not isinstance(payload, dict) or not set(payload) <= {
+            *INTENT_FIELDS,
+            "home",
+        }:
+            raise ValueError(
+                "The intent record has goal, constraints, alternatives, check, backup and home"
+            )
+        fields = {}
+        for key in (*INTENT_FIELDS, "home"):
+            value = payload.get(key, "")
+            if not isinstance(value, str) or len(value) > INTENT_LIMIT:
+                raise ValueError(
+                    f"Keep each intent answer to text of at most {INTENT_LIMIT} characters"
+                )
+            fields[key] = value
+        if fields["home"] not in INTENT_HOMES:
+            raise ValueError("Choose where the why lives from the list")
+        with self.locked():
+            self.write({"identity": self.identity, "fields": fields}, self.intent_path)
+        return {"intent": fields}
+
+    def read_note(self, text):
+        """A reference note as blocks, every citation held against the pinned diff."""
+        # The same note is read by every snapshot, and the diff never changes.
+        read = self._notes.get(text)
+        if read is None:
+            reading = self.diff_reading()
+            read = load_explainer().read(
+                text, reading["files"], trusted=not reading["problems"]
+            )
+            # A second thread may have read it too: the inputs are pinned, so
+            # either result is the same, and the lock only guards the dict.
+            with self._cache_lock:
+                if len(self._notes) >= 32:
+                    self._notes.pop(next(iter(self._notes)))
+                read = self._notes.setdefault(text, read)
+        return read
+
+    def reference_view(self, feedback):
+        """What the page draws for each note, or None for a note it cannot read.
+
+        A stored note that no longer parses is shown as the text it is.
+        """
+        if not feedback:
+            return []
+        views = []
+        for note in feedback["notes"]:
+            read = self.read_note(note["text"])
+            views.append(None if read["problems"] else read["blocks"])
+        return views
 
     def checks(self, answers):
         """The deterministic checks on the core answer; see understanding.py."""
@@ -339,6 +460,21 @@ class Workbench:
             "reviewer_error": presence.get("error") if reviewer == "error" else None,
             "large_commits": large_commits,
             "commit_coverage_complete": commit_coverage,
+        }
+
+    def page_snapshot(self):
+        """The snapshot with what is drawn for the contributor alone.
+
+        The agent CLI and the managed worker read snapshot(), which never holds
+        the intent record, the debt lens or the drawn note: the record is private
+        by construction, and the worker does not compute what it would discard.
+        """
+        snapshot = self.snapshot()
+        return {
+            **snapshot,
+            "reference_view": self.reference_view(snapshot["feedback"]),
+            "debt": self.debt(snapshot),
+            "intent": self.intent(),
         }
 
     def finish(self):
@@ -545,6 +681,20 @@ class Workbench:
             if task:
                 self.presence("offline", 0)
             raise
+
+    def check_note(self, feedback):
+        """Refuse a note whose drawn parts the diff does not hold.
+
+        For the agent that wrote it and can fix it. The managed worker cannot be
+        asked again, so it is not checked: it stores what it wrote, and a note
+        that does not read is shown as the text it is.
+        """
+        notes = feedback.get("notes") if isinstance(feedback, dict) else None
+        for note in notes if isinstance(notes, list) else []:
+            text = note.get("text") if isinstance(note, dict) else None
+            problems = self.read_note(text)["problems"] if isinstance(text, str) else []
+            if problems:
+                raise ValueError("Reference note: " + "; ".join(problems[:3]))
 
     def feedback(self, feedback, *, request=None, replace=False):
         if not isinstance(feedback, dict) or set(feedback) != {
@@ -767,7 +917,7 @@ def server(workbench, port, *, reviewer="manual", token=None):
                 # The diff is fetched once from /api/diff, not on every poll.
                 self.reply(
                     200,
-                    {k: v for k, v in workbench.snapshot().items() if k != "diff"},
+                    {k: v for k, v in workbench.page_snapshot().items() if k != "diff"},
                 )
             except (ValueError, OSError, subprocess.SubprocessError) as error:
                 self.reply(409, {"error": str(error)})
@@ -783,6 +933,7 @@ def server(workbench, port, *, reviewer="manual", token=None):
                 "/api/reflection",
                 "/api/check",
                 "/api/finish",
+                "/api/intent",
             ):
                 return self.reply(404, {"error": "Not found"})
             try:
@@ -800,6 +951,8 @@ def server(workbench, port, *, reviewer="manual", token=None):
                     if self.path == "/api/finish"
                     else workbench.check_draft(payload)
                     if self.path == "/api/check"
+                    else workbench.save_intent(payload)
+                    if self.path == "/api/intent"
                     else workbench.save(payload)
                     if self.path == "/api/answers"
                     else workbench.reflect(payload)
@@ -973,8 +1126,10 @@ def main():
                 parser.error("feedback requires --request-id from the wait result")
             # The agent may refine its reference for the request it answers;
             # the workers never replace one.
+            note = load(Path(args.file))
+            workbench.check_note(note)
             workbench.feedback(
-                load(Path(args.file)),
+                note,
                 request={"request_id": args.request_id},
                 replace=True,
             )

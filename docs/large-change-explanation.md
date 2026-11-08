@@ -51,9 +51,12 @@ explanation. Do not hide a checklist inside a compound question.
 AI returns one grounded reference note after the contributor submits. A clear
 author goal guides later code adjustments; it need not be rewritten to justify
 an implementation that misses it. Ask at most one clarification when intent is
-ambiguous. The contributor compares the reference with their explanation and
-records their own assessment. A partial or missed answer requires a correction
-or a remaining uncertainty. AI does not grade or approve this interaction.
+ambiguous. The reference may include a diagram, a table and quoted code: every
+line it cites is checked against the reviewed diff. A link it could not cite is
+written as an inferred (dashed) arrow; an uncited solid one is refused. The
+contributor compares the reference with their explanation and records their own
+assessment. A partial or missed answer requires a correction or a remaining
+uncertainty. AI does not grade or approve this interaction.
 The original question, submitted explanation and reflection stay bound to the
 review snapshot as context for subsequent agent work.
 
@@ -94,6 +97,12 @@ limits in the English PR body. Preserve the final issue-closing line. Keep the
 question-and-answer transcript and the local review report private; do not post
 a score or claim that a contributor has been certified. The explanation can be
 in the contributor's language locally.
+
+The workspace also offers an optional, private intent record: the contributor's
+own short answers on why the change exists, what must stay true, what was not
+done, and which check pins it. It is for the contributor to copy into the
+English PR body and is never read by the hook or CI
+([the workbench](../.claude/skills/codetrial-review/workbench.md#three-debts-what-the-change-leaves-behind)).
 
 The pull request carries no review block and no label to ask for. CI measures
 the commits and the diff itself, from the base branch's workflow and checker, so

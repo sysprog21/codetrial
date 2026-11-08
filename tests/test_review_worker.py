@@ -71,6 +71,10 @@ prompt=sys.stdin.read()
 if mode=='fail':sys.exit(1)
 value={'notes':[{'field':'motivation','text':'Fixture-only source consistency feedback.'}]}
 if mode=='bad':value['notes']=[]
+if mode in ('retry','drawn-bad'):
+ good='A flow.\n\n```flow\nget -> cache: first @example.py:1\n```'
+ bad='A flow.\n\n```flow\nget -> cache: first @example.py:99\n```'
+ value['notes'][0]['text']=good if (mode=='retry' and '"problems_with_it"' in prompt) else bad
 if mode=='max-note':
  schema=json.loads(Path(sys.argv[sys.argv.index('--output-schema')+1]).read_text())
  value['notes'][0]['text']='x'*schema['properties']['notes']['items']['properties']['text']['maxLength']
@@ -102,6 +106,69 @@ Path(sys.argv[sys.argv.index('--output-last-message')+1]).write_text(json.dumps(
         )
         self.addCleanup(instance.close)
         return instance
+
+    def drawable(self):
+        """A diff with real hunks and a question on its file, so a citation can hold."""
+        (self.bundle / "pr.diff").write_text(
+            "diff --git a/example.py b/example.py\nnew file mode 100644\n"
+            "--- /dev/null\n+++ b/example.py\n@@ -0,0 +1,2 @@\n+one\n+two\n"
+        )
+        manifest = json.loads((self.bundle / "manifest.json").read_text())
+        manifest["files"] = [{"path": "example.py", "additions": 2, "deletions": 0}]
+        (self.bundle / "manifest.json").write_text(json.dumps(manifest))
+        self.questions.write_text(
+            json.dumps(
+                [{"id": "q", "path": "example.py", "quote": "+one", "prompt": "Why?"}]
+            )
+        )
+        self.app = workbench.Workbench(self.bundle, self.questions)
+        self.app.revoke = lambda: None
+
+    def prompts(self):
+        # By process id as a number: "prompt-99" sorts after "prompt-100" as text.
+        order = sorted(self.root.glob("prompt-*"), key=lambda p: int(p.name[7:]))
+        return [p.read_text() for p in order]
+
+    def test_the_worker_is_taught_the_draft_format_and_given_numbered_lines(self):
+        self.drawable()
+        self.submit()
+        self.start()
+        self.until(lambda: self.app.snapshot()["status"] == "reflection_needed")
+        (prompt,) = self.prompts()
+        self.assertIn("```flow", prompt)
+        self.assertIn("@path:oN", prompt)
+        evidence = json.loads(prompt[prompt.index('{"head"') :])
+        self.assertEqual(
+            evidence["citable_lines"],
+            {"path": "example.py", "lines": ["1\t+one", "2\t+two"]},
+        )
+
+    def test_a_drawn_note_the_diff_does_not_hold_is_retried_once_with_the_problem(self):
+        self.drawable()
+        self.mode("retry")
+        self.submit()
+        self.start()
+        self.until(lambda: self.app.snapshot()["status"] == "reflection_needed")
+        self.assertEqual(len(self.calls()), 2)
+        second = json.loads(self.prompts()[-1][self.prompts()[-1].index('{"head"') :])
+        self.assertIn("not in the pinned diff", second["problems_with_it"])
+        self.assertIn("@example.py:99", second["your_last_note"])
+        view = self.app.page_snapshot()["reference_view"]
+        text = self.app.snapshot()["feedback"]["notes"][0]["text"]
+        self.assertIsNotNone(view[0], text)
+        self.assertEqual([b["t"] for b in view[0]], ["p", "flow"])
+
+    def test_a_note_that_still_does_not_read_is_stored_and_shown_as_text(self):
+        self.drawable()
+        self.mode("drawn-bad")
+        self.submit()
+        self.start()
+        self.until(lambda: self.app.snapshot()["status"] == "reflection_needed")
+        self.assertEqual(len(self.calls()), 2)  # one retry, never a loop
+        self.assertIn(
+            "@example.py:99", self.app.snapshot()["feedback"]["notes"][0]["text"]
+        )
+        self.assertEqual(self.app.page_snapshot()["reference_view"], [None])
 
     def test_truncation_notice_fits_with_a_maximum_length_reference(self):
         (self.bundle / "pr.diff").write_text(
@@ -158,6 +225,9 @@ Path(sys.argv[sys.argv.index('--output-last-message')+1]).write_text(json.dumps(
         evidence = json.loads(prompt[prompt.index('{"head"') :])
         self.assertIn("the_passage_the_question_is_about()", evidence["diff"])
         self.assertTrue(evidence["diff_truncated"])
+        # The notice is a paragraph of its own, so a drawing it follows still closes.
+        text = self.app.snapshot()["feedback"]["notes"][0]["text"]
+        self.assertIn("\n\nEvidence is incomplete", text)
         # Changed lines alone do not shrink a file that is only additions, so a
         # large one that does not fit is shown by its opening lines.
         self.assertTrue(evidence["files_first_lines_only"])

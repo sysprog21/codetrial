@@ -1,6 +1,12 @@
 /* The shared lobby owns the palette, type, themes, cards and focus treatment. */
 .review-workbench {
   width: min(100%, 112rem);
+  /* The progress rail's height: what sticks below it, and where a jump lands. */
+  --rail-h: 3.25rem;
+}
+.review-workbench h2,
+.review-workbench h3 {
+  scroll-margin-top: calc(var(--rail-h) + 1rem);
 }
 .workbench-caption {
   color: var(--sub);
@@ -51,7 +57,131 @@
 }
 .file-panel {
   position: sticky;
-  top: 1rem;
+  top: calc(var(--rail-h) + 1rem);
+}
+
+/* Where the contributor is: four steps, the current one filled, those behind
+   it checked. It stays in view so the next step is always one click away. */
+.review-rail {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  margin: 0 0 1.25rem;
+  padding: 0.5rem 0;
+  background: color-mix(in srgb, var(--page) 92%, transparent);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--hairline);
+}
+.review-rail ol {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: none;
+}
+.review-rail li {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.review-rail li + li::before {
+  content: "";
+  width: 1.5rem;
+  height: 1px;
+  background: var(--hairline);
+}
+.review-rail button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 2.25rem;
+  padding: 0.25rem 0.75rem 0.25rem 0.3rem;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: none;
+  color: var(--sub);
+  font: inherit;
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+.review-rail button:hover {
+  border-color: var(--hairline);
+  color: var(--ink);
+}
+.rail-num {
+  display: inline-grid;
+  place-items: center;
+  width: 1.625rem;
+  height: 1.625rem;
+  border: 1px solid var(--control-border);
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+.review-rail [data-state="current"] {
+  color: var(--ink);
+  font-weight: 650;
+  border-color: var(--hairline);
+  background: var(--practice-tint);
+}
+.review-rail [data-state="current"] .rail-num {
+  border-color: var(--accent-fill);
+  background: var(--accent-fill);
+  color: var(--on-accent);
+}
+.review-rail [data-state="done"] .rail-num {
+  border-color: var(--good);
+  color: var(--good);
+}
+/* A check, not a number, once a step is behind: the glyph is decoration and
+   the hidden text says "done". */
+.review-rail [data-state="done"] .rail-num {
+  font-size: 0;
+}
+.review-rail [data-state="done"] .rail-num::after {
+  content: "\2713";
+  font-size: 0.8125rem;
+}
+/* Feedback arrived while the reader was elsewhere. */
+.review-rail .rail-new .rail-num {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-fill) 35%, transparent);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .review-rail .rail-new .rail-num {
+    animation: rail-new 1.6s ease-in-out 3;
+  }
+}
+@keyframes rail-new {
+  50% {
+    box-shadow: 0 0 0 6px
+      color-mix(in srgb, var(--accent-fill) 10%, transparent);
+  }
+}
+.keys-hint kbd {
+  display: inline-block;
+  min-width: 1.25rem;
+  padding: 0 0.3rem;
+  border: 1px solid var(--control-border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--inset-surface);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  line-height: 1.5;
+  text-align: center;
+}
+.diff-keys {
+  margin: 0 0 0.5rem;
+}
+/* A keyboard hint means nothing on a touch screen with no keyboard. */
+@media (hover: none) and (pointer: coarse) {
+  .keys-hint {
+    display: none;
+  }
 }
 .file-list {
   display: grid;
@@ -356,8 +486,66 @@ mark.del {
   font-size: 0.8125rem;
   line-height: 1.5;
 }
+.save-row .keys-hint {
+  margin: 0;
+}
 .feedback-panel {
   margin-top: 1.5rem;
+}
+/* The reference and the explanation it answers, side by side, so the
+   self-assessment is made with both in view. The reflection sits under the
+   reference; the explanation stays beside both while they scroll. */
+.compare-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0 1.5rem;
+}
+.compare-grid:has(#your-explanation:not([hidden])) {
+  grid-template-columns: minmax(0, 1.7fr) minmax(16rem, 1fr);
+  grid-template-areas:
+    "ref yours"
+    "form yours";
+  align-items: start;
+}
+.compare-grid #feedback-list {
+  grid-area: ref;
+  min-width: 0;
+}
+.compare-grid #reflection-form {
+  grid-area: form;
+  min-width: 0;
+}
+.compare-yours {
+  grid-area: yours;
+  position: sticky;
+  top: calc(var(--rail-h) + 1rem);
+  margin-block: 0.75rem;
+  padding: 1rem 1.25rem;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  background: var(--step-surface);
+}
+.compare-yours[hidden] {
+  display: none;
+}
+.compare-yours h3 {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+.compare-text {
+  margin: 0.75rem 0 0;
+  max-height: 50vh;
+  overflow: auto;
+  color: var(--ink);
+  line-height: 1.65;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  text-wrap: pretty;
+}
+.compare-yours .field-hint:empty {
+  display: none;
 }
 .feedback-panel li {
   margin-block: 0.75rem;
@@ -365,6 +553,248 @@ mark.del {
   line-height: 1.6;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
+}
+/* A reference note drawn from the explainer draft: prose, a flow diagram, a
+   comparison table and code quoted from the diff. Solid arrows cite the diff;
+   dashed amber ones are the reviewer's inference. */
+.feedback-panel li.explainer {
+  white-space: normal;
+  color: var(--ink);
+}
+.explainer li {
+  margin-block: 0.25rem;
+  white-space: normal;
+}
+.ex-note-body {
+  display: grid;
+  gap: 1rem;
+  margin-top: 0.5rem;
+}
+.ex-note-body p,
+.ex-note-body ul {
+  margin: 0;
+  color: var(--sub);
+  text-wrap: pretty;
+}
+.ex-note-body ul {
+  padding-left: 1.25rem;
+}
+.ex-note-body code {
+  font-family: var(--font-mono);
+  font-size: 0.875em;
+  padding: 0.05rem 0.3rem;
+  border-radius: 4px;
+  background: var(--inset-surface);
+}
+.ex-heading {
+  margin: 0.5rem 0 0;
+  font-size: 0.9375rem;
+}
+.ex-cite {
+  display: inline-block;
+  max-width: 100%;
+  margin-inline: 0.15rem;
+  padding: 0.25rem 0.6rem;
+  /* 24 px tall at least, and the edge a control is identified by, as elsewhere. */
+  border: 1px solid var(--control-border);
+  border-radius: 999px;
+  background: var(--inset-surface);
+  color: var(--accent-ink);
+  font: inherit;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  line-height: 1.4;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.ex-cite:hover {
+  border-color: var(--accent);
+}
+.ex-figure,
+.ex-code {
+  margin: 0;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  background: var(--step-surface);
+  overflow: hidden;
+}
+.ex-scroll {
+  overflow-x: auto;
+  padding: 0.5rem;
+}
+.ex-scroll svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  margin-inline: auto;
+}
+.ex-node rect {
+  fill: var(--inset-surface);
+  stroke: var(--control-border);
+  stroke-width: 1;
+}
+.ex-node text {
+  fill: var(--ink);
+  font-size: 13px;
+}
+.ex-edge {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.75;
+}
+.ex-arrow {
+  fill: var(--accent);
+}
+/* Dashed and gray, not a hue: an inference must read as one without color. */
+.ex-edge.ex-inferred {
+  stroke: var(--sub);
+  stroke-dasharray: 6 4;
+}
+.ex-arrow.ex-inferred {
+  fill: var(--sub);
+}
+.ex-badge circle {
+  fill: var(--step-surface);
+  stroke: var(--accent);
+}
+.ex-badge.ex-inferred circle {
+  stroke: var(--sub);
+  stroke-dasharray: 2 2;
+}
+.ex-badge text {
+  fill: var(--ink);
+  font-size: 10px;
+  font-weight: 600;
+}
+.ex-badge .ex-label {
+  fill: var(--sub);
+  font-size: 12px;
+  font-weight: 400;
+  paint-order: stroke;
+  stroke: var(--step-surface);
+  stroke-width: 4px;
+}
+.ex-edges {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0.75rem 1rem;
+  list-style: none;
+  border-top: 1px solid var(--hairline);
+  font-size: 0.8125rem;
+}
+.ex-edges li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.6rem;
+  margin: 0;
+  color: var(--sub);
+}
+.ex-num {
+  display: inline-grid;
+  place-items: center;
+  min-width: 1.25rem;
+  height: 1.25rem;
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  font-size: 0.6875rem;
+  color: var(--ink);
+}
+.ex-step {
+  color: var(--ink);
+  font-family: var(--font-mono);
+}
+.ex-tag {
+  padding: 0 0.4rem;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  font-size: 0.75rem;
+  color: var(--sub);
+}
+.ex-edges .ex-tag {
+  border-style: dashed;
+}
+.ex-caption {
+  padding: 0 1rem 0.75rem;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+.ex-code-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.75rem;
+  border-bottom: 1px solid var(--hairline);
+}
+.ex-code-body {
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+.ex-row {
+  display: grid;
+  grid-template-columns: 3rem 1.25rem max-content;
+  width: max-content;
+  min-width: 100%;
+}
+.ex-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+}
+.ex-table {
+  width: 100%;
+  min-width: 36rem;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+.ex-table th,
+.ex-table td {
+  padding: 0.6rem 0.85rem;
+  border-bottom: 1px solid var(--hairline);
+  text-align: left;
+  vertical-align: top;
+  color: var(--sub);
+  line-height: 1.5;
+}
+.ex-table thead th {
+  background: var(--step-surface);
+  color: var(--ink);
+  font-weight: 650;
+  font-size: 0.8125rem;
+}
+.ex-table tbody th {
+  color: var(--ink);
+  font-weight: 600;
+}
+.ex-table tbody tr:last-child > * {
+  border-bottom: 0;
+}
+/* These boxes clip their contents, so a ring drawn outside would be cut off. */
+.ex-scroll:focus-visible,
+.ex-code-body:focus-visible,
+.ex-table-wrap:focus-visible {
+  outline-offset: -3px;
+}
+/* The line a citation opened in the diff. */
+.cited {
+  outline: 2px solid var(--accent-ink);
+  outline-offset: -2px;
+  background: color-mix(in srgb, var(--accent-ink) 14%, transparent);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .cited {
+    animation: cited-in 0.6s ease-out;
+  }
+}
+@keyframes cited-in {
+  from {
+    outline-offset: 6px;
+    outline-color: transparent;
+  }
 }
 .feedback-actions {
   display: flex;
@@ -640,5 +1070,147 @@ mark.del {
     50% {
       opacity: 1;
     }
+  }
+}
+
+/* The change as three debts, and the contributor's intent record. */
+.debt-panel {
+  margin-top: 1.5rem;
+}
+.debt-layers {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1rem;
+  margin-block: 1.25rem;
+}
+.debt-card {
+  padding: 1rem 1.25rem;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  background: var(--step-surface);
+}
+.debt-card h3,
+.debt-where {
+  margin: 0.25rem 0 0;
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+.debt-asks {
+  margin: 0.75rem 0 0;
+  color: var(--ink);
+  font-weight: 600;
+  text-wrap: balance;
+}
+.debt-signals {
+  display: grid;
+  gap: 0.6rem;
+  margin: 0.75rem 0 0;
+  padding-left: 1.1rem;
+  color: var(--sub);
+  font-size: 0.875rem;
+  line-height: 1.55;
+}
+/* The record is optional work: closed until wanted, its state in the summary. */
+.intent-details {
+  border-top: 1px solid var(--hairline);
+}
+.intent-details > summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.75rem;
+  padding-block: 1rem;
+  cursor: pointer;
+  list-style: none;
+}
+.intent-details > summary::-webkit-details-marker {
+  display: none;
+}
+.intent-details > summary::before {
+  content: "";
+  align-self: center;
+  width: 0.45rem;
+  height: 0.45rem;
+  border-right: 2px solid var(--sub);
+  border-bottom: 2px solid var(--sub);
+  transform: rotate(-45deg);
+}
+.intent-details[open] > summary::before {
+  transform: rotate(45deg);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .intent-details > summary::before {
+    transition: transform 0.15s ease-out;
+  }
+}
+.intent-details > summary h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+.intent-details > summary .field-hint {
+  margin: 0;
+}
+.intent-form {
+  display: grid;
+  gap: 0.5rem;
+  max-width: 44rem;
+  padding-bottom: 0.5rem;
+}
+.intent-form label {
+  display: block;
+  margin-top: 0.75rem;
+  color: var(--ink);
+  font-weight: 600;
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+.intent-form textarea {
+  display: block;
+  width: 100%;
+  min-height: 4.5rem;
+  resize: vertical;
+  margin-top: 0.4rem;
+  padding: 0.75rem;
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.875rem;
+  line-height: 1.6;
+}
+#intent-status {
+  color: var(--sub);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+#intent-copy:disabled {
+  cursor: not-allowed;
+}
+@media (max-width: 960px) {
+  .debt-layers {
+    grid-template-columns: 1fr;
+  }
+  .compare-grid:has(#your-explanation:not([hidden])) {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "ref"
+      "yours"
+      "form";
+  }
+  .compare-yours {
+    position: static;
+  }
+}
+@media (max-width: 680px) {
+  .review-workbench {
+    --rail-h: 0rem;
+  }
+  /* On a phone the rail scrolls away with the page rather than eat its height. */
+  .review-rail {
+    position: static;
+  }
+  .review-rail li + li::before {
+    display: none;
   }
 }
