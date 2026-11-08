@@ -844,3 +844,216 @@ test("text targets and focus outside the drawing toolbar keep their own undo and
     assert.equal(await page.evaluate(() => globalThis.keyTaken), false);
   }
 });
+
+test("P, E, and T shortcuts respect text, lock, and drawing states", async (t) => {
+  const ctx = await boardPage(t);
+  if (!ctx) return;
+  const { page } = ctx;
+  const board = page.locator("#board");
+  const pressed = (name) =>
+    page
+      .getByRole("button", { name, exact: true })
+      .getAttribute("aria-pressed");
+
+  await board.focus();
+
+  for (const [key, name] of [
+    ["p", "Red pen"],
+    ["p", "Blue pen"],
+    ["p", "Green pen"],
+    ["p", "Black pen"],
+  ]) {
+    await page.keyboard.press(key);
+    assert.equal(await pressed(name), "true", `${key} selects ${name}`);
+  }
+
+  await page.evaluate(() => {
+    document.querySelector("#board").dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "p",
+        repeat: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+  });
+  assert.equal(
+    await pressed("Black pen"),
+    "true",
+    "held keys do not cycle colors",
+  );
+
+  const modifiedShortcutHandled = await page.evaluate(() => {
+    const event = new KeyboardEvent("keydown", {
+      key: "p",
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    document.querySelector("#board").dispatchEvent(event);
+    return event.defaultPrevented;
+  });
+  assert.equal(
+    modifiedShortcutHandled,
+    false,
+    "modified keys remain available to the browser",
+  );
+  assert.equal(await pressed("Black pen"), "true");
+
+  await page.getByRole("button", { name: "Eraser", exact: true }).focus();
+  await page.keyboard.press("p");
+  assert.equal(
+    await pressed("Red pen"),
+    "true",
+    "shortcuts also work from the toolbar",
+  );
+  for (const name of ["Blue pen", "Green pen", "Black pen"]) {
+    await page.keyboard.press("p");
+    assert.equal(
+      await pressed(name),
+      "true",
+      `P selects ${name} from the toolbar`,
+    );
+  }
+
+  await page.keyboard.press("e");
+  assert.equal(await pressed("Eraser"), "true");
+  assert.equal(await pressed("Medium eraser"), "true");
+  for (const name of ["Large eraser", "Small eraser", "Medium eraser"]) {
+    await page.keyboard.press("e");
+    assert.equal(await pressed(name), "true", `E selects ${name}`);
+  }
+
+  await page.keyboard.press("t");
+  assert.equal(await pressed("Text"), "true");
+  await page.keyboard.press("t");
+  assert.equal(
+    await pressed("Eraser"),
+    "true",
+    "T returns to the previous tool",
+  );
+
+  await page.keyboard.press("p");
+  assert.equal(await pressed("Black pen"), "true");
+  await page.keyboard.press("t");
+  assert.equal(await pressed("Text"), "true");
+  await page.keyboard.press("t");
+  assert.equal(
+    await pressed("Black pen"),
+    "true",
+    "T returns to the previous pen",
+  );
+
+  await page.keyboard.press("t");
+  const box = await board.boundingBox();
+  await page.mouse.click(box.x + 100, box.y + 100);
+  const input = page.locator(".board-text-input");
+  await input.waitFor();
+  await page.keyboard.type("pet");
+  assert.equal(await input.inputValue(), "pet");
+  assert.equal(await pressed("Text"), "true", "typing does not switch tools");
+
+  await page.locator(".board-text-cancel").click();
+  await page.evaluate(() => globalThis.boardTest.lock("ended"));
+  await board.focus();
+  for (const key of ["p", "e", "t"]) {
+    await page.keyboard.press(key);
+    assert.equal(
+      await pressed("Text"),
+      "true",
+      `${key} is ignored while locked`,
+    );
+    assert.equal(
+      await page.evaluate(() => globalThis.keyTaken),
+      false,
+      `${key} is not consumed while locked`,
+    );
+  }
+
+  await page.evaluate(() => globalThis.boardTest.lock("live"));
+  await page.getByRole("button", { name: "Black pen", exact: true }).click();
+  await board.focus();
+  const boardBox = await board.boundingBox();
+  await page.mouse.move(boardBox.x + 80, boardBox.y + 80);
+  await page.mouse.down();
+  for (const key of ["p", "e", "t"]) {
+    await page.keyboard.press(key);
+    assert.equal(
+      await pressed("Black pen"),
+      "true",
+      `${key} is ignored while drawing`,
+    );
+    assert.equal(
+      await pressed("Eraser"),
+      "false",
+      `${key} does not select eraser`,
+    );
+    assert.equal(await pressed("Text"), "false", `${key} does not select text`);
+    assert.equal(
+      await page.evaluate(() => globalThis.keyTaken),
+      false,
+      `${key} is not consumed while drawing`,
+    );
+  }
+  await page.mouse.up();
+
+  await board.focus();
+  await page.keyboard.press("t");
+  assert.equal(await pressed("Text"), "true");
+  const textDragStart = { x: boardBox.x + 120, y: boardBox.y + 120 };
+  await page.mouse.move(textDragStart.x, textDragStart.y);
+  await page.mouse.down();
+  await page.mouse.move(textDragStart.x + 120, textDragStart.y + 60);
+  await page.locator(".board-text-draft.is-creating").waitFor();
+  assert.equal(
+    await page.evaluate(() => document.activeElement?.id),
+    "board",
+    "the board keeps focus while the text box is being dragged out",
+  );
+  await page.keyboard.press("p");
+  assert.equal(
+    await pressed("Text"),
+    "true",
+    "P is ignored while creating a text box",
+  );
+  assert.equal(
+    await page.evaluate(() => globalThis.keyTaken),
+    false,
+    "P is not consumed during a text-box gesture",
+  );
+  await page.mouse.up();
+  await page.locator(".board-text-input").waitFor();
+  assert.equal(
+    await page
+      .locator(".board-text-input")
+      .evaluate((input) => input === document.activeElement),
+    true,
+    "releasing the pointer completes the text draft",
+  );
+});
+
+test("P shortcut uses event.code for a non-Latin event.key", async (t) => {
+  const ctx = await boardPage(t);
+  if (!ctx) return;
+  const { page } = ctx;
+  await page.locator("#board").focus();
+
+  const handled = await page.evaluate(() => {
+    const event = new KeyboardEvent("keydown", {
+      key: "π",
+      code: "KeyP",
+      bubbles: true,
+      cancelable: true,
+    });
+    document.querySelector("#board").dispatchEvent(event);
+    return event.defaultPrevented;
+  });
+  assert.equal(handled, true, "the physical P key is handled on this layout");
+  assert.equal(
+    await page
+      .getByRole("button", { name: "Red pen", exact: true })
+      .getAttribute("aria-pressed"),
+    "true",
+    "event.code selects the next pen when event.key is non-Latin",
+  );
+});
