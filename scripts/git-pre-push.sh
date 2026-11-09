@@ -5,6 +5,9 @@
 # --no-verify reaches the remote unread. This is the last place to catch that
 # while the history is still local and cheap to rewrite.
 #
+# It also checks the formatting of a topic branch with scripts/indent.sh, the
+# pre-commit hook's own check, for the commits that never passed through it.
+#
 # It also refuses new work on the main branch of any other copy of this
 # repository, which in practice is a fork a pull request is about to be opened
 # from. The same rule runs in .github/workflows/check.yml for a contributor who
@@ -116,6 +119,35 @@ fi
 script_dir=$(git rev-parse --show-toplevel)/scripts
 zero=0000000000000000000000000000000000000000
 failed=0
+
+# Formatting is the pre-commit hook's, and a rebase, a rechain or --no-verify
+# publishes commits it never saw. This is where those paths meet, so the files a
+# push publishes are judged here by the same script, against the index a
+# checkout of the pushed head would have. $1 is that head, $2 the commit the
+# push builds on, empty when it builds on nothing.
+check_format()
+{
+    dir=$(mktemp -d) || return 1
+    (
+        for variable in $(git rev-parse --local-env-vars); do
+            # The object store is how the pushed head is found.
+            case $variable in
+                GIT_OBJECT_DIRECTORY | GIT_ALTERNATE_OBJECT_DIRECTORIES) ;;
+                *) unset "$variable" ;;
+            esac
+        done
+        GIT_INDEX_FILE=$dir/index
+        export GIT_INDEX_FILE
+        mkdir "$dir/tree" \
+            && git read-tree "$1" \
+            && git checkout-index -a --prefix="$dir/tree/" \
+            && "$script_dir/indent.sh" --staged "$dir/tree" \
+                "${2:-$(git hash-object -t tree /dev/null)}" > /dev/null
+    )
+    status=$?
+    rm -rf "$dir"
+    return "$status"
+}
 
 # For a new branch the remote has no tip to diff against, so "new" means every
 # commit not already published somewhere. Scoped to this remote when it has
@@ -250,6 +282,36 @@ while read -r local_ref local_sha remote_ref remote_sha; do
     case $remote_ref in
         refs/heads/main) ;;
         refs/heads/*)
+
+            # The formatting base is where the branch left main, so a rebase or
+            # a force push is judged by its own files and not by everything main
+            # took in meanwhile. Without a main to measure from, the remote tip
+            # stands in, and for a new branch the parent of its oldest outgoing
+            # commit.
+            format_base=
+            if [ -n "$review_policy" ]; then
+                format_base=$(git merge-base "$local_sha" "$review_policy" 2> /dev/null || :)
+            fi
+            if [ -z "$format_base" ] && git cat-file -e "${remote_sha}^{commit}" 2> /dev/null; then
+                format_base=$(git merge-base "$remote_sha" "$local_sha" 2> /dev/null || :)
+            fi
+            if [ -z "$format_base" ] && [ -n "$secret_commits" ]; then
+                format_base=$(printf '%s\n' "$secret_commits" | sed -n '$p')
+                format_base=$(git rev-parse --verify --quiet "$format_base^" || :)
+            fi
+
+            # indent.sh alone knows which files and settings a formatter reads,
+            # and it checks nothing when the branch changes none of them. Merges
+            # count: a resolution can bring in a file nobody formatted. A head
+            # another remote already holds is judged here too, since the pull
+            # request is opened from this one.
+            if [ "$local_sha" != "$remote_sha" ] && ! check_format "$local_sha" "$format_base"; then
+                echo "Push rejected: $local_ref has unformatted files." >&2
+                echo "Fix them in the commit that introduced them; a rebase skips the pre-commit hook." >&2
+                failed=1
+                continue
+            fi
+
             review_enabled=0
             if [ -e "$review_skill" ] || [ -e "${review_skill%/*}/commit-sizes.py" ] \
                 || git cat-file -e "$local_sha:$review_path" 2> /dev/null \

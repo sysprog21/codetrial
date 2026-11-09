@@ -23,5 +23,9 @@ case "$*" in
         [ -z "${FAKE_NO_SUITE:-}" ] || exit 0
         echo "${FAKE_PUSHED:-2026-10-20T12:00:00Z}"
         ;;
+    "api graphql "*)
+        [ -z "${FAKE_MINIMIZED_MORE:-}" ] || exit 1
+        echo "${FAKE_MINIMIZED:-[]}"
+        ;;
     *) exit 1 ;;
 esac

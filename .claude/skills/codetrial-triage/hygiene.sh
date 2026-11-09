@@ -8,8 +8,11 @@
 #
 # Usage: hygiene.sh <pr> [repo]
 #        Prints {pr, head, skip, items: [{key, text}], body, comments: [{key,
-#        text}]}. skip says why the PR gets nothing (the skip calls below), and
-#        items and comments are then empty. body is the review text, empty when
+#        text}], hide: [{id, key, why}]}. skip says why the PR gets nothing
+#        (the skip calls below), and items, comments and hide are then empty.
+#        hide lists the visible copies of earlier requests to hide once the
+#        review is up: why is repeated (a newer copy stands) or stale (the
+#        evidence is gone). body is the review text, empty when
 #        no item applies. comments are the requests posted as a plain comment
 #        rather than a Request changes review: the screenshot request, which
 #        does not block the merge by itself.
@@ -17,7 +20,9 @@
 #
 # An item a maintainer already raised at this head, in a review left on it or a
 # comment after GitHub's first check suite for it (the push, by GitHub's clock
-# rather than the contributor's), is left out: that request stands.
+# rather than the contributor's), is left out: that request stands. So is one
+# whose own text is still visible on any earlier head while its evidence holds,
+# which is what keeps a push from posting the same review again.
 
 set -eu
 
@@ -46,7 +51,7 @@ skip()
 {
     jq -n --arg why "$1" --slurpfile p "$work/pr.json" \
         '{pr: $p[0].number, head: $p[0].headRefOid, skip: $why, items: [], body: "",
-          comments: []}'
+          comments: [], hide: []}'
     exit 0
 }
 why=$(jq -r 'if .isDraft then "draft"
@@ -66,6 +71,19 @@ logins=$(gh api --paginate "repos/$repo/collaborators?permission=push" \
     --jq '.[].login' 2> /dev/null) || skip "the push listing failed"
 printf '%s\n' "$logins" | grep -qxF "$author" && skip "a maintainer's pull request"
 pushers=$(printf '%s\n' "$logins" | jq -Rn '[inputs | select(length > 0)]')
+
+# Which reviews are hidden: `gh pr view` reports it for comments and not for
+# reviews. Without it a hidden copy of a request would read as one still
+# standing, so a failed read skips the PR as the push listing does.
+# shellcheck disable=SC2016  # $owner and the others below are GraphQL variables
+minimized=$(gh api graphql -F owner="${repo%%/*}" -F name="${repo##*/}" -F number="$pr" \
+    -f query='query($owner: String!, $name: String!, $number: Int!) {
+      repository(owner: $owner, name: $name) { pullRequest(number: $number) {
+        reviews(first: 100) { pageInfo { hasNextPage } nodes { id isMinimized } } } } }' \
+    --jq '.data.repository.pullRequest.reviews
+        | if .pageInfo.hasNextPage then error("more than one page")
+          else [.nodes[] | select(.isMinimized) | .id] end' \
+    2> /dev/null) || skip "the review listing failed"
 
 # When the head reached GitHub, by GitHub's clock: its first check suite. The
 # committer date is set by the contributor's clock and dates nothing about the
@@ -141,29 +159,22 @@ again=$(gh pr view "$pr" --repo "$repo" --json headRefOid --jq .headRefOid)
 jq -n -L "$(dirname "$0")" --slurpfile p "$work/pr.json" --slurpfile c "$work/commits.json" \
     --slurpfile ci "$work/ci.json" --slurpfile inline "$work/inline.json" \
     --argjson bad "$bad_messages" --argjson ai "$ai_messages" \
-    --argjson pushers "$pushers" --arg pushed "$pushed" --argjson shows "$shows_page" --arg img "$image_re" \
+    --argjson pushers "$pushers" --argjson minimized "$minimized" --arg pushed "$pushed" --argjson shows "$shows_page" --arg img "$image_re" \
     --arg again "$again" --rawfile fix "$(dirname "$0")/rebase.md" '
   $p[0] as $pr | ($c | add) as $commits
   | (if $ci[0].head == $pr.headRefOid then $ci[0] else {} end) as $ci
   | def staff: .author.login | IN($pushers[]);
-  # What maintainers already said at this head.
-  ([$pr.reviews[] | select(staff and .commit.oid == $pr.headRefOid) | .body]
-   + [$pr.comments[] | select(staff and .createdAt > $pushed) | .body]
-   + [$inline | add // [] | .[]
-      | select((.user.login | IN($pushers[])) and .commit_id == $pr.headRefOid)
-      | .body]
-   | join("\n")) as $said
   # The aggregate check job only collects the others, so it proves nothing.
   # A job whose log could not be read has null gates: no evidence either way.
-  | ($ci.failing // [] | map(select(.current == true and .name != "check"
+  ($ci.failing // [] | map(select(.current == true and .name != "check"
       and .gates != null))) as $failing
+  | (if $again != $pr.headRefOid or ($commits | last | .sha) != $pr.headRefOid
+     then "the head moved while it was read"
+     else null end) as $skip
+  # Every request, with whether the evidence for it holds at this head.
   | def item($key; $when; $marker; $text):
-      if $when and ($said | test($marker; "i") | not)
-      then {key: $key, text: $text} else empty end;
-  (if $again != $pr.headRefOid or ($commits | last | .sha) != $pr.headRefOid
-   then "the head moved while it was read"
-   else null end) as $skip
-  | (if $skip then [] else [
+      {key: $key, when: $when, marker: $marker, text: $text};
+  ([
       item("fork_main"; $pr.isCrossRepository and $pr.headRefName == "main";
         "branch of your fork|topic branch";
         "This pull request is opened from the `main` branch of your fork, so every later commit you push there joins it. Open a new pull request from a topic branch and close this one; see `CONTRIBUTING.md`."),
@@ -185,12 +196,71 @@ jq -n -L "$(dirname "$0")" --slurpfile p "$work/pr.json" --slurpfile c "$work/co
         and any($failing[]; .on_main == false and .gates != ["indent"]);
         "regression|rebase";
         $fix | rtrimstr("\n"))
-    ] end) as $items
+    ]) as $defs
+  | ($defs | map(select(.when) | .key)) as $active
+  # The request that rests on CI is unknown, not gone, when the diagnosis
+  # failed or read another head, a check is still running or held, or the log of a job
+  # could not be read. An unknown request keeps the copy that carries it
+  # (nothing is hidden on no evidence) and is not posted either.
+  | (($ci.head == null) or (($ci.pending // []) | length > 0)
+     or (($ci.held // []) | length > 0)
+     or any($ci.failing // [] | .[]; .current == true and .name != "check" and .gates == null)
+    ) as $unknown
+  | def holds: . as $k
+      | ($k | IN($active[])) or ($unknown and $k == "indent");
+  # The copies of these requests that are still visible, whatever head they
+  # were left on, newest first. A request stands while its evidence holds, so
+  # a push that leaves the failure as it was does not ask again. A copy that
+  # carries a request whose evidence is gone no longer describes the PR and is
+  # hidden; the requests it carried that still hold go out in the new review.
+  # The CI regression belongs to rebase.md and pr-sweep.sh hides it.
+  def own($id; $at; $body):
+      [$defs[] | select(.key != "ci_regression") | . as $d
+       | select($body | contains($d.text))] as $found
+      # Only a body made of our texts: a maintainer who added feedback of their
+      # own to one is not asked to lose it by having the review hidden.
+      | select(($found | length > 0)
+          and (reduce $found[] as $d ($body; split($d.text) | join(""))
+               | gsub("\\s"; "") == ""))
+      | {id: $id, at: $at, keys: [$found[].key]};
+  ([$pr.reviews[] | select(staff and (.id | IN($minimized[]) | not))
+      | own(.id; .submittedAt; .body // "")]
+   + [$pr.comments[] | select(staff and (.isMinimized | not))
+      | own(.id; .createdAt; .body // "")]
+   | sort_by(.at) | reverse) as $ours
+  | def keep: all(.keys[]; holds)
+      or ($unknown and any(.keys[]; . == "indent"));
+  ($ours | map(select(keep | not))) as $stale
+  | (reduce ($ours[] | select(keep)) as $o
+      ({covered: [], drop: []};
+       . as $st
+       | if all($o.keys[]; . as $k | $k | IN($st.covered[]))
+         then .drop += [$o] else .covered += $o.keys end)) as $kept
+  | (if $skip then [] else
+       [$kept.drop[] | {id, key: (.keys | join(",")), why: "repeated"}]
+       + [$stale[] | {id, key: (.keys | join(",")), why: "stale"}]
+     end) as $hide
+  # What maintainers already said at this head, but for a copy about to be hidden.
+  | ($stale | map(.id)) as $going
+  | ([$pr.reviews[] | select(staff and .commit.oid == $pr.headRefOid
+        and (.id | IN($going[], $minimized[]) | not)) | .body]
+   + [$pr.comments[] | select(staff and .createdAt > $pushed and (.isMinimized | not)
+        and (.id | IN($going[]) | not)) | .body]
+   + [$inline | add // [] | .[]
+      | select((.user.login | IN($pushers[])) and .commit_id == $pr.headRefOid)
+      | .body]
+   | join("\n")) as $said
+  | (if $skip then [] else
+       [$defs[] | . as $d
+        | select($d.when and ($said | test($d.marker; "i") | not)
+          and ($d.key | IN($kept.covered[]) | not))
+        | {key, text}]
+     end) as $items
   # A screenshot is asked for once: any visible maintainer comment or review
   # that mentions one, whenever it was left, stands until the description shows
   # an image, so a push does not bring the request back.
-  | ([$pr.reviews[], $pr.comments[]
-      | select(staff and (.isMinimized | not)) | .body]
+  | ([$pr.reviews[] | select(staff and (.id | IN($minimized[]) | not)) | .body]
+     + [$pr.comments[] | select(staff and (.isMinimized | not)) | .body]
      + [$inline | add // [] | .[] | select(.user.login | IN($pushers[])) | .body]
      | any(test("screenshot"; "i"))) as $asked
   | (if $skip or $asked or ($pr.body // "" | test($img; "i"))
@@ -200,5 +270,5 @@ jq -n -L "$(dirname "$0")" --slurpfile p "$work/pr.json" --slurpfile c "$work/co
             text: "Add screenshots to the pull request description to illustrate your work, as @ColtenOuO suggests. Example: #349"}]
      end) as $comments
   | {pr: $pr.number, head: $pr.headRefOid, skip: $skip, items: $items,
-     body: ([$items[].text] | join("\n\n")), comments: $comments}
+     body: ([$items[].text] | join("\n\n")), comments: $comments, hide: $hide}
 '

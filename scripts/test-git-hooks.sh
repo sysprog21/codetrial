@@ -952,6 +952,109 @@ absent "a push with a refused ref gets no note" "$work/last.out" "no review on r
 git reset -q --hard HEAD~1
 rm -rf .claude
 
+# A commit that never saw the pre-commit hook, as a rebase leaves it, with the
+# Change-Id chain repaired the way a contributor would.
+commit_unhooked()
+{
+    git -c core.hooksPath=/dev/null commit -q -m "$1" -m "$2" \
+        && python3 scripts/hashchain.py rechain > /dev/null 2>&1
+}
+
+# A commit that never saw the pre-commit hook, as a rebase leaves it, still has
+# a valid Change-Id once rechained. The push is where its formatting is judged.
+if command -v ruff > /dev/null 2>&1; then
+    git push -q fork HEAD:refs/heads/fmt
+    printf 'x = [1,\n  2]\n' > tests/unformatted.py
+    git add tests/unformatted.py
+    commit_unhooked "Add an unformatted script" "Made without the pre-commit hook, so nothing formatted it."
+    expect 1 "a push of an unformatted file is refused" git push -q fork HEAD:refs/heads/fmt
+    contains "the refusal names the file" "$work/last.out" "tests/unformatted.py"
+    ruff format -q tests/unformatted.py
+    git add tests/unformatted.py
+    git -c core.hooksPath=/dev/null commit -q --amend --no-edit
+    python3 scripts/hashchain.py rechain > /dev/null 2>&1
+    expect 0 "the same file formatted is pushed" git push -q -f fork HEAD:refs/heads/fmt
+    git reset -q --hard HEAD~1
+    printf 'line-length = 120\n' > ruff.toml
+    printf 'value = ["first item with a long name", "second item with a long name", "third item with a long name"]\n' > tests/config_delete.py
+    git add ruff.toml tests/config_delete.py
+    commit_unhooked "Add formatter configuration" "Establish the branch base for the deletion test."
+    git push -q fork HEAD:refs/heads/config-delete
+    git rm -q ruff.toml
+    commit_unhooked "Remove formatter configuration" "The remaining files must be checked against the default settings."
+    expect 1 "deleting formatter configuration checks remaining files" \
+        git push -q fork HEAD:refs/heads/config-delete
+    git reset -q --hard HEAD~1
+    git mv ruff.toml old-config.txt
+    commit_unhooked "Rename formatter configuration" "The old name no longer configures the formatter."
+    expect 1 "renaming formatter configuration checks remaining files" \
+        git push -q fork HEAD:refs/heads/config-delete
+    git reset -q --hard HEAD~2
+else
+    echo "  SKIP    format push: ruff is not installed"
+fi
+
+# A branch rebased onto a main that moved is judged by its own files. The old
+# tip is no ancestor of the new head, so a diff against it would take in
+# everything main gained, a changed formatter setting included, and check the
+# whole tree, an unformatted file main already holds along with it.
+if command -v ruff > /dev/null 2>&1; then
+    git init -q --bare "$work/rb.git"
+    git remote add rb "$work/rb.git"
+    start=$(git rev-parse HEAD)
+    git checkout -q -b rb-topic
+    printf 'x = 1\n' > tests/rb_one.py
+    git add tests/rb_one.py
+    git commit -q -m "Add a formatted script" -m "The branch's only change, made through the hooks."
+    expect 0 "the branch is pushed before main moves" git push -q rb HEAD:refs/heads/rb-topic
+    git checkout -q -b rb-main "$start"
+    printf 'y = [1,\n  2]\n' > tests/rb_legacy.py
+    printf 'line-length = 88\n' > ruff.toml
+    git add tests/rb_legacy.py ruff.toml
+    commit_unhooked "Move main along" "Main gains a formatter setting and a file nobody formatted."
+    # What a fetch of upstream would leave: its main is where main moved to.
+    policy=$(git rev-parse -q --verify refs/remotes/upstream/main || :)
+    git update-ref refs/remotes/upstream/main HEAD
+    git checkout -q rb-topic
+    git -c core.hooksPath=/dev/null rebase -q rb-main
+    python3 scripts/hashchain.py rechain > /dev/null 2>&1
+    expect 0 "a rebased branch is judged by its own files" \
+        git push -q -f rb HEAD:refs/heads/rb-topic
+
+    # A push of nothing but a merge is judged too, for what its resolution
+    # holds.
+    git checkout -q -b rb-side "$start"
+    printf 'z = 1\n' > tests/rb_side.py
+    git add tests/rb_side.py
+    git commit -q -m "Add a side script" -m "Pushed on its own, so the merge below is all that is left to send."
+    expect 0 "the side branch is pushed first" git push -q rb HEAD:refs/heads/rb-side
+    git checkout -q rb-topic
+    git merge -q --no-ff --no-commit rb-side
+    printf 'w = [1,\n  2]\n' > tests/rb_merge.py
+    git add tests/rb_merge.py
+    commit_unhooked "Merge the side script" "The resolution carries a file nobody formatted."
+    expect 1 "a merge-only push is judged for formatting" \
+        git push -q rb HEAD:refs/heads/rb-topic
+    contains "the merge refusal names the file" "$work/last.out" "tests/rb_merge.py"
+
+    # A head another remote already holds is still judged, which is the case for
+    # a remote that has no branches yet.
+    git -c core.hooksPath=/dev/null push -q rb HEAD:refs/heads/rb-elsewhere
+    git init -q --bare "$work/fresh.git"
+    git remote add fresh "$work/fresh.git"
+    expect 1 "a head held by another remote is judged for formatting" \
+        git push -q fresh HEAD:refs/heads/rb-topic
+    contains "the refusal on a fresh remote names the file" "$work/last.out" "tests/rb_merge.py"
+    git checkout -q "$start" 2> /dev/null || git checkout -q -
+    if [ -n "$policy" ]; then
+        git update-ref refs/remotes/upstream/main "$policy"
+    else
+        git update-ref -d refs/remotes/upstream/main
+    fi
+else
+    echo "  SKIP    rebased push: ruff is not installed"
+fi
+
 expect 0 "new work pushed to upstream's main" \
     push_main upstream https://github.com/sysprog21/codetrial
 

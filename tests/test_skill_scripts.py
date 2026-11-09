@@ -2579,6 +2579,12 @@ class HygieneTests(unittest.TestCase):
         )
         old = review("maint", "CHANGES_REQUESTED", 0, "Show a screenshot.", oid="h0")
         self.assertEqual(self.comment_keys(good, files=files, reviews=[old]), [])
+        # A review hidden by hand asks nothing: gh pr view cannot say so.
+        hidden = {"FAKE_MINIMIZED": json.dumps([old["id"]])}
+        self.assertEqual(
+            self.comment_keys(good, files=files, reviews=[old], env=hidden),
+            ["screenshot"],
+        )
         # Asked on a line of the diff rather than in a comment.
         inline = [
             {"user": {"login": "maint"}, "commit_id": "h0", "body": "A screenshot?"}
@@ -2758,6 +2764,125 @@ class HygieneTests(unittest.TestCase):
         self.assertEqual(
             self.keys(commits, ci=ci, reviews=[posted], **fields), (None, [])
         )
+
+    def test_a_request_stands_across_pushes_while_its_evidence_holds(self):
+        good = [commit(GOOD_MESSAGE)]
+        ci = {"head": "h1", "failing": [failing_job(["indent"])]}
+        text = self.hygiene(good, ci=ci)["body"]
+
+        def copy(name, days, body=text, oid="h0"):
+            return review("maint", "CHANGES_REQUESTED", days, body, oid=oid) | {
+                "id": name
+            }
+
+        # The copy was left on an earlier head and the gate still fails: no
+        # second review, and nothing to hide.
+        out = self.hygiene(good, ci=ci, reviews=[copy("R_old", 3)])
+        self.assertEqual((out["items"], out["hide"]), ([], []))
+        # Hidden by hand, it no longer stands and the request goes out again.
+        out = self.hygiene(
+            good,
+            ci=ci,
+            reviews=[copy("R_old", 3)],
+            env={"FAKE_MINIMIZED": '["R_old"]'},
+        )
+        self.assertEqual([i["key"] for i in out["items"]], ["indent"])
+        # Two copies left by earlier sweeps: the newest stays.
+        out = self.hygiene(good, ci=ci, reviews=[copy("R_a", 3), copy("R_b", 1)])
+        self.assertEqual(
+            out["hide"], [{"id": "R_a", "key": "indent", "why": "repeated"}]
+        )
+        self.assertEqual(out["items"], [])
+        # A comment carries the request too, and is hidden the same way.
+        said = {
+            "id": "IC_x",
+            "author": {"login": "maint"},
+            "createdAt": ago(5),
+            "isMinimized": False,
+            "body": text,
+        }
+        out = self.hygiene(good, said=[said], ci=ci, reviews=[copy("R_b", 1)])
+        self.assertEqual([h["id"] for h in out["hide"]], ["IC_x"])
+
+    def test_a_request_whose_evidence_is_gone_is_hidden_and_not_repeated(self):
+        good = [commit(GOOD_MESSAGE)]
+        both = [commit("added a thing.")]
+        ci = {"head": "h1", "failing": [failing_job(["indent"])]}
+        text = self.hygiene(both, ci=ci)["body"]
+        old = review("maint", "CHANGES_REQUESTED", 2, text, oid="h0") | {"id": "R_old"}
+        # The gate passes now: the copy describes a PR that no longer exists.
+        out = self.hygiene(good, ci={"head": "h1", "failing": []}, reviews=[old])
+        self.assertEqual(out["items"], [])
+        self.assertEqual(
+            out["hide"], [{"id": "R_old", "key": "commit_rules,indent", "why": "stale"}]
+        )
+        # The commit messages are fixed and the gate still fails: the review
+        # that carried both is replaced by one that carries what holds.
+        out = self.hygiene(good, ci=ci, reviews=[old])
+        self.assertEqual([i["key"] for i in out["items"]], ["indent"])
+        self.assertEqual([h["id"] for h in out["hide"]], ["R_old"])
+        # A head that moved while it was read hides nothing.
+        out = self.hygiene([commit(GOOD_MESSAGE) | {"sha": "h2"}], reviews=[old])
+        self.assertEqual(
+            (out["skip"], out["hide"]), ("the head moved while it was read", [])
+        )
+
+    def test_no_ci_evidence_keeps_the_copy_that_rests_on_it(self):
+        good = [commit(GOOD_MESSAGE)]
+        failing = {"head": "h1", "failing": [failing_job(["indent"])]}
+        text = self.hygiene(good, ci=failing)["body"]
+        old = review("maint", "CHANGES_REQUESTED", 2, text, oid="h0") | {"id": "R_old"}
+        # None of these says the gate passes: the diagnosis failed, it read
+        # another head, a check is still running or held, or a log was unread.
+        unknown = {
+            "failed": {},
+            "another head": {"head": "h0", "failing": []},
+            "pending": {"head": "h1", "failing": [], "pending": ["gates"]},
+            "held": {"head": "h1", "failing": [], "held": ["gates"]},
+            "unread": {"head": "h1", "failing": [failing_job(None)]},
+        }
+        # A review that carried a request about the messages too, now fixed:
+        # it still rests on CI, so it stays while CI is unknown.
+        mixed_text = self.hygiene([commit("added a thing.")], ci=failing)["body"]
+        mixed = review("maint", "CHANGES_REQUESTED", 2, mixed_text, oid="h0") | {
+            "id": "R_mixed"
+        }
+        for name, ci in unknown.items():
+            out = self.hygiene(good, ci=ci, reviews=[old])
+            self.assertEqual((out["items"], out["hide"]), ([], []), name)
+            out = self.hygiene(good, ci=ci, reviews=[mixed])
+            self.assertEqual((out["items"], out["hide"]), ([], []), name)
+        # A complete read with nothing failing is the evidence that it is gone.
+        out = self.hygiene(good, ci={"head": "h1", "failing": []}, reviews=[old])
+        self.assertEqual([h["why"] for h in out["hide"]], ["stale"])
+
+    def test_a_review_with_feedback_of_its_own_is_never_hidden(self):
+        good = [commit(GOOD_MESSAGE)]
+        failing = {"head": "h1", "failing": [failing_job(["indent"])]}
+        text = self.hygiene(good, ci=failing)["body"]
+        mixed = review(
+            "maint", "CHANGES_REQUESTED", 2, "The API in foo.rs is wrong.\n\n" + text
+        ) | {"id": "R_human", "commit": {"oid": "h0"}}
+        out = self.hygiene(good, ci={"head": "h1", "failing": []}, reviews=[mixed])
+        self.assertEqual(out["hide"], [])
+
+    def test_a_review_hidden_by_hand_is_not_what_was_said(self):
+        good = [commit(GOOD_MESSAGE)]
+        failing = {"head": "h1", "failing": [failing_job(["indent"])]}
+        text = self.hygiene(good, ci=failing)["body"]
+        here = review("maint", "CHANGES_REQUESTED", 0, text, oid="h1") | {
+            "id": "R_here"
+        }
+        out = self.hygiene(good, ci=failing, reviews=[here])
+        self.assertEqual(out["items"], [])
+        out = self.hygiene(
+            good, ci=failing, reviews=[here], env={"FAKE_MINIMIZED": '["R_here"]'}
+        )
+        self.assertEqual([i["key"] for i in out["items"]], ["indent"])
+
+    def test_a_partial_review_listing_skips_the_pr(self):
+        out = self.hygiene([commit(GOOD_MESSAGE)], env={"FAKE_MINIMIZED_MORE": "1"})
+        self.assertEqual(out["skip"], "the review listing failed")
 
     def test_a_pr_nobody_should_be_asked_about_is_skipped(self):
         bad = [commit("added a thing.")]
@@ -3779,6 +3904,43 @@ class ApplyPrActionsTests(unittest.TestCase):
         self.assertIn("pulls/1/reviews -f commit_id=h1", log)
         self.assertNotIn("pulls/2/reviews", log)
         self.assertNotIn("pulls/3/reviews", log)
+
+    def test_hygiene_hides_the_replaced_copies_after_the_new_review_is_up(self):
+        old = '"hide":[{"id":"PRR_old","key":"indent","why":"stale"}]'
+        hygiene = (
+            'case "$1" in\n'
+            f'  1) echo \'{{"pr":1,"head":"h1","items":[{{"key":"indent"}}],"body":"fix",{old}}}\' ;;\n'
+            f'  2) echo \'{{"pr":2,"head":"h2","items":[],"body":"",{old}}}\' ;;\n'
+            f'  3) echo \'{{"pr":3,"head":"h3","items":[],"body":"",{old}}}\' ;;\n'
+            "  *) exit 1 ;;\n"
+            "esac\n"
+        )
+        result, got, log = self.run_actions(
+            self.sweep(**self.QUIET), hygiene=hygiene, FAKE_MOVED="3"
+        )
+        # PR 1 posts and then hides; PR 2 has nothing new and only hides; PR 3
+        # moved after it was read and is left alone.
+        self.assertEqual(got[("hygiene", 1)], "applied")
+        self.assertEqual(got[("hygiene_hide", 1)], "applied")
+        self.assertEqual(got[("hygiene_hide", 2)], "applied")
+        self.assertNotIn(("hygiene_hide", 3), got)
+        self.assertEqual(log.count("subjectId: $id"), 2)
+        self.assertLess(log.index("pulls/1/reviews"), log.index("minimizeComment"))
+
+    def test_hygiene_keeps_the_old_copy_when_the_new_review_is_not_posted(self):
+        hygiene = (
+            'case "$1" in\n'
+            '  1) echo \'{"pr":1,"head":"h1","items":[{"key":"indent"}],"body":"fix",'
+            '"hide":[{"id":"PRR_old","key":"indent","why":"stale"}]}\' ;;\n'
+            "  *) exit 1 ;;\n"
+            "esac\n"
+        )
+        result, got, log = self.run_actions(
+            self.sweep(**self.QUIET), hygiene=hygiene, FAKE_MOVED="1"
+        )
+        self.assertEqual(got[("hygiene", 1)], "skipped")
+        self.assertNotIn(("hygiene_hide", 1), got)
+        self.assertNotIn("minimizeComment", log)
 
     def test_a_hygiene_comment_is_posted_as_a_comment_at_the_live_head(self):
         quiet = self.QUIET
