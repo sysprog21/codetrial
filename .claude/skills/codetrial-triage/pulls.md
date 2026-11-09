@@ -249,8 +249,21 @@ and `hygiene.sh` reads the PR before either is posted. It holds the CI item
 back on a conflicting PR for that reason, since a rebase may be the whole
 answer to the failure, and the two reviews otherwise ask for different things.
 
-The posted review is itself the request at that head, so the next sweep finds
-it and asks nothing again until the author pushes. When the maintainers type a
+A request stands for as long as its evidence holds, on whatever head it was
+left: a push that leaves the `indent` gate failing does not post the same
+review again, and a request a maintainer already made counts the same. Each
+run keeps one visible copy of each item and says what to do with the others in
+`hide`: `repeated` is an older copy of a request a newer one carries, `stale` is
+a copy carrying a request whose evidence is gone (the gate passes now, the
+messages are fixed). A stale review that also carried requests that still hold
+is replaced, those going out in the new review. `apply-pr-actions.sh --hygiene`
+hides each entry as Outdated after the new review is posted, never before, or
+at once when there is no new review to post, and leaves them alone when the head
+moved or the post failed. Hiding does not
+dismiss a review; the PR stays at changes requested until a maintainer
+re-reviews. A copy hidden by hand no longer stands, so the request is asked
+again. The rebase request and the screenshot comment keep their own rules
+above. When the maintainers type a
 new recurring request by hand, add it to `hygiene.sh` as an item with their
 wording and a marker that recognizes it, and a case in
 `tests/test_skill_scripts.py`.

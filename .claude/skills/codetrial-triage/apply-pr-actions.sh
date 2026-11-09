@@ -295,10 +295,12 @@ hygiene_reviews()
             receipt hygiene "$pr" failed "hygiene.sh failed, so the PR is unchecked"
             continue
         fi
-        jq -e '(.body | length > 0) or ((.comments // []) | length > 0)' "$file" > /dev/null || continue
+        jq -e '(.body | length > 0) or ((.comments // []) | length > 0)
+            or ((.hide // []) | length > 0)' "$file" > /dev/null || continue
         head=$(jq -r .head "$file")
         moved=false
         [ "$(live_head "$pr")" = "$head" ] || moved=true
+        replaced=true
         if jq -er '.body | select(length > 0)' "$file" > "$work/hygiene-$pr.md"; then
             if $moved; then
                 receipt hygiene "$pr" skipped "the head moved after it was read"
@@ -307,7 +309,22 @@ hygiene_reviews()
                 receipt hygiene "$pr" applied "$(jq -r '[.items[].key] | join(",")' "$file")"
             else
                 receipt hygiene "$pr" failed "the review was not posted"
+                replaced=false
             fi
+        fi
+
+        # The copies this review replaces, hidden only after it is up, so a
+        # failed post never leaves the PR with no visible request. Hiding does
+        # not dismiss a review; the PR stays at changes requested until a
+        # maintainer re-reviews.
+        if [ "$replaced" = true ] && ! $moved; then
+            jq -r '(.hide // [])[] | [.id, .why] | @tsv' "$file" | while IFS="$(printf '\t')" read -r id why; do
+                if minimize "$id" OUTDATED; then
+                    receipt hygiene_hide "$pr" applied "$why $id"
+                else
+                    receipt hygiene_hide "$pr" failed "$id"
+                fi
+            done
         fi
 
         # Requests that are a plain comment: one file per comment, since the
