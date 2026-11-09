@@ -20,6 +20,7 @@ import {
   scoreText,
 } from "./lib.js";
 import { atScrollEnd, scrolledByCandidate } from "./scroll-follow.js";
+import { mountCopyButton } from "./copy.js";
 
 export const FINAL_CODE_NOT_SAVED = "(final code was not saved)";
 
@@ -188,6 +189,46 @@ export function resultsMarkup(
     ${judgeCases ? `<ul class="result-list">${judgeCases}</ul>` : ""}
     ${candidateCases ? `<h3>Your cases</h3><ul class="result-list">${candidateCases}</ul>` : ""}
   `,
+  };
+}
+
+export function mountResultsCopy(
+  root,
+  content,
+  focusFallback,
+  clipboard = globalThis.navigator?.clipboard,
+) {
+  const actions = root.querySelector("[data-copy-results-actions]");
+  const button = root.querySelector("[data-copy-results]");
+  const status = root.querySelector("[data-copy-results-status]");
+  const invalidate = mountCopyButton(
+    button,
+    status,
+    () => {
+      if (actions.hidden) return null;
+      // innerText keeps rendered block breaks and preformatted diagnostics,
+      // and follows the filter without serializing a second results model.
+      const chrome = Array.from(
+        content.querySelectorAll(
+          "[data-runner-status], [data-diagnostic-navigation-status]",
+        ),
+        (node) => ({ node, hidden: node.hidden }),
+      );
+      try {
+        for (const { node } of chrome) node.hidden = true;
+        return content.innerText.trim() || null;
+      } finally {
+        for (const { node, hidden } of chrome) node.hidden = hidden;
+      }
+    },
+    "Could not copy results. Select the results and copy them manually.",
+    clipboard,
+  );
+  return (available) => {
+    invalidate();
+    if (!available && actions.contains(root.ownerDocument.activeElement))
+      focusFallback.focus();
+    actions.hidden = !available;
   };
 }
 
@@ -774,28 +815,13 @@ export function mountFinalCodeCopy(
   const button = root.querySelector("[data-copy-code]");
   if (!button) return;
   const status = root.querySelector("[data-copy-code-status]");
-  let pending = false;
-  let reset;
-  button.addEventListener("click", async () => {
-    if (pending) return;
-    pending = true;
-    clearTimeout(reset);
-    button.setAttribute("aria-disabled", "true");
-    status.textContent = "Copying...";
-    try {
-      await clipboard.writeText(code);
-      status.textContent = "Copied!";
-      reset = setTimeout(() => {
-        status.textContent = "";
-      }, 2000);
-    } catch {
-      status.textContent =
-        "Could not copy code. Select the code and copy it manually.";
-    } finally {
-      pending = false;
-      button.removeAttribute("aria-disabled");
-    }
-  });
+  mountCopyButton(
+    button,
+    status,
+    () => code,
+    "Could not copy code. Select the code and copy it manually.",
+    clipboard,
+  );
 }
 
 /// A whiteboard interview's work, step by step: the board when each step was

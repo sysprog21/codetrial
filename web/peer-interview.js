@@ -15,7 +15,11 @@ import {
 } from "./workspace.js";
 import { loadProblem } from "./problem-data.js";
 import { runBrowserTests } from "./runners.js";
-import { problemMarkup, finalRunnerStatus } from "./render.js";
+import {
+  problemMarkup,
+  finalRunnerStatus,
+  mountResultsCopy,
+} from "./render.js";
 const byId = (id) => document.getElementById(id);
 const id = new URLSearchParams(location.search).get("session");
 const base = `/api/peer/sessions/${encodeURIComponent(id ?? "")}`;
@@ -27,6 +31,11 @@ const nodes = {
   resultsContent: byId("peer-results"),
   resultsLabel: byId("peer-results-label"),
 };
+const updateResultsCopy = mountResultsCopy(
+  nodes.resultsContent.parentElement,
+  nodes.resultsContent,
+  nodes.resultsLabel,
+);
 let state;
 let round = -1;
 let roundLoaded = false;
@@ -75,6 +84,17 @@ function error(error) {
 function roundPath() {
   return `${base}/rounds/${round}`;
 }
+function resetResults() {
+  updateResultsCopy(false);
+  nodes.resultsContent.textContent = "Run your code to see results.";
+}
+function renderResults(status, { changed = true } = {}) {
+  renderWorkspaceResults(nodes, tests, { status });
+  if (changed)
+    updateResultsCopy(
+      Boolean(tests.setupError) || Boolean(tests.cases?.length),
+    );
+}
 const workspace = mountWorkspace({
   nodes,
   readOnly: true,
@@ -83,7 +103,7 @@ const workspace = mountWorkspace({
     editVersion++;
     tests = null;
     testStatus = null;
-    byId("peer-results").textContent = "Run your code to see results.";
+    resetResults();
     byId("peer-save-status").textContent = "Unsaved changes";
     if (!previewTimer)
       previewTimer = setTimeout(() => {
@@ -104,6 +124,7 @@ const workspace = mountWorkspace({
       lease === runLease &&
       nodes.editor.value === runCode &&
       state.currentRound?.status === "active";
+    updateResultsCopy(false);
     testStatus = firstWorkspaceRunnerStatus(language);
     renderWorkspaceStatus(nodes, testStatus);
     const result = await runBrowserTests(
@@ -119,7 +140,7 @@ const workspace = mountWorkspace({
     if (!currentRun()) return;
     tests = result;
     testStatus = finalRunnerStatus(tests, testStatus);
-    renderWorkspaceResults(nodes, tests, { status: testStatus });
+    renderResults(testStatus);
     dirty = true;
     await save(false);
   },
@@ -236,6 +257,7 @@ async function loadSnapshot() {
     snapshot.revision < revision
   )
     return;
+  const changed = snapshot.revision !== revision || !tests;
   revision = snapshot.revision;
   if (dirty && peerRole(state) === "candidate") return;
   language = snapshot.language || language;
@@ -246,11 +268,8 @@ async function loadSnapshot() {
       ? (problem?.starterCode?.[language] ?? "")
       : (snapshot.code ?? ""),
   );
-  if (tests)
-    renderWorkspaceResults(nodes, tests, {
-      status: finalRunnerStatus(tests, null),
-    });
-  else byId("peer-results").textContent = "Run your code to see results.";
+  if (tests) renderResults(finalRunnerStatus(tests, null), { changed });
+  else resetResults();
 }
 async function recoverWriter() {
   const recoveringRound = round;
@@ -293,7 +312,7 @@ async function loadRound(nextRound) {
   tests = null;
   problem = null;
   byId("peer-notes").value = "";
-  byId("peer-results").textContent = "Run your code to see results.";
+  resetResults();
   const info = await peerApi(`${roundPath()}/problem`);
   problem = await loadProblem(info.page);
   language = state.settings?.language || language;

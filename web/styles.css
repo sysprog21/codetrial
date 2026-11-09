@@ -1389,7 +1389,7 @@ p {
    so a pill with its own look (the turn button, a danger pill, a pressed
    toggle) keeps it without being listed here. */
 :where(
-  .pill-button:not(:disabled),
+  .pill-button:not(:disabled):not([aria-disabled="true"]),
   .tab-button:not(.selected),
   .font-size-button:not(:disabled):not([aria-disabled="true"])
 ):hover {
@@ -1398,7 +1398,7 @@ p {
 }
 
 :where(
-  .pill-button:not(:disabled),
+  .pill-button:not(:disabled):not([aria-disabled="true"]),
   .tab-button,
   .font-size-button:not(:disabled):not([aria-disabled="true"])
 ):active {
@@ -2241,7 +2241,8 @@ table.phase-scores {
 
 /* Saving and copying both keep their controls visibly waiting. */
 .report-actions button:disabled,
-.final-code button[aria-disabled="true"] {
+.final-code button[aria-disabled="true"],
+.results-copy-actions button[aria-disabled="true"] {
   opacity: 0.55;
   cursor: progress;
 }
@@ -3519,7 +3520,8 @@ body:not([data-recording]) .replay-detail > :not(header) {
   resize: vertical;
 }
 
-.candidate-case-actions {
+.candidate-case-actions,
+.results-copy-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
