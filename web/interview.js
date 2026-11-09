@@ -3036,6 +3036,7 @@ function selectTab(tab) {
   nodes.transcriptPanel.hidden = !transcript;
   nodes.problemTab.classList.toggle("selected", !transcript);
   nodes.transcriptTab.classList.toggle("selected", transcript);
+  if (transcript) state.transcript.reveal();
 }
 
 /// The tab an interview opens on: the preferred language when this problem
