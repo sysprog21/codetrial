@@ -7992,6 +7992,11 @@ lobbyTest(
     });
     await problem.selectOption(EASY[0]);
     assert.equal(await problem.locator("option").count(), 2);
+    const workspace = page.getByRole("combobox", {
+      name: "Workspace",
+      exact: true,
+    });
+    await workspace.selectOption("coding");
     await page.check("#practice-focus-share-input");
     failing.add("/api/reports");
     await page.fill("#github-login", "candidate");
@@ -8017,6 +8022,10 @@ lobbyTest(
       "All problems",
     ]);
     assert.equal(await problem.inputValue(), "all");
+    assert.deepEqual(await workspace.locator("option").allTextContents(), [
+      "All workspaces",
+    ]);
+    assert.equal(await workspace.inputValue(), "all");
     assert.equal(await page.locator("#attempt-history").textContent(), "");
     assert.equal(await page.locator("#practice-focus").isHidden(), true);
     assert.equal(
