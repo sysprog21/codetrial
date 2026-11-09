@@ -9,13 +9,14 @@ description: >
   open PRs by size and merge confidence, reporting what moved since the last
   sweep, approving GitHub Actions runs held for first-time contributors, asking
   conflicting PRs to rebase, requesting changes for recurring contributor
-  mistakes (hooks, indent, merge commits, missing screenshots), reviewing low
-  and blocked PRs with several agents, posting the verified inline findings and
-  similar-work reminders, and applying requested label, assignee, issue type,
-  sub-issue or blocked-by changes. Default to a read-only report; a PR sweep
-  has narrowly defined actions in pulls.md. Use codetrial-contribute for drafts
-  on a contributor's behalf, new issues or PRs, and focused maintainer
-  questions.
+  mistakes (hooks, indent, merge commits, missing screenshots), hiding settled
+  reviews, deleting stale refine reminders, thanking merged contributors,
+  reviewing low and blocked PRs with several agents, posting the verified
+  inline findings and similar-work reminders, and applying requested label,
+  assignee, issue type, sub-issue or blocked-by changes. Default to a
+  read-only report; a PR sweep has narrowly defined actions in pulls.md. Use
+  codetrial-contribute for drafts on a contributor's behalf, new issues or PRs,
+  and focused maintainer questions.
 ---
 
 # Triage CodeTrial issues and pull requests
