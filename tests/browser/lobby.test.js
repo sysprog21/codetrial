@@ -6765,14 +6765,17 @@ for (const account of [true, false]) {
         }, saved);
       }
       await lobby(page);
-      const mode = page.getByRole("combobox", { name: "Mode", exact: true });
+      const mode = page.getByRole("combobox", {
+        name: "Workspace",
+        exact: true,
+      });
       await reaches(
         page,
         () => document.querySelectorAll("#attempt-history > li").length === 3,
       );
       assert.deepEqual(await mode.locator("option").allTextContents(), [
-        "All modes",
-        "Coding",
+        "All workspaces",
+        "Editor",
         "Whiteboard",
       ]);
 

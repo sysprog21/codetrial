@@ -6,7 +6,7 @@ import {
   codingLoop,
   interviewMode,
   languageLabel,
-  modeIsWhiteboard,
+  surfaceLabel,
 } from "./lib.js";
 import {
   clearReportHistory,
@@ -1926,6 +1926,8 @@ function showProgressError(message) {
   progressNormalized = [];
   nodes.progressProblem.length = 1;
   nodes.progressProblem.value = "all";
+  nodes.progressMode.length = 1;
+  nodes.progressMode.value = "all";
   shownAttempts = [];
   renderPracticeFocus();
   renderSequelSuggestion();
@@ -1990,9 +1992,9 @@ function showProgress(entries, suffix) {
     nodes.progressMode,
     model.options.interviewMode.map((value) => ({
       value,
-      label: modeIsWhiteboard(value) ? "Whiteboard" : "Coding",
+      label: surfaceLabel(value),
     })),
-    "All modes",
+    "All workspaces",
   );
   renderProgress();
 }

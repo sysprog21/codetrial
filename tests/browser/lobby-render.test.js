@@ -67,6 +67,7 @@ const UNIDENTIFIED = {
   "account-status": "Could not check your account. Retry the account check.",
   "login-link": "Retry account check",
   "progress-problem": "all",
+  "progress-mode": "all",
   start: "Start interview",
   "progress-summary":
     "Could not load account progress. Retry the account check.",
