@@ -38,6 +38,14 @@ case "$*" in
         fi
         : > "$FAKE_LOG.written"
         ;;
+    "api graphql "*"comments(last"*)
+        # The PR's comments as GraphQL returns them; the test builds the body.
+        if [ -n "${FAKE_COMMENTS:-}" ]; then
+            printf '%s\n' "$FAKE_COMMENTS"
+        else
+            echo '{"data":{"repository":{"pullRequest":{"comments":{"totalCount":0,"nodes":[]}}}}}'
+        fi
+        ;;
     "api graphql "*"query("*)
         if [ -n "${FAKE_THREADS_AFTER_WRITE:-}" ] && [ -f "$FAKE_LOG.written" ]; then
             printf '%s\n' "$FAKE_THREADS_AFTER_WRITE"

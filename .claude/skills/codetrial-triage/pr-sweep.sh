@@ -36,7 +36,9 @@
 #             thread that is resolved or outdated. Skipped when a thread is
 #             too long to read whole
 #   refine_stale  the viewer's "Some review comments ... not settled yet"
-#             comments (refine.md) on a PR with no open thread left, to delete
+#             comments (refine.md) to delete: all of them on a PR with no open
+#             thread left (why settled), and every one but the newest on a PR
+#             that still has open threads (why superseded)
 #   unknown   PRs whose mergeability GitHub has still not computed after one
 #             retry; rerun
 #   status    every open PR, smallest first: lines changed split into source
@@ -591,11 +593,13 @@ def refs: (ref_prefix + "[0-9]+\\b") as $one
         and (.body == "" or .author.__typename == "Bot"))
     | {pr: $n, id, by: .author.login}],
   refine_stale: [$prs[] | .number as $n
-    | select(whole and .reviewThreads.totalCount <= 100
-        and all(.reviewThreads.nodes[]; .isResolved))
-    | .comments.nodes[]
-    | select(.author.login == $me and (.body | startswith($refine)))
-    | {pr: $n, id}],
+    | select(whole and .reviewThreads.totalCount <= 100)
+    | ([.comments.nodes[]
+        | select(.author.login == $me and (.body | startswith($refine)))]
+       | sort_by([.createdAt, .id])) as $mine
+    | (all(.reviewThreads.nodes[]; .isResolved)) as $settled
+    | (if $settled then $mine else $mine[:-1] end)[]
+    | {pr: $n, id, why: (if $settled then "settled" else "superseded" end)}],
   maintainers_known: ($pushers != null),
   viewer: $me,
   prerequisites: prerequisites,
