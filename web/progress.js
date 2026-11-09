@@ -331,11 +331,7 @@ function progressOptions(entries) {
           left.label.localeCompare(right.label) ||
           left.value.localeCompare(right.value),
       ),
-    interviewMode: values(
-      "interviewMode",
-      (left, right) =>
-        Number(left === "whiteboard") - Number(right === "whiteboard"),
-    ),
+    interviewMode: values("interviewMode"),
     difficulty: values(
       "difficulty",
       (left, right) => LEVELS.indexOf(left) - LEVELS.indexOf(right),

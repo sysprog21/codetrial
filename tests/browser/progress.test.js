@@ -305,6 +305,10 @@ test("mode filtering combines with every existing filter for local and account h
       interviewMode: "whiteboard",
       durationMin: 60,
     }),
+    entry("problem", "2026-01-06", 80, {
+      interviewMode: "whiteboard",
+      problemId: "other",
+    }),
   ];
   for (const account of [false, true]) {
     const history = account
@@ -312,6 +316,7 @@ test("mode filtering combines with every existing filter for local and account h
       : rows;
     const filters = {
       interviewMode: "whiteboard",
+      problemId: "two-sum",
       difficulty: "Easy",
       language: "python",
       durationMin: "45",
