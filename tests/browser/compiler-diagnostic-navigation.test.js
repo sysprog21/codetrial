@@ -385,3 +385,72 @@ test("Java locations without columns use the pending run snapshot and newer runs
     await page.close();
   }
 });
+
+test("Copy results preserves compiler diagnostics as displayed plain text", async (t) => {
+  compilerReply = (source) => locationsIn(source, ["missing_name"]);
+  const context = await interviewPage(t, "c");
+  if (!context) return;
+  const { page, errors } = context;
+  try {
+    await page.evaluate(() => {
+      globalThis.copiedDiagnostics = [];
+      navigator.clipboard.writeText = async (text) => {
+        globalThis.copiedDiagnostics.push(text);
+      };
+    });
+    await replaceCode(
+      page,
+      "bool canSpellFromTiles(char* message, char* tiles) {\n  return missing_name;\n}",
+    );
+    await page.click("#run-tests");
+    await waitForLocations(page, 1);
+    const text = (await page.locator("#results-content").innerText())
+      .replace(/^Compiling with Compiler Explorer\.\.\.\s*/, "")
+      .trim();
+    assert.match(text, /Couldn't run your code/);
+    assert.match(text, /error: missing_name\n/);
+    assert.match(text, /note: external header/);
+    await page
+      .getByRole("button", { name: "Copy results", exact: true })
+      .click();
+    await page.waitForFunction(
+      () =>
+        document.querySelector("[data-copy-results-status]").textContent ===
+        "Copied!",
+    );
+    assert.deepEqual(await page.evaluate(() => globalThis.copiedDiagnostics), [
+      text,
+    ]);
+    assert.doesNotMatch(
+      await page.evaluate(() => globalThis.copiedDiagnostics[0]),
+      /Compiling with Compiler Explorer\.\.\./,
+    );
+    await replaceCode(page, "// edited after compilation");
+    await page.locator("[data-diagnostic-line]").click();
+    const navigationStatus = page.locator(
+      "[data-diagnostic-navigation-status]",
+    );
+    assert.equal(
+      await navigationStatus.textContent(),
+      "Code or language has changed. Run tests again to navigate to this location.",
+    );
+    const original = await page.locator("#results-content").innerHTML();
+    await page
+      .getByRole("button", { name: "Copy results", exact: true })
+      .click();
+    await page.waitForFunction(
+      () =>
+        globalThis.copiedDiagnostics.length === 2 &&
+        document
+          .querySelector("[data-copy-results]")
+          .getAttribute("aria-disabled") !== "true",
+    );
+    const copied = await page.evaluate(() => globalThis.copiedDiagnostics[1]);
+    assert.doesNotMatch(copied, /Code or language has changed/);
+    assert.equal(copied, text);
+    assert.equal(await page.locator("#results-content").innerHTML(), original);
+    assert.deepEqual(errors, []);
+  } finally {
+    await page.close();
+  }
+});
