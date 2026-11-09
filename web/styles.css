@@ -411,6 +411,15 @@ p {
   border: 0;
 }
 
+.problem-list-filter {
+  display: flex;
+  flex-basis: 100%;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 2rem;
+  cursor: pointer;
+}
+
 .practice-filters legend {
   width: 100%;
   color: var(--sub);

@@ -10601,3 +10601,228 @@ lobbyTest(
     }
   },
 );
+
+async function openSavedList(page, ids) {
+  await page.addInitScript(
+    ([key, ids]) => localStorage.setItem(key, JSON.stringify(ids)),
+    [PRACTICE_LIST_KEY, ids],
+  );
+  await lobby(page);
+  await openTopicFilter(page);
+  return snapshot(page);
+}
+
+lobbyTest(
+  "saved-list filter combines with search, topic and difficulty",
+  async (page) => {
+    const before = await openSavedList(page, [...EASY, ...MEDIUM]);
+    const only = page.getByLabel("Only my list", { exact: true });
+    await only.check();
+    const visible = () =>
+      page
+        .locator(".problem-card:not([hidden])")
+        .evaluateAll((items) => items.map((item) => item.dataset.problem));
+    assert.deepEqual((await visible()).sort(), [...MEDIUM].sort());
+    assert.equal((await snapshot(page)).card, before.card);
+    await page
+      .locator('[name="problem-search-mode"][value="leetcode"]')
+      .check();
+    await page.locator("#problem-search").fill("Jump Game");
+    await page.waitForFunction(
+      () =>
+        document.querySelector("#problem-filter-summary").textContent ===
+        '1 problem in your list and matching LeetCode number or title "Jump Game" shown.',
+    );
+    assert.deepEqual(await visible(), [MEDIUM[0]]);
+    const excludedTopic = Object.values(TOPICS_BY_PAGE)
+      .flat()
+      .find((value) => !TOPICS_BY_PAGE[MEDIUM[0]].includes(value));
+    assert.ok(excludedTopic);
+    await page.selectOption("#problem-topic", excludedTopic);
+    assert.equal((await visible()).length, 0);
+    const topic = TOPICS_BY_PAGE[MEDIUM[0]][0];
+    await page.selectOption("#problem-topic", topic);
+    assert.deepEqual(await visible(), [MEDIUM[0]]);
+    await page.locator("#problem-search").fill("no-such-title");
+    assert.equal((await visible()).length, 0);
+    assert.match(
+      await page.locator("#problem-filter-summary").textContent(),
+      /No saved problems match/,
+    );
+    await page.click("#problem-filters-reset");
+    assert.equal(await only.isChecked(), false);
+    assert.equal(await page.locator("#problem-topic").inputValue(), "");
+    assert.equal(await page.locator("#problem-search").inputValue(), "");
+    assert.deepEqual((await snapshot(page)).levels, before.levels);
+    assert.deepEqual(
+      await page.evaluate(
+        (key) => JSON.parse(localStorage.getItem(key)),
+        PRACTICE_LIST_KEY,
+      ),
+      [...EASY, ...MEDIUM],
+    );
+    await only.check();
+    await setLevel(page, "Easy", true);
+    await setLevel(page, "Medium", false);
+    assert.deepEqual((await visible()).sort(), [...EASY].sort());
+  },
+);
+
+lobbyTest(
+  "saved-list filter handles removal, empty state and keyboard focus",
+  async (page) => {
+    await openSavedList(page, [MEDIUM[0]]);
+    const only = page.getByLabel("Only my list", { exact: true });
+    await only.check();
+    await page.locator(`[data-problem="${MEDIUM[0]}"]`).click();
+    assert.equal((await snapshot(page)).card, MEDIUM[0]);
+    await page.click("details.problem-picker summary");
+    await practiceInput(page, MEDIUM[0]).focus();
+    await page.keyboard.press("Space");
+    assert.equal((await snapshot(page)).card, MEDIUM[0]);
+    assert.equal(await page.locator(".problem-card:not([hidden])").count(), 0);
+    assert.equal(await isFocused(only), true);
+    assert.match(
+      await page.locator("#problem-filter-summary").textContent(),
+      /Your list is empty/,
+    );
+    await only.uncheck();
+    assert.ok((await page.locator(".problem-card:not([hidden])").count()) > 0);
+  },
+);
+
+lobbyTest(
+  "saved-list filter follows other tabs without changing the selection",
+  async (page) => {
+    await openSavedList(page, MEDIUM);
+    await page.getByLabel("Only my list", { exact: true }).check();
+    const before = await snapshot(page);
+    const other = await page.context().newPage();
+    await other.goto(base);
+    await practiceInput(page, MEDIUM[0]).focus();
+    await other.evaluate(
+      ([key, id]) => localStorage.setItem(key, JSON.stringify([id])),
+      [PRACTICE_LIST_KEY, MEDIUM[1]],
+    );
+    await page.waitForFunction(
+      (id) => document.querySelector(`[data-problem="${id}"]`).hidden,
+      MEDIUM[0],
+    );
+    assert.equal(await page.locator(".problem-card:not([hidden])").count(), 1);
+    assert.equal((await snapshot(page)).card, before.card);
+    assert.equal(await isFocused(page.locator("#problem-only-list")), true);
+    await other.evaluate(
+      (key) => localStorage.removeItem(key),
+      PRACTICE_LIST_KEY,
+    );
+    await page.waitForFunction(() =>
+      document
+        .querySelector("#problem-filter-summary")
+        .textContent.includes("Your list is empty"),
+    );
+  },
+);
+
+lobbyTest(
+  "saved-list filter keeps list draws outside selected levels hidden",
+  async (page) => {
+    await openSavedList(page, [EASY[0]]);
+    await page.getByLabel("Only my list", { exact: true }).check();
+    assert.equal(await page.locator(".problem-card:not([hidden])").count(), 0);
+    await page.click("#practice-list-pick");
+    assert.equal((await snapshot(page)).card, EASY[0]);
+    await page.locator("#problem-search").fill("missing");
+    assert.equal(await page.locator(".problem-card:not([hidden])").count(), 0);
+    await page.locator("#problem-search").fill("");
+    assert.equal(await page.locator(".problem-card:not([hidden])").count(), 0);
+  },
+);
+
+lobbyTest(
+  "cached restore clears saved-only browsing with the other filters",
+  async (page) => {
+    await openSavedList(page, MEDIUM);
+    const cards = page.locator(".problem-card:not([hidden])");
+    const before = await cards.count();
+    assert.ok(before > MEDIUM.length);
+    await page.getByLabel("Only my list", { exact: true }).check();
+    await page.locator("#problem-search").fill("missing");
+    await page.selectOption("#problem-topic", TOPICS_BY_PAGE[MEDIUM[0]][0]);
+    const restored = await page.evaluate(() => {
+      window.dispatchEvent(
+        new PageTransitionEvent("pageshow", { persisted: true }),
+      );
+      return document.querySelectorAll(".problem-card:not([hidden])").length;
+    });
+    assert.equal(restored, before);
+    assert.equal(await page.locator("#problem-only-list").isChecked(), false);
+    assert.equal(await page.locator("#problem-search").inputValue(), "");
+    assert.equal(await page.locator("#problem-topic").inputValue(), "");
+    assert.equal(await cards.count(), before);
+  },
+);
+
+lobbyTest(
+  "saved-list filter keeps an unsaved history retry selected but hidden",
+  async (page) => {
+    reports = [savedAttempt(MEDIUM[0])];
+    await openSavedList(page, [MEDIUM[1]]);
+    await page.getByLabel("Only my list", { exact: true }).check();
+    await page.getByRole("button", { name: "Try again", exact: true }).click();
+    assert.equal((await snapshot(page)).card, MEDIUM[0]);
+    assert.equal((await cardInfo(page, MEDIUM[0])).hidden, true);
+    await page.locator("#problem-search").fill("missing");
+    await page.locator("#problem-search").fill("");
+    assert.equal((await cardInfo(page, MEDIUM[0])).hidden, true);
+    await page.getByLabel("Only my list", { exact: true }).uncheck();
+    assert.equal((await cardInfo(page, MEDIUM[0])).hidden, false);
+  },
+);
+
+lobbyTest(
+  "saved-list filter keeps an out-of-filter due review selected but hidden",
+  async (page) => {
+    reports = [savedAttempt(MEDIUM[0])];
+    await openSavedList(page, [MEDIUM[1]]);
+    await page.getByLabel("Only my list", { exact: true }).check();
+    await setLevel(page, "Hard", true);
+    await setLevel(page, "Medium", false);
+    assert.match((await snapshot(page)).note, /Review due after/);
+    assert.equal((await snapshot(page)).card, MEDIUM[0]);
+    assert.equal((await cardInfo(page, MEDIUM[0])).hidden, true);
+  },
+);
+
+lobbyTest(
+  "saved-list filter keeps an unsaved sequel selected but hidden",
+  async (page) => {
+    reports = [hired(pageOf("two-sum"), { createdAt: 50 })];
+    const sequel = pageOf("two-sum-ii-input-array-is-sorted");
+    await openSavedList(page, [MEDIUM[1]]);
+    await page.getByLabel("Only my list", { exact: true }).check();
+    await page.click("#sequel-suggestion-pick");
+    assert.equal((await snapshot(page)).card, sequel);
+    assert.equal((await cardInfo(page, sequel)).hidden, true);
+  },
+);
+
+lobbyTest(
+  "saved-list filter keeps a manual choice hidden after account refresh",
+  async (page) => {
+    session = { signedIn: false, guestModeAvailable: true };
+    await openSavedList(page, [MEDIUM[1]]);
+    await page.locator(`[data-problem="${MEDIUM[0]}"]`).click();
+    await page.click("details.problem-picker summary");
+    await page.getByLabel("Only my list", { exact: true }).check();
+    await page.fill("#github-login", "candidate");
+    await page.click("#login-link");
+    await page.waitForFunction(
+      () =>
+        document.querySelector("#account-status").textContent ===
+        "Signed in as candidate",
+    );
+    await awaitReady(page);
+    assert.equal((await snapshot(page)).card, MEDIUM[0]);
+    assert.equal((await cardInfo(page, MEDIUM[0])).hidden, true);
+  },
+);
