@@ -77,6 +77,7 @@ class InteractiveHookTests(unittest.TestCase):
             "check-secrets.py",
             "check-interactive-review.py",
             "hashchain.py",
+            "indent.sh",
         ]:
             shutil.copy2(ROOT / "scripts" / name, self.repo / "scripts" / name)
         (self.repo / ".claude/skills/codetrial-review").mkdir(parents=True)

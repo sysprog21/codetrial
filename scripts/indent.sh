@@ -33,12 +33,13 @@ set -u
 
 usage()
 {
-    echo "usage: ${0##*/} [--check [--skip-missing] | --write | --staged DIR]" >&2
+    echo "usage: ${0##*/} [--check [--skip-missing] | --write | --staged DIR [BASE]]" >&2
     exit 2
 }
 
 mode=check
 skip_missing=0
+since_arg=
 while [ $# -gt 0 ]; do
     case "$1" in
         --check) mode=check ;;
@@ -49,6 +50,17 @@ while [ $# -gt 0 ]; do
             work=${2:-}
             [ -d "$work" ] || usage
             shift
+
+            # The commit the index is judged against, HEAD when absent. A push
+            # names the remote tip, so the files it publishes are the ones
+            # judged and not whatever the index differs from HEAD in.
+            case ${2:-} in
+                '' | -*) ;;
+                *)
+                    since_arg=$2
+                    shift
+                    ;;
+            esac
             ;;
         *) usage ;;
     esac
@@ -58,6 +70,10 @@ done
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$ROOT" || exit 1
+
+# A mistyped BASE would read as every setting having changed, and the check
+# would quietly widen to the whole tree.
+[ -z "$since_arg" ] || git rev-parse --verify --quiet "$since_arg^{tree}" > /dev/null || usage
 
 # What decides the output besides the files themselves: the formatters'
 # settings, Prettier's pinned version, the Rust release rustfmt comes from, and
@@ -73,9 +89,9 @@ configs='.editorconfig rustfmt.toml rust-toolchain.toml ruff.toml .prettierrc.js
 # every file the commit will hold. Either way `diff --cached` and not
 # `ls-files`, which also lists a file added with --intent-to-add, whose content
 # the commit does not carry and the checkout below writes out empty.
-since=
+since=$since_arg
 # shellcheck disable=SC2086
-if [ "$mode" = staged ] && ! git diff --cached --quiet -- $configs; then
+if [ "$mode" = staged ] && ! git diff --cached --quiet $since_arg -- $configs; then
     since=$(git hash-object -t tree /dev/null)
 fi
 base=$ROOT

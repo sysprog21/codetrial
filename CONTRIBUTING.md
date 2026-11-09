@@ -105,7 +105,9 @@ Formatting is required of every contributor; only a pull request Dependabot
 opened and wrote has formatting drift reported rather than failed. The pre-commit
 hook refuses a commit whose staged files need a formatter you have not
 installed, and `make indent-check` checks the tree the same way without
-rewriting it.
+rewriting it. The pre-push hook runs the same check over the files a topic
+branch changes, since a rebase, `hashchain.py rechain` or `--no-verify`
+publishes commits the pre-commit hook never saw.
 
 The gate ends by naming any lane it skipped; read that rather than assuming
 green means covered. [docs/development.md](docs/development.md) has
