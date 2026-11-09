@@ -91,7 +91,10 @@ The gate cannot see these, and reviews here keep raising them:
   theme. A color, a corner or a font size elsewhere is one of the role tokens or
   scale steps on `:root` in `web/styles.css`, each commented with its role and
   contrast; a role the page lacks is a new token with its lobby light value
-  beside it, never a literal in a rule. Match what the lobby renders on `main`,
+  beside it, never a literal in a rule. A custom property holding a color
+  literal belongs in `:root` or a theme block, not a component selector, and a
+  named color such as `white` is a literal too: use the token for its
+  role (`--on-accent` for text on an accent fill). Match what the lobby renders on `main`,
   not a screenshot in the issue (#147). A new editor color is a `--code-*`
   custom property in `web/styles.css`, with its light value in both
   `.editor-stack[data-theme="light"]` and the `prefers-color-scheme: light`

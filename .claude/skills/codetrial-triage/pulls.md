@@ -392,7 +392,13 @@ that also carry inline comments. Matching "rebase" proves nothing about the rest
 of the body: #108's review also asks for `make indent`, #280's asks to drop the
 prerequisite's commits and mark the draft ready, and "please do not rebase"
 matches too. Put each on the confirmed list with its whole body, and hide only
-the ones whose every request the fixed text covers.
+the ones whose every request the fixed text covers. The 2026-11-02 Change-Id
+rollout review (rechain, `make hooks`, interactive review) is an exception: the
+fixed text carries none of those requests, so hiding it drops them. When a
+newer fixed-form request already stands on the PR (#295, #561), say so in the
+entry; it repeats only the rebase, so decide each remaining request explicitly,
+the Change-Id guidance (which CONTRIBUTING.md and `hashchain.py` also print)
+and the interactive review separately.
 
 ## Recheck dependencies and substantive review
 

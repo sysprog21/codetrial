@@ -24,8 +24,8 @@ case "$*" in
     # gh applies --jq itself, so the fake prints the rows.
     "api user --jq .login") echo "${FAKE_VIEWER:-someone}" ;;
     "api graphql --paginate "*)
-        printf 'false\tfalse\tweb/a.js\t11\tmaint\tHandle the empty list.\n'
-        printf 'true\ttrue\tweb/a.js\t3\tmaint\tFixed.\n'
+        printf 'false\tfalse\tweb/a.js\t11\tmaint\tHandle the empty list.\tPRRT_1\thttps://x/discussion_r1\n'
+        printf 'true\ttrue\tweb/a.js\t3\tmaint\tFixed.\tPRRT_2\thttps://x/discussion_r2\n'
         ;;
     # gh applies --jq itself: the status, then how many merges the run holds.
     "api repos/sysprog21/codetrial/compare/c0ffee1...h1 --jq "*)
