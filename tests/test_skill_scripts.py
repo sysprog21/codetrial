@@ -611,6 +611,71 @@ class PrSweepTests(SweepCase):
         )
         self.assertEqual(grades, {1: "low", 2: "medium"})
 
+    def test_a_review_whose_threads_are_all_settled_is_hidden_as_resolved(self):
+        def mine(rid, state="COMMENTED", kind="User", body="", count=1):
+            return review("maint", state, 1, body) | {
+                "id": rid,
+                "author": {"__typename": kind, "login": "maint"},
+                "comments": {"totalCount": count},
+            }
+
+        def thread_of(*rids, resolved=False, outdated=False, total=None):
+            nodes = [
+                {"author": {"login": "maint"}, "pullRequestReview": {"id": r}}
+                for r in rids
+            ]
+            return {
+                "id": "T_" + "_".join(rids),
+                "isResolved": resolved,
+                "isOutdated": outdated,
+                "path": "a.js",
+                "comments": {"totalCount": total or len(nodes), "nodes": nodes},
+            }
+
+        reviews = [
+            mine("R_bot", kind="Bot", body="summary"),
+            mine("R_out"),
+            mine("R_text", body="please look"),
+            mine("R_open"),
+            mine("R_cr", state="CHANGES_REQUESTED"),
+            mine("R_split", count=2),
+            mine("R_none", count=0),
+        ]
+        threads = [
+            thread_of("R_bot", resolved=True),
+            thread_of("R_out", outdated=True),
+            thread_of("R_text", resolved=True),
+            thread_of("R_open"),
+            thread_of("R_cr", resolved=True),
+            thread_of("R_split", resolved=True),
+            thread_of("R_split"),
+        ]
+        swept = self.run_pulls(
+            pull(1, reviews=listed(*reviews), reviewThreads=listed(*threads)),
+            pull(
+                2,
+                reviews=listed(mine("R_long")),
+                reviewThreads=listed(thread_of("R_long", resolved=True, total=21)),
+            ),
+        )
+        self.assertEqual(
+            [(h["pr"], h["id"]) for h in swept["hide_resolved"]],
+            [(1, "R_bot"), (1, "R_out")],
+        )
+
+    def test_a_refine_comment_is_stale_once_no_thread_is_open(self):
+        text = (SKILLS / "codetrial-triage" / "refine.md").read_text()
+        mine = comment("viewer", 1, text) | {"id": "IC_mine"}
+        theirs = comment("maint", 1, text) | {"id": "IC_theirs"}
+        other = comment("viewer", 1, "Thanks!") | {"id": "IC_other"}
+        comments = listed(mine, theirs, other)
+        settled = listed(thread() | {"isResolved": True})
+        swept = self.run_pulls(
+            pull(1, comments=comments, reviewThreads=settled),
+            pull(2, comments=comments, reviewThreads=listed(thread())),
+        )
+        self.assertEqual(swept["refine_stale"], [{"pr": 1, "id": "IC_mine"}])
+
     def test_a_thread_the_author_opened_is_not_a_reviewer_thread(self):
         grades = self.grades(
             pull(1, commits=GREEN, reviewThreads=listed(thread(login="contributor")))
@@ -1114,6 +1179,77 @@ class PrSweepTests(SweepCase):
         )
         self.assertEqual([entry["pr"] for entry in swept["rebase"]], [1])
         self.assertEqual([entry["id"] for entry in swept["hide"]], ["IC_1"])
+
+    def test_a_request_the_author_pushed_past_is_outdated_once_the_branch_merges(self):
+        onto = "Rebase onto latest `main` branch and resolve conflicts."
+        old = review("maint", "CHANGES_REQUESTED", 20, FIXED, oid="old") | {
+            "id": "R_old"
+        }
+        now = review("maint", "CHANGES_REQUESTED", 2, FIXED, oid="head2") | {
+            "id": "R_now"
+        }
+        swept = self.run_pulls(
+            # Pushed since: nothing is current, so every copy is outdated.
+            pull(1, reviews=listed(old), comments=listed(request("IC_1", 15, onto))),
+            # A request on the current head still stands.
+            pull(2, reviews=listed(now)),
+            # A conflict nobody can be asked about yet keeps its newest copy.
+            pull(3, mergeable="CONFLICTING", isDraft=True, reviews=listed(old)),
+        )
+        hidden = {(h["pr"], h["id"]): h["why"] for h in swept["hide"]}
+        self.assertEqual(hidden, {(1, "R_old"): "outdated", (1, "IC_1"): "outdated"})
+
+    def test_a_dismissed_request_in_a_known_wording_is_hidden_as_outdated(self):
+        dismissed = review("maint", "DISMISSED", 3, FIXED) | {"id": "R_dismissed"}
+        inline = dismissed | {"id": "R_inline", "comments": {"totalCount": 1}}
+        other = review("maint", "DISMISSED", 3, "Please also fix the docs") | {
+            "id": "R_other"
+        }
+        swept = self.run_pulls(
+            pull(1, reviews=listed(dismissed, inline, other)),
+        )
+        self.assertEqual(
+            [(h["id"], h["kind"], h["why"]) for h in swept["hide"]],
+            [("R_dismissed", "review", "outdated")],
+        )
+
+    def test_a_repeated_request_is_replaced_by_the_newest_and_says_it_is_repeated(self):
+        copies = listed(request("IC_a", 8, FIXED), request("IC_b", 6, FIXED))
+        swept = self.run_pulls(pull(1, mergeable="CONFLICTING", comments=copies))
+        self.assertEqual(
+            sorted((h["id"], h["kind"], h["why"], h["act"]) for h in swept["hide"]),
+            [
+                ("IC_a", "comment", "repeated", "hide"),
+                ("IC_b", "comment", "repeated", "hide"),
+            ],
+        )
+        # The viewer own repeated comment is the one a sweep may delete.
+        mine = request("IC_mine", 8, FIXED) | {
+            "author": {"__typename": "User", "login": "viewer"}
+        }
+        swept = self.run_pulls(
+            pull(
+                1,
+                mergeable="CONFLICTING",
+                comments=listed(mine, request("IC_b", 6, FIXED)),
+            )
+        )
+        self.assertEqual(
+            sorted((h["id"], h["act"]) for h in swept["hide"]),
+            [("IC_b", "hide"), ("IC_mine", "delete")],
+        )
+        # On a merging branch the newest current copy stays and only older go.
+        swept = self.run_pulls(
+            pull(
+                1,
+                comments=listed(request("IC_a", 8, FIXED), request("IC_b", 6, FIXED)),
+                commits=checked(),
+            )
+        )
+        self.assertEqual(
+            [(h["id"], h["why"]) for h in swept["hide"]],
+            [("IC_a", "repeated")],
+        )
 
     def test_earlier_copies_of_the_ci_wording_and_the_old_text_are_hidden(self):
         old = "Rebase latest `main` branch and resolve conflicts."
@@ -2359,6 +2495,9 @@ class HygieneTests(unittest.TestCase):
         out = self.hygiene(*args, **kwargs)
         return out["skip"], [item["key"] for item in out["items"]]
 
+    def comment_keys(self, *args, **kwargs):
+        return [c["key"] for c in self.hygiene(*args, **kwargs)["comments"]]
+
     def test_each_rule_fires_on_its_own_evidence(self):
         commits = EVERY_RULE
         skip, keys = self.keys(
@@ -2366,18 +2505,89 @@ class HygieneTests(unittest.TestCase):
         )
         self.assertIsNone(skip)
         self.assertEqual(
-            keys,
-            ["fork_main", "merge_commit", "commit_rules", "co_authored", "screenshot"],
+            keys, ["fork_main", "merge_commit", "commit_rules", "co_authored"]
         )
-        # A clean PR, a person credited as co-author, and a page change that
-        # shows a screenshot.
+        # A clean PR is asked for nothing.
         self.assertEqual(self.keys([commit(GOOD_MESSAGE)]), (None, []))
+
+    def test_a_page_change_without_a_screenshot_is_asked_in_a_plain_comment(self):
+        good = [commit(GOOD_MESSAGE)]
+        text = (
+            "Add screenshots to the pull request description to illustrate your "
+            "work, as @ColtenOuO suggests. Example: #349"
+        )
+        out = self.hygiene(good, files=[{"path": "web/index.html"}])
+        self.assertEqual(out["comments"], [{"key": "screenshot", "text": text}])
+        # It is a comment, so it does not turn the PR into a blocked review.
+        self.assertEqual((out["items"], out["body"]), ([], ""))
         shown = "Before and after:\n\n![lobby](https://github.com/user-attachments/assets/x)"
+        for name, fields in {
+            "an image in the description": {
+                "files": [{"path": "web/styles.css"}],
+                "body": shown,
+            },
+            "no page file": {"files": [{"path": "web/problems/a.json"}]},
+            "a vendored script": {"files": [{"path": "web/vendor/x.js"}]},
+        }.items():
+            with self.subTest(name):
+                self.assertEqual(self.comment_keys(good, **fields), [])
+
+    def test_a_script_counts_as_a_page_change_when_it_writes_to_the_dom(self):
+        good = [commit(GOOD_MESSAGE)]
+        files = [{"path": "web/app.js"}]
+
+        def diff(line, path="web/app.js"):
+            return f"diff --git a/{path} b/{path}\n+++ b/{path}\n+{line}"
+
+        env = {"FAKE_DIFF": diff("el.textContent = label;")}
+        self.assertEqual(self.comment_keys(good, files=files, env=env), ["screenshot"])
+        for name, text in {
+            "logic only": diff("const total = a + b;"),
+            "a test file": diff("el.textContent = 1;", "web/app.test.js"),
+            "vendored code": diff("el.innerHTML = 1;", "web/vendor/x.js"),
+        }.items():
+            with self.subTest(name):
+                self.assertEqual(
+                    self.comment_keys(good, files=files, env={"FAKE_DIFF": text}), []
+                )
+        # A diff GitHub will not serve leaves only HTML and CSS as evidence.
+        self.assertEqual(self.comment_keys(good, files=files), [])
+
+    def test_a_removed_dom_write_is_a_page_change_too(self):
+        good = [commit(GOOD_MESSAGE)]
+        gone = "diff --git a/web/app.js b/web/app.js\n+++ b/web/app.js\n-  el.textContent = label;"
         self.assertEqual(
-            self.keys(
-                [commit(GOOD_MESSAGE)], files=[{"path": "web/styles.css"}], body=shown
+            self.comment_keys(
+                good, files=[{"path": "web/app.js"}], env={"FAKE_DIFF": gone}
             ),
-            (None, []),
+            ["screenshot"],
+        )
+
+    def test_a_screenshot_already_asked_for_is_not_asked_again(self):
+        good = [commit(GOOD_MESSAGE)]
+        files = [{"path": "web/index.html"}]
+        ask = {
+            "author": {"login": "maint"},
+            "createdAt": "2026-10-19T00:00:00Z",
+            "body": "Add screenshots to the pull request description.",
+        }
+        # Before the last push or not: the description is what is missing.
+        self.assertEqual(self.comment_keys(good, [ask], files=files), [])
+        self.assertEqual(
+            self.comment_keys(good, [ask | {"isMinimized": True}], files=files),
+            ["screenshot"],
+        )
+        old = review("maint", "CHANGES_REQUESTED", 0, "Show a screenshot.", oid="h0")
+        self.assertEqual(self.comment_keys(good, files=files, reviews=[old]), [])
+        # Asked on a line of the diff rather than in a comment.
+        inline = [
+            {"user": {"login": "maint"}, "commit_id": "h0", "body": "A screenshot?"}
+        ]
+        self.assertEqual(
+            self.comment_keys(
+                good, files=files, env={"FAKE_INLINE": json.dumps(inline)}
+            ),
+            [],
         )
 
     def test_only_an_agent_address_is_an_attribution_marker(self):
@@ -2498,7 +2708,6 @@ class HygieneTests(unittest.TestCase):
             "co_authored": ([commit(agent)], {}),
             "merge_commit": ([commit(GOOD_MESSAGE), commit("Merge it", parents=2)], {}),
             "fork_main": ([commit(GOOD_MESSAGE)], {"headRefName": "main"}),
-            "screenshot": ([commit(GOOD_MESSAGE)], {"files": [{"path": "web/a.css"}]}),
         }
         for key, (commits, fields) in cases.items():
             with self.subTest(key):
@@ -2544,7 +2753,7 @@ class HygieneTests(unittest.TestCase):
             ],
         }
         out = self.hygiene(commits, ci=ci, **fields)
-        self.assertEqual(len(out["items"]), 7)
+        self.assertEqual(len(out["items"]), 6)
         posted = review("maint", "CHANGES_REQUESTED", 0, out["body"], oid="h1")
         self.assertEqual(
             self.keys(commits, ci=ci, reviews=[posted], **fields), (None, [])
@@ -3251,21 +3460,98 @@ class ReviewQueueTests(unittest.TestCase):
         env = {"FAKE_HISTORY": "", "FAKE_LOG": f"{self.repo}/gh.log"} | env
         return self.finish(self.refine_draft(refine), "abc", gh=FAKE_GH_REFINE, **env)
 
-    def test_finish_posts_the_refine_comment_once_per_head(self):
+    def test_finish_posts_the_refine_comment_with_every_listed_thread(self):
         threads = [{"url": "https://github.com/o/r/pull/7#c1", "path": "a.js"}]
         self.assertEqual(self.finish_refine(threads).returncode, 0)
         log = (self.repo / "gh.log").read_text()
         self.assertIn("refine the change", log)
         self.assertIn("pull/7#c1", log)
         self.assertIn("Checked at abc.", log)
+        self.assertNotIn("DELETE", log)
         self.assertEqual(self.ledger.read_text(), "7 abc\n")
 
-        (self.repo / "gh.log").unlink()
-        again = self.finish_refine(
-            threads, FAKE_HISTORY="see https://github.com/o/r/pull/7#c1"
+    def test_finish_deletes_the_stale_copies_once_the_new_reminder_is_posted(self):
+        text = (SKILLS / "codetrial-triage" / "refine.md").read_text()
+        history = json.dumps(
+            [
+                {"id": 11, "user": {"login": "viewer"}, "body": text + "\nOld list"},
+                {"id": 12, "user": {"login": "someone"}, "body": text},
+                {"id": 13, "user": {"login": "viewer"}, "body": "Thanks!"},
+            ]
         )
-        self.assertEqual(again.returncode, 0)
+        threads = [{"url": "https://github.com/o/r/pull/7#c1", "path": "a.js"}]
+        self.assertEqual(
+            self.finish_refine(threads, FAKE_HISTORY=history).returncode, 0
+        )
+        log = (self.repo / "gh.log").read_text()
+        self.assertIn("issues/comments/11", log)
+        self.assertNotIn("issues/comments/12", log)
+        self.assertNotIn("issues/comments/13", log)
+        self.assertLess(log.index("comment"), log.index("issues/comments/11"))
+
+        # A reminder that did not post leaves the old one standing.
+        (self.repo / "gh.log").unlink()
+        failed = self.finish_refine(
+            threads, FAKE_HISTORY=history, FAKE_COMMENT_FAIL="1"
+        )
+        self.assertEqual(failed.returncode, 4)
         self.assertFalse((self.repo / "gh.log").exists())
+
+    def test_finish_retry_keeps_the_identical_reminder_and_clears_the_rest(self):
+        text = (SKILLS / "codetrial-triage" / "refine.md").read_text()
+        current = (
+            text
+            + "\nNot addressed at the current head:\n"
+            + "- https://github.com/o/r/pull/7#c1 (`a.js`)\n"
+            + "\nChecked at abc.\n"
+        )
+        history = json.dumps(
+            [
+                {"id": 20, "user": {"login": "viewer"}, "body": current},
+                {"id": 21, "user": {"login": "viewer"}, "body": text + "\nOld"},
+            ]
+        )
+        threads = [{"url": "https://github.com/o/r/pull/7#c1", "path": "a.js"}]
+        self.assertEqual(
+            self.finish_refine(threads, FAKE_HISTORY=history).returncode, 0
+        )
+        log = (self.repo / "gh.log").read_text()
+        self.assertNotIn("comment\n", log)
+        self.assertIn("issues/comments/21", log)
+        self.assertNotIn("issues/comments/20", log)
+
+    def test_finish_keeps_one_identical_reminder_and_deletes_a_second(self):
+        text = (SKILLS / "codetrial-triage" / "refine.md").read_text()
+        current = (
+            text
+            + "\nNot addressed at the current head:\n"
+            + "- https://github.com/o/r/pull/7#c1 (`a.js`)\n"
+            + "\nChecked at abc.\n"
+        )
+        history = json.dumps(
+            [
+                {"id": 30, "user": {"login": "viewer"}, "body": current},
+                {"id": 31, "user": {"login": "viewer"}, "body": current},
+            ]
+        )
+        threads = [{"url": "https://github.com/o/r/pull/7#c1", "path": "a.js"}]
+        self.assertEqual(
+            self.finish_refine(threads, FAKE_HISTORY=history).returncode, 0
+        )
+        log = (self.repo / "gh.log").read_text()
+        self.assertIn("issues/comments/31", log)
+        self.assertNotIn("issues/comments/30", log)
+        self.assertNotIn("comment\n", log)
+
+    def test_finish_keeps_the_head_out_when_a_stale_copy_cannot_be_deleted(self):
+        text = (SKILLS / "codetrial-triage" / "refine.md").read_text()
+        history = json.dumps(
+            [{"id": 40, "user": {"login": "viewer"}, "body": text + "\nOld"}]
+        )
+        threads = [{"url": "https://github.com/o/r/pull/7#c1", "path": "a.js"}]
+        result = self.finish_refine(threads, FAKE_HISTORY=history, FAKE_DELETE_FAIL="1")
+        self.assertEqual(result.returncode, 4)
+        self.assertFalse(self.ledger.exists() and self.ledger.read_text())
 
     def test_finish_asks_the_author_to_resolve_an_addressed_thread(self):
         threads = [
@@ -3402,6 +3688,7 @@ class ApplyPrActionsTests(unittest.TestCase):
     """apply-pr-actions.sh against a gh that logs every write it is asked for."""
 
     FAKE = FAKE_GH_APPLY
+    QUIET = {"approve": [], "rebase": [], "hide": []}
 
     def sweep(self, **fields):
         base = {
@@ -3416,6 +3703,8 @@ class ApplyPrActionsTests(unittest.TestCase):
                 {"pr": 3, "id": "IC_3", "by": "maint"},
                 {"pr": 4, "id": "IC_4", "by": "maint"},
             ],
+            "hide_resolved": [],
+            "refine_stale": [],
         }
         return json.dumps(base | fields)
 
@@ -3473,7 +3762,7 @@ class ApplyPrActionsTests(unittest.TestCase):
     )
 
     def test_hygiene_reviews_post_only_a_body_read_at_the_live_head(self):
-        quiet = {"approve": [], "rebase": [], "hide": []}
+        quiet = self.QUIET
         result, got, log = self.run_actions(
             self.sweep(**quiet), hygiene=self.HYGIENE, FAKE_MOVED="3"
         )
@@ -3491,8 +3780,186 @@ class ApplyPrActionsTests(unittest.TestCase):
         self.assertNotIn("pulls/2/reviews", log)
         self.assertNotIn("pulls/3/reviews", log)
 
+    def test_a_hygiene_comment_is_posted_as_a_comment_at_the_live_head(self):
+        quiet = self.QUIET
+        shot = (
+            'echo \'{"pr":%s,"head":"h%s","items":[],"body":"",'
+            '"comments":[{"key":"screenshot","text":"Add screenshots now."}]}\' ;;\n'
+        )
+        hygiene = 'case "$1" in\n  1) ' + shot % (1, 1) + "  3) " + shot % (3, 3)
+        hygiene += "  *) exit 1 ;;\nesac\n"
+        _, got, log = self.run_actions(
+            self.sweep(**quiet), hygiene=hygiene, FAKE_MOVED="3"
+        )
+        self.assertEqual(got[("hygiene_screenshot", 1)], "applied")
+        self.assertEqual(got[("hygiene_screenshot", 3)], "skipped")
+        self.assertIn("pr comment 1 ", log)
+        self.assertIn("Add screenshots now.", log)
+        self.assertNotIn("pr comment 3 ", log)
+        self.assertNotIn("pulls/1/reviews", log)
+
+    def test_a_merged_pr_of_a_contributor_is_thanked_once(self):
+        def merged(number, login, body=None, bot=False):
+            return {
+                "number": number,
+                "author": {"login": login, "is_bot": bot},
+                "comments": [{"author": {"login": "maint"}, "body": body}]
+                if body
+                else [],
+            }
+
+        quiet = self.QUIET
+        listing = [
+            merged(9, "newbie"),
+            merged(10, "thanked", "Thanks @thanked, merged."),
+            merged(13, "later", "Please thank @later when it lands."),
+            merged(11, "maint"),
+            merged(12, "app/dependabot", bot=True),
+        ]
+        _, got, log = self.run_actions(
+            self.sweep(**quiet),
+            hygiene=self.HYGIENE,
+            FAKE_MERGED=json.dumps(listing),
+        )
+        thanks = {pr for (action, pr) in got if action == "thanks"}
+        self.assertEqual(thanks, {9, 13})
+        self.assertIn("Thank @newbie for contributing!", log)
+        self.assertNotIn("pr comment 10 ", log)
+
+    def test_resolved_reviews_are_hidden_and_a_stale_refine_comment_deleted(self):
+        quiet = self.QUIET
+        _, got, log = self.run_actions(
+            self.sweep(
+                **quiet,
+                hide_resolved=[{"pr": 2, "id": "PRR_2", "by": "cubic-dev-ai"}],
+                refine_stale=[{"pr": 2, "id": "IC_9"}],
+            )
+        )
+        self.assertEqual(
+            got, {("hide_resolved", 2): "applied", ("refine_stale", 2): "applied"}
+        )
+        self.assertIn("PRR_2", log)
+        self.assertIn("classifier: RESOLVED", log)
+        self.assertIn("deleteIssueComment", log)
+
+    def test_a_write_that_timed_out_is_tried_again_before_it_is_reported(self):
+        quiet = self.QUIET
+        _, got, log = self.run_actions(
+            self.sweep(**quiet, hide_resolved=[{"pr": 2, "id": "PRR_2"}]),
+            FAKE_FLAKY="1",
+            RETRY_DELAY="0",
+        )
+        self.assertEqual(got, {("hide_resolved", 2): "applied"})
+        self.assertEqual(log.count("classifier: RESOLVED"), 2)
+
+    def test_each_review_is_checked_again_after_a_previous_hide(self):
+        def state(reopened):
+            threads = [
+                {
+                    "isResolved": not (reopened and review == "PRR_3"),
+                    "isOutdated": False,
+                    "comments": {
+                        "totalCount": 1,
+                        "nodes": [{"pullRequestReview": {"id": review}}],
+                    },
+                }
+                for review in ("PRR_2", "PRR_3")
+            ]
+            return json.dumps(
+                {
+                    "data": {
+                        "repository": {
+                            "pullRequest": {
+                                "reviewThreads": {"totalCount": 2, "nodes": threads}
+                            }
+                        }
+                    }
+                }
+            )
+
+        result, _, log = self.run_actions(
+            self.sweep(
+                **self.QUIET,
+                hide_resolved=[{"pr": 2, "id": "PRR_2"}, {"pr": 2, "id": "PRR_3"}],
+            ),
+            FAKE_THREADS=state(False),
+            FAKE_THREADS_AFTER_WRITE=state(True),
+        )
+        receipts = [json.loads(line) for line in result.stdout.splitlines()]
+        self.assertEqual([r["result"] for r in receipts], ["applied", "skipped"])
+        self.assertEqual(log.count("classifier: RESOLVED"), 1)
+
+    def test_an_entry_the_sweep_marks_delete_is_deleted_and_the_rest_hidden(self):
+        def entry(pr, node, act):
+            return {"pr": pr, "id": node, "by": "maint", "act": act}
+
+        hide = [
+            entry(1, "IC_mine", "delete"),
+            entry(2, "IC_theirs", "hide"),
+            entry(3, "R_mine", "hide"),
+        ]
+        _, got, log = self.run_actions(self.sweep(**(self.QUIET | {"hide": hide})))
+        self.assertEqual(set(got.values()), {"applied"})
+        self.assertEqual(log.count("deleteIssueComment"), 1)
+        self.assertRegex(
+            log, r"id=IC_mine -f query=\s+mutation\(\$id: ID!\) \{ deleteIssueComment"
+        )
+        self.assertEqual(log.count("classifier: OUTDATED"), 2)
+
+    def test_a_node_gone_after_a_timed_out_attempt_counts_as_done(self):
+        _, got, _ = self.run_actions(
+            self.sweep(**self.QUIET, refine_stale=[{"pr": 2, "id": "IC_9"}]),
+            FAKE_FLAKY="1",
+            FAKE_GONE="1",
+            RETRY_DELAY="0",
+        )
+        self.assertEqual(got, {("refine_stale", 2): "applied"})
+
+    def test_a_refused_write_is_not_tried_again(self):
+        _, got, log = self.run_actions(
+            self.sweep(**self.QUIET, hide_resolved=[{"pr": 2, "id": "PRR_2"}]),
+            FAKE_REFUSED="1",
+            RETRY_DELAY="0",
+        )
+        self.assertEqual(got, {("hide_resolved", 2): "failed"})
+        self.assertEqual(log.count("classifier: RESOLVED"), 1)
+
+    def test_changed_or_incomplete_threads_prevent_mutations(self):
+        quiet = self.QUIET
+        thread = {
+            "isResolved": False,
+            "isOutdated": False,
+            "comments": {
+                "totalCount": 1,
+                "nodes": [{"pullRequestReview": {"id": "PRR_2"}}],
+            },
+        }
+        for total in (1, 2):
+            state = {
+                "data": {
+                    "repository": {
+                        "pullRequest": {
+                            "reviewThreads": {"totalCount": total, "nodes": [thread]}
+                        }
+                    }
+                }
+            }
+            _, got, log = self.run_actions(
+                self.sweep(
+                    **quiet,
+                    hide_resolved=[{"pr": 2, "id": "PRR_2"}],
+                    refine_stale=[{"pr": 2, "id": "IC_9"}],
+                ),
+                FAKE_THREADS=json.dumps(state),
+            )
+            self.assertEqual(
+                got, {("hide_resolved", 2): "skipped", ("refine_stale", 2): "skipped"}
+            )
+            self.assertNotIn("classifier: RESOLVED", log)
+            self.assertNotIn("deleteIssueComment", log)
+
     def test_hygiene_is_off_without_the_flag(self):
-        quiet = {"approve": [], "rebase": [], "hide": []}
+        quiet = self.QUIET
         _, got, log = self.run_actions(self.sweep(**quiet))
         self.assertEqual((got, "reviews" in log), ({}, False))
 

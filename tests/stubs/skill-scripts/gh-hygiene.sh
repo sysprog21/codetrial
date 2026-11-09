@@ -7,6 +7,10 @@ case "$*" in
         ;;
     "pr view 5 --repo sysprog21/codetrial --json number,"*) cat "$FAKE_PR" ;;
     "pr view 5 --repo sysprog21/codetrial --json headRefOid --jq .headRefOid") echo h1 ;;
+    "pr diff 5 "*)
+        [ -n "${FAKE_DIFF:-}" ] || exit 1
+        printf '%s\n' "$FAKE_DIFF"
+        ;;
     "api repos/sysprog21/codetrial/pulls/5/commits --paginate") cat "$FAKE_COMMITS" ;;
     "api repos/sysprog21/codetrial/pulls/5/comments --paginate")
         if [ -n "${FAKE_INLINE:-}" ]; then

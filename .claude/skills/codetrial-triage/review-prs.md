@@ -323,13 +323,19 @@ attention") posts nothing and shows the drafts instead.
 fixed text in [refine.md](refine.md), which tells the author to refine per the
 review comments, reply on each thread and resolve it themselves, then a link to
 each thread under "Not addressed" or "Addressed ... reply and resolve", and the
-head it was checked at. A thread an earlier refine comment already linked is
-not listed again, so a rerun never repeats itself. The PR stays graded `low`
-while threads are open, and the `stale` nudge in [pulls.md](pulls.md) reminds an
-author who goes quiet. A thread opened without a push brings the PR back,
-because the ledger line records the open-thread count the sweep saw and a
-larger count is read again. Outdated threads the head addresses are resolved as
-above; anything else stays open until its author or reviewer resolves it.
+head it was checked at. The list is every open thread the agent sorted for the
+author (a thread holding only the maintainer's own comments is not one), not
+only the new ones, and the comment replaces the viewer's earlier reminders on
+the PR: once it is posted they are deleted, so a PR carries one current
+reminder and no stale copies. A reminder that fails to post deletes nothing. When
+every thread is resolved the sweep deletes the leftover reminder itself
+(`refine_stale`, [pulls.md](pulls.md#what-a-sweep-may-apply-without-asking)).
+The PR stays graded `low` while threads are open, and the `stale` nudge in
+[pulls.md](pulls.md) reminds an author who goes quiet. A thread opened without a
+push brings the PR back, because the ledger line records the open-thread count
+the sweep saw and a larger count is read again. Outdated threads the head
+addresses are resolved as above; anything else stays open until its author or
+reviewer resolves it.
 
 ## Report
 

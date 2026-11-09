@@ -27,8 +27,9 @@ the old snapshot as today's. Report the open PR
 count, and any PR whose `files_truncated`, `reviews_truncated`,
 `threads_truncated`, `comments_truncated` or `closes_truncated` is set, since
 the lists below miss what was cut. In particular, `overlap` is incomplete when
-`closes_truncated` is set, and `rebase`, `hide`, `hide_ask` and `stale` omit a
-PR when either of `reviews_truncated` or `comments_truncated` is. The action
+`closes_truncated` is set, and `rebase`, `hide`, `hide_ask`, `hide_resolved`,
+`refine_stale` and `stale` omit a PR when either of `reviews_truncated` or
+`comments_truncated` is. The action
 lists name a PR `pr`, which the commands below take as `$pr`. A PR in `unknown`
 still has no mergeability after the script's own retry, since GitHub computes it
 on first request and every merge to `main` resets it; rerun once and report any
@@ -44,14 +45,16 @@ matters most here, where some actions apply without asking.
 ## What a sweep may apply without asking
 
 Asking to sweep the PRs ("sweep the PRs", "run the PR sweep") authorizes the
-first three actions below, because none carries text drafted during the sweep,
-each is cheap to undo or harmless, and holding them for a confirmation only
-stalls a contributor. A bare `/codetrial-triage` also authorizes the fourth,
-and the inline review of each low or blocked PR with its similar-work notices
-([review-prs.md](review-prs.md)), which are drafted, but in a form the
-maintainer approved and each verified at the head before it is posted. A bare
-"continue" after an issue report is not that request: it carries the work on,
-and these actions go on the confirmed list instead.
+approvals, the rebase requests and the hides and deletions below, because none
+carries text drafted during the sweep, each is cheap to undo or harmless, and
+holding them for a confirmation only stalls a contributor. A bare
+`/codetrial-triage` also authorizes resolving an addressed outdated thread, the
+hygiene reviews and comments, the thanks, and the inline review of each low or
+blocked PR with its similar-work notices ([review-prs.md](review-prs.md)),
+which are drafted, but in a form the maintainer approved and each verified at
+the head before it is posted. A bare "continue" after an issue report is not
+that request: it carries the work on, and these actions go on the confirmed
+list instead.
 
 - Approving a run in `approve` whose `first_time` is true and whose
   `touches_workflows` and `files_truncated` are false. A run waits there because
@@ -91,7 +94,7 @@ and these actions go on the confirmed list instead.
   resolved thread with what at the head addresses it; a reviewer who disagrees
   clicks unresolve.
 - Requesting a rebase on each PR in `rebase`, then hiding every entry in
-  `hide` as outdated. The text is fixed in [rebase.md](rebase.md), so the
+  `hide` as outdated, or deleting it. The text is fixed in [rebase.md](rebase.md), so the
   maintainer approved it once by writing it, and `hide` holds only requests in a
   wording the maintainers have used for the same thing (listed in
   `pr-sweep.sh`), with no inline comments; a hidden comment stays one click from
@@ -104,19 +107,45 @@ and these actions go on the confirmed list instead.
   "Approve the held runs" does for approvals; report the conflicting PRs it skips
   (the account's own, and those holding a current rebase review) so the count
   matches the banner.
+  Each `hide` entry says `why` it goes and what to do, `act`. `repeated`: a
+  newer copy of the request stands (the one just posted, or the newest current
+  one). `outdated`: nothing stands, because the author pushed past it and the
+  branch merges, or the review was dismissed. A PR that merges keeps only a
+  request still current at its head, so a lone old "Rebase onto latest `main`
+  branch and resolve conflicts." is hidden once the author has rebased. `act` is
+  `delete` only for a repeated comment the viewer wrote; GitHub cannot delete a
+  submitted review, and another maintainer's comment is theirs, so those are
+  hidden as Outdated.
+- Hiding every review in `hide_resolved` as resolved (GitHub's "Hide
+  (Resolved)"), and deleting every comment in `refine_stale`. The first is a
+  COMMENTED review, with no body of a person's own, whose every inline comment
+  sits in a thread that is resolved or outdated, as #633's cubic review was; the
+  thread, the review state and the grade are untouched, and the review is one
+  click from readable. The second is the viewer's own [refine.md](refine.md)
+  reminder on a PR with no open thread left; it is deleted, not hidden. A
+  reminder on a PR that still has open threads is replaced by the review's next
+  one ([review-prs.md](review-prs.md#check-every-open-thread)). Both are
+  re-checked against live threads right before the write.
 - On a bare `/codetrial-triage` only, requesting changes on each open PR
   whose `hygiene.sh` output has items, as
-  [Contributor hygiene](#contributor-hygiene) describes. Each item is a rule a
+  [Contributor hygiene](#contributor-hygiene) describes, and posting each
+  plain comment it names (the screenshot request). Each item is a rule a
   script decides and carries a wording the maintainers already used, so this
   too is text the maintainer approved by writing it. "Sweep the PRs" alone
   lists the items and posts none.
+- On a bare `/codetrial-triage` only, thanking the author of each pull request
+  merged in the last three days whose author is not a maintainer or a bot and
+  has no maintainer comment opening `Thank @login `: `Thank @login for
+  contributing!`, the line the maintainers leave on every such merge by hand.
+  Three days keeps a sweep from backfilling old merges.
 
 `apply-pr-actions.sh` does all of it in one call, except resolving outdated
 threads (the review of a low or blocked PR owns that), and prints a receipt per
 action (`applied`, `already`, `skipped`, `confirm` or `failed`); the commands
 after it are what it runs, for doing one by hand. `--hygiene` adds the
-hygiene reviews, which only a bare sweep takes. Every `confirm` and `failed`
-receipt goes in the report or on the confirmed list, and `hide_ask` stays the
+hygiene reviews, which only a bare sweep takes. A hide or delete that times out is tried twice more before it counts as
+`failed`, since a first full sweep makes hundreds of them. Every `confirm` and
+`failed` receipt goes in the report or on the confirmed list, and `hide_ask` stays the
 maintainer's:
 
 ```sh
@@ -168,7 +197,8 @@ report the sweep's `superseded` count rather than approving or cancelling them.
 Most changes requested here are the same few requests typed again: run
 `make hooks` and fix the commit messages, run `make indent`, rebase instead of
 merge, open the PR from a topic branch, drop the AI attribution, fix the CI
-regressions before asking for review, show a screenshot of a page change.
+regressions before asking for review. A request to show a screenshot of a page
+change is the same kind but goes out as a plain comment, not a review.
 `hygiene.sh` decides each of them for one PR at its current head and prints
 the review text, the maintainers' own wording for every item that applies.
 `apply-pr-actions.sh --hygiene` runs it for every open PR and posts each
@@ -204,6 +234,15 @@ gh api "repos/$repo/pulls/$pr/reviews" \
   -f commit_id="$(jq -r .head "$SCRATCH/hygiene-$pr.json")" \
   -f event=REQUEST_CHANGES -F body=@"$SCRATCH/hygiene-$pr.md"
 ```
+
+A page change is asked to show screenshots in a plain comment, not a review:
+the fix is one line in the description, so it does not block the merge.
+`comments` in the script's output holds it and `apply-pr-actions.sh --hygiene`
+posts it. It applies to any `web/**/*.html` or `.css` change, or a `web/`
+script (not vendored, not a test) whose changed lines write to the DOM, a
+heuristic the script states. It is skipped when the description holds an image
+or video, or when any visible maintainer comment or review has mentioned a
+screenshot; a change the heuristic misses is for the PR's review to notice.
 
 The fixed `rebase.md` request and this review go out in the same response,
 and `hygiene.sh` reads the PR before either is posted. It holds the CI item

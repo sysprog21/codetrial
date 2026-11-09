@@ -31,6 +31,12 @@
 #   hide      superseded rebase requests in a known wording, to hide
 #   hide_ask  other rebase requests, to confirm before hiding
 #             (all three: pulls.md, "Conflicting branches")
+#   hide_resolved  reviews to hide as resolved: a COMMENTED review, with no
+#             body of a person's own, whose every inline comment sits in a
+#             thread that is resolved or outdated. Skipped when a thread is
+#             too long to read whole
+#   refine_stale  the viewer's "Some review comments ... not settled yet"
+#             comments (refine.md) on a PR with no open thread left, to delete
 #   unknown   PRs whose mergeability GitHub has still not computed after one
 #             retry; rerun
 #   status    every open PR, smallest first: lines changed split into source
@@ -108,6 +114,9 @@ text=$(dirname "$0")/rebase.md
 known='["Rebase latest `main` and resolve conflicts",
   "Rebase latest `main` branch",
   "Rebase latest `main` branch and resolve conflicts",
+  "Rebase onto latest `main` branch",
+  "Rebase onto latest `main` branch and resolve conflicts",
+  "Rebase onto latest main branch and resolve conflicts",
   "Before asking someone to review, you MUST resolve any regressions flagged by GitHub Actions"]'
 
 # A thread reply is a review by its writer, so author replies show up in
@@ -159,7 +168,8 @@ query='query($owner: String!, $name: String!, $endCursor: String) {
         reviewThreads(first: 100) {
           totalCount
           nodes { id isResolved isOutdated path
-            comments(first: 1) { nodes { author { __typename login } } } }
+            comments(first: 20) { totalCount
+              nodes { author { __typename login } pullRequestReview { id } } } }
         }
         timelineItems(last: 1, itemTypes: [HEAD_REF_FORCE_PUSHED_EVENT]) {
           nodes { ... on HeadRefForcePushedEvent { createdAt } }
@@ -222,7 +232,8 @@ fi
 out=$(printf '%s\n%s\n' "$prs" "$runs" | jq -s --argjson days "$days" --arg me "$me" \
     --arg base "$base" --rawfile text "$text" --argjson known "$known" \
     --argjson pushers "$pushers" --argjson previous "$previous" \
-    --argjson main_failed "$main_failed" --arg repo "$repo" '
+    --argjson main_failed "$main_failed" --arg repo "$repo" \
+    --arg refine "$(cat "$(dirname "$0")/refine.md")" '
 def human: .author != null and .author.__typename != "Bot";
 def ts: if . == null then 0 else fromdateiso8601 end;
 def pushed: (.commits.nodes[0].commit // {checkSuites: {nodes: []}}) as $c
@@ -256,6 +267,13 @@ def requests: .author.login as $a | .headRefOid as $head | pushed as $p |
       | {id, by: .author.login, at, body, inline, review, current});
 def fixed_only: .inline == 0 and (.body | norm | IN($wordings[]));
 def asks_rebase: [requests[] | select(fixed_only)] | sort_by(.at | ts);
+# A dismissed review is no request any more, but it stays on the page: the fixed
+# wordings left behind after a dismissal are outdated by definition.
+def dismissed: [.reviews.nodes[]
+  | select(.state == "DISMISSED" and human and staff and (.isMinimized | not)
+      and .comments.totalCount == 0 and (.body | norm | IN($wordings[])))
+  | {id, by: .author.login, at: .submittedAt, kind: "review", why: "outdated",
+     act: "hide"}];
 def asked_here: any(requests[]; .current);
 # A conflict is asked about with a Request changes review, so a current
 # comment alone, whatever its wording, does not hold a conflicting PR back from
@@ -527,19 +545,57 @@ def refs: (ref_prefix + "[0-9]+\\b") as $one
          human and staff and (.isMinimized | not)
          and (.body // "" | [scan("(?i)\\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?):?\\s+" + issue_ref)
            | .[0] | tonumber] | any(.[]; . == $n)))}],
-  hide: [$prs[] | .number as $n | select(whole)
+  hide: ([$prs[] | .number as $n | select(whole)
     | asks_rebase as $r
     # The copy kept is the one that holds the PR out of rebase: on a conflict
     # that is the newest current review, which a later comment must not hide.
+    # A PR that merges keeps only a request still current at its head; the rest
+    # are outdated. A conflict nobody can ask about yet (a draft, a stack) keeps
+    # the newest, as it has nobody else to ask.
     | ($r | map(.current and .review) | rindex(true)
-        // ($r | map(.current) | rindex(true)) // -1) as $keep
-    | (if needs_rebase or hand_asked then $r else $r | del(.[$keep]) end)[]
-    | {pr: $n, id, at, by}],
+        // ($r | map(.current) | rindex(true))) as $keepc
+    | (needs_rebase or hand_asked) as $replaced
+    | (if $replaced then null
+       elif .mergeable == "MERGEABLE" then $keepc
+       else $keepc // (($r | length) - 1) end) as $at
+    | ($r | to_entries[] | select(.key != $at)) as $e
+    # A request a newer copy (or the one about to be posted) replaces is
+    # repeated; one nothing replaces is outdated. A comment the viewer wrote
+    # that is repeated can be deleted, a review never can.
+    | $e.value
+    | (if $replaced or ($at != null and (.at | ts) < ($r[$at].at | ts))
+       then "repeated" else "outdated" end) as $why
+    | {pr: $n, id, at, by, kind: (if .review then "review" else "comment" end),
+       why: $why,
+       act: (if $why == "repeated" and (.review | not) and .by == $me
+             then "delete" else "hide" end)}]
+    + [$prs[] | .number as $n | select(whole) | dismissed[] | {pr: $n} + .]),
   hide_ask: [$prs[] | .number as $n
     | select(whole and (needs_rebase
         or (asks_rebase | length > 0) and (hand_asked | not)))
     | requests[] | select(fixed_only | not)
     | {pr: $n, id, at, by, body}],
+  hide_resolved: [$prs[] | .number as $n
+    | select(whole and .reviewThreads.totalCount <= 100
+        and all(.reviewThreads.nodes[]; .comments.totalCount <= 20))
+    | ([.reviewThreads.nodes[] | . as $t | .comments.nodes[]
+        | select(.pullRequestReview != null)
+        | {r: .pullRequestReview.id, settled: ($t.isResolved or $t.isOutdated)}]
+       | group_by(.r)
+       | map({key: .[0].r, value: {n: length, ok: all(.[]; .settled)}})
+       | from_entries) as $by
+    | .reviews.nodes[]
+    | select((.isMinimized | not) and .state == "COMMENTED"
+        and .comments.totalCount > 0 and $by[.id] != null
+        and $by[.id].ok and $by[.id].n == .comments.totalCount
+        and (.body == "" or .author.__typename == "Bot"))
+    | {pr: $n, id, by: .author.login}],
+  refine_stale: [$prs[] | .number as $n
+    | select(whole and .reviewThreads.totalCount <= 100
+        and all(.reviewThreads.nodes[]; .isResolved))
+    | .comments.nodes[]
+    | select(.author.login == $me and (.body | startswith($refine)))
+    | {pr: $n, id}],
   maintainers_known: ($pushers != null),
   viewer: $me,
   prerequisites: prerequisites,

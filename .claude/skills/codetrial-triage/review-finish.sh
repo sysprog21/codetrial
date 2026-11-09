@@ -17,8 +17,9 @@
 #        a draft that is not {pr, sha, comments, similar, resolve} for this PR.
 #        An optional refine array of {url, path, kind} (kind is unaddressed, the
 #        default, or resolve for a thread the head addresses but the author left
-#        open) posts refine.md with those
-#        threads listed, once per head (review-prs.md, "Check every open thread").
+#        open) posts refine.md with those threads listed, then deletes the
+#        viewer's earlier refine comments on the PR (review-prs.md, "Check every
+#        open thread").
 
 set -eu
 
@@ -80,25 +81,24 @@ fi
 
 pending=false
 
-# Threads the head leaves unaddressed: one plain comment, the fixed text of
-# refine.md plus a link per thread, skipping threads an earlier refine comment
-# already linked so a rerun does not post them twice. A comment history that
-# cannot be read posts nothing and leaves the head out of the ledger.
+# Threads the head leaves open: one plain comment, the fixed text of refine.md
+# plus a link per thread, naming every thread the draft lists. It replaces the
+# viewer's earlier refine comments on the PR, which are deleted once the new one
+# is posted, so the PR carries one current reminder and no stale copies. A
+# history that cannot be read posts nothing and leaves the head out of the
+# ledger; a copy that cannot be deleted leaves it out too, so the retry finishes
+# the cleanup.
 post_refine()
 {
-    history=$(gh api --paginate "repos/$repo/issues/$pr/comments" --jq '.[].body') || return 1
+    me=$(gh api user --jq .login) || return 1
+    history=$(gh api --paginate "repos/$repo/issues/$pr/comments") || return 1
     body=$(mktemp)
     trap 'rm -f "$body"' EXIT
     cat "$here/refine.md" > "$body"
     found=false
     for kind in unaddressed resolve; do
         fresh=$(jq -r --arg k "$kind" '.refine[]
-            | select((.kind // "unaddressed") == $k) | "- \(.url) (`\(.path)`)"' "$draft" \
-            | while IFS= read -r line; do
-                url=${line#- }
-                url=${url%% *}
-                printf '%s\n' "$history" | grep -qF "$url" || printf '%s\n' "$line"
-            done)
+            | select((.kind // "unaddressed") == $k) | "- \(.url) (`\(.path)`)"' "$draft")
         [ -n "$fresh" ] || continue
         found=true
         case $kind in
@@ -109,7 +109,24 @@ post_refine()
     done
     $found || return 0
     printf '\nChecked at %s.\n' "$sha" >> "$body"
-    gh pr comment "$pr" --repo "$repo" --body-file "$body"
+
+    # Every viewer reminder but one that already says exactly this is stale, a
+    # second identical copy included. One identical copy is kept and not posted
+    # twice, and the others still go, so a retry after a failed delete finishes
+    # the cleanup.
+    mine=$(printf '%s\n' "$history" | jq -rs --arg me "$me" --arg m "$(cat "$here/refine.md")" \
+        --rawfile body "$body" '[.[][] | select(.user.login == $me and (.body | startswith($m)))] as $all
+        | [$all[] | select(.body == $body) | .id] as $same
+        | {same: ($same | length > 0),
+           old: ([$all[] | select(.body != $body) | .id] + $same[1:])}') || return 1
+    if [ "$(printf '%s\n' "$mine" | jq -r .same)" = false ]; then
+        gh pr comment "$pr" --repo "$repo" --body-file "$body" || return 1
+    fi
+    status=0
+    for id in $(printf '%s\n' "$mine" | jq -r '.old[]'); do
+        gh api -X DELETE "repos/$repo/issues/comments/$id" > /dev/null || status=1
+    done
+    return $status
 }
 if [ "$refine" -gt 0 ]; then
     post_refine || pending=true

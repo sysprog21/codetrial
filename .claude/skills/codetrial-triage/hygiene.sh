@@ -7,9 +7,12 @@
 # regression item asks for the same thing in the same words.
 #
 # Usage: hygiene.sh <pr> [repo]
-#        Prints {pr, head, skip, items: [{key, text}], body}. skip says why
-#        the PR gets nothing (the skip calls below), and items is then empty.
-#        body is the review text, empty when no item applies.
+#        Prints {pr, head, skip, items: [{key, text}], body, comments: [{key,
+#        text}]}. skip says why the PR gets nothing (the skip calls below), and
+#        items and comments are then empty. body is the review text, empty when
+#        no item applies. comments are the requests posted as a plain comment
+#        rather than a Request changes review: the screenshot request, which
+#        does not block the merge by itself.
 #        Exits 2 on bad arguments.
 #
 # An item a maintainer already raised at this head, in a review left on it or a
@@ -42,7 +45,8 @@ head=$(jq -r .headRefOid "$work/pr.json")
 skip()
 {
     jq -n --arg why "$1" --slurpfile p "$work/pr.json" \
-        '{pr: $p[0].number, head: $p[0].headRefOid, skip: $why, items: [], body: ""}'
+        '{pr: $p[0].number, head: $p[0].headRefOid, skip: $why, items: [], body: "",
+          comments: []}'
     exit 0
 }
 why=$(jq -r 'if .isDraft then "draft"
@@ -74,6 +78,28 @@ gh api "repos/$repo/pulls/$pr/commits" --paginate > "$work/commits.json"
 # Inline review comments, where a maintainer may ask on a line rather than in
 # the review body.
 gh api "repos/$repo/pulls/$pr/comments" --paginate > "$work/inline.json"
+
+# Whether the PR changes what a web page shows. HTML and CSS always do.
+# JavaScript does when a changed line (an added or a removed one) writes to the
+# DOM or its styling, a heuristic and not a parse: vendored code and tests are
+# left out, and a diff GitHub will not serve yields no evidence, so only HTML
+# and CSS count then.
+shows_page=false
+image_re='<img|!\[|user-attachments/|\.(png|jpe?g|gif|webp|mp4|mov)\b'
+
+# The diff is read only when a script could still decide the answer: not when
+# the description already shows an image or a stylesheet or page already counts.
+if jq -e --arg img "$image_re" 'any(.files[]; .path | test("^web/(.*/)?[^/]+\\.js$") and (test("^web/vendor/|\\.test\\.") | not))
+    and (any(.files[]; .path | test("^web/.*\\.(html|css)$")) | not)
+    and ((.body // "") | test($img; "i") | not)' \
+    "$work/pr.json" > /dev/null && gh pr diff "$pr" --repo "$repo" > "$work/pr.diff" 2> /dev/null; then
+    awk '/^diff --git / { f = $4; next }
+        f ~ /^b\/web\// && f !~ /^b\/web\/vendor\// && f ~ /\.js$/ && f !~ /\.test\./ \
+            && /^[-+]/ && !/^(\+\+\+|---)/ \
+            && /textContent|innerHTML|innerText|classList|className|\.style|createElement|\.hidden|setAttribute|insertAdjacent|replaceChildren|\.append|\.prepend/ \
+            { found = 1; exit }
+        END { exit !found }' "$work/pr.diff" && shows_page=true
+fi
 
 # Each commit through the commit-msg hook's own rules, the ones CI applies too.
 # Its exit status adds up what is wrong, so one call answers both questions and
@@ -115,7 +141,7 @@ again=$(gh pr view "$pr" --repo "$repo" --json headRefOid --jq .headRefOid)
 jq -n -L "$(dirname "$0")" --slurpfile p "$work/pr.json" --slurpfile c "$work/commits.json" \
     --slurpfile ci "$work/ci.json" --slurpfile inline "$work/inline.json" \
     --argjson bad "$bad_messages" --argjson ai "$ai_messages" \
-    --argjson pushers "$pushers" --arg pushed "$pushed" \
+    --argjson pushers "$pushers" --arg pushed "$pushed" --argjson shows "$shows_page" --arg img "$image_re" \
     --arg again "$again" --rawfile fix "$(dirname "$0")/rebase.md" '
   $p[0] as $pr | ($c | add) as $commits
   | (if $ci[0].head == $pr.headRefOid then $ci[0] else {} end) as $ci
@@ -158,13 +184,21 @@ jq -n -L "$(dirname "$0")" --slurpfile p "$work/pr.json" --slurpfile c "$work/co
         $pr.mergeable == "MERGEABLE" and ($ci.stale_base != true)
         and any($failing[]; .on_main == false and .gates != ["indent"]);
         "regression|rebase";
-        $fix | rtrimstr("\n")),
-      item("screenshot";
-        any($pr.files[]; .path | test("^web/.*\\.(html|css)$"))
-        and ($pr.body // "" | test("<img|!\\[|user-attachments/|\\.(png|jpe?g|gif|webp|mp4|mov)\\b"; "i") | not);
-        "screenshot";
-        "This changes what the web pages show, so the pull request description must include screenshots of the result (before and after where something changed), with any personal data removed.")
+        $fix | rtrimstr("\n"))
     ] end) as $items
+  # A screenshot is asked for once: any visible maintainer comment or review
+  # that mentions one, whenever it was left, stands until the description shows
+  # an image, so a push does not bring the request back.
+  | ([$pr.reviews[], $pr.comments[]
+      | select(staff and (.isMinimized | not)) | .body]
+     + [$inline | add // [] | .[] | select(.user.login | IN($pushers[])) | .body]
+     | any(test("screenshot"; "i"))) as $asked
+  | (if $skip or $asked or ($pr.body // "" | test($img; "i"))
+        or (($shows or any($pr.files[]; .path | test("^web/.*\\.(html|css)$"))) | not)
+     then []
+     else [{key: "screenshot",
+            text: "Add screenshots to the pull request description to illustrate your work, as @ColtenOuO suggests. Example: #349"}]
+     end) as $comments
   | {pr: $pr.number, head: $pr.headRefOid, skip: $skip, items: $items,
-     body: ([$items[].text] | join("\n\n"))}
+     body: ([$items[].text] | join("\n\n")), comments: $comments}
 '
