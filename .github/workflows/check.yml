@@ -22,10 +22,17 @@ permissions:
 # A second push to a branch makes the first run's answer worthless, so stop
 # paying for it. Never on main: those runs are the record of what passed.
 #
+# On main the group is the commit, not the ref. A group allows one pending run,
+# so with the ref in it a third push in quick succession replaced the pending
+# run, which ended cancelled with no jobs. One group per commit keeps
+# every merge's run. The cost is that a burst of merges runs side by side, and
+# that `release-latest` (below) can then leave `latest` on an older build until
+# the tip's run is rerun.
+#
 # The event is in the group so a weekly avatar run on main never queues behind,
 # or displaces, the push run that publishes a release.
 concurrency:
-  group: check-${{ github.event_name }}-${{ github.ref }}
+  group: check-${{ github.event_name }}-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 env:
