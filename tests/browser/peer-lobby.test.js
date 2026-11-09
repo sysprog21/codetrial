@@ -11,6 +11,17 @@ after(async () => {
   await browser?.close();
   await new Promise((resolve) => (server ? server.close(resolve) : resolve()));
 });
+// Where site data is blocked, reading the `sessionStorage` global throws. The
+// peer lobby used to name that global at module scope for the invite fragment,
+// so the page never left "Checking account...".
+const blockSessionStorage = (page) =>
+  page.addInitScript(() => {
+    Object.defineProperty(window, "sessionStorage", {
+      get() {
+        throw new DOMException("blocked", "SecurityError");
+      },
+    });
+  });
 const initial = {
   sessionId: "session-a",
   status: "pending",
@@ -66,6 +77,60 @@ test("signed-out invite survives fragment clearing and GitHub sign-in", async (t
     ),
     "secret",
   );
+});
+test("an invite link names site data when session storage is blocked", async (t) => {
+  const page = await setup(t);
+  if (!page) return;
+  await blockSessionStorage(page);
+  await page.goto(`${base}/peer-lobby.html#invite=secret`);
+  await page.waitForFunction(() =>
+    document
+      .getElementById("peer-status")
+      .textContent.includes("Peer practice needs site data"),
+  );
+  assert.match(
+    await page.locator("#peer-status").textContent(),
+    /open the invite link again/,
+  );
+  assert.equal(new URL(page.url()).hash, "");
+});
+test("peer lobby names site data when session storage is blocked without an invite", async (t) => {
+  const page = await setup(t);
+  if (!page) return;
+  await blockSessionStorage(page);
+  await page.goto(`${base}/peer-lobby.html`);
+  await page.waitForFunction(() =>
+    document
+      .getElementById("peer-status")
+      .textContent.includes("Peer practice needs site data"),
+  );
+  const statusText = await page.locator("#peer-status").textContent();
+  assert.match(statusText, /^Peer practice needs site data/);
+  assert.match(statusText, /reload this page/);
+  assert.doesNotMatch(statusText, /open the invite link again/);
+});
+test("an invite link names site data when session storage refuses writes", async (t) => {
+  const page = await setup(t);
+  if (!page) return;
+  await page.addInitScript((key) => {
+    const area = window.sessionStorage;
+    const write = area.setItem.bind(area);
+    area.setItem = (name, value) => {
+      if (name === key) throw new DOMException("blocked", "SecurityError");
+      return write(name, value);
+    };
+  }, INVITE_STORAGE_KEY);
+  await page.goto(`${base}/peer-lobby.html#invite=secret`);
+  await page.waitForFunction(() =>
+    document
+      .getElementById("peer-status")
+      .textContent.includes("Peer practice needs site data"),
+  );
+  assert.match(
+    await page.locator("#peer-status").textContent(),
+    /open the invite link again/,
+  );
+  assert.equal(new URL(page.url()).hash, "");
 });
 test("signed-in invite accepted once, token cleared, start waits for both ready", async (t) => {
   const page = await setup(t);
