@@ -24,7 +24,7 @@
 #                reviewer reads the line a comment would land on instead of
 #                counting from a hunk header
 #   threads.tsv  every review thread: resolved, outdated, path, line, author,
-#                first comment flattened to one line
+#                first comment flattened to one line, thread id, comment url
 #   talk.json    reviews and top-level comments
 #   comments.json every inline review comment, replies included, since a point
 #                a human made in a reply is as raised as one opening a thread
@@ -323,13 +323,14 @@ gh api graphql --paginate -F n="$pr" -F owner="${repo%%/*}" -F name="${repo#*/}"
   repository(owner: $owner, name: $name) { pullRequest(number: $n) {
     reviewThreads(first: 100, after: $endCursor) {
       pageInfo { hasNextPage endCursor }
-      nodes { isResolved isOutdated path line originalLine
-        comments(first: 1) { nodes { author { login } body } } } } } } }' \
+      nodes { id isResolved isOutdated path line originalLine
+        comments(first: 1) { nodes { author { login } body url } } } } } } }' \
     --jq '.data.repository.pullRequest.reviewThreads.nodes[]
       | [.isResolved, .isOutdated, .path, (.line // .originalLine),
          .comments.nodes[0].author.login,
          (.comments.nodes[0].body | gsub("<!--[\\s\\S]*?-->"; "") | gsub("\\s+"; " ")
-          | ltrimstr(" ") | .[:300])] | @tsv' \
+          | ltrimstr(" ") | .[:300]),
+         .id, .comments.nodes[0].url] | @tsv' \
     > "$dir/threads.tsv"
 
 # An earlier review's head counts only when this head descends from it: then the

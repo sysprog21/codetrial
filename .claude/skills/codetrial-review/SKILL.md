@@ -154,8 +154,10 @@ Write the specification down as a checklist now, one line per thing it asks
 for, so the scope lens can report against it.
 
 Read what the PR already carries before judging it: the bundle's
-`threads.tsv`, one row per review thread, every inline comment with its
-replies in `$SCRATCH/review-$pr/comments.json`, and the reviews and
+`threads.tsv`, one row per review thread (resolved, outdated, path, line,
+author, first comment, thread id, comment url; a path the diff no longer
+touches is an outdated thread from an earlier head, not a stray row), every
+inline comment with its replies in `$SCRATCH/review-$pr/comments.json`, and the reviews and
 top-level comments in `$SCRATCH/review-$pr/talk.json`. A finding that an
 unresolved thread, a reply in one or a cubic comment already raises is cited,
 not raised again; a resolved one is raised again only if the head

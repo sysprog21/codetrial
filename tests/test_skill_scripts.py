@@ -2105,6 +2105,14 @@ class ReviewBundleTests(unittest.TestCase):
         self.assertEqual(manifest["not_at_head"], ["web/gone.js", "web/old.js"])
         self.assertNotIn("not read", result.stderr)
         self.assertEqual(len(written["threads.tsv"].splitlines()), 2)
+        # The sweep's resolve and refine steps address a thread by id and url.
+        self.assertEqual(
+            [line.split("\t")[-2:] for line in written["threads.tsv"].splitlines()],
+            [
+                ["PRRT_1", "https://x/discussion_r1"],
+                ["PRRT_2", "https://x/discussion_r2"],
+            ],
+        )
         # A point made in a reply counts as raised, so replies are kept.
         self.assertEqual(json.loads(written["comments.json"])[0]["reply"], True)
         self.assertIsNone(manifest["since"])
