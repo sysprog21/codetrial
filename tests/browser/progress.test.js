@@ -262,7 +262,7 @@ test("problem filtering combines with every existing filter for local and accoun
   }
 });
 
-test("mode filtering separates coding and whiteboard attempts and their options", () => {
+test("workspace filtering separates coding and whiteboard attempts and their options", () => {
   const rows = [
     entry("coding", "2026-01-01", 55),
     entry("whiteboard", "2026-01-02", 65, { interviewMode: "whiteboard" }),
@@ -289,7 +289,7 @@ test("mode filtering separates coding and whiteboard attempts and their options"
   );
 });
 
-test("mode filtering combines with every existing filter for local and account history", () => {
+test("workspace filtering combines with every existing filter for local and account history", () => {
   const rows = [
     entry("match", "2026-01-01", 55, { interviewMode: "whiteboard" }),
     entry("coding", "2026-01-02", 60),

@@ -6733,7 +6733,7 @@ for (const account of [true, false]) {
 
 for (const account of [true, false]) {
   lobbyTest(
-    `the mode filter keeps ${account ? "account" : "device"} history and charts in sync`,
+    `the workspace filter keeps ${account ? "account" : "device"} history and charts in sync`,
     async (page) => {
       session = { signedIn: account, user: { login: "candidate" } };
       const saved = [55, 70, 90].map((score, index) => {
