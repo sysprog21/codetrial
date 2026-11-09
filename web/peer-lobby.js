@@ -4,6 +4,7 @@ import {
   peerApi,
   normalizePeerNickname,
 } from "./peer-lib.js";
+import { readStored, storageArea, writeStored } from "./audio-output.js";
 const byId = (id) => document.getElementById(id);
 const status = byId("peer-status");
 let state = null;
@@ -19,14 +20,34 @@ function updateAvailability(active) {
   byId("peer-available").disabled = active || !byId("peer-opt-in").checked;
   byId("peer-save-audio").disabled = active || !audioAvailable;
 }
+// Read once, through `storageArea`: at module scope a blocked `sessionStorage`
+// would otherwise stop the whole page from loading.
+const tabStorage = storageArea("sessionStorage");
+const tabStorageBlocked = !tabStorage;
+// A full site-data block refuses the session cookie too, so there is no join
+// to protect by keeping an invite token in the address bar or across sign-in.
+const SITE_DATA_NEEDED =
+  "Peer practice needs site data, which this browser is blocking for this site. Allow site data for this site, then reload this page.";
+const SITE_DATA_NEEDED_INVITE =
+  "Peer practice needs site data, which this browser is blocking for this site. Allow site data for this site, then open the invite link again.";
 const requested = new URLSearchParams(location.search).get("session");
 const fragment = new URLSearchParams(location.hash.slice(1));
+// Always clear the invite hash. The write is made and read back here rather
+// than through writeStored, which swallows a refusal, so a refused write is
+// known and the page asks for the invite link again instead of running init.
+let inviteUnstored = false;
 if (fragment.has("invite")) {
-  // Waived per reference until this page's fix, which must find the invite token
-  // a home without storage: `storageArea(...).setItem` would pass the rule and
-  // still throw on null here. Each fix deletes its own directive.
-  // eslint-disable-next-line no-restricted-globals
-  sessionStorage.setItem(INVITE_STORAGE_KEY, fragment.get("invite"));
+  const token = fragment.get("invite");
+  let stored = false;
+  if (tabStorage) {
+    try {
+      tabStorage.setItem(INVITE_STORAGE_KEY, token);
+      stored = tabStorage.getItem(INVITE_STORAGE_KEY) === token;
+    } catch {
+      // Getter answered; the write did not.
+    }
+  }
+  if (!stored) inviteUnstored = true;
   history.replaceState(null, "", location.pathname + location.search);
 }
 const base = () => `/api/peer/sessions/${encodeURIComponent(state.sessionId)}`;
@@ -183,8 +204,7 @@ async function init() {
   const account = await peerApi("/api/session");
   if (!account.signedIn) {
     byId("peer-signin").hidden = false;
-    // eslint-disable-next-line no-restricted-globals
-    if (sessionStorage.getItem(INVITE_STORAGE_KEY))
+    if (readStored(INVITE_STORAGE_KEY, tabStorage))
       location.assign("/api/login?next=peer-join");
     status.textContent = "Sign in with GitHub to practice with a partner.";
     return;
@@ -249,8 +269,7 @@ async function enterReciprocalMode(account) {
   // the page without updates.
   clearInterval(timer);
   timer = setInterval(() => void refresh(), 5000);
-  // eslint-disable-next-line no-restricted-globals
-  const invite = sessionStorage.getItem(INVITE_STORAGE_KEY);
+  const invite = readStored(INVITE_STORAGE_KEY, tabStorage);
   try {
     if (invite) {
       try {
@@ -258,12 +277,10 @@ async function enterReciprocalMode(account) {
       } catch (error) {
         // A rejected invitation never becomes valid, so a reload must not retry it.
         if (error.code === "invite_unavailable")
-          // eslint-disable-next-line no-restricted-globals
-          sessionStorage.removeItem(INVITE_STORAGE_KEY);
+          writeStored(INVITE_STORAGE_KEY, "", tabStorage);
         throw error;
       }
-      // eslint-disable-next-line no-restricted-globals
-      sessionStorage.removeItem(INVITE_STORAGE_KEY);
+      writeStored(INVITE_STORAGE_KEY, "", tabStorage);
       history.replaceState(
         null,
         "",
@@ -321,6 +338,12 @@ window.addEventListener("pageshow", (event) => {
   clearInterval(timer);
   timer = setInterval(() => void refresh(), 5000);
 });
-void init().catch((error) => {
-  status.textContent = error.message;
-});
+if (tabStorageBlocked || inviteUnstored) {
+  status.textContent = inviteUnstored
+    ? SITE_DATA_NEEDED_INVITE
+    : SITE_DATA_NEEDED;
+} else {
+  void init().catch((error) => {
+    status.textContent = error.message;
+  });
+}
