@@ -6,6 +6,7 @@ import {
   codingLoop,
   interviewMode,
   languageLabel,
+  surfaceLabel,
 } from "./lib.js";
 import {
   clearReportHistory,
@@ -192,6 +193,7 @@ const nodes = {
   progressDifficulty: document.querySelector("#progress-difficulty"),
   progressLanguage: document.querySelector("#progress-language"),
   progressDuration: document.querySelector("#progress-duration"),
+  progressMode: document.querySelector("#progress-mode"),
   profileRole: document.querySelector("#profile-role"),
   profileSeniority: document.querySelector("#profile-seniority"),
   profileCompany: document.querySelector("#profile-company"),
@@ -643,6 +645,7 @@ for (const filter of [
   nodes.progressDifficulty,
   nodes.progressLanguage,
   nodes.progressDuration,
+  nodes.progressMode,
 ]) {
   filter.addEventListener("change", renderProgress);
 }
@@ -1949,6 +1952,8 @@ function showProgressError(message) {
   progressNormalized = [];
   nodes.progressProblem.length = 1;
   nodes.progressProblem.value = "all";
+  nodes.progressMode.length = 1;
+  nodes.progressMode.value = "all";
   shownAttempts = [];
   renderPracticeFocus();
   renderSequelSuggestion();
@@ -2008,6 +2013,14 @@ function showProgress(entries, suffix) {
       value,
       label: `${value} min`,
     })),
+  );
+  syncFilter(
+    nodes.progressMode,
+    model.options.interviewMode.map((value) => ({
+      value,
+      label: surfaceLabel(value),
+    })),
+    "All workspaces",
   );
   renderProgress();
 }
@@ -2679,6 +2692,7 @@ function renderProgress() {
     difficulty: nodes.progressDifficulty.value,
     language: nodes.progressLanguage.value,
     durationMin: nodes.progressDuration.value,
+    interviewMode: nodes.progressMode.value,
   };
   const model = progressModelFrom(progressNormalized, filters);
   nodes.progressTrends.replaceChildren();

@@ -6731,6 +6731,105 @@ for (const account of [true, false]) {
   );
 }
 
+for (const account of [true, false]) {
+  lobbyTest(
+    `the workspace filter keeps ${account ? "account" : "device"} history and charts in sync`,
+    async (page) => {
+      session = { signedIn: account, user: { login: "candidate" } };
+      const saved = [55, 70, 90].map((score, index) => {
+        const whiteboard = index === 1;
+        const { payload } = focusedAttempt(EASY[0], {
+          phase: "Algorithm",
+          assessed: true,
+          weaknesses: [whiteboard ? "Trace an example" : "Explain complexity"],
+        });
+        Object.assign(payload, {
+          id: `attempt-${index}`,
+          date: `2026-01-0${index + 1}T00:00:00Z`,
+          difficulty: "Easy",
+          language: "python",
+          durationMin: 45,
+          interviewMode: whiteboard ? "whiteboard" : "coding",
+        });
+        payload.report.topics = [whiteboard ? "boards" : "arrays"];
+        payload.report.frameworkAssessment.phases.find(
+          (row) => row.phase === "Algorithm",
+        ).score = score;
+        return payload;
+      });
+      if (account) {
+        reports = saved.map((payload) => ({ id: payload.id, payload }));
+      } else {
+        await page.addInitScript((entries) => {
+          localStorage.setItem("codetrial_history", JSON.stringify(entries));
+        }, saved);
+      }
+      await lobby(page);
+      const mode = page.getByRole("combobox", {
+        name: "Workspace",
+        exact: true,
+      });
+      await reaches(
+        page,
+        () => document.querySelectorAll("#attempt-history > li").length === 3,
+      );
+      assert.deepEqual(await mode.locator("option").allTextContents(), [
+        "All workspaces",
+        "Editor",
+        "Whiteboard",
+      ]);
+
+      await mode.selectOption("whiteboard");
+      await reaches(
+        page,
+        () => document.querySelectorAll("#attempt-history > li").length === 1,
+      );
+      assert.match(
+        await page.locator("#progress-summary").textContent(),
+        /1 of 3 attempts shown/,
+      );
+      assert.match(
+        await page.locator("#progress-topics").textContent(),
+        /boards: 1 attempt/,
+      );
+      assert.doesNotMatch(
+        await page.locator("#progress-topics").textContent(),
+        /arrays/,
+      );
+      assert.match(
+        await page.locator("#progress-weaknesses").textContent(),
+        /flagged in 1 of 1 assessed attempt/,
+      );
+      assert.doesNotMatch(
+        await page.locator("#progress-weaknesses").textContent(),
+        /Explain complexity/,
+      );
+
+      await mode.selectOption("coding");
+      await reaches(
+        page,
+        () => document.querySelectorAll("#attempt-history > li").length === 2,
+      );
+      await page
+        .locator("#progress-trends")
+        .getByRole("button", { name: "Algorithm", exact: true })
+        .click();
+      assert.equal(
+        await page
+          .locator("#progress-chart-description-reacto-algorithm")
+          .textContent(),
+        "Attempt 1: 55, Rubric v1. Attempt 2: 90, Rubric v1.",
+      );
+
+      await mode.selectOption("all");
+      await reaches(
+        page,
+        () => document.querySelectorAll("#attempt-history > li").length === 3,
+      );
+    },
+  );
+}
+
 lobbyTest(
   "a filtered attempt list deletes the report the row shows",
   async (page) => {
@@ -7893,6 +7992,11 @@ lobbyTest(
     });
     await problem.selectOption(EASY[0]);
     assert.equal(await problem.locator("option").count(), 2);
+    const workspace = page.getByRole("combobox", {
+      name: "Workspace",
+      exact: true,
+    });
+    await workspace.selectOption("coding");
     await page.check("#practice-focus-share-input");
     failing.add("/api/reports");
     await page.fill("#github-login", "candidate");
@@ -7918,6 +8022,10 @@ lobbyTest(
       "All problems",
     ]);
     assert.equal(await problem.inputValue(), "all");
+    assert.deepEqual(await workspace.locator("option").allTextContents(), [
+      "All workspaces",
+    ]);
+    assert.equal(await workspace.inputValue(), "all");
     assert.equal(await page.locator("#attempt-history").textContent(), "");
     assert.equal(await page.locator("#practice-focus").isHidden(), true);
     assert.equal(
