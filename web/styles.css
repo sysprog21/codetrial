@@ -2420,6 +2420,21 @@ table.phase-scores {
   margin-left: auto;
 }
 
+.board-shortcut-key {
+  display: inline-grid;
+  place-items: center;
+  margin-left: 0.35rem;
+  min-width: 1.25rem;
+  height: 1.25rem;
+  padding: 0 0.2rem;
+  border: 1px solid var(--hairline);
+  border-radius: 0.25rem;
+  color: var(--sub);
+  font: inherit;
+  font-size: 0.7rem;
+  line-height: 1;
+}
+
 /* The pens sit on a strip of the board's own white, so each swatch looks like
    the ink it draws. On the dark toolbar the black pen was a dark disc on a dark
    ground and could not be found. */
@@ -2429,6 +2444,10 @@ table.phase-scores {
   padding: 0.2rem 0.35rem;
   border-radius: 999px;
   background: var(--paper);
+}
+
+.board-pens .board-shortcut-key {
+  color: var(--surface);
 }
 
 .board-color {

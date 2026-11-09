@@ -483,14 +483,18 @@
             class="board-pens"
             role="group"
             aria-label="Pen colour"
-          ></div>
+          >
+            <kbd class="board-shortcut-key" aria-hidden="true">P</kbd>
+          </div>
           <button
             id="board-eraser"
             class="board-tool"
             type="button"
+            aria-label="Eraser"
             aria-pressed="false"
+            aria-keyshortcuts="E"
           >
-            Eraser
+            Eraser <kbd class="board-shortcut-key" aria-hidden="true">E</kbd>
           </button>
           <!-- Filled from ERASER_WIDTHS like the pens are from PEN_COLORS.
                Picking a size picks the eraser too: nobody sizes an eraser they
@@ -505,10 +509,12 @@
             id="board-text"
             class="board-tool"
             type="button"
+            aria-label="Text"
             aria-pressed="false"
             title="Drag on the board to create a text label"
+            aria-keyshortcuts="T"
           >
-            Text
+            Text <kbd class="board-shortcut-key" aria-hidden="true">T</kbd>
           </button>
           <button id="board-undo" class="board-tool" type="button">Undo</button>
           <button id="board-redo" class="board-tool" type="button">Redo</button>

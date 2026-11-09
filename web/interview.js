@@ -408,6 +408,7 @@ const board = {
   }),
   color: PEN_COLORS[0].color,
   tool: "pen",
+  previousNonTextTool: "pen",
   eraserWidth: ERASER_WIDTH,
   /// Whether the board takes edits yet; see `boardLocked`.
   ready: false,
@@ -5447,7 +5448,8 @@ function initWhiteboard() {
     swatch.style.background = color;
     swatch.dataset.color = color;
     swatch.setAttribute("aria-label", `${name} pen`);
-    swatch.title = swatch.getAttribute("aria-label");
+    swatch.setAttribute("aria-keyshortcuts", "P");
+    swatch.title = `${name} pen (P)`;
     swatch.addEventListener("click", () => selectPen(color));
     nodes.boardPens.append(swatch);
   }
@@ -5506,9 +5508,7 @@ function initWhiteboard() {
       event.defaultPrevented ||
       event.repeat ||
       event.isComposing ||
-      event.keyCode === 229 ||
-      event.altKey ||
-      (mac ? !event.metaKey || event.ctrlKey : !event.ctrlKey || event.metaKey)
+      event.keyCode === 229
     )
       return;
     const target = event.target;
@@ -5519,11 +5519,45 @@ function initWhiteboard() {
       (target !== nodes.board && !target.closest(".board-toolbar"))
     )
       return;
+
     const printable = /^[\x20-\x7e]$/.test(event.key);
     if (!printable && !/^[^\x00-\x7f]$/u.test(event.key)) return;
     const key = printable
       ? event.key.toLowerCase()
       : event.code.replace(/^Key/, "").toLowerCase();
+
+    if (!event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey) {
+      if (boardLocked() || board.pointers.held()) return;
+      if (key === "p") {
+        if (board.tool !== "pen") {
+          selectPen(board.color);
+        } else {
+          const index = PEN_COLORS.findIndex(
+            ({ color }) => color === board.color,
+          );
+          selectPen(PEN_COLORS[(index + 1) % PEN_COLORS.length].color);
+        }
+      } else if (key === "e") {
+        if (board.tool !== "eraser") {
+          selectTool("eraser");
+        } else {
+          const index = ERASER_WIDTHS.indexOf(board.eraserWidth);
+          selectEraserWidth(ERASER_WIDTHS[(index + 1) % ERASER_WIDTHS.length]);
+        }
+      } else if (key === "t") {
+        selectTool(board.tool === "text" ? board.previousNonTextTool : "text");
+      } else {
+        return;
+      }
+      event.preventDefault();
+      return;
+    }
+
+    if (
+      event.altKey ||
+      (mac ? !event.metaKey || event.ctrlKey : !event.ctrlKey || event.metaKey)
+    )
+      return;
     let action = "";
     if (key === "z" && !event.shiftKey) action = "undo";
     else if (
@@ -5604,19 +5638,18 @@ function bindBoardPointer() {
 
 function selectPen(color) {
   board.color = color;
-  board.tool = "pen";
-  paintToolState();
+  selectTool("pen");
 }
 
 function selectTool(tool) {
+  if (tool !== "text") board.previousNonTextTool = tool;
   board.tool = tool;
   paintToolState();
 }
 
 function selectEraserWidth(width) {
   board.eraserWidth = width;
-  board.tool = "eraser";
-  paintToolState();
+  selectTool("eraser");
 }
 
 /// The toolbar and the cursor, from `board` alone, so no selector has to
@@ -5624,7 +5657,7 @@ function selectEraserWidth(width) {
 function paintToolState() {
   board.textDraft?.refresh();
   const erasing = board.tool === "eraser";
-  for (const swatch of nodes.boardPens.children) {
+  for (const swatch of nodes.boardPens.querySelectorAll(".board-color")) {
     swatch.setAttribute(
       "aria-pressed",
       String(board.tool === "pen" && swatch.dataset.color === board.color),

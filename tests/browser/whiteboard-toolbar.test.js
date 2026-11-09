@@ -73,7 +73,8 @@ test("each pen is named by its color and says whether it is the one in hand", as
       assert.equal(await pen.count(), 1, name);
       // The hover tip is the name for a sighted candidate who cannot tell the
       // red swatch from the green one.
-      assert.equal(await pen.getAttribute("title"), name);
+      assert.equal(await pen.getAttribute("title"), `${name} (P)`);
+      assert.equal(await pen.getAttribute("aria-keyshortcuts"), "P");
     }
     assert.deepEqual(await pressed(page), ["Black pen"]);
     assert.deepEqual(await ringed(page), ["Black pen"]);

@@ -730,9 +730,12 @@ const touch = (pointerId) => ({ pointerId, pointerType: "touch", button: 0 });
 test("a mouse, a pen and a finger can each draw", () => {
   for (const pointer of [mouse(1), pen(2), touch(3)]) {
     const gate = createPointerGate();
+    assert.equal(gate.held(), false);
     assert.equal(gate.down(pointer), "begin");
+    assert.equal(gate.held(), true);
     assert.ok(gate.owns(pointer));
     assert.equal(gate.up(pointer), true);
+    assert.equal(gate.held(), false);
     assert.equal(gate.owns(pointer), false);
   }
   // Only the primary button draws: a right click or a pen's barrel button is
@@ -743,10 +746,12 @@ test("a mouse, a pen and a finger can each draw", () => {
 test("one pointer draws at a time, and a second finger is not part of its stroke", () => {
   const gate = createPointerGate();
   assert.equal(gate.down(touch(1)), "begin");
+  assert.equal(gate.held(), true);
   assert.equal(gate.down(touch(2)), null);
   assert.equal(gate.owns(touch(2)), false);
   assert.equal(gate.up(touch(2)), false, "the second finger ends nothing");
   assert.ok(gate.owns(touch(1)));
+  assert.equal(gate.held(), true, "the first finger still holds the board");
 });
 
 test("a palm is kept off the board while a pen is down", () => {

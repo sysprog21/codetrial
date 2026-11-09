@@ -91,7 +91,8 @@ function strokeWidth(tool, eraserWidth = ERASER_WIDTH) {
   return ERASER_WIDTHS.includes(eraserWidth) ? eraserWidth : ERASER_WIDTH;
 }
 
-/// Which pointer is drawing, with palm rejection for a pen.
+/// Which pointer holds an in-progress board gesture, with palm rejection for
+/// a pen.
 ///
 /// Mouse, pen and touch all reach the board as pointer events, so the board
 /// takes all three, one pointer at a time: a second finger never extends or
@@ -104,6 +105,7 @@ export function createPointerGate() {
   let owner = null;
   const pens = new Set();
   return {
+    held: () => owner !== null,
     /// `"begin"`, `"replace"`, or `null` for a pointer that must not draw.
     down({ pointerId, pointerType, button }) {
       if (pointerType === "pen") pens.add(pointerId);
