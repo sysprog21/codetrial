@@ -122,10 +122,14 @@ list instead.
   sits in a thread that is resolved or outdated, as #633's cubic review was; the
   thread, the review state and the grade are untouched, and the review is one
   click from readable. The second is the viewer's own [refine.md](refine.md)
-  reminder on a PR with no open thread left; it is deleted, not hidden. A
-  reminder on a PR that still has open threads is replaced by the review's next
-  one ([review-prs.md](review-prs.md#check-every-open-thread)). Both are
-  re-checked against live threads right before the write.
+  reminder; it is deleted, not hidden. On a PR with no open thread left every
+  copy goes (`why: settled`). On a PR that still has open threads every copy
+  but the newest goes (`why: superseded`), so one current reminder stands even
+  when an earlier run left several; the review's next reminder replaces that
+  one ([review-prs.md](review-prs.md#check-every-open-thread)). A `settled`
+  entry is re-checked against live threads right before the write, and a
+  `superseded` one against the live comments (it is kept if it has become the
+  newest).
 - On a bare `/codetrial-triage` only, requesting changes on each open PR
   whose `hygiene.sh` output has items, as
   [Contributor hygiene](#contributor-hygiene) describes, and posting each

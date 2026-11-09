@@ -328,7 +328,9 @@ author (a thread holding only the maintainer's own comments is not one), not
 only the new ones, and the comment replaces the viewer's earlier reminders on
 the PR: once it is posted they are deleted, so a PR carries one current
 reminder and no stale copies. A reminder that fails to post deletes nothing. When
-every thread is resolved the sweep deletes the leftover reminder itself
+every thread is resolved the sweep deletes the leftover reminder itself, and
+while threads are open it trims all but the newest copy, on PRs within 100
+comments and 100 threads
 (`refine_stale`, [pulls.md](pulls.md#what-a-sweep-may-apply-without-asking)).
 The PR stays graded `low` while threads are open, and the `stale` nudge in
 [pulls.md](pulls.md) reminds an author who goes quiet. A thread opened without a

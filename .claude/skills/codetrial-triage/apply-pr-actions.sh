@@ -225,7 +225,9 @@ done > "$work/hide.out"
 # A review whose every thread is resolved or outdated is settled, so it is
 # hidden as resolved; the thread stays where it is and the review is one click
 # from readable. A refine request left on a PR with no open thread is stale, so
-# it is deleted: a reminder that no longer asks for anything only misleads.
+# it is deleted: a reminder that no longer asks for anything only misleads. On a
+# PR that still has open threads every copy but the newest is deleted too, so
+# one current reminder stands.
 live_threads()
 {
     # shellcheck disable=SC2016  # GraphQL variables
@@ -255,9 +257,59 @@ jq -r '.hide_resolved[] | [.pr, .id] | @tsv' "$sweep" | while read -r pr id; do
         receipt hide_resolved "$pr" failed "$id"
     fi
 done > "$work/hide-resolved.out"
+
+# The viewer's refine reminders on a PR, oldest first, each with its node id.
+# Read for every row, so a copy review-finish.sh trimmed in between is seen.
+live_reminders()
+{
+    # shellcheck disable=SC2016  # GraphQL variables
+    gh api graphql -F owner="${repo%/*}" -F name="${repo#*/}" -F pr="$1" -f query='
+          query($owner: String!, $name: String!, $pr: Int!) {
+            repository(owner: $owner, name: $name) { pullRequest(number: $pr) {
+              comments(last: 100) { totalCount nodes { id createdAt body author { login } } }
+            } }
+          }' | jq --arg me "$(jq -r .viewer "$sweep")" --arg m "$(cat "$here/refine.md")" '
+        .data.repository.pullRequest.comments.nodes |= (
+          map(select(.author.login == $me and (.body | startswith($m))))
+          | sort_by([.createdAt, .id]))'
+}
+
+# Delete a reminder the sweep found superseded, whatever the threads say, but
+# only while the live PR still has it as the viewer's reminder with a newer one
+# standing: review-finish.sh may have trimmed the PR since the sweep.
+delete_superseded()
+{
+    mine=$(live_reminders "$1") || {
+        receipt refine_stale "$1" failed "could not read comments"
+        return
+    }
+    place=$(printf '%s\n' "$mine" | jq -r --arg id "$2" '
+        [.data.repository.pullRequest.comments.nodes[].id] as $ids
+        | ($ids | index($id)) as $at
+        | if $at == null and .data.repository.pullRequest.comments.totalCount > 100 then "unverified"
+          elif $at == null then "gone"
+          elif $at == ($ids | length) - 1 then "newest"
+          else "ok" end') || place=
+    case $place in
+        gone) receipt refine_stale "$1" already "$2 is gone" ;;
+        unverified) receipt refine_stale "$1" skipped "$2 is outside the last 100 comments" ;;
+        newest) receipt refine_stale "$1" skipped "$2 is now the only current reminder" ;;
+        ok)
+            if delete_comment "$2"; then
+                receipt refine_stale "$1" applied "deleted $2"
+            else
+                receipt refine_stale "$1" failed "$2"
+            fi
+            ;;
+        *) receipt refine_stale "$1" failed "could not verify $2" ;;
+    esac
+}
+
 # shellcheck disable=SC2016  # $id below is a GraphQL variable
-jq -r '.refine_stale[] | [.pr, .id] | @tsv' "$sweep" | while read -r pr id; do
-    if ! state=$(live_threads "$pr"); then
+jq -r '.refine_stale[] | [.pr, .id, (.why // "settled")] | @tsv' "$sweep" | while read -r pr id why; do
+    if [ "$why" = superseded ]; then
+        delete_superseded "$pr" "$id"
+    elif ! state=$(live_threads "$pr"); then
         receipt refine_stale "$pr" failed "could not read threads"
     elif ! printf '%s\n' "$state" | jq -e '
         .data.repository.pullRequest.reviewThreads as $t

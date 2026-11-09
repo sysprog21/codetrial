@@ -64,6 +64,14 @@ def ago(days):
     return moment.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+REFINE_TEXT = (SKILLS / "codetrial-triage" / "refine.md").read_text()
+
+
+def reminder(id, days=1):
+    """A refine.md reminder from the viewer, as the sweep reads it."""
+    return comment("viewer", days, REFINE_TEXT) | {"id": id}
+
+
 def comment(login, days, body="Please post the `--version` line."):
     return {
         "author": {"__typename": "User", "login": login},
@@ -674,7 +682,60 @@ class PrSweepTests(SweepCase):
             pull(1, comments=comments, reviewThreads=settled),
             pull(2, comments=comments, reviewThreads=listed(thread())),
         )
-        self.assertEqual(swept["refine_stale"], [{"pr": 1, "id": "IC_mine"}])
+        self.assertEqual(
+            swept["refine_stale"], [{"pr": 1, "id": "IC_mine", "why": "settled"}]
+        )
+
+    def test_only_the_newest_refine_comment_stands_while_a_thread_is_open(self):
+        first, second, third = reminder("IC_1"), reminder("IC_2"), reminder("IC_3")
+        swept = self.run_pulls(
+            pull(
+                1,
+                comments=listed(first, second, third),
+                reviewThreads=listed(thread()),
+            )
+        )
+        self.assertEqual(
+            swept["refine_stale"],
+            [
+                {"pr": 1, "id": "IC_1", "why": "superseded"},
+                {"pr": 1, "id": "IC_2", "why": "superseded"},
+            ],
+        )
+
+    def test_the_newest_refine_comment_is_chosen_by_time_not_by_list_position(self):
+        newest, oldest = reminder("IC_new", 1), reminder("IC_old", 5)
+        swept = self.run_pulls(
+            pull(
+                1,
+                comments=listed(newest, oldest),
+                reviewThreads=listed(thread()),
+            )
+        )
+        self.assertEqual(
+            swept["refine_stale"], [{"pr": 1, "id": "IC_old", "why": "superseded"}]
+        )
+
+    def test_one_refine_comment_stands_while_a_thread_is_open(self):
+        only = reminder("IC_1")
+        swept = self.run_pulls(
+            pull(1, comments=listed(only), reviewThreads=listed(thread()))
+        )
+        self.assertEqual(swept["refine_stale"], [])
+
+    def test_every_refine_comment_goes_once_all_threads_are_resolved(self):
+        one, two = reminder("IC_1"), reminder("IC_2")
+        swept = self.run_pulls(
+            pull(
+                1,
+                comments=listed(one, two),
+                reviewThreads=listed(thread() | {"isResolved": True}),
+            )
+        )
+        self.assertEqual(
+            [(r["id"], r["why"]) for r in swept["refine_stale"]],
+            [("IC_1", "settled"), ("IC_2", "settled")],
+        )
 
     def test_a_thread_the_author_opened_is_not_a_reviewer_thread(self):
         grades = self.grades(
@@ -3826,6 +3887,7 @@ class ApplyPrActionsTests(unittest.TestCase):
     def sweep(self, **fields):
         base = {
             "maintainers_known": True,
+            "viewer": "viewer",
             "prs": [{"number": n, "head": f"h{n}"} for n in (1, 2, 3, 4)],
             "approve": [
                 self.approval()["approve"][0],
@@ -4011,6 +4073,95 @@ class ApplyPrActionsTests(unittest.TestCase):
         self.assertIn("PRR_2", log)
         self.assertIn("classifier: RESOLVED", log)
         self.assertIn("deleteIssueComment", log)
+
+    def reminders(self, *nodes, total=None):
+        text = REFINE_TEXT
+        return json.dumps(
+            {
+                "data": {
+                    "repository": {
+                        "pullRequest": {
+                            "comments": {
+                                "totalCount": total or len(nodes),
+                                "nodes": [
+                                    {
+                                        "id": n,
+                                        "createdAt": f"2026-11-0{day}T00:00:00Z",
+                                        "author": {"login": by},
+                                        "body": text if by == "viewer" else "hi",
+                                    }
+                                    for n, by, day in nodes
+                                ],
+                            }
+                        }
+                    }
+                }
+            }
+        )
+
+    def superseded(self, comments, **env):
+        return self.run_actions(
+            self.sweep(
+                **self.QUIET,
+                refine_stale=[{"pr": 2, "id": "IC_old", "why": "superseded"}],
+            ),
+            FAKE_COMMENTS=comments,
+            **env,
+        )
+
+    def test_a_superseded_refine_comment_is_deleted_without_reading_threads(self):
+        _, got, log = self.superseded(
+            self.reminders(("IC_old", "viewer", 1), ("IC_new", "viewer", 2))
+        )
+        self.assertEqual(got, {("refine_stale", 2): "applied"})
+        self.assertIn("deleteIssueComment", log)
+        self.assertNotIn("isResolved", log)
+
+    def test_a_superseded_refine_comment_that_became_the_newest_is_kept(self):
+        _, got, log = self.superseded(self.reminders(("IC_old", "viewer", 1)))
+        self.assertEqual(got, {("refine_stale", 2): "skipped"})
+        self.assertNotIn("deleteIssueComment", log)
+
+    def test_a_superseded_refine_comment_already_gone_is_not_a_failure(self):
+        _, got, log = self.superseded(self.reminders(("IC_new", "viewer", 1)))
+        self.assertEqual(got, {("refine_stale", 2): "already"})
+        self.assertNotIn("deleteIssueComment", log)
+
+    def test_another_authors_comment_never_counts_as_the_newer_reminder(self):
+        _, got, log = self.superseded(
+            self.reminders(("IC_old", "viewer", 1), ("IC_other", "someone", 1))
+        )
+        self.assertEqual(got, {("refine_stale", 2): "skipped"})
+        self.assertNotIn("deleteIssueComment", log)
+
+    def test_the_newest_reminder_is_chosen_by_time_not_by_list_position(self):
+        # IC_old is listed last but is the older: it is deleted, not kept.
+        _, got, log = self.superseded(
+            self.reminders(("IC_new", "viewer", 2), ("IC_old", "viewer", 1))
+        )
+        self.assertEqual(got, {("refine_stale", 2): "applied"})
+        self.assertIn("deleteIssueComment", log)
+
+    def test_a_comment_past_the_last_hundred_is_not_reported_gone(self):
+        _, got, log = self.superseded(
+            self.reminders(("IC_new", "viewer", 1), total=101)
+        )
+        self.assertEqual(got, {("refine_stale", 2): "skipped"})
+        self.assertNotIn("deleteIssueComment", log)
+
+    def test_a_refine_entry_without_a_reason_is_checked_against_the_threads(self):
+        _, got, log = self.run_actions(
+            self.sweep(**self.QUIET, refine_stale=[{"pr": 2, "id": "IC_9"}])
+        )
+        self.assertEqual(got, {("refine_stale", 2): "applied"})
+        self.assertIn("isResolved", log)
+
+    def test_a_failed_superseded_delete_is_reported(self):
+        _, got, _ = self.superseded(
+            self.reminders(("IC_old", "viewer", 1), ("IC_new", "viewer", 2)),
+            FAKE_REFUSED="1",
+        )
+        self.assertEqual(got, {("refine_stale", 2): "failed"})
 
     def test_a_write_that_timed_out_is_tried_again_before_it_is_reported(self):
         quiet = self.QUIET
