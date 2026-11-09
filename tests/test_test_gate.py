@@ -301,7 +301,7 @@ gate()
         passing = dict.fromkeys(("GATES", "AUDIT", "PLAN", "MUTANTS"), "success")
         return subprocess.run(
             ["bash", "-e", "-c", command],
-            env={**os.environ, **passing, **env},
+            env={**os.environ, **passing, "GITHUB_STEP_SUMMARY": os.devnull, **env},
             capture_output=True,
             check=False,
         ).returncode

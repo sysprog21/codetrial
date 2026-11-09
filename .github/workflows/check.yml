@@ -529,6 +529,14 @@ jobs:
           PLAN: ${{ needs.plan-mutants.result }}
           MUTANTS: ${{ needs.mutants.result }}
         run: |
+          {
+            echo "| job | result |"
+            echo "| --- | --- |"
+            echo "| gates | $GATES |"
+            echo "| audit | $AUDIT |"
+            echo "| plan-mutants | $PLAN |"
+            echo "| mutants | $MUTANTS |"
+          } >> "$GITHUB_STEP_SUMMARY"
           if [ "$GATES" != success ]; then
             echo "::error::gate lanes: $GATES. This job only collects them; the failed gates lane has the cause."
             exit 1
