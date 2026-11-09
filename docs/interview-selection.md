@@ -15,6 +15,20 @@ Strict URL's `problem` parameter is ignored; reopening it cannot request that
 problem. Switching to Practice is allowed. This is a self-assessment mode, not
 an administrator-enforced exam.
 
+## Saved-list browsing
+
+Practice's "Only my list" checkbox filters the problem cards by saved
+membership together with difficulty, title search and topic. It does not
+change the selected problem, the saved list or the random draw pool. "Pick
+from my list" still draws from all saved problems regardless of those filters.
+While saved-only browsing is active, review recommendations, sequel picks,
+history retries and account refreshes also leave cards outside these filters
+hidden; the selected problem can still be started.
+Removing a saved problem, including from another tab, updates this view; when
+its focused card disappears, focus moves to the checkbox. Empty-list and
+no-match messages are distinct. "Reset filter" clears saved-only browsing,
+title search and topic, leaving difficulty and saved membership unchanged.
+
 ## Admission and selection
 
 Strict requires a signed-in account even when the deployment allows guests.

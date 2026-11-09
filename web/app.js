@@ -94,8 +94,8 @@ let historyCategories = null;
 /// The practice focus the share box currently refers to.
 let sharedFocus = null;
 let manualProblem = false;
-// Due reviews, history retries, and practice-list draws may bypass
-// difficulty/topic filters, but never an active title search.
+// Due reviews, history retries, sequel picks and practice-list draws may
+// bypass difficulty/topic filters, but not title search or saved-only browsing.
 let searchVisibilityException = null;
 /// The reports a drawn problem kept across a difficulty change was drawn from,
 /// serialized, or null when nothing is kept. Not `manualProblem`: a hand pick
@@ -208,6 +208,7 @@ const nodes = {
   problemSearch: document.querySelector("#problem-search"),
   problemSearchModes: document.querySelectorAll('[name="problem-search-mode"]'),
   problemTopic: document.querySelector("#problem-topic"),
+  problemOnlyList: document.querySelector("#problem-only-list"),
   problemPicker: document.querySelector("details.problem-picker"),
   problemFiltersReset: document.querySelector("#problem-filters-reset"),
   problemFilterSummary: document.querySelector("#problem-filter-summary"),
@@ -453,7 +454,7 @@ nodes.practiceListPick.addEventListener("click", () => {
   manualProblem = true;
   keptDraw = null;
   applyProblemFilters();
-  if (!nodes.problemSearch.value.trim()) setCardHidden(card, false);
+  if (!nodes.problemSearch.value.trim()) revealChosenCard(card);
   setProblem(card);
   searchVisibilityException = card;
   setDuration(suggestedDuration(new Set([card.difficulty])));
@@ -470,7 +471,7 @@ nodes.sequelSuggestionPick.addEventListener("click", () => {
   manualProblem = true;
   keptDraw = null;
   applyProblemFilters();
-  if (!nodes.problemSearch.value.trim()) setCardHidden(card, false);
+  if (!nodes.problemSearch.value.trim()) revealChosenCard(card);
   // Selecting the sequel hides the offer and this button with it, which would
   // drop keyboard focus to the body. The random draw stays visible, and the
   // guard above is the one that leaves it enabled.
@@ -503,6 +504,7 @@ function renderPracticeList() {
   const storageNote = practiceListSaved
     ? "Saved in this browser only."
     : "Kept for this visit only; browser storage is unavailable.";
+  if (nodes.problemOnlyList.checked) applyTitleSearchFilters();
   nodes.practiceListStatus.textContent = count
     ? `${count} problem${count === 1 ? "" : "s"} in your list. Draws use all checked problems, regardless of filters. ${storageNote}`
     : `0 problems in your list. Open the problem picker below to check problems. ${storageNote}`;
@@ -593,6 +595,8 @@ for (const input of nodes.problemSearchModes) {
   });
 }
 
+nodes.problemOnlyList.addEventListener("change", applyTitleSearchFilters);
+
 nodes.problemTopic.addEventListener("change", () => {
   filterSelectionChanged();
 });
@@ -602,6 +606,7 @@ nodes.problemSearch.addEventListener("input", () => {
 });
 
 nodes.problemFiltersReset.addEventListener("click", () => {
+  nodes.problemOnlyList.checked = false;
   nodes.problemSearch.value = "";
   nodes.problemSearchModes[0].checked = true;
   nodes.problemSearch.placeholder = "Search scenario titles";
@@ -960,6 +965,7 @@ window.addEventListener("pageshow", (event) => {
   // late enough to re-enable a button the candidate already pressed and hand
   // them a second navigation.
   if (!event.persisted) return;
+  nodes.problemOnlyList.checked = false;
   nodes.problemSearch.value = "";
   nodes.problemSearchModes[0].checked = true;
   nodes.problemSearch.placeholder = "Search scenario titles";
@@ -1116,9 +1122,9 @@ function settle() {
   );
   // A back/forward restore reapplies the filters. Keep an explicit choice
   // visible, whether selected by card, practice draw or history's Try again.
-  // A non-empty title search still owns card visibility during account refresh.
+  // Title search and saved-only browsing still own card visibility.
   if (manualProblem && problem && !nodes.problemSearch.value.trim())
-    setCardHidden(problem, false);
+    revealChosenCard(problem);
   // Refreshed reports that differ from the ones a kept draw came from may have
   // just recorded it as passed, so the lobby draws again.
   if (keptDraw !== null && keptDraw !== JSON.stringify(reports))
@@ -1569,12 +1575,15 @@ function applyProblemFilters(difficulties = selectedDifficulties()) {
       topic: nodes.problemTopic.value,
       query: nodes.problemSearch.value ?? "",
       searchBy: selectedSearchMode(),
-    }),
+    }).filter(
+      (card) => !nodes.problemOnlyList.checked || practiceList.has(card.id),
+    ),
   );
   for (const card of cards) setCardHidden(card, !visible.has(card));
   const topic = nodes.problemTopic.value;
   const query = (nodes.problemSearch.value ?? "").trim();
   const description = [
+    ...(nodes.problemOnlyList.checked ? ["in your list"] : []),
     ...(topic ? [`tagged ${topic}`] : []),
     ...(query
       ? [
@@ -1582,18 +1591,35 @@ function applyProblemFilters(difficulties = selectedDifficulties()) {
         ]
       : []),
   ];
+  if (nodes.problemOnlyList.checked && !visible.size) {
+    nodes.problemFilterSummary.textContent = practiceList.size
+      ? "No saved problems match the current filters."
+      : "Your list is empty. Uncheck Only my list to add problems.";
+    return;
+  }
   nodes.problemFilterSummary.textContent = description.length
     ? `${visible.size} problem${visible.size === 1 ? "" : "s"} ${description.join(" and ")} shown.`
     : "";
 }
 
 function setCardHidden(card, hidden) {
+  if (
+    hidden &&
+    nodes.problemOnlyList.checked &&
+    card.entry.contains(document.activeElement)
+  )
+    nodes.problemOnlyList.focus();
   card.button.hidden = hidden;
   card.entry.hidden = hidden;
 }
 
-// Reapply only the pre-existing exception when the user edits title search.
-// Difficulty and topic changes still use their original selection policy.
+function revealChosenCard(card) {
+  if (!nodes.problemOnlyList.checked) setCardHidden(card, false);
+}
+
+// Reapply only the pre-existing exception when title search, saved-only
+// browsing or the saved list changes. Difficulty and topic changes still use
+// their original selection policy.
 function applyTitleSearchFilters() {
   applyProblemFilters();
   if (
@@ -1602,7 +1628,7 @@ function applyTitleSearchFilters() {
     problem &&
     searchVisibilityException === problem
   )
-    setCardHidden(problem, false);
+    revealChosenCard(problem);
 }
 
 function filterSelectionChanged() {
@@ -1655,8 +1681,8 @@ function recommend(note = "", mode = "recommend") {
   if (choice.review) {
     searchVisibilityException = choice.picked;
     // Due reviews may bypass difficulty and topic filters, but title
-    // search controls which cards appear in the picker.
-    if (!nodes.problemSearch.value.trim()) setCardHidden(choice.picked, false);
+    // search and saved-only browsing control which cards appear in the picker.
+    if (!nodes.problemSearch.value.trim()) revealChosenCard(choice.picked);
     const level = selectedDifficulties().has(choice.picked.difficulty)
       ? ""
       : ` (${choice.picked.difficulty})`;
@@ -2178,8 +2204,9 @@ function renderAttemptHistory(attempts) {
       selection.value = "practice";
       syncSelectionMode();
       manualProblem = true;
-      // A history retry bypasses the picker filters, not active title search.
-      if (!nodes.problemSearch.value.trim()) setCardHidden(card, false);
+      // A retry bypasses difficulty and topic, but not title search or
+      // saved-only browsing.
+      if (!nodes.problemSearch.value.trim()) revealChosenCard(card);
       setProblem(card, attempt.language);
       searchVisibilityException = card;
       const savedDuration = attempt.durationMin;
