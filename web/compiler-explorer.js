@@ -72,7 +72,8 @@ export function nativeLiteral(value, type, language) {
     return arrayLiteral(value, type.slice(0, -2), language);
   const list = type.match(/^list<(.+)>$/);
   if (list) return listLiteral(value, list[1], language);
-  if (type === "string") return JSON.stringify(value);
+  if (type === "string")
+    return language === "c" ? cStringLiteral(value) : JSON.stringify(value);
   if (type === "character") return charLiteral(value);
   if (type === "boolean") return value ? "true" : "false";
   if (type === "integer") return String(value);
@@ -409,6 +410,7 @@ function remapDiagnostics(text, { offset, lineCount }) {
 }
 
 function cHarness(spec, candidateCode) {
+  refuseNulCases(spec);
   return `#include <limits.h>
 #include <math.h>
 #include <stdbool.h>
@@ -1080,6 +1082,50 @@ function treeNodeLiteral(value, language) {
     return `treeNode(vector<optional<int>>{${values.map((item) => (item === null ? "nullopt" : String(item))).join(", ")}})`;
   }
   return `treeNode(new Integer[]{${values.map((item) => (item === null ? "null" : String(item))).join(", ")}})`;
+}
+
+/// `-std=c17` keeps trigraphs, which are replaced before a literal is read, so
+/// a case typed as "abc??!def" reached C as "abc|def" while C++ and Java saw it
+/// as typed. `\?` is C's own escape for a question mark and no trigraph forms
+/// across it. JSON also writes a control character as `\u00XX`, which C17
+/// refuses as a universal character name below U+00A0, so those become octal
+/// escapes instead. Octal stops at three digits, unlike `\x`, so a hex digit
+/// typed after one is not read into it. The scan takes each backslash pair
+/// whole first, so a typed backslash followed by "u0001" keeps its spelling,
+/// and no JSON escape contains `?`.
+function cStringLiteral(value) {
+  return JSON.stringify(value).replace(
+    /\\u00([0-9a-f]{2})|\\.|\?/g,
+    (match, hex) => {
+      if (hex) return `\\${parseInt(hex, 16).toString(8).padStart(3, "0")}`;
+      return match === "?" ? "\\?" : match;
+    },
+  );
+}
+
+/// NUL would compile as `\000`, but C hands the solution a string that ends
+/// there, so the case would run on less than was typed and fail a correct
+/// solution. Refused, naming the case, until adding a case refuses NUL itself.
+/// Only string parameters truncate on the way in: `charLiteral` writes a
+/// `character` NUL as a raw byte, which clang only warns about, and the
+/// solution receives 0. A `character[][]` that is also the output still loses
+/// that cell on the way out, since `json_char_matrix` prints it as "".
+function refuseNulCases(spec) {
+  const holdsNul = (value) =>
+    typeof value === "string"
+      ? value.includes("\0")
+      : Array.isArray(value) && value.some(holdsNul);
+  const isString = (type) => nestedItemType(type) === "string";
+  for (const [index, testCase] of spec.cases.entries()) {
+    if (
+      testCase.input.some(
+        (value, i) => isString(spec.paramTypes[i]) && holdsNul(value),
+      )
+    )
+      throw new Error(
+        `${testCase.label ?? `Case ${index + 1}`} holds a NUL character, which a C string cannot carry.`,
+      );
+  }
 }
 
 function charLiteral(value) {
