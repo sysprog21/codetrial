@@ -1,0 +1,56 @@
+name: watch runs
+
+# A main run the platform abandons before `check` exists cannot report its own
+# absence, so this looks from outside (scripts/check-run-jobs.sh).
+on:
+  schedule:
+    - cron: '29 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: watch-runs
+
+jobs:
+  watch:
+    # Only trusted main code may write to the repository.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: List main runs without a check job
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          title='Main run ended without a check job'
+          status=0
+          sh scripts/check-run-jobs.sh "$GH_REPO" 50 > "$RUNNER_TEMP/runs.txt" || status=$?
+          # Status 1 is a finding; anything else is the script or the API failing.
+          [ "$status" -le 1 ] || exit "$status"
+          issue=$(gh issue list --state open --search "\"$title\" in:title" --json number,title,author \
+            --jq "map(select(.title == \"$title\" and .author.is_bot)) | .[0].number // empty")
+          if [ "$status" -eq 0 ]; then
+            [ -z "$issue" ] || gh issue close "$issue" --reason completed
+            exit 0
+          fi
+          {
+            echo 'These completed main push runs of check.yml have no check job. The platform'
+            echo 'dropped them before the aggregator was created, so they show no failed job.'
+            echo
+            sed 's/^/- /' "$RUNNER_TEMP/runs.txt"
+          } > "$RUNNER_TEMP/body.md"
+          if [ -n "$issue" ]; then
+            gh issue edit "$issue" --body-file "$RUNNER_TEMP/body.md"
+          else
+            gh issue create --title "$title" --body-file "$RUNNER_TEMP/body.md"
+          fi

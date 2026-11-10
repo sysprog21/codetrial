@@ -631,6 +631,7 @@ gate mutants-install-tests unittest_gate "$ROOT/tests/test_mutants_install.py"
 gate latency-tests unittest_gate "$ROOT/tests/test_analyze_latency.py"
 gate interview-behavior-script-tests unittest_gate "$ROOT/tests/test_interview_behavior_script.py"
 gate wait-for-server-tests unittest_gate "$ROOT/tests/test_wait_for_server.py"
+gate check-run-jobs-tests unittest_gate "$ROOT/tests/test_check_run_jobs.py"
 
 # These cases enforce real one-second permit and process cleanup deadlines.
 # Thirty-two concurrent launchers starve their own guards on a loaded host.
