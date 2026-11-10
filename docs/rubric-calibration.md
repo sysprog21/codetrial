@@ -18,6 +18,11 @@ degraded, and missing transcripts; every rubric score band; zero and nonzero hin
 use; and both complete and intentionally unassessable phases. Selection must not
 depend on the model's decision.
 
+Unassessable coverage requires at least one session/phase pair whose model and
+human scores are all `null`, across the whole dataset. It is not required for
+every phase or stratum. The existing input rules still apply, including at least
+two distinct human reviewers per sample and every required phase key.
+
 Each assessable phase is scored independently by at least two trained reviewers
 who see a random sample id, candidate evidence, the frozen rubric, and no model
 score, model decision, identity, demographic information, or other reviewer's
@@ -25,6 +30,10 @@ rating. Reviewers use `null` when evidence cannot support a score. A phase is
 invalid when model and humans disagree about assessability. After independent
 ratings are locked, disagreements spanning two rubric bands or 20 points are
 adjudicated by a third reviewer; original ratings remain in the analysis input.
+Every recorded human judgment participates in assessability validation: a null
+and a numeric score disagree even when two other reviewers gave numeric scores.
+Such a mismatch is invalid input (exit 2), before coverage or metric results are
+reported. Consistently null phases contribute no numeric score to the metrics.
 
 The gate passes only when every condition holds:
 

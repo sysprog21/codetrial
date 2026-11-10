@@ -118,6 +118,7 @@ def analyze(raw):
         raise ValueError("$.samples: expected array")
     ids, pairs, errors, strata = set(), [], defaultdict(list), defaultdict(set)
     assessed_phases, observed_bands, hint_strata = set(), set(), set()
+    has_unassessable = False
     pairwise = defaultdict(lambda: [[], []])
     for index, sample in enumerate(samples):
         path = f"$.samples[{index}]"
@@ -180,20 +181,14 @@ def analyze(raw):
             exact_keys(rating["scores"], PHASES, f"{rating_path}.scores")
             for phase in PHASES:
                 value = score(rating["scores"][phase], f"{rating_path}.scores.{phase}")
-                if value is not None:
-                    human[phase].append((reviewer, value))
+                human[phase].append((reviewer, value))
         for phase in PHASES:
             values = human[phase]
+            if any((model[phase] is None) != (value is None) for _, value in values):
+                raise ValueError(f"{path}.{phase}: model/human assessability mismatch")
             if model[phase] is None:
-                if values:
-                    raise ValueError(
-                        f"{path}.{phase}: model/human assessability mismatch"
-                    )
+                has_unassessable = True
                 continue
-            if len(values) < 2:
-                raise ValueError(
-                    f"{path}.{phase}: assessed phase needs two human raters"
-                )
             assessed_phases.add(phase)
             observed_bands.add(band(model[phase]))
             human_mean = mean([value for _, value in values])
@@ -226,6 +221,8 @@ def analyze(raw):
         failures.append(
             f"phase coverage missing {sorted(set(PHASES) - assessed_phases)}"
         )
+    if not has_unassessable:
+        failures.append("unassessable phase coverage missing")
     if observed_bands != set(range(len(BANDS))):
         failures.append(
             f"score-band coverage missing {sorted(set(range(len(BANDS))) - observed_bands)}"
