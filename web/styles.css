@@ -3414,6 +3414,13 @@ body:not([data-recording]) .replay-detail > :not(header) {
   stroke-linejoin: round;
 }
 
+.muted-speech-reminder {
+  margin: 0.5rem 0 0;
+  border-left: 3px solid var(--danger-ink);
+  padding-left: 0.5rem;
+  color: var(--alert-ink);
+}
+
 .mic-muted-status {
   border-radius: 999px;
   padding: 0.375rem 0.75rem;

@@ -36,6 +36,7 @@ import {
   loadProblem,
 } from "./problem-data.js";
 import { downloadMarkdown, reportFilename } from "./download.js";
+import { createMutedSpeechWatch } from "./muted-speech.js";
 import {
   consumeSharedFocus,
   storeReportPracticeFocus,
@@ -631,6 +632,8 @@ const nodes = {
   mic: document.querySelector("#mic"),
   micMutedStatus: document.querySelector("#mic-muted-status"),
   micControlStatus: document.querySelector("#mic-control-status"),
+  mutedSpeechConsent: document.querySelector("#muted-speech-consent"),
+  mutedSpeechReminder: document.querySelector("#muted-speech-reminder"),
   thinking: document.querySelector("#thinking"),
   yieldTurn: document.querySelector("#yield-turn"),
   turnStatus: document.querySelector("#turn-status"),
@@ -2332,6 +2335,10 @@ async function connectLiveKit(connection, preflight, presenting = false) {
   });
   room.on(livekit.RoomEvent.Disconnected, () => {
     audioPlayback.release(room);
+    // Jim is gone, so there is no one left to be muted to. Local recording can
+    // keep the microphone live past this, and the watch would go on reading it.
+    mutedSpeech.stop();
+    nodes.mutedSpeechReminder.hidden = true;
     state.connected = false;
     state.offlinePractice = !strict;
     if (strict && state.joinedRoom) localRecording.finish();
@@ -2592,6 +2599,7 @@ function setLocalAudioEnabled(enabled) {
 }
 
 function stopLocalMedia() {
+  mutedSpeech.stop();
   localRecording.finish(nodes.ending);
   stopIntegrityWorker();
   stopPreflight({ userStream: state.localUserStream });
@@ -2714,6 +2722,7 @@ function finalizeRecoveryOnPageHide(event) {
 }
 
 window.addEventListener("pagehide", finalizeRecoveryOnPageHide);
+window.addEventListener("pagehide", () => mutedSpeech.stop());
 
 /// `flushed` settles once the report receipt has had its chance to leave; the
 /// room stays up until then so the agent can stop retransmitting. Recovery's
@@ -2964,6 +2973,39 @@ async function consumeTranscript(room, reader, participant) {
   }
 }
 
+/// Only with the preflight consent, and only for the input that is muted now.
+/// The track is the one the room or the stream holds, never the clone.
+const mutedSpeech = createMutedSpeechWatch({
+  jimSpeaking: () => state.agentSpeaking,
+  onSpeech: () => {
+    if (state.phase === "live" && !state.micEnabled)
+      nodes.mutedSpeechReminder.hidden = false;
+  },
+});
+
+/// Called whenever one of its conditions may have changed: a mute or unmute,
+/// or a microphone switch. A hidden tab keeps it running, since the level is
+/// read on the audio thread and Jim still hears nothing. With no room there is
+/// no Jim to be muted to, though local recording can keep the microphone live
+/// after a drop and offline practice runs without one.
+function watchMutedSpeech() {
+  if (
+    state.phase !== "live" ||
+    !state.room ||
+    state.micEnabled ||
+    !nodes.mutedSpeechConsent.checked
+  ) {
+    mutedSpeech.stop();
+    return;
+  }
+  // Not again once it has reminded: one reminder per muted stretch.
+  if (!nodes.mutedSpeechReminder.hidden) return;
+  mutedSpeech.watch(
+    state.localUserStream?.getAudioTracks?.()[0] ??
+      publishedMicrophone()?.mediaStreamTrack,
+  );
+}
+
 async function toggleMicrophone() {
   if (state.phase !== "live" || state.micChanging || nodes.mic.disabled) return;
   const enabled = !state.micEnabled;
@@ -2994,7 +3036,10 @@ async function toggleMicrophone() {
     // The room can stay connected while ending, so a late success must still
     // be reflected by the mute indicator.
     state.micEnabled = enabled;
+    // Cleared by a successful unmute only; a failed one keeps it.
+    if (enabled) nodes.mutedSpeechReminder.hidden = true;
     paintMicrophoneState();
+    watchMutedSpeech();
     if (!enabled && state.localUserStream) {
       void publishIntegrityEvent({
         type: "MICROPHONE_STOPPED",
@@ -3577,6 +3622,7 @@ function microphoneSwitch() {
       watchIntegrityTrack(track, "MICROPHONE_STOPPED", "microphone");
       followMicrophoneLoss(track);
       startTurnRing(state.localUserStream);
+      watchMutedSpeech();
       void publishIntegrityEvent({
         type: "MICROPHONE_SWITCHED",
         source: "microphone",
@@ -4376,6 +4422,9 @@ function endInterview(reason) {
   const exampleFinished = exampleBoard?.finish();
   state.phase = "ending";
   if (strict) updateRunAvailability();
+  mutedSpeech.stop();
+  // The reminder is about being heard in the interview, which is over.
+  nodes.mutedSpeechReminder.hidden = true;
   localRecording.finish(nodes.ending);
   // The hint outranks the ending overlay in the stacking order, so a candidate
   // who ends while it is still up would read the report status through it.

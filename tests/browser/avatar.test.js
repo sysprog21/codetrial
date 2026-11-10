@@ -822,12 +822,16 @@ test("avatar analyser reads Jim and never the candidate", () => {
   // worth pinning is which module may read each source. Local recording also
   // mixes the tab and existing microphone; neither source belongs to the avatar.
   //
-  // `mic-meter.js` is read in beside the path rather than added to
-  // `INTERVIEW_SOURCES`, which is the modules `interview.js` hands its bindings
-  // to and is pinned to exactly those. The meter is where the microphone's own
-  // source lives, so leaving it out would let this allowlist grow unwatched in
-  // the one file most likely to grow it.
-  const sources = [...INTERVIEW_SOURCES, "web/mic-meter.js"].flatMap((name) =>
+  // `mic-meter.js` and `muted-speech.js` are read in beside the path rather
+  // than added to `INTERVIEW_SOURCES`, which is the modules `interview.js`
+  // hands its bindings to and is pinned to exactly those. They are where the
+  // microphone's own sources live, so leaving them out would let this allowlist
+  // grow unwatched in the files most likely to grow it.
+  const sources = [
+    ...INTERVIEW_SOURCES,
+    "web/mic-meter.js",
+    "web/muted-speech.js",
+  ].flatMap((name) =>
     captures(read(name), /createMediaStreamSource\(([^)]*)\)/g).map(
       (source) => [name, source.trim()],
     ),
@@ -839,6 +843,7 @@ test("avatar analyser reads Jim and never the candidate", () => {
       ["web/local-recorder.js", "new MediaStream(capture.getAudioTracks("],
       ["web/avatar/stage.js", "new MediaStream([track.mediaStreamTrack]"],
       ["web/mic-meter.js", "stream"],
+      ["web/muted-speech.js", "stream"],
     ],
     "a new createMediaStreamSource call site appeared; the avatar must only ever read Jim",
   );

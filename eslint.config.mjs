@@ -146,4 +146,10 @@ export default [
     files: ["web/face-worker.js"],
     languageOptions: { globals: { FaceDetection: "readonly" } },
   },
+  {
+    // Loaded by `audioWorklet.addModule`, so it runs in the audio worklet's
+    // scope, whose globals (`currentTime`, `registerProcessor`) no page has.
+    files: ["web/muted-speech-worklet.js"],
+    languageOptions: { globals: globals.audioWorklet },
+  },
 ];
