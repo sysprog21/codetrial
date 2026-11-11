@@ -184,10 +184,20 @@ def analyze(raw):
                 human[phase].append((reviewer, value))
         for phase in PHASES:
             values = human[phase]
-            if any((model[phase] is None) != (value is None) for _, value in values):
-                raise ValueError(f"{path}.{phase}: model/human assessability mismatch")
+            for reviewer, value in values:
+                if (model[phase] is None) != (value is None):
+                    raise ValueError(
+                        f"{path}.{phase}: model/human assessability mismatch"
+                        f" ({reviewer})"
+                    )
             if model[phase] is None:
-                has_unassessable = True
+                if sample["loop"] == "coding_behavioral" or phase not in (
+                    "Situation",
+                    "Task",
+                    "Action",
+                    "Result",
+                ):
+                    has_unassessable = True
                 continue
             assessed_phases.add(phase)
             observed_bands.add(band(model[phase]))

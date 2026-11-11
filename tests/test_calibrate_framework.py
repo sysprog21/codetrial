@@ -22,7 +22,7 @@ class CalibrationTests(unittest.TestCase):
             (ROOT / "tests" / "fixtures" / "calibration" / name).read_text()
         )
 
-    def all_scored_fixture(self):
+    def applicable_scored_fixture(self):
         raw = self.fixture("passing-synthetic.json")
         for sample in raw["samples"]:
             rows = [sample["modelScores"]] + [
@@ -30,18 +30,32 @@ class CalibrationTests(unittest.TestCase):
             ]
             for row in rows:
                 for phase in CAL.PHASES:
+                    if sample["loop"] == "coding_only" and phase in (
+                        "Situation",
+                        "Task",
+                        "Action",
+                        "Result",
+                    ):
+                        continue
                     if row[phase] is None:
                         row[phase] = 82
         return raw
 
     def test_unassessable_coverage_zero_and_one(self):
-        raw = self.all_scored_fixture()
+        raw = self.applicable_scored_fixture()
         uncovered = CAL.analyze(raw)
         self.assertEqual(uncovered["status"], "NOT_CALIBRATED")
         self.assertEqual(uncovered["failures"], ["unassessable phase coverage missing"])
         for sample_index, phase in itertools.product(
             range(len(raw["samples"])), CAL.PHASES
         ):
+            if raw["samples"][sample_index]["loop"] == "coding_only" and phase in (
+                "Situation",
+                "Task",
+                "Action",
+                "Result",
+            ):
+                continue
             with self.subTest(sample=sample_index, phase=phase):
                 one = copy.deepcopy(raw)
                 sample = one["samples"][sample_index]
@@ -50,11 +64,51 @@ class CalibrationTests(unittest.TestCase):
                     rating["scores"][phase] = None
                 covered = CAL.analyze(one)
                 self.assertEqual(covered["status"], "PASS", covered["failures"])
-                self.assertEqual(covered["counts"]["assessedPhasePairs"], 299)
-                for metric in ("interRaterQwk", "modelHumanMae", "bandAgreement"):
-                    self.assertEqual(
-                        covered["metrics"][metric], uncovered["metrics"][metric]
+                self.assertEqual(
+                    covered["counts"]["assessedPhasePairs"],
+                    uncovered["counts"]["assessedPhasePairs"] - 1,
+                )
+
+    def test_unassessable_coverage_with_extra_session(self):
+        raw = self.applicable_scored_fixture()
+        extra = copy.deepcopy(raw["samples"][0])
+        extra["id"] = "extra-session"
+        raw["samples"].append(extra)
+        uncovered = CAL.analyze(raw)
+        self.assertEqual(uncovered["failures"], ["unassessable phase coverage missing"])
+        extra["modelScores"]["Repeat"] = None
+        for rating in extra["humanRatings"]:
+            rating["scores"]["Repeat"] = None
+        covered = CAL.analyze(raw)
+        self.assertEqual(covered["status"], "PASS", covered["failures"])
+        self.assertEqual(
+            covered["counts"]["assessedPhasePairs"],
+            uncovered["counts"]["assessedPhasePairs"] - 1,
+        )
+
+    def test_passing_fixture_has_applicable_unassessable_phase(self):
+        raw = self.fixture("passing-synthetic.json")
+        self.assertTrue(
+            any(
+                sample["modelScores"][phase] is None
+                and all(
+                    rating["scores"][phase] is None for rating in sample["humanRatings"]
+                )
+                for sample in raw["samples"]
+                for phase in (
+                    CAL.PHASES
+                    if sample["loop"] == "coding_behavioral"
+                    else (
+                        "Repeat",
+                        "Example",
+                        "Algorithm",
+                        "Coding",
+                        "Test",
+                        "Optimizations",
                     )
+                )
+            )
+        )
 
     def test_all_unassessable_data_fails_without_numeric_metrics(self):
         raw = self.fixture("passing-synthetic.json")
@@ -77,6 +131,9 @@ class CalibrationTests(unittest.TestCase):
 
     def test_assessability_mismatch_rejected_in_every_reviewer_order(self):
         for model_score in (30, None):
+            reviewer_pattern = (
+                "reviewer-c" if model_score is not None else "reviewer-[ab]"
+            )
             raw = self.fixture("passing-synthetic.json")
             sample = raw["samples"][0]
             sample["modelScores"]["Repeat"] = model_score
@@ -88,7 +145,9 @@ class CalibrationTests(unittest.TestCase):
                     model=model_score, order=[r["reviewerId"] for r in ratings]
                 ):
                     sample["humanRatings"] = list(ratings)
-                    with self.assertRaisesRegex(ValueError, "assessability mismatch"):
+                    with self.assertRaisesRegex(
+                        ValueError, rf"assessability mismatch \({reviewer_pattern}\)$"
+                    ):
                         CAL.analyze(raw)
 
     def test_invalid_unassessable_samples_are_rejected(self):
@@ -116,7 +175,7 @@ class CalibrationTests(unittest.TestCase):
                     CAL.analyze(raw)
 
     def test_cli_assessability_statuses_and_exit_codes(self):
-        zero = self.all_scored_fixture()
+        zero = self.applicable_scored_fixture()
         one = copy.deepcopy(zero)
         sample = one["samples"][0]
         sample["modelScores"]["Repeat"] = None
@@ -155,6 +214,7 @@ class CalibrationTests(unittest.TestCase):
                         if code == 2:
                             self.assertEqual(result.stdout, "")
                             self.assertIn("assessability mismatch", result.stderr)
+                            self.assertIn("(reviewer-c)", result.stderr)
                         else:
                             self.assertEqual(result.stderr, "")
                             if output_format == "json":

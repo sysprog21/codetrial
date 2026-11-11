@@ -18,10 +18,13 @@ degraded, and missing transcripts; every rubric score band; zero and nonzero hin
 use; and both complete and intentionally unassessable phases. Selection must not
 depend on the model's decision.
 
-Unassessable coverage requires at least one session/phase pair whose model and
-human scores are all `null`, across the whole dataset. It is not required for
-every phase or stratum. The existing input rules still apply, including at least
-two distinct human reviewers per sample and every required phase key.
+Unassessable coverage requires at least one applicable session/phase pair whose
+model and human scores are all `null`, across the whole dataset. All REACTO
+phases apply to both loop types; STAR phases apply only to coding-plus-behavioral
+loops. The inapplicable STAR `null` values in coding-only sessions do not meet
+this requirement. It is not required for every phase or stratum. The existing
+input rules still apply, including at least two distinct human reviewers per
+sample and every required phase key.
 
 Each assessable phase is scored independently by at least two trained reviewers
 who see a random sample id, candidate evidence, the frozen rubric, and no model
