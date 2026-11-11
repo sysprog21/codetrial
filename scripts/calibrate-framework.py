@@ -31,11 +31,11 @@ THRESHOLDS = {
 }
 
 
-def exact_keys(value, expected, path):
+def exact_keys(value, expected, path, *, optional=()):
     if not isinstance(value, dict):
         raise ValueError(f"{path}: expected object")
     unknown = sorted(set(value) - set(expected))
-    missing = sorted(set(expected) - set(value))
+    missing = sorted(set(expected) - set(value) - set(optional))
     if missing or unknown:
         raise ValueError(f"{path}: missing={missing} unknown={unknown}")
 
@@ -178,9 +178,11 @@ def analyze(raw):
                     f"{rating_path}.reviewerId: expected distinct pseudonym"
                 )
             reviewers.add(reviewer)
-            exact_keys(rating["scores"], PHASES, f"{rating_path}.scores")
-            for phase in PHASES:
-                value = score(rating["scores"][phase], f"{rating_path}.scores.{phase}")
+            exact_keys(
+                rating["scores"], PHASES, f"{rating_path}.scores", optional=PHASES
+            )
+            for phase, raw_value in rating["scores"].items():
+                value = score(raw_value, f"{rating_path}.scores.{phase}")
                 human[phase].append((reviewer, value))
         for phase in PHASES:
             values = human[phase]
@@ -190,6 +192,10 @@ def analyze(raw):
                         f"{path}.{phase}: model/human assessability mismatch"
                         f" ({reviewer})"
                     )
+            if len(values) < 2:
+                raise ValueError(
+                    f"{path}.{phase}: need at least two independent human ratings"
+                )
             if model[phase] is None:
                 if sample["loop"] == "coding_behavioral" or phase not in (
                     "Situation",

@@ -150,6 +150,93 @@ class CalibrationTests(unittest.TestCase):
                     ):
                         CAL.analyze(raw)
 
+    def test_partial_adjudicator_only_contributes_recorded_scores(self):
+        raw = self.fixture("passing-synthetic.json")
+        sample = raw["samples"][0]
+        # Filling an omitted phase with the model score must change the metrics.
+        for rating in sample["humanRatings"]:
+            rating["scores"]["Example"] = 50
+        baseline = CAL.analyze(raw)
+        third = {"reviewerId": "reviewer-c", "scores": {"Repeat": 90}}
+        for ratings in itertools.permutations([*sample["humanRatings"], third]):
+            with self.subTest(order=[rating["reviewerId"] for rating in ratings]):
+                sample["humanRatings"] = list(ratings)
+                result = CAL.analyze(raw)
+                self.assertEqual(result["status"], "PASS", result["failures"])
+                self.assertEqual(result["counts"], baseline["counts"])
+                pairs = baseline["counts"]["assessedPhasePairs"]
+                self.assertAlmostEqual(
+                    result["metrics"]["modelHumanMae"],
+                    baseline["metrics"]["modelHumanMae"] + 20 / pairs,
+                )
+                self.assertAlmostEqual(
+                    result["metrics"]["bandAgreement"],
+                    baseline["metrics"]["bandAgreement"] - 1 / pairs,
+                )
+                self.assertLess(
+                    result["metrics"]["interRaterQwk"],
+                    baseline["metrics"]["interRaterQwk"],
+                )
+
+    def test_partial_adjudicator_omissions_and_explicit_null_differ(self):
+        for model_score in (30, None):
+            raw = self.fixture("passing-synthetic.json")
+            sample = raw["samples"][0]
+            sample["modelScores"]["Repeat"] = model_score
+            for rating in sample["humanRatings"]:
+                rating["scores"]["Repeat"] = model_score
+            third = {"reviewerId": "reviewer-c", "scores": {"Algorithm": 30}}
+            for ratings in itertools.permutations([*sample["humanRatings"], third]):
+                with self.subTest(
+                    model=model_score, order=[r["reviewerId"] for r in ratings]
+                ):
+                    sample["humanRatings"] = list(ratings)
+                    result = CAL.analyze(raw)
+                    self.assertEqual(result["status"], "PASS", result["failures"])
+                    third["scores"]["Repeat"] = None if model_score is not None else 30
+                    with self.assertRaisesRegex(
+                        ValueError, r"assessability mismatch \(reviewer-c\)$"
+                    ):
+                        CAL.analyze(raw)
+                    del third["scores"]["Repeat"]
+
+    def test_every_phase_needs_two_recorded_human_ratings(self):
+        for phase, model_score, recorded in itertools.product(
+            CAL.PHASES, (50, None), (0, 1)
+        ):
+            with self.subTest(phase=phase, model=model_score, recorded=recorded):
+                raw = self.fixture("passing-synthetic.json")
+                sample = raw["samples"][1]
+                sample["modelScores"][phase] = model_score
+                for rating in sample["humanRatings"]:
+                    del rating["scores"][phase]
+                if recorded:
+                    sample["humanRatings"].append(
+                        {"reviewerId": "reviewer-c", "scores": {phase: model_score}}
+                    )
+                with self.assertRaisesRegex(
+                    ValueError, rf"{phase}: need at least two independent human ratings"
+                ):
+                    CAL.analyze(raw)
+
+    def test_partial_scores_still_validate_keys_types_and_ranges(self):
+        for scores in (
+            None,
+            [],
+            {"Unknown": 30},
+            {"Repeat": True},
+            {"Repeat": 1.5},
+            {"Repeat": -1},
+            {"Repeat": 101},
+        ):
+            with self.subTest(scores=scores):
+                raw = self.fixture("passing-synthetic.json")
+                raw["samples"][0]["humanRatings"].append(
+                    {"reviewerId": "reviewer-c", "scores": scores}
+                )
+                with self.assertRaises(ValueError):
+                    CAL.analyze(raw)
+
     def test_invalid_unassessable_samples_are_rejected(self):
         for defect in (
             "missing reviewer",
@@ -186,11 +273,20 @@ class CalibrationTests(unittest.TestCase):
         third["reviewerId"] = "reviewer-c"
         third["scores"]["Repeat"] = None
         mixed["samples"][0]["humanRatings"].append(third)
+        partial = self.fixture("passing-synthetic.json")
+        partial["samples"][0]["humanRatings"].append(
+            {"reviewerId": "reviewer-c", "scores": {"Repeat": 90}}
+        )
+        insufficient = copy.deepcopy(partial)
+        for rating in insufficient["samples"][0]["humanRatings"][:2]:
+            del rating["scores"]["Repeat"]
         cases = (
             ("control", self.fixture("passing-synthetic.json"), 0, "PASS"),
             ("zero", zero, 1, "NOT_CALIBRATED"),
             ("one", one, 0, "PASS"),
             ("mixed", mixed, 2, None),
+            ("partial", partial, 0, "PASS"),
+            ("insufficient", insufficient, 2, None),
         )
         with tempfile.TemporaryDirectory() as directory:
             for name, raw, code, status in cases:
@@ -213,8 +309,14 @@ class CalibrationTests(unittest.TestCase):
                         self.assertEqual(result.returncode, code, result.stderr)
                         if code == 2:
                             self.assertEqual(result.stdout, "")
-                            self.assertIn("assessability mismatch", result.stderr)
-                            self.assertIn("(reviewer-c)", result.stderr)
+                            if name == "insufficient":
+                                self.assertIn(
+                                    "Repeat: need at least two independent human ratings",
+                                    result.stderr,
+                                )
+                            else:
+                                self.assertIn("assessability mismatch", result.stderr)
+                                self.assertIn("(reviewer-c)", result.stderr)
                         else:
                             self.assertEqual(result.stderr, "")
                             if output_format == "json":

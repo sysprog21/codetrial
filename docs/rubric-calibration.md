@@ -24,7 +24,9 @@ phases apply to both loop types; STAR phases apply only to coding-plus-behaviora
 loops. The inapplicable STAR `null` values in coding-only sessions do not meet
 this requirement. It is not required for every phase or stratum. The existing
 input rules still apply, including at least two distinct human reviewers per
-sample and every required phase key.
+sample and every required model phase key. Each phase needs at least two
+recorded human judgments, all numeric for an assessed phase or all `null` for
+an unassessable phase.
 
 Each assessable phase is scored independently by at least two trained reviewers
 who see a random sample id, candidate evidence, the frozen rubric, and no model
@@ -33,6 +35,13 @@ rating. Reviewers use `null` when evidence cannot support a score. A phase is
 invalid when model and humans disagree about assessability. After independent
 ratings are locked, disagreements spanning two rubric bands or 20 points are
 adjudicated by a third reviewer; original ratings remain in the analysis input.
+An adjudicator who reviews only disputed phases omits the other keys from their
+`scores` object. An omitted key means no judgment was recorded; an explicit
+`null` means the reviewer judged that phase unassessable. Reviewer order does
+not assign roles. Only recorded judgments enter assessability validation and
+numeric metrics; missing judgments are never replaced with scores or `null`.
+Unknown phase keys and invalid score values remain invalid input. Omissions
+cannot reduce any phase below two independent recorded human judgments.
 Every recorded human judgment participates in assessability validation: a null
 and a numeric score disagree even when two other reviewers gave numeric scores.
 Such a mismatch is invalid input (exit 2), before coverage or metric results are
