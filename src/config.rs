@@ -172,8 +172,9 @@ pub(crate) fn parse_config(text: &str) -> Result<Vec<(String, String)>, usize> {
         let Some((key, value)) = trimmed.split_once('=') else {
             return Err(index + 1);
         };
+
         values.push((
-            key.trim().to_string(),
+            config_key(key).to_string(),
             value
                 .trim()
                 .trim_matches('"')
@@ -182,6 +183,19 @@ pub(crate) fn parse_config(text: &str) -> Result<Vec<(String, String)>, usize> {
         ));
     }
     Ok(values)
+}
+
+/// The setting a config line names. A file copied from a shell says `export
+/// KEY=value`: left in the key it matches nothing, and the setting is silently
+/// not applied. Setup's editor reads keys through this too, so the line it
+/// rewrites is the line launch reads.
+pub(crate) fn config_key(key: &str) -> &str {
+    let key = key.trim();
+    match key.strip_prefix("export") {
+        // A shell takes any blanks after the word, a tab as well as a space.
+        Some(rest) if rest.starts_with(char::is_whitespace) => rest.trim_start(),
+        _ => key,
+    }
 }
 
 /// Lays the config file over the environment. The two Gemini credential names
@@ -420,6 +434,14 @@ pub fn load_from_pairs(
             invalid_entries.push(message);
             None
         });
+
+    // `0` switches interim reviews off, so a typo for it must not become the
+    // default and spend the report model's quota unannounced.
+    if present(&values, "CODETRIAL_MAX_INTERIM_REVIEWS")
+        .is_some_and(|value| value.parse::<u32>().is_err())
+    {
+        invalid_entries.push("CODETRIAL_MAX_INTERIM_REVIEWS must be a whole number".into());
+    }
 
     if !missing_keys.is_empty() || !invalid_entries.is_empty() {
         return Err(ConfigError {

@@ -220,10 +220,19 @@ fn merge(contents: &str, replacements: &[(&str, &str)]) -> String {
         let replacement = entry
             .split_once('=')
             .filter(|_| !entry.starts_with('#'))
-            .and_then(|(key, _)| replacements.iter().find(|(name, _)| *name == key.trim()));
+            .and_then(|(key, _)| {
+                replacements
+                    .iter()
+                    .find(|(name, _)| *name == crate::config::config_key(key))
+            });
         if let Some((key, value)) = replacement {
             let ending = &line[line.trim_end_matches(['\r', '\n']).len()..];
-            merged.push_str(&format!("{key}={value}{ending}"));
+            let export = if crate::config::config_key(entry) != entry {
+                "export "
+            } else {
+                ""
+            };
+            merged.push_str(&format!("{export}{key}={value}{ending}"));
             rewritten.push(*key);
         } else {
             merged.push_str(line);

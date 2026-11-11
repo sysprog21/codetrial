@@ -467,7 +467,9 @@ const SETUP_PAGE: &str = r#"<!doctype html>
       if (trimmed === '' || trimmed.startsWith('#')) continue;
       const equals = trimmed.indexOf('=');
       if (equals < 0) throw new Error('line ' + number + ' is not KEY=value');
-      values[trimmed.slice(0, equals).trim()] = trimmed
+      // A shell takes any blank after export, as config_key does; a key that
+      // merely starts with the word, or a bare export, is its own key.
+      values[trimmed.slice(0, equals).trim().replace(/^export\s+/, '')] = trimmed
         .slice(equals + 1)
         .trim()
         .replace(/^"+|"+$/g, '')

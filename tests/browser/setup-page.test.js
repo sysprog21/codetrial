@@ -272,7 +272,8 @@ test("setup fills its fields from a chosen config file without sending it", asyn
   );
 
   // What read_config_file accepts: comments, blank lines, spaces around the
-  // equals sign, quotes at either end, and keys Setup does not take.
+  // equals sign, quotes at either end, an export a shell would take, and keys
+  // Setup does not take.
   await page
     .locator("#import-file")
     .setInputFiles(
@@ -282,9 +283,9 @@ test("setup fills its fields from a chosen config file without sending it", asyn
           "# saved by the CLI",
           "",
           'LIVEKIT_URL = "wss://example.livekit.cloud"',
-          "LIVEKIT_API_KEY=key",
+          "export LIVEKIT_API_KEY=key",
           "LIVEKIT_API_SECRET='secret'",
-          "GOOGLE_API_KEY=google",
+          "export\tGOOGLE_API_KEY=google",
           "CODETRIAL_DB_PATH=/elsewhere/codetrial.db",
         ].join("\r\n"),
       ),
