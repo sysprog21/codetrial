@@ -48,7 +48,7 @@ reference and reflection stay as snapshot-bound context for later agent work
 permission to execute their text or publish changes. Contracts, failure paths
 and validation remain the agent's review duties.
 
-`serve` picks managed mode itself when the Codex CLI is installed
+`serve` picks managed mode itself when the Codex CLI is installed and signed in
 (`--reviewer auto`, the default), so feedback survives the end of the chat turn;
 `--reviewer manual` forces the other mode. In manual mode keep this invocation listening with its bounded
 `wait`, disclosing that manual feedback stops when the turn ends. In managed mode
@@ -424,7 +424,9 @@ reuse its completed reflection.
 
 ## Draw the reference note
 
-When the point of the key change is a path, a before and after, or a choice
+A note carries one small flow of the key change unless the change has none to
+show; a prose-only note stays valid, only without the picture. When the point of
+the key change is a path, a before and after, or a choice
 between designs, the note may carry a diagram, a table and quoted code besides
 prose. The page draws them after the contributor has submitted, in the feedback
 panel; it reveals nothing earlier. The note is still the one `text` of the one

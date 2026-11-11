@@ -98,17 +98,20 @@ def _grams(items, size):
     return {tuple(items[i : i + size]) for i in range(len(items) - size + 1)}
 
 
-@functools.lru_cache(maxsize=8)
-def _latin_grams(source, size):
-    """The runs of `size` words one source says; fixed for a session.
-
-    Each source on its own: the end of the question and the start of the patch
-    are not neighbours, and a string cached by its own identity hashes once.
-    """
+def _latin_runs(text, size):
+    """The runs of `size` words a text says, each stretch between CJK on its own:
+    the end of one and the start of the next are not neighbours."""
     found = set()
-    for part in CJK.split(source):
+    for part in CJK.split(text):
         found |= _grams(_latin(part), size)
     return found
+
+
+@functools.lru_cache(maxsize=16)
+def _latin_grams(source, size):
+    """`_latin_runs` of a source, fixed for a session and cached. The answer's
+    own fragments go through `_latin_runs`, so typing cannot evict a source."""
+    return _latin_runs(source, size)
 
 
 @functools.lru_cache(maxsize=8)
@@ -129,9 +132,9 @@ def _mostly(answer, there):
     A comment in the patch pasted with a few words of padding passes the
     eight-word test; here the share of the answer that sits in such runs counts.
     """
+    # Latin words only: a copy in CJK text is for `copied` to find.
     total = covered = 0
     for part in CODE_SPAN.split(answer):
-        total += len(CJK.findall(part))
         for run in CJK.split(part):
             tokens = _latin(run)
             total += len(tokens)
@@ -154,7 +157,7 @@ def copied(answer, sources):
     # Each stretch between quoted spans on its own: words either side of a
     # span are not neighbours, and joining them could invent a match.
     return any(
-        _latin_grams(part, GRAM_WORDS) & latin_there or _cjk_grams(part) & cjk_there
+        _latin_runs(part, GRAM_WORDS) & latin_there or _cjk_grams(part) & cjk_there
         for part in CODE_SPAN.split(answer)
     )
 
@@ -187,13 +190,20 @@ def anchors(patch, prompt="", quote=""):
     )[:ANCHORS]
 
 
+# Words every question is made of; sharing one says nothing about the topic.
+GENERIC = frozenset(
+    "code does change changed this that what why how which would should could "
+    "happen happens answer explain mean means about there when then they them".split()
+)
+
+
 def _stems(text):
     """Words of four letters or more, cut to a crude stem, so send, sends and
     sent-ish forms of one word meet. Not language knowledge: a plain cut."""
     return {
         re.sub(r"(?:ing|ed|es|s)$", "", w)[:STEM]
         for w in _latin(CODE_SPAN.sub(" ", text))
-        if len(w) >= 4 and w not in STOP
+        if len(w) >= 4 and w not in STOP and w not in GENERIC
     }
 
 
@@ -272,7 +282,7 @@ MESSAGES = {
     "short": f"A little more, please: at least {MIN_WORDS} words (or {MIN_WORDS} Chinese characters), including {MIN_DISTINCT} different words or characters, in your own words. Say what the code does and why it matters. If you are unsure, say so and name the first thing you would read or run.",
     "copied": "That repeats the question or the code word for word. Say it in your own words; put a line you want to quote in `backticks`.",
     "copy_hint": "Parts of this answer resemble the question or change. Check that it explains the code in your own words.",
-    "unrelated": "The answer may not mention the question or changed code. This check cannot judge every language; the reviewer will read your explanation.",
+    "unrelated": "This may not be about the question. Reuse a word from it or name the code your answer depends on. The check cannot judge every language; the reviewer will read your explanation.",
     "ungrounded": "Nothing from the changed lines is mentioned yet. Which of these does your answer depend on?",
     "good": "Specific enough. Send to reviewer when you are ready.",
     "unsure": "That is fine. Add what you would check first, and the review starts there.",

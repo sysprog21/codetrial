@@ -103,6 +103,9 @@ Path(sys.argv[sys.argv.index('--output-last-message')+1]).write_text(json.dumps(
     chmodSync(cli, 0o700);
     env.PATH = `${bin}:${env.PATH}`;
     args.push("--reviewer", "codex");
+  } else {
+    // The default would pick a Codex worker here when one is installed.
+    args.push("--reviewer", "manual");
   }
   const server = own(
     spawn(python, [helper, "serve", "--port", "0", ...args], {

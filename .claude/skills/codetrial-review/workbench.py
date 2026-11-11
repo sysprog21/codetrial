@@ -858,10 +858,31 @@ def load_gate():
 
 
 def resolve_reviewer(choice):
-    """Managed when Codex is installed: a manual reviewer answers only while a chat turn listens."""
-    if choice == "auto":
-        return "codex" if shutil.which("codex") else "manual"
-    return choice
+    """Managed when Codex is installed and signed in.
+
+    A manual reviewer answers only while a chat turn listens, and the managed
+    worker refuses to start without a login, so auto checks both.
+    """
+    if choice != "auto":
+        return choice
+    executable = shutil.which("codex")
+    if not executable:
+        return "manual"
+    try:
+        with tempfile.TemporaryDirectory(prefix="codetrial-auth-") as cwd:
+            signed_in = (
+                subprocess.run(
+                    [executable, "login", "status"],
+                    cwd=cwd,
+                    capture_output=True,
+                    timeout=10,
+                    check=False,
+                ).returncode
+                == 0
+            )
+    except (OSError, subprocess.SubprocessError):
+        signed_in = False
+    return "codex" if signed_in else "manual"
 
 
 def server(workbench, port, *, reviewer="manual", token=None):

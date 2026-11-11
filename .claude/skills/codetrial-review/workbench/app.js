@@ -184,17 +184,23 @@ function refreshCoach() {
 
 // What the server says about this text; one request per text, shared by the
 // coach and by a send.
-async function coachChecks(text) {
+function coachChecks(text) {
   const { identity } = session;
+  // The request itself is kept, so a send that arrives while the coach's is
+  // still in flight joins it; a failure is forgotten so the next ask retries.
   if (coachLast?.text === text && coachLast.identity === identity)
-    return coachLast.checks;
-  const checks = await api("/api/check", {
+    return coachLast.request;
+  const request = api("/api/check", {
     method: "PUT",
     body: JSON.stringify({ identity, text }),
   });
   // Kept for the snapshot it was asked about, not for whichever is open now.
-  coachLast = { text, identity, checks };
-  return checks;
+  const entry = { text, identity, request };
+  coachLast = entry;
+  request.catch(() => {
+    if (coachLast === entry) coachLast = null;
+  });
+  return request;
 }
 
 function scheduleCoach(immediate = false) {

@@ -21,9 +21,11 @@ directly only after they have tried.
 - **One, then stop.** The message ends on the question: no hint, option, sample
   answer or teaching after it. A compound question hides a checklist and is
   split.
-- **Fresh.** A later session on the same branch asks about something else:
-  not the file or the angle an earlier session used when another consequential
-  change is left, and otherwise a different angle on the least recent one.
+- **Fresh.** A later session on the same branch asks about something else: a
+  consequential change in a file no earlier session asked about or, once every
+  one has been asked, another angle on the least recent. The sessions of the
+  contributor explanation are remembered by `check-interactive-review.py asked`;
+  a guided session reads its own ledger's `# Understanding` map.
 - **Not a leak.** Nothing the person has not reached is said before they
   answer, a reference answer included. Two things are never held back: a
   leaked credential, candidate material or any P0 is said the moment it is

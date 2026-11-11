@@ -165,7 +165,7 @@ level and what was missed, never the text of a finding that is still unsaid:
 ```markdown
 # Understanding
 Head: 3f2a9c1, asked: 7, target: 4
-- admission (src/web/token.rs): 3, last checked at question 6 - missed: the order of the checks
+- admission (src/web/token.rs): 3, last checked at question 6 on 3f2a9c1 - missed: the order of the checks
 - topic wiring (web/lib.js): -
 ```
 
@@ -191,22 +191,23 @@ unproven, and the session stops asking about it either way.
 one of them not asked right after the user was told the answer. A missed
 question lowers it by one and sends the area back to the loop.
 
-**Spaced review.** `last checked` is the `Asked` count when the area was last
-questioned, the diagnostic's included. After the diagnostic, unannounced, on
+**Spaced review.** `last checked` is the `Asked` count and the head when the area
+was last questioned, the diagnostic's included. After the diagnostic, unannounced, on
 every fourth question re-ask the area with the oldest `last checked` among
 those at level 1 or above, from a new angle; a
 change with one area re-asks an earlier idea in it. Break a tie by the lower
 level. When the head moves, place the ledger ([above](#when-the-head-moves))
-and re-ask each area whose paths changed, from one
-`git diff -U0 <at> <head>` over their paths. For each Completed finding that
+and re-ask each area whose paths changed, from `git diff -U0 <checked> <head>` over each
+area's paths, `<checked>` being the head on that area's map line. For each Completed finding that
 was fixed, ask what the test or command its entry names pins, and check the
 answer by reading that test at the head; a finding closed by a ruling or "gone
 at" has nothing to re-ask.
 
 **Final assessment.** When every area is at target, or the user asks for it,
 ask one question per area and one that crosses the areas, or for a one-area
-change the area and a contract in `docs/` ("which check refuses this, and what
-runs if that check is bypassed?"), its answer read from the head first. An
+change the area and a contract in `docs/` ("which check refuses this?", then
+in its own turn "what runs if that check is bypassed?"), its answer read from
+the head first. An
 area that missed, or needed a narrowing question, drops a level and returns to
 the loop; a miss on the crossing question drops each area it names. When none did, show the final
 map and the weakest areas, and keep them in Notes. Stopping early is the user's

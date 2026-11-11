@@ -59,11 +59,20 @@ class WorkbenchTest(unittest.TestCase):
     def write_manifest(self):
         (self.root / "manifest.json").write_text(json.dumps(self.manifest))
 
-    def test_auto_reviewer_is_managed_only_when_codex_is_installed(self):
+    def test_auto_reviewer_is_managed_only_when_codex_is_usable(self):
         # A manual reviewer answers only while a chat turn listens, so the page
         # would sit on "Feedback is pending"; auto avoids that when it can.
-        for found, expected in ((None, "manual"), ("/bin/codex", "codex")):
-            with mock.patch.object(workbench.shutil, "which", return_value=found):
+        done = subprocess.CompletedProcess
+        for found, login, expected in (
+            (None, None, "manual"),
+            ("/bin/codex", done([], 1), "manual"),
+            ("/bin/codex", OSError("gone"), "manual"),
+            ("/bin/codex", done([], 0), "codex"),
+        ):
+            with (
+                mock.patch.object(workbench.shutil, "which", return_value=found),
+                mock.patch.object(workbench.subprocess, "run", side_effect=[login]),
+            ):
                 self.assertEqual(workbench.resolve_reviewer("auto"), expected)
         self.assertEqual(workbench.resolve_reviewer("manual"), "manual")
         self.assertEqual(workbench.resolve_reviewer("codex"), "codex")
@@ -747,6 +756,8 @@ class WorkbenchTest(unittest.TestCase):
                 str(self.root),
                 "--questions",
                 str(self.questions),
+                "--reviewer",
+                "manual",
             ],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -806,6 +817,8 @@ class WorkbenchTest(unittest.TestCase):
                     str(self.root),
                     "--questions",
                     str(self.questions),
+                    "--reviewer",
+                    "manual",
                 ],
             ),
             patch.object(workbench, "server") as serve,
