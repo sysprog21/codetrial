@@ -279,6 +279,12 @@ pub(crate) fn transact<T>(
     })
 }
 
+/// Invitations one account may have waiting at once. Each stays `pending` for
+/// the invite lifetime and is read by the settlement sweep every few seconds
+/// under the shared database connection, so the count has to be bounded the way
+/// reports and interviews are.
+const MAX_PENDING_SESSIONS_PER_USER: i64 = 20;
+
 pub(crate) fn create(
     accounts: &Accounts,
     user: i64,
@@ -286,9 +292,26 @@ pub(crate) fn create(
     config: &crate::config::PeerConfig,
     now: i64,
 ) -> rusqlite::Result<PeerResult<Value>> {
-    accounts.transaction(|connection| create_on(connection, user, settings, config, now))
+    accounts.transaction(|connection| {
+        // The cap is on sessions nobody has entered yet: an invitation,
+        // accepted or not, and a pairing's session, which stays `pending` until
+        // someone enters its lobby. Only a new invitation is refused by it. The
+        // count reads the status column alone, since a JSON function would fail
+        // for an account with one unreadable row.
+        let waiting: i64 = connection.query_row(
+            "SELECT count(*) FROM peer_sessions WHERE creator_id=?1 AND status='pending'",
+            [user],
+            |row| row.get(0),
+        )?;
+        if waiting >= MAX_PENDING_SESSIONS_PER_USER {
+            return Ok(Err("too_many_invitations"));
+        }
+        create_on(connection, user, settings, config, now)
+    })
 }
 
+/// Creates a pending session without the invitation cap, which `create` applies
+/// to an invitation only: a pairing must not be refused for a full list.
 pub(super) fn create_on(
     connection: &Connection,
     user: i64,

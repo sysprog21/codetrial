@@ -462,3 +462,162 @@ fn claiming_a_closed_room_leases_it_for_thirty_seconds() {
     assert_eq!(session.next_delete_at, 530);
     assert!(claim_rooms(&accounts, 501).unwrap().is_empty());
 }
+
+/// One row the code can no longer read must not stop every other session from
+/// being settled: the transaction rolls back on an error, so a single bad
+/// `state_json` would freeze expiry for all of them on every tick.
+#[tokio::test]
+async fn an_unreadable_session_does_not_stop_the_others_settling() {
+    let (accounts, first) = accounts();
+    accounts
+        .with(|c| {
+            c.execute(
+                "INSERT INTO peer_sessions (id,creator_id,status,version,settings_json,state_json,created_at,expires_at)
+                 VALUES ('unreadable',1,'pending',0,'{}','not json',1,1000)",
+                [],
+            )
+        })
+        .unwrap();
+    let settings = accounts
+        .with(|c| peer::load(c, &first))
+        .unwrap()
+        .unwrap()
+        .settings;
+    let created = peer::create(
+        &accounts,
+        1,
+        settings,
+        &crate::config::PeerConfig::default(),
+        201,
+    )
+    .unwrap()
+    .unwrap();
+    let id = created["sessionId"].as_str().unwrap();
+    accounts
+        .with(|c| {
+            let mut session = peer::load(c, id)?.unwrap();
+            session.status = "active".into();
+            session.hard_deadline = Some(300);
+            peer::save(c, &session)
+        })
+        .unwrap();
+
+    settle_once(Arc::clone(&accounts), 300).await.unwrap();
+
+    assert_eq!(
+        accounts
+            .with(|c| peer::load(c, id))
+            .unwrap()
+            .unwrap()
+            .status,
+        "finalizing"
+    );
+}
+
+/// The cleanup claim reads each closed room's session, so one unreadable row
+/// must not keep every other closed room from being deleted.
+#[test]
+fn an_unreadable_closed_room_does_not_stop_the_others_being_claimed() {
+    let (accounts, id) = accounts();
+    accounts
+        .with(|c| {
+            c.execute(
+                "INSERT INTO peer_sessions (id,creator_id,status,version,settings_json,state_json,created_at,expires_at,room_name,next_delete_at)
+                 VALUES ('unreadable',1,'cancelled',0,'{}','not json',1,1000,'interview-bad',0)",
+                [],
+            )?;
+            let mut s = peer::load(c, &id)?.unwrap();
+            s.status = "cancelled".into();
+            s.room_name = Some("interview-peerroom".into());
+            s.provider_id = Some("primary".into());
+            s.next_delete_at = 0;
+            peer::save(c, &s)
+        })
+        .unwrap();
+    let claimed = claim_rooms(&accounts, 500).unwrap();
+    assert_eq!(claimed.len(), 1);
+    assert_eq!(claimed[0].room, "interview-peerroom");
+}
+
+/// The cleanup query takes sixteen rows a pass, so rows that never load must
+/// leave the window, or sixteen of them would keep every readable closed room
+/// from ever being claimed.
+#[test]
+fn unreadable_closed_rooms_leave_the_window_for_the_others() {
+    let (accounts, id) = accounts();
+    accounts
+        .with(|c| {
+            for n in 0..16 {
+                c.execute(
+                    "INSERT INTO peer_sessions (id,creator_id,status,version,settings_json,state_json,created_at,expires_at,room_name,next_delete_at)
+                     VALUES (?1,1,'cancelled',0,'{}','not json',1,1000,'interview-bad',0)",
+                    [format!("unreadable-{n}")],
+                )?;
+            }
+            let mut s = peer::load(c, &id)?.unwrap();
+            s.status = "cancelled".into();
+            s.room_name = Some("interview-peerroom".into());
+            s.provider_id = Some("primary".into());
+            s.next_delete_at = 0;
+            peer::save(c, &s)?;
+            // The window is read in row order, so the readable room comes last.
+            c.execute("UPDATE peer_sessions SET rowid=1000 WHERE id=?1", [&id])?;
+            Ok(())
+        })
+        .unwrap();
+    assert!(claim_rooms(&accounts, 500).unwrap().is_empty());
+    let claimed = claim_rooms(&accounts, 501).unwrap();
+    assert_eq!(claimed.len(), 1);
+    assert_eq!(claimed[0].room, "interview-peerroom");
+}
+
+/// A pass runs every few seconds, so one unreadable row would be logged every
+/// few seconds for as long as it stays unreadable. It is said once.
+#[test]
+fn an_unreadable_session_is_reported_once_per_pass() {
+    assert!(first_report("settlement", "unreadable-once"));
+    assert!(!first_report("settlement", "unreadable-once"));
+    assert!(
+        first_report("cleanup", "unreadable-once"),
+        "another pass is a separate report"
+    );
+    assert!(first_report("settlement", "unreadable-other"));
+}
+
+/// A session that reads cleanly again is forgotten, so a later failure of it
+/// is a new fact and is said.
+#[test]
+fn a_session_that_reads_again_is_reported_when_it_next_fails() {
+    assert!(first_report("settlement", "flaky"));
+    assert!(!first_report("settlement", "flaky"));
+    forget_report("settlement", "flaky");
+    assert!(first_report("settlement", "flaky"));
+}
+
+/// Past the bound the set does not start over, which would repeat every bad
+/// row on every pass and bring back the flood it is there to stop. What it
+/// already holds stays quiet, and the overflow is said once.
+#[test]
+fn a_full_report_set_stays_quiet_and_does_not_start_over() {
+    let mut said = std::collections::HashSet::new();
+    for n in 0..3 {
+        assert!(first_report_in(&mut said, 3, "pass", &format!("bad-{n}")));
+    }
+    assert!(
+        !first_report_in(&mut said, 3, "pass", "bad-0"),
+        "remembered"
+    );
+    assert!(
+        !first_report_in(&mut said, 3, "pass", "one-more"),
+        "past the bound"
+    );
+    assert!(
+        !first_report_in(&mut said, 3, "pass", "bad-1"),
+        "still remembered"
+    );
+    assert!(
+        !first_report_in(&mut said, 3, "pass", "another"),
+        "and still full"
+    );
+    assert_eq!(said.len(), 4, "the three, and the overflow marker");
+}

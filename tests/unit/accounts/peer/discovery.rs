@@ -13,7 +13,7 @@ fn fixture() -> Accounts {
     a.with(|c|c.execute_batch("INSERT INTO users(id,github_id,login,created_at,updated_at)VALUES(1,1,'alice',1,1),(2,2,'bob',1,1),(3,3,'eve',1,1)")).unwrap();
     a
 }
-fn settings() -> Settings {
+fn easy() -> Settings {
     Settings {
         topic: String::new(),
         difficulty: "easy".into(),
@@ -31,7 +31,7 @@ fn available(a: &Accounts, user: i64, now: i64) -> Availability {
     let row = prepare(
         a,
         user,
-        settings(),
+        easy(),
         Some((&format!("interview-wait{user}"), "primary")),
         &crate::config::PeerConfig::default(),
         now,
@@ -46,13 +46,11 @@ fn refreshing_an_available_entry_needs_no_provider_but_a_new_room_does() {
     let a = fixture();
     let row = available(&a, 1, 100);
     let config = crate::config::PeerConfig::default();
-    let refreshed = prepare(&a, 1, settings(), None, &config, 101)
-        .unwrap()
-        .unwrap();
+    let refreshed = prepare(&a, 1, easy(), None, &config, 101).unwrap().unwrap();
     assert_eq!(refreshed.id, row.id);
     set_profile(&a, 2, "Bob", 100).unwrap().unwrap();
     assert!(matches!(
-        prepare(&a, 2, settings(), None, &config, 101).unwrap(),
+        prepare(&a, 2, easy(), None, &config, 101).unwrap(),
         Err("provider_unavailable")
     ));
 }
@@ -65,7 +63,7 @@ fn nickname_is_required_and_rejects_numeric_non_ascii_and_punctuation() {
         prepare(
             &a,
             1,
-            settings(),
+            easy(),
             Some(("interview-wait1", "primary")),
             &crate::config::PeerConfig::default(),
             100
@@ -99,7 +97,7 @@ fn only_published_fresh_availability_is_in_the_roster() {
     let pending = prepare(
         &a,
         1,
-        settings(),
+        easy(),
         Some(("interview-wait1", "primary")),
         &crate::config::PeerConfig::default(),
         100,
@@ -263,7 +261,7 @@ fn persistence_choices_are_independent_and_immutable_in_a_pairing_proposal() {
         let a = fixture();
         set_profile(&a, 1, "Alice", 100).unwrap().unwrap();
         set_profile(&a, 2, "Bob", 100).unwrap().unwrap();
-        let mut choices = settings();
+        let mut choices = easy();
         choices.save_transcript = transcript;
         choices.save_audio = audio;
         let host = prepare(
@@ -335,8 +333,30 @@ fn a_member_entering_a_private_session_disappears_from_discovery() {
     );
 }
 
+/// The invitation cap is on the invitations a person leaves waiting. A pairing
+/// both people confirmed creates a session that is accepted at once, so a host
+/// with a full list of waiting invitations must still be able to pair.
+#[test]
+fn a_full_invitation_list_does_not_block_a_pairing() {
+    let a = fixture();
+    let config = crate::config::PeerConfig::default();
+    for n in 0..super::super::MAX_PENDING_SESSIONS_PER_USER {
+        super::super::create(&a, 1, easy(), &config, 100 + n)
+            .unwrap()
+            .unwrap();
+    }
+    let host = available(&a, 1, 200);
+    set_profile(&a, 2, "Bob", 200).unwrap().unwrap();
+    let r = request(&a, 2, &host.id, 201).unwrap().unwrap();
+    let id = r["requestId"].as_str().unwrap();
+    confirm(&a, 1, id, true, &config, 202).unwrap().unwrap();
+    confirm(&a, 2, id, true, &config, 203)
+        .unwrap()
+        .expect("a pairing is not an invitation left waiting");
+}
+
 fn create_on_fixture(a: &Accounts, now: i64) -> String {
-    super::super::create(a, 1, settings(), &crate::config::PeerConfig::default(), now)
+    super::super::create(a, 1, easy(), &crate::config::PeerConfig::default(), now)
         .unwrap()
         .unwrap()["sessionId"]
         .as_str()
@@ -351,7 +371,7 @@ fn an_empty_pending_room_does_not_hold_capacity() {
         max_sessions: 1,
         ..Default::default()
     };
-    let created = crate::accounts::peer::create(&a, 1, settings(), &config, 100)
+    let created = crate::accounts::peer::create(&a, 1, easy(), &config, 100)
         .unwrap()
         .unwrap();
     let id = created["sessionId"].as_str().unwrap().to_owned();
@@ -360,7 +380,7 @@ fn an_empty_pending_room_does_not_hold_capacity() {
         prepare(
             &a,
             2,
-            settings(),
+            easy(),
             Some(("interview-wait2", "primary")),
             &config,
             now,
@@ -399,15 +419,9 @@ fn hold(a: &Accounts, user: i64, session: &str) {
 }
 
 fn private_session(a: &Accounts, user: i64, now: i64) -> String {
-    super::super::create(
-        a,
-        user,
-        settings(),
-        &crate::config::PeerConfig::default(),
-        now,
-    )
-    .unwrap()
-    .unwrap()["sessionId"]
+    super::super::create(a, user, easy(), &crate::config::PeerConfig::default(), now)
+        .unwrap()
+        .unwrap()["sessionId"]
         .as_str()
         .unwrap()
         .to_owned()
@@ -444,7 +458,7 @@ fn a_member_in_a_live_session_can_neither_publish_nor_request() {
         prepare(
             &a,
             2,
-            settings(),
+            easy(),
             Some(("interview-wait2", "primary")),
             &crate::config::PeerConfig::default(),
             101
@@ -479,7 +493,7 @@ fn one_outgoing_request_at_a_time_and_repeating_it_returns_the_same_one() {
     let row = prepare(
         &a,
         3,
-        settings(),
+        easy(),
         Some(("interview-wait3", "primary")),
         &crate::config::PeerConfig::default(),
         100,
@@ -573,7 +587,7 @@ fn availability_lasts_forty_five_seconds_from_each_refresh() {
     let row = prepare(
         &a,
         1,
-        settings(),
+        easy(),
         Some(("interview-wait1", "primary")),
         &config,
         100,
@@ -583,9 +597,7 @@ fn availability_lasts_forty_five_seconds_from_each_refresh() {
     assert_eq!(row.expires_at, 100 + AVAILABILITY_TTL_SECONDS);
     let published = publish(&a, &row.id, 1, true, 110).unwrap().unwrap();
     assert_eq!(published.expires_at, 110 + AVAILABILITY_TTL_SECONDS);
-    let refreshed = prepare(&a, 1, settings(), None, &config, 120)
-        .unwrap()
-        .unwrap();
+    let refreshed = prepare(&a, 1, easy(), None, &config, 120).unwrap().unwrap();
     assert_eq!(refreshed.expires_at, 120 + AVAILABILITY_TTL_SECONDS);
     assert_eq!(
         lobby(&a, 2, 164).unwrap()["available"]
@@ -611,7 +623,7 @@ fn only_the_owner_can_publish_and_only_while_the_entry_is_live() {
     let row = prepare(
         &a,
         1,
-        settings(),
+        easy(),
         Some(("interview-wait1", "primary")),
         &config,
         100,

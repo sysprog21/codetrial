@@ -333,3 +333,24 @@ fn each_invalid_setting_is_refused_on_its_own() {
         assert!(!valid_settings(&settings, &config), "{name}");
     }
 }
+
+/// The settlement sweep reads every unfinished session on a shared connection
+/// every few seconds, so one account cannot be allowed to keep an unbounded
+/// number of them waiting.
+#[test]
+fn an_account_cannot_keep_unbounded_invitations_waiting() {
+    let a = accounts();
+    let config = crate::config::PeerConfig::default();
+    for n in 0..MAX_PENDING_SESSIONS_PER_USER {
+        create(&a, 1, easy(), &config, 100 + n)
+            .unwrap()
+            .unwrap_or_else(|code| panic!("invitation {n} refused: {code}"));
+    }
+    assert_eq!(
+        create(&a, 1, easy(), &config, 200).unwrap().unwrap_err(),
+        "too_many_invitations"
+    );
+    create(&a, 2, easy(), &config, 200)
+        .unwrap()
+        .expect("another account is unaffected");
+}
