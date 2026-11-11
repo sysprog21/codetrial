@@ -716,7 +716,7 @@ async fn pending_eviction_service() -> PendingEviction {
             claims["exp"].as_u64().unwrap(),
             crate::current_epoch_seconds(),
         );
-        let ttl = crate::token::TOKEN_TTL_SECONDS;
+        let ttl = crate::token::MANAGEMENT_TOKEN_TTL_SECONDS;
         assert!(
             exp >= now && exp <= now + ttl && exp + 60 > now + ttl,
             "exp {exp} against now {now}"

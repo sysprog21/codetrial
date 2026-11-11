@@ -179,6 +179,7 @@ fn room_service_credential_accepted(
 struct RoomService {
     url: String,
     seen: Arc<Mutex<Vec<(String, String)>>>,
+    tokens: Arc<Mutex<Vec<String>>>,
 }
 
 impl RoomService {
@@ -187,6 +188,8 @@ impl RoomService {
         let url = format!("http://{}", listener.local_addr().unwrap());
         let seen = Arc::new(Mutex::new(Vec::new()));
         let recorded = Arc::clone(&seen);
+        let tokens = Arc::new(Mutex::new(Vec::new()));
+        let recorded_tokens = Arc::clone(&tokens);
         tokio::spawn(async move {
             let mut replies = replies.into_iter().peekable();
             let mut last = (200, "{}");
@@ -226,6 +229,9 @@ impl RoomService {
                 }
                 let accepted =
                     room_service_credential_accepted(&head, &path, STUB_API_KEY, STUB_API_SECRET);
+                if let Some(token) = bearer_token(&head) {
+                    recorded_tokens.lock().unwrap().push(token.to_owned());
+                }
                 recorded
                     .lock()
                     .unwrap()
@@ -250,7 +256,7 @@ impl RoomService {
                 let _ = socket.flush().await;
             }
         });
-        Self { url, seen }
+        Self { url, seen, tokens }
     }
 
     fn config(&self) -> AgentConfig {
@@ -261,6 +267,21 @@ impl RoomService {
             ("GOOGLE_API_KEY", "google"),
         ])
         .unwrap()
+    }
+
+    /// The `exp` claim of every credential a call carried.
+    fn expiries(&self) -> Vec<u64> {
+        self.tokens
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|token| {
+                let payload = token.split('.').nth(1)?;
+                let claims: serde_json::Value =
+                    serde_json::from_slice(&URL_SAFE_NO_PAD.decode(payload).ok()?).ok()?;
+                claims.get("exp")?.as_u64()
+            })
+            .collect()
     }
 
     fn requests(&self) -> Vec<(String, String)> {
@@ -551,7 +572,6 @@ async fn a_duplicate_is_evicted_without_the_caller_waiting() {
         &service.config(),
         "interview-abc12345",
         "agent-late".to_owned(),
-        1_700_000_000,
     );
 
     let arrived = async {
@@ -583,6 +603,15 @@ fn the_room_loop_evicts_a_duplicate_only_through_the_helper() {
         !hub.contains("evict_duplicate_agent(config"),
         "the loop must not await the removal itself"
     );
+
+    // The credential it signs lives five minutes, so the helper reads the clock
+    // itself: a time handed down from when the interview began would have
+    // lapsed by the time a duplicate joins.
+    let helper = include_str!("../../../src/livekit/rooms.rs")
+        .split("fn spawn_duplicate_eviction")
+        .nth(1)
+        .unwrap();
+    assert!(helper.contains("crate::current_epoch_seconds()"));
 }
 
 /// A removal that finds nobody is done, and every other refusal is not.
@@ -639,14 +668,9 @@ async fn isolation_removes_a_duplicate_and_confirms_the_room_is_clear() {
     ])
     .await;
 
-    isolate_local_agent(
-        &service.config(),
-        "interview-abc12345",
-        "agent-me",
-        1_700_000_000,
-    )
-    .await
-    .unwrap();
+    isolate_local_agent(&service.config(), "interview-abc12345", "agent-me")
+        .await
+        .unwrap();
 
     let methods: Vec<String> = service
         .requests()
@@ -661,6 +685,26 @@ async fn isolation_removes_a_duplicate_and_confirms_the_room_is_clear() {
             "ListParticipants".to_string(),
         ],
         "it lists, removes what it found, and lists again to confirm"
+    );
+}
+
+/// Isolation runs after the wait for the candidate, so what it signs is dated
+/// when it runs and not when the interview began: a credential that lives five
+/// minutes, signed before a five minute wait, is refused by the first call.
+#[tokio::test]
+async fn isolation_signs_with_a_credential_that_has_not_lapsed() {
+    let service = RoomService::start(vec![(200, r#"{"participants":[]}"#)]).await;
+
+    isolate_local_agent(&service.config(), "interview-abc12345", "agent-me")
+        .await
+        .unwrap();
+
+    let now = crate::current_epoch_seconds();
+    let expiries = service.expiries();
+    assert!(!expiries.is_empty());
+    assert!(
+        expiries.iter().all(|exp| *exp > now),
+        "{expiries:?} vs {now}"
     );
 }
 

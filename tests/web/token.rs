@@ -75,7 +75,7 @@ fn room_admin_token_can_manage_only_the_target_room() {
 
     assert_eq!(claims["iss"], "key");
     assert_eq!(claims["sub"], "room-admin");
-    assert_eq!(claims["exp"], 8200);
+    assert_eq!(claims["exp"], 1300);
     assert_eq!(claims["video"]["room"], "interview-abc");
     assert_eq!(claims["video"]["roomAdmin"], true);
     assert!(claims["video"].get("roomJoin").is_none());

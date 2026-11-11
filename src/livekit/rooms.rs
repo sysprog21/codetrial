@@ -24,26 +24,32 @@ pub(super) async fn isolate_local_agent(
     config: &AgentConfig,
     room_name: &str,
     local_identity: &str,
-    now_seconds: u64,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    // A bounded number of removal rounds, then one more look. The last look is
-    // what confirms the final removal landed, and writing the budget as the
-    // range rather than as a counter is what keeps "one pass more" a property
-    // of the shape instead of an arithmetic accident.
+    // Every call is signed from the clock as it is then. Isolation runs after
+    // the wait for the candidate, which can take up to five minutes, and the
+    // credential lives five minutes: a time taken when the interview began
+    // would have lapsed by the time the first call is made. A bounded number of
+    // removal rounds, then one more look. The last look is what confirms the
+    // final removal landed, and writing the budget as the range rather than as
+    // a counter is what keeps "one pass more" a property of the shape instead
+    // of an arithmetic accident.
     for _ in 0..DUPLICATE_AGENT_ISOLATION_ATTEMPTS {
-        let participants = list_room_participants(config, room_name, now_seconds).await?;
+        let participants =
+            list_room_participants(config, room_name, crate::current_epoch_seconds()).await?;
         let duplicate_agents = duplicate_agent_identities(&participants, local_identity);
         if duplicate_agents.is_empty() {
             return Ok(());
         }
         for identity in &duplicate_agents {
             eprintln!("{}", removing_duplicate_line(room_name, identity));
-            remove_room_participant(config, room_name, identity, now_seconds).await?;
+            remove_room_participant(config, room_name, identity, crate::current_epoch_seconds())
+                .await?;
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
 
-    let participants = list_room_participants(config, room_name, now_seconds).await?;
+    let participants =
+        list_room_participants(config, room_name, crate::current_epoch_seconds()).await?;
     let duplicate_agents = duplicate_agent_identities(&participants, local_identity);
     if duplicate_agents.is_empty() {
         return Ok(());
@@ -231,14 +237,14 @@ pub(super) async fn evict_duplicate_agent(
 /// client timeout ends within thirty seconds, writes at most one log line and
 /// holds the cloned config only for that time, so an interview that ends under
 /// it leaves nothing running that nothing else bounds.
-pub(super) fn spawn_duplicate_eviction(
-    config: &AgentConfig,
-    room_name: &str,
-    identity: String,
-    now_seconds: u64,
-) {
+pub(super) fn spawn_duplicate_eviction(config: &AgentConfig, room_name: &str, identity: String) {
     let config = config.clone();
     let room_name = room_name.to_owned();
+
+    // Signed from the clock now: the credential lives five minutes, and a time
+    // taken when the interview began would have lapsed by the time a duplicate
+    // joins.
+    let now_seconds = crate::current_epoch_seconds();
     tokio::spawn(async move {
         if let Err(error) = evict_duplicate_agent(&config, &room_name, &identity, now_seconds).await
         {

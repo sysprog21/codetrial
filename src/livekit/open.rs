@@ -317,7 +317,7 @@ pub(super) async fn open_session<'a>(
     let mut gemini_ready = Duration::ZERO;
     let joined = tokio::try_join!(
         async {
-            isolate_local_agent(config, room_name, &agent_identity, now_seconds).await?;
+            isolate_local_agent(config, room_name, &agent_identity).await?;
             let published =
                 publish_output_audio(room.connected(), GEMINI_OUTPUT_AUDIO_SAMPLE_RATE).await;
             room_ready = setup_began.elapsed();

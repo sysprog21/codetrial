@@ -1388,7 +1388,6 @@ pub(crate) async fn run_room_with_slot(
         room_name,
         agent: &agent_identity,
         candidate: &candidate_identity,
-        now_seconds,
     };
     let deadline_at = tokio::time::Instant::now() + interview_hard_deadline(boot.duration_min);
     let mut loops = RoomLoop {
@@ -1685,7 +1684,6 @@ async fn handle_room_event(
         room_name,
         agent: agent_identity,
         candidate: candidate_identity,
-        now_seconds,
     } = *ids;
     let config = interview.config;
     match event {
@@ -1742,7 +1740,7 @@ async fn handle_room_event(
         RoomEvent::ParticipantConnected(participant)
             if is_duplicate_agent(&participant, agent_identity) =>
         {
-            spawn_duplicate_eviction(config, room_name, participant.identity().0, now_seconds);
+            spawn_duplicate_eviction(config, room_name, participant.identity().0);
         }
         RoomEvent::ParticipantDisconnected(participant)
             if participant.identity().0 == candidate_identity =>
@@ -1808,7 +1806,6 @@ struct RoomIdentities<'a> {
     room_name: &'a str,
     agent: &'a str,
     candidate: &'a str,
-    now_seconds: u64,
 }
 
 #[derive(Clone, Copy)]
