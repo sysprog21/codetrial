@@ -718,7 +718,9 @@ Withdrawn consent closes ingest for good, and closes it in the same shape as an
 id that was never this account's. A browser that buffered events before the
 withdrawal will try to flush them afterwards, and consent that stops the video
 while the replay keeps growing is not withdrawal. What is already stored is the
-deletion path's to remove, not ingest's.
+deletion path's to remove, not ingest's, with one exception: an interview that
+has no recording has no deletion to wait for, so withdrawing consent removes its
+replay in the same transaction.
 
 Cross-account is `404` rather than `403`, the same as everywhere else an
 interview id arrives from a browser: an account that does not own an interview
