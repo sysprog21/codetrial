@@ -129,6 +129,7 @@
             <button id="close-window" class="save-button" type="button">
               Finish and close
             </button>
+            <p id="finish-note" class="field-hint" role="status"></p>
             <p class="field-hint">
               This stops the review server on your computer. Your confirmation
               stays saved.
@@ -294,17 +295,27 @@
               </p>
             </div>
           </div>
-          <p id="reviewer-presence" class="field-hint" role="status"></p>
-          <div id="waiting" class="waiting" hidden>
-            <span class="waiting-dots" aria-hidden="true"
-              ><i></i><i></i><i></i
-            ></span>
-            <span class="waiting-bar" aria-hidden="true"></span>
-            <span
-              id="waiting-time"
-              class="field-hint"
-              aria-hidden="true"
-            ></span>
+          <div id="handoff" class="handoff" data-tone="idle">
+            <p id="reviewer-presence" class="field-hint" role="status"></p>
+            <div id="waiting" class="waiting" hidden>
+              <span class="waiting-dots" aria-hidden="true"
+                ><i></i><i></i><i></i
+              ></span>
+              <span class="waiting-bar" aria-hidden="true"></span>
+              <span
+                id="waiting-time"
+                class="field-hint"
+                aria-hidden="true"
+              ></span>
+            </div>
+            <button
+              id="resume-copy"
+              class="duration-button"
+              type="button"
+              hidden
+            >
+              Copy the resume line
+            </button>
           </div>
           <div class="compare-grid">
             <ul id="feedback-list"></ul>
@@ -389,20 +400,6 @@
                 name="goal"
                 maxlength="2000"
               ></textarea>
-              <label for="intent-constraints">What must stay true?</label>
-              <textarea
-                id="intent-constraints"
-                name="constraints"
-                maxlength="2000"
-              ></textarea>
-              <label for="intent-alternatives"
-                >What did you not do, and why?</label
-              >
-              <textarea
-                id="intent-alternatives"
-                name="alternatives"
-                maxlength="2000"
-              ></textarea>
               <label for="intent-check"
                 >Which check fails if this breaks? Name the test or
                 command.</label
@@ -412,25 +409,6 @@
                 name="check"
                 maxlength="2000"
               ></textarea>
-              <label for="intent-backup"
-                >Who else could explain this change?</label
-              >
-              <textarea
-                id="intent-backup"
-                name="backup"
-                maxlength="2000"
-              ></textarea>
-              <label for="intent-home"
-                >Where will the why live after this review?</label
-              >
-              <select id="intent-home" name="home">
-                <option value="">Not decided</option>
-                <option value="pr">The pull request description</option>
-                <option value="commit">A commit message</option>
-                <option value="docs">A document or decision record</option>
-                <option value="comment">A code comment</option>
-                <option value="none">Nowhere yet</option>
-              </select>
               <div class="save-row">
                 <button id="intent-save" class="duration-button" type="submit">
                   Save record

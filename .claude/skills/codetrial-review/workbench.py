@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import shutil
 import signal
 import stat
 import subprocess
@@ -27,8 +28,7 @@ from urllib.parse import urlsplit
 FIELDS = ("motivation",)
 # The intent record is the contributor's own words, kept beside the review and
 # never part of the answers, so it changes neither their digest nor the gate.
-INTENT_FIELDS = ("goal", "constraints", "alternatives", "check", "backup")
-INTENT_HOMES = ("", "pr", "commit", "docs", "comment", "none")
+INTENT_FIELDS = ("goal", "check")
 INTENT_LIMIT = 2000
 CONFIDENCE = ("sure", "probably", "guessing", "unknown")
 ASSETS = {
@@ -302,14 +302,18 @@ class Workbench:
 
     def intent(self):
         """The contributor's intent record for this snapshot, or empty fields."""
-        empty = {**{k: "" for k in INTENT_FIELDS}, "home": ""}
+        empty = {k: "" for k in INTENT_FIELDS}
         try:
             saved = load(self.intent_path)
         except (OSError, ValueError):
             return empty
         if saved.get("identity") != self.identity:
             return empty
-        return {**empty, **saved.get("fields", {})}
+        # A record saved with the longer list keeps the answers still asked for.
+        kept = saved.get("fields", {})
+        return {
+            k: kept[k] if isinstance(kept.get(k), str) else "" for k in INTENT_FIELDS
+        }
 
     def save_intent(self, payload):
         """Keep what the contributor wrote about why this change is the way it is.
@@ -317,25 +321,33 @@ class Workbench:
         Nothing here is generated or checked for meaning: it is theirs, saved
         as they typed it, and bound to this snapshot so a new one starts clean.
         """
-        if not isinstance(payload, dict) or not set(payload) <= {
-            *INTENT_FIELDS,
-            "home",
-        }:
-            raise ValueError(
-                "The intent record has goal, constraints, alternatives, check, backup and home"
-            )
+        if not isinstance(payload, dict) or not set(payload) <= set(INTENT_FIELDS):
+            raise ValueError("The intent record has " + " and ".join(INTENT_FIELDS))
         fields = {}
-        for key in (*INTENT_FIELDS, "home"):
+        for key in INTENT_FIELDS:
             value = payload.get(key, "")
             if not isinstance(value, str) or len(value) > INTENT_LIMIT:
                 raise ValueError(
                     f"Keep each intent answer to text of at most {INTENT_LIMIT} characters"
                 )
             fields[key] = value
-        if fields["home"] not in INTENT_HOMES:
-            raise ValueError("Choose where the why lives from the list")
         with self.locked():
-            self.write({"identity": self.identity, "fields": fields}, self.intent_path)
+            # Answers saved when the record asked more questions stay in the
+            # file, unseen, rather than being thrown away by an edit.
+            try:
+                earlier = load(self.intent_path)
+            except (OSError, ValueError):
+                earlier = {}
+            old = (
+                earlier.get("fields", {})
+                if earlier.get("identity") == self.identity
+                else {}
+            )
+            kept = {k: v for k, v in old.items() if k not in INTENT_FIELDS}
+            self.write(
+                {"identity": self.identity, "fields": {**kept, **fields}},
+                self.intent_path,
+            )
         return {"intent": fields}
 
     def read_note(self, text):
@@ -436,11 +448,13 @@ class Workbench:
         ]
         presence = load(self.presence_path) if self.presence_path.exists() else {}
         reviewer = "offline"
-        if (
-            presence.get("identity") == self.identity
-            and presence.get("until", 0) > time.time()
-        ):
-            reviewer = presence["state"]
+        if presence.get("identity") == self.identity:
+            if presence.get("until", 0) > time.time():
+                reviewer = presence["state"]
+            elif presence.get("state") in ("waiting", "reading"):
+                # Seen for this answer and then silent: not the same as never
+                # there, since the task may still be working.
+                reviewer = "lapsed"
         return {
             **state,
             "manifest": self.manifest,
@@ -493,6 +507,7 @@ class Workbench:
             "anchors": list(checks["anchors"]),
             "state": understanding.state(checks),
             "message": understanding.message(checks),
+            "blocks_send": understanding.problem(checks) is not None,
         }
 
     def check_draft(self, payload):
@@ -842,6 +857,35 @@ def load_gate():
     return gate
 
 
+def resolve_reviewer(choice):
+    """Managed when Codex is installed and signed in.
+
+    A manual reviewer answers only while a chat turn listens, and the managed
+    worker refuses to start without a login, so auto checks both.
+    """
+    if choice != "auto":
+        return choice
+    found = shutil.which("codex")
+    if not found:
+        return "manual"
+    executable = os.path.abspath(found)
+    try:
+        with tempfile.TemporaryDirectory(prefix="codetrial-auth-") as cwd:
+            signed_in = (
+                subprocess.run(
+                    [executable, "login", "status"],
+                    cwd=cwd,
+                    capture_output=True,
+                    timeout=10,
+                    check=False,
+                ).returncode
+                == 0
+            )
+    except (OSError, subprocess.SubprocessError):
+        signed_in = False
+    return "codex" if signed_in else "manual"
+
+
 def server(workbench, port, *, reviewer="manual", token=None):
     token = token or secrets.token_urlsafe(32)
     assets = Path(__file__).with_name("workbench")
@@ -1031,7 +1075,12 @@ def main():
         "--request-id",
         help="request_id from the wait result being answered; stale requests are refused",
     )
-    parser.add_argument("--reviewer", choices=["manual", "codex"], default="manual")
+    parser.add_argument(
+        "--reviewer",
+        choices=["auto", "manual", "codex"],
+        default="auto",
+        help="auto uses Codex when installed and signed in, so feedback does not depend on a chat turn",
+    )
     parser.add_argument(
         "--token-file",
         type=Path,
@@ -1099,7 +1148,12 @@ def main():
                 ):
                     raise ValueError("Invalid private access token")
                 token = raw.strip().decode("ascii")
-            server(workbench, args.port, reviewer=args.reviewer, token=token)
+            server(
+                workbench,
+                args.port,
+                reviewer=resolve_reviewer(args.reviewer),
+                token=token,
+            )
         elif args.command == "basis":
             print(json.dumps(workbench.basis(), indent=2, ensure_ascii=False))
         elif args.command == "inspect":

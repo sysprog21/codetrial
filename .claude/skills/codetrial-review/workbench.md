@@ -48,9 +48,9 @@ reference and reflection stay as snapshot-bound context for later agent work
 permission to execute their text or publish changes. Contracts, failure paths
 and validation remain the agent's review duties.
 
-When an authenticated Codex CLI is available, use
-managed mode (`--reviewer codex`) so feedback survives the end of the chat turn;
-otherwise use manual mode and keep this invocation listening with its bounded
+`serve` picks managed mode itself when the Codex CLI is installed and signed in
+(`--reviewer auto`, the default), so feedback survives the end of the chat turn;
+`--reviewer manual` forces the other mode. In manual mode keep this invocation listening with its bounded
 `wait`, disclosing that manual feedback stops when the turn ends. In managed mode
 inspect the saved feedback while the formal review continues; in manual mode read
 submissions and return verified feedback with `feedback`, since showing a form or
@@ -81,7 +81,15 @@ lists undiffed untracked files, the workspace shows that limitation and its
 explanation remains provisional. For a dirty preview, supply the full PR base to `commit-sizes.py`.
 
 Prepare `$bundle/questions.json` with **one core key-change question**, chosen after
-reading the diff and relevant callers. Include a manifest `path`, a short `quote`
+reading the diff and relevant callers, and framed as [socratic.md](socratic.md#what-a-question-is)
+frames a question. Before choosing it, read what earlier sessions on this clone asked
+(`python3 scripts/check-interactive-review.py asked`, newest first) and
+[vary it](socratic.md#what-a-question-is): a commit pushed after review, a
+rebase or a force push after reviewer comments is a new head that gets a new
+session, and its core question goes to a consequential change whose file was
+not asked about last, or, when every one has been asked, to another angle on
+the least recent (the failure path, the contract, the test that pins it) rather
+than the same prompt again. Include a manifest `path`, a short `quote`
 from the pinned patch, an `id` and a concrete `prompt`. Choose the behavior or
 tradeoff that most needs the contributor's explanation, rather than the largest
 file. This prompt replaces the generic motivation question: there is **one answer
@@ -118,7 +126,15 @@ python3 .claude/skills/codetrial-review/workbench.py serve \
 
 This managed mode uses the already installed and authenticated Codex CLI. Usage
 counts against its configured account. If that CLI is unavailable, use
-`--reviewer manual` and keep the chat wait/feedback loop below running.
+`--reviewer manual` and keep the chat wait/feedback loop below running. Run that
+loop itself as the background command: nested in `( … &)` the shell exits at
+once and its completion looks like a submission.
+
+In manual mode also start the submission watch from
+[the interaction loop](#the-agentbrowser-interaction-loop) in the background
+right now, with the confirmation watch: a send that no task is waiting for
+leaves the page saying so and nothing more, which reads as a page that did not
+update.
 
 Open the printed URL in the contributor's existing browser. Runtime needs only
 Python's standard library on Unix, Git and the files in this checkout: no desktop
@@ -196,18 +212,32 @@ answer. `understanding.py` holds the rules, all deterministic, with no model
 call:
 
 - **Short:** a sendable core answer has at least 12 words, counting each CJK
-  character as one. "I don't know" is acceptable however short, though not as a lead-in to the question pasted back.
+  character as one, and at least 8 different ones, so filler does not count.
+  "I don't know" is acceptable however short, though not as a lead-in to the
+  question pasted back. The reviewer can ask what to read or run first.
 - **Copied:** eight plain words in a row (twelve CJK characters) that appear in
   the question, its quoted passage or the file's patch are refused at send.
-  Text inside `backticks` is not counted, so quoting a line is fine.
+  An answer that is half or more runs of five such words gets a hint: common
+  technical phrasing can overlap without being copied. Text inside `backticks`
+  is not counted, so quoting a line is fine.
+- **Unrelated:** an answer with no word in common with the question, the quote
+  or the file's name, and no code from the change named as code (an underscore,
+  a camelCase, a path), gets a hint. Words are compared by a crude stem, not by
+  meaning, so this catches text about something else, not a wrong answer; it
+  is skipped when nothing was asked and for answers mostly in CJK, which it
+  cannot judge.
 - **Names nothing:** an answer that mentions none of the identifiers in the
   changed lines gets a hint, never a refusal. The submission records whether it
   did (`checks.grounded`) and which names were available, and the reviewer is
   told to spend its one clarification on how the quoted code behaves instead of
   restating the goal.
 
-Drafts are never refused; only **Send to reviewer** is, and only for short or
-copied answers. These are this tool's defaults, not findings about
+Drafts are never refused; only **Send to reviewer** is, and only for short
+or copied answers. Relevance is an advisory signal because the heuristic
+cannot judge every language. The coach shows where the answer stands as an edge
+(red when Send would refuse it, grey for a hint, accent when it is ready), and a
+refused send says so there, beside the answer with focus on it, never in the
+page-level alert. These are this tool's defaults, not findings about
 understanding. They make a pasted prompt visible and a fluent answer that never
 touches the code easy to notice; they cannot show that the contributor
 understands the change.
@@ -304,7 +334,13 @@ and chooses **Send to reviewer** (or presses Ctrl or Cmd with Enter in the
 answer). **Save explanation** only saves a draft; it does not notify the agent
 to review it. A rail of four steps (Read, Explain, Compare, Keep the why) stays
 at the top of the page and marks where the contributor is, from the same state
-the summary line reads; choosing a step moves focus to its heading. Feedback
+the summary line reads; choosing a step moves focus to its heading. After a send, one
+handoff box under the step heading carries the state: a reviewer at work (with
+the time this page has watched, not the age of the submission), none listening
+(with a copy button for the resume line), one that was seen and then stopped
+signalling (said as that, since it may still be working), a failed job (Send
+becomes Retry) or a reply. Send stays usable throughout, so an edited answer can
+always be sent again. Feedback
 that arrives while the page is open is announced once and marked on the rail,
 without moving focus, and is shown beside the explanation exactly as it was
 sent, so the self-assessment is made with both in view. Both persist in
@@ -350,8 +386,10 @@ from the received submission:
 }
 ```
 
-`field` is `motivation`. Return exactly one reference note, prose or, when a
-picture or table carries the point better, [drawn](#draw-the-reference-note-optional). Do not
+`field` is `motivation`. Return exactly one reference note, [drawn](#draw-the-reference-note)
+with one small flow of the key change unless the change has no flow to show
+(documentation, formatting): the managed worker does this, and a prose-only note
+from a manual agent leaves the page without the picture it was built to show. Do not
 return an `approved` field or grade the author. If their goal is clear but the
 code does not achieve it, identify that gap as a possible code adjustment;
 do not keep demanding a different motivation.
@@ -384,9 +422,11 @@ them. For code/base/question changes, prepare a new bundle/session, retain the
 old record and revisit affected answers; do not overwrite the old identity or
 reuse its completed reflection.
 
-## Draw the reference note (optional)
+## Draw the reference note
 
-When the point of the key change is a path, a before and after, or a choice
+A note carries one small flow of the key change unless the change has none to
+show; a prose-only note stays valid, only without the picture. When the point of
+the key change is a path, a before and after, or a choice
 between designs, the note may carry a diagram, a table and quoted code besides
 prose. The page draws them after the contributor has submitted, in the feedback
 panel; it reveals nothing earlier. The note is still the one `text` of the one
@@ -492,20 +532,18 @@ What it deliberately does not do:
 
 The **intent record** sits closed under the three layers until wanted, or opens
 by itself once one has been saved; its summary says how many answers are written
-and whether they are saved, and Ctrl or Cmd with Enter saves it. It is five
-short answers and a choice, in the contributor's own words: what the change must keep doing and why it exists, what must stay
-true, what was not done and why, which check fails if it breaks, who else could
-explain it, and where the why will live afterwards. It is saved beside the
+and whether they are saved, and Ctrl or Cmd with Enter saves it. It is two
+short answers in the contributor's own words: what the change must keep doing
+and why it exists, and which check fails if it breaks. It is saved beside the
 review in `$bundle/intent-record-<snapshot>.json`, one file for each snapshot so a
 new head starts empty and a window left open on an older one cannot replace the
 newer record, and is **not** part of the answers: it changes neither their
 digest nor the identity, and the gate and the signed record never read it.
 **Copy for the pull request** turns what was written into a short English section
 for the PR body, which already has to carry the rationale
-([the large-change rules](../../../docs/large-change-explanation.md)): the five
-answers under plain labels, in the contributor's words. The "where will the why
-live" choice is a reminder for the contributor and is not copied. The download
-includes the record too.
+([the large-change rules](../../../docs/large-change-explanation.md)): the
+answers under plain labels, in the contributor's words. The download includes
+the record too.
 
 The record is also **not handed to the reviewing agent**: `inspect`, `wait` and
 `feedback` print the snapshot without it, since the page says it stays on this
@@ -556,7 +594,10 @@ Put only useful rationale and reading order in the PR body, never this transcrip
 ### Git hook evidence
 
 Pre-commit advises when the staged text reaches 200 added plus deleted lines;
-it allows the commit so this review can pin its SHA. Pre-push enforces the
+it allows the commit so this review can pin its SHA. Post-rewrite, after a
+rebase or an amend, says when the rewritten head is still over the thresholds
+and has no matching review, so the contributor reviews again before the push
+hook refuses; it is advice and fails nothing. Pre-push enforces the
 200-per-commit and >500-per-PR thresholds on topic branches. It accepts neither
 a manually appended `reviewed` marker nor a clean web form alone.
 

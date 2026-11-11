@@ -36,7 +36,8 @@ and checking every finding at the head before anyone sees it.
 | [defect-evaluation.md](defect-evaluation.md) | whether a review finds defects: replay contamination and a blinded pilot |
 | [benchmarking.md](benchmarking.md) | reproducible offline bootstrap checks and measurement limits |
 | [experience.md](experience.md) | explicit durable local reports, evidence use and later outcome checks |
-| [interactive.md](interactive.md) | the findings ledger across turns and pushes: reading order, placement when the head moves, presets |
+| [interactive.md](interactive.md) | the findings ledger across turns and pushes: reading order, placement when the head moves, presets, a Socratic guided session |
+| [socratic.md](socratic.md) | how a question is asked and followed up, shared by the guided review and the contributor explanation |
 | [workbench.md](workbench.md) | local interactive review page, server and the bidirectional agent loop |
 | `review-worker.py` | optional persistent motivation feedback through an installed Codex CLI; formal code review and publication remain separate |
 | `memory.py` | the project memory: every PR and issue discussion, searchable, with its provenance ([Project memory](#project-memory)) |

@@ -93,6 +93,37 @@ for state in rebase-merge rebase-apply sequencer; do
 done
 EOF
     fi
+    if [ "$1" = post-rewrite ]; then
+        cat << 'EOF'
+# Git supplies the old and new commits on stdin; ORIG_HEAD is not set by amend.
+# Compare every old commit with the final tree before running its scripts.
+# Missing or invalid input and failed diffs also suppress the incoming code.
+input=$(mktemp) || exit 1
+trap 'rm -f "$input"' EXIT
+cat > "$input" || exit 1
+seen=
+while read -r old new rest; do
+    [ -n "$old" ] || continue
+    seen=yes
+    case "$old:$new" in
+        :* | *: | *[!0-9a-f:]*) script=/dev/null; continue ;;
+    esac
+    if ! git cat-file -e "$new^{commit}" 2> /dev/null; then
+        script=/dev/null
+        continue
+    fi
+    if ! git diff --quiet "$old" HEAD -- scripts/git-post-rewrite.sh \
+        scripts/check-interactive-review.py .claude/skills/codetrial-review 2> /dev/null; then
+        script=/dev/null
+    fi
+done < "$input"
+[ -n "$seen" ] || script=/dev/null
+sh "$script" "$@" < "$input" || exit
+[ ! -x "$0.local" ] || "$0.local" "$@" < "$input"
+exit
+EOF
+        return
+    fi
     cat << EOF
 [ -x "\$0.local" ] || exec sh "\$script" "\$@"
 input=\$(mktemp) || exit 1

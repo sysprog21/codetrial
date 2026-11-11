@@ -313,18 +313,15 @@ class WorkbenchTest(unittest.TestCase):
     def test_the_intent_record_is_kept_as_written_and_changes_nothing_else(self):
         app, root = self.make()
         before = app.page_snapshot()
-        self.assertEqual(
-            before["intent"], {**{k: "" for k in workbench.INTENT_FIELDS}, "home": ""}
-        )
+        self.assertEqual(before["intent"], {"goal": "", "check": ""})
         record = {
             "goal": "A miss must reach the database.",
             "check": "tests/cache_test.rs",
-            "home": "pr",
         }
         self.assertEqual(app.save_intent(record)["intent"]["goal"], record["goal"])
         after = app.page_snapshot()
         self.assertEqual(after["intent"]["goal"], record["goal"])
-        self.assertEqual(after["intent"]["constraints"], "")
+        self.assertEqual(after["intent"]["check"], record["check"])
         # Not part of the answers, so the gate's inputs are untouched.
         for key in ("answer_digest", "identity", "revision", "answers", "status"):
             self.assertEqual(after[key], before[key], key)
@@ -335,13 +332,36 @@ class WorkbenchTest(unittest.TestCase):
         for payload, why in (
             ({"goal": 5}, "text"),
             ({"goal": "x" * 2001}, "at most 2000"),
-            ({"verdict": "approved"}, "has goal"),
-            ({"home": "elsewhere"}, "from the list"),
-            ("goal", "has goal"),
+            ({"verdict": "approved"}, "has goal and check"),
+            ({"home": "pr"}, "has goal and check"),
+            ({"backup": "someone"}, "has goal and check"),
+            ("goal", "has goal and check"),
         ):
             with self.subTest(str(payload)[:20]):
                 with self.assertRaisesRegex(ValueError, why):
                     app.save_intent(payload)
+
+    def test_a_record_saved_with_the_longer_list_keeps_the_answers_still_asked(self):
+        app, root = self.make()
+        app.write(
+            {
+                "identity": app.identity,
+                "fields": {"goal": "Kept.", "backup": "Dropped.", "home": "pr"},
+            },
+            app.intent_path,
+        )
+        self.assertEqual(app.intent(), {"goal": "Kept.", "check": ""})
+
+    def test_saving_keeps_answers_from_the_longer_list_in_the_file(self):
+        app, root = self.make()
+        app.write(
+            {"identity": app.identity, "fields": {"goal": "Old.", "backup": "Keep."}},
+            app.intent_path,
+        )
+        app.save_intent({"goal": "New.", "check": "make test"})
+        saved = json.loads(app.intent_path.read_text())["fields"]
+        self.assertEqual(saved["backup"], "Keep.")
+        self.assertEqual(app.intent(), {"goal": "New.", "check": "make test"})
 
     def test_a_new_snapshot_does_not_inherit_the_old_record(self):
         app, root = self.make()

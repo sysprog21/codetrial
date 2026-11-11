@@ -239,6 +239,61 @@ def atomic(path, value):
             os.unlink(temporary)
 
 
+ASKED_KEEP = 100  # sessions of key-change questions kept for varying the next one
+
+
+def asked_path():
+    return common() / "codetrial-review/asked.jsonl"
+
+
+def record_asked(head, base, questions):
+    """Remember which files a certified session asked about.
+
+    A later session on the same branch, after a rebase or more commits, reads
+    this to ask about another area instead of the one the contributor already
+    explained. It survives a revoked certificate: the question was still asked.
+    """
+    path = asked_path()
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    entry = {
+        "head": head,
+        "base": base,
+        "questions": [
+            {
+                "id": q.get("id"),
+                "path": q.get("path"),
+                "prompt": q.get("prompt", "")[:300],
+            }
+            for q in questions
+            if q.get("path")
+        ],
+    }
+    # One short line appended, so concurrent certifications cannot lose each
+    # other's; the file is cut back only when it has grown well past its keep.
+    with open(path, "a") as history:
+        history.write(json.dumps(entry) + "\n")
+    lines = path.read_text().splitlines()
+    if len(lines) > 2 * ASKED_KEEP:
+        path.write_text("\n".join(lines[-ASKED_KEEP:]) + "\n")
+
+
+def asked(limit=20):
+    """The most recent sessions' questions, newest first; empty when there are none."""
+    try:
+        lines = asked_path().read_text().splitlines()
+    except OSError:
+        return []
+    entries = []
+    for line in reversed(lines):
+        try:
+            entries.append(json.loads(line))
+        except ValueError:
+            continue
+        if len(entries) == limit:
+            break
+    return entries
+
+
 def certify(bundle):
     bundle = Path(bundle).resolve()
     manifest_bytes = (bundle / "manifest.json").read_bytes()
@@ -306,6 +361,12 @@ def certify(bundle):
             raise ValueError("Interactive review changed while it was being certified")
         with evidence_lock(head):
             atomic(evidence_path(head), proof)
+            try:
+                record_asked(head, base, snapshot["questions"])
+            except OSError:
+                # The history only varies the next question; certifying the
+                # review that was just completed does not depend on it.
+                pass
         record_marker(base, head)
 
 
@@ -414,6 +475,50 @@ def status(base, head):
             result["status"] = "complete"
             result["evidence"] = str(evidence_path(head))
     return result
+
+
+def rewritten():
+    """What a rebase or amend leaves: the advice to review again, or nothing.
+
+    The old head's evidence names a commit that no longer exists, so a branch
+    still over the threshold has no matching record. The push hook refuses it
+    then; this says so while the contributor still remembers the change.
+    """
+    # Match the pre-push hook's URL-based choice even when the contributor gave
+    # the canonical remote a different name. Do not fall back to a stale fork
+    # when the canonical remote exists but has no main tracking ref yet.
+    canonical_url = re.compile(
+        r"(^|[@/.])github[.]com(:[0-9]+)?[:/]sysprog21/codetrial([.]git)?/?$",
+        re.I,
+    )
+    remotes = git("remote", "-v").decode(errors="replace").splitlines()
+    canonical = next(
+        (
+            parts[0]
+            for row in remotes
+            if len(parts := row.split()) >= 2 and canonical_url.search(parts[1])
+        ),
+        None,
+    )
+    for name in (canonical,) if canonical else ("upstream", "origin"):
+        try:
+            base = resolve(f"refs/remotes/{name}/main")
+        except (subprocess.CalledProcessError, ValueError):
+            continue
+        result = status(base, "HEAD")
+        if result["status"] != "pending":
+            return ""
+        return (
+            "This branch still reaches the interactive-review threshold"
+            f" ({result['pr_text_lines']} text lines) and the rewritten head has no"
+            " matching review. Run /codetrial-review before pushing"
+            + (
+                "; it asks about a different area than earlier sessions."
+                if asked()
+                else "."
+            )
+        )
+    return ""
 
 
 def read_marker(head):
@@ -936,7 +1041,17 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "command",
-        choices=["staged", "push", "certify", "status", "mark", "pr", "marker"],
+        choices=[
+            "staged",
+            "push",
+            "certify",
+            "status",
+            "mark",
+            "pr",
+            "marker",
+            "asked",
+            "rewritten",
+        ],
     )
     parser.add_argument("--base")
     parser.add_argument("--head", default="HEAD")
@@ -960,7 +1075,18 @@ def main():
     )
     args = parser.parse_args()
     try:
-        if args.command == "marker":
+        if args.command == "asked":
+            # For the agent choosing the next key-change question.
+            print(json.dumps(asked(), indent=2))
+        elif args.command == "rewritten":
+            # For the post-rewrite hook: advice only, never a refusal.
+            try:
+                advice = rewritten()
+            except (OSError, ValueError, KeyError, subprocess.CalledProcessError):
+                advice = ""
+            if advice:
+                print(advice)
+        elif args.command == "marker":
             # For the pre-push hook, which sends only a completed record.
             print((read_marker(resolve(args.head)) or {}).get("status", ""))
         elif args.command == "staged":

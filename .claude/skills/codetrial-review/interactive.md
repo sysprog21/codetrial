@@ -64,7 +64,8 @@ Open on what the diff says the change does, then on what could contradict it:
   module is for, what to watch for, a decision made while reviewing. Neither
   is posted.
 
-Anything else in the file, prose or a heading of the user's own, stays as it is
+`# Understanding` appears only in a [guided review](#guided-review). Anything
+else in the file, prose or a heading of the user's own, stays as it is
 when the ledger is rewritten, in the order it was read.
 
 ## When the head moves
@@ -120,6 +121,8 @@ so that two sessions answer the same way.
   targeted test after each and the full lane once at the end. A finding that
   does not hold goes to Questions with the counter-evidence, not silently to
   Completed.
+- **Guide me through it.** The [guided review](#guided-review), only when the
+  user asks to be walked through, quizzed on or taught the change.
 - **Ask about these lines.** Answer from the head and the contracts. An answer
   is not a finding: it goes in the reply, and into Notes only when the user
   wants it kept.
@@ -128,3 +131,84 @@ so that two sessions answer the same way.
   its quote and a stale one cannot be posted.
 
 The ledger never grants a permission; the harness asks, and the user answers.
+
+## Guided review
+
+The presets above hand the user findings; this one makes the user find them,
+with the review's verified material as the syllabus. It starts only on an
+explicit request ("walk me through this PR", "quiz me on this change"). The
+rules for every question, and what a session never becomes, are in
+[socratic.md](socratic.md). It is not the
+[large-change explanation](../../../docs/large-change-explanation.md) and cannot
+stand in for it.
+
+**Syllabus.** Questions come from the behaviors the tests pin and the changed
+code no test reaches ([reading order](#read-in-this-order)), the Pending
+findings and the contracts the diff touches. When Pending is empty, verify a
+finding at the head under [step 4](SKILL.md#4-verify) before it is asked about
+or handed over, not the whole diff up front. An area is one group of the step 1
+grouping the diff touches. Past 5, take the five the change most depends on and
+say what is left.
+
+**Diagnostic.** Before teaching or showing any finding, ask one question per
+area, easy to hard: what the change does in their words, what a given input
+does, which test fails if a named line is removed, what happens on the failure
+path. An area not asked about starts as unassessed (`-`); a diagnostic answer
+gives a provisional level of at most 2, and only the loop earns more. Then show
+the map and propose where to start; the user may override.
+
+**The map.** Levels per area, in the ledger under `# Understanding`, which
+`review-ledger.py` leaves as read. `Head` is the commit the questions were asked
+at, so a moved head can be answered under spaced review. An area holds its
+level and what was missed, never the text of a finding that is still unsaid:
+
+```markdown
+# Understanding
+Head: 3f2a9c1, asked: 7, target: 4
+- admission (src/web/token.rs): 3, last checked at question 6 on 3f2a9c1 - missed: the order of the checks
+- topic wiring (web/lib.js): -
+```
+
+    - unassessed . 0 unaware . 1 can name it . 2 can follow the diff
+    3 predicts correctly after one narrowing question
+    4 predicts, failure path included, unaided
+    5 finds the defect or an edge case and explains it to another reviewer
+
+Show this block when a level changes and when the user asks for progress. The
+default target is 4, or 5 when the user asked for the most thorough pass.
+
+**Loop.** Questions follow [socratic.md](socratic.md#what-a-question-is) and
+its [follow-ups](socratic.md#what-follows-an-answer). `Asked` counts every
+question, follow-ups and spaced re-asks included. Where a test or a command can
+run, run the narrowest lane of [codetrial-verify](../codetrial-verify/SKILL.md)
+once per head and reuse its output, then ask for the prediction and compare it
+with the output, not with a description of it. A finding that does not hold goes
+to Questions with the counter-evidence, as in "Address every pending finding";
+a defect the user states goes to Pending once verified, or to Questions when
+unproven, and the session stops asking about it either way.
+
+**Earning a level.** Raise one only on 2 or more independent checks, at least
+one of them not asked right after the user was told the answer. A missed
+question lowers it by one and sends the area back to the loop.
+
+**Spaced review.** `last checked` is the `Asked` count and the head when the area
+was last questioned, the diagnostic's included. After the diagnostic, unannounced, on
+every fourth question re-ask the area with the oldest `last checked` among
+those at level 1 or above, from a new angle; a
+change with one area re-asks an earlier idea in it. Break a tie by the lower
+level. When the head moves, place the ledger ([above](#when-the-head-moves))
+and re-ask each area whose paths changed, from `git diff -U0 <checked> <head>` over each
+area's paths, `<checked>` being the head on that area's map line. For each Completed finding that
+was fixed, ask what the test or command its entry names pins, and check the
+answer by reading that test at the head; a finding closed by a ruling or "gone
+at" has nothing to re-ask.
+
+**Final assessment.** When every area is at target, or the user asks for it,
+ask one question per area and one that crosses the areas, or for a one-area
+change the area and a contract in `docs/` ("which check refuses this?", then
+in its own turn "what runs if that check is bypassed?"), its answer read from
+the head first. An
+area that missed, or needed a narrowing question, drops a level and returns to
+the loop; a miss on the crossing question drops each area it names. When none did, show the final
+map and the weakest areas, and keep them in Notes. Stopping early is the user's
+call and leaves the map in the ledger; resuming reads it.
