@@ -865,9 +865,10 @@ def resolve_reviewer(choice):
     """
     if choice != "auto":
         return choice
-    executable = shutil.which("codex")
-    if not executable:
+    found = shutil.which("codex")
+    if not found:
         return "manual"
+    executable = os.path.abspath(found)
     try:
         with tempfile.TemporaryDirectory(prefix="codetrial-auth-") as cwd:
             signed_in = (
@@ -1078,7 +1079,7 @@ def main():
         "--reviewer",
         choices=["auto", "manual", "codex"],
         default="auto",
-        help="auto uses Codex when installed, so feedback does not depend on a chat turn",
+        help="auto uses Codex when installed and signed in, so feedback does not depend on a chat turn",
     )
     parser.add_argument(
         "--token-file",

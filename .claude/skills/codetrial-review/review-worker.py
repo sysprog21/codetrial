@@ -42,7 +42,10 @@ DRAWING = (
 class Reviewer:
     def __init__(self, app, executable="codex", timeout=180):
         self.app = app
-        self.executable = shutil.which(executable)
+        found = shutil.which(executable)
+        # Absolute: the sign-in check runs from another directory, where a
+        # relative PATH entry such as `.` would no longer find it.
+        self.executable = os.path.abspath(found) if found else None
         if not self.executable:
             raise ValueError(
                 "Codex CLI is unavailable; install/sign in or use manual review"
