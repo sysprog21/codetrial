@@ -12,7 +12,9 @@
 use super::{InterviewMode, Problem, RUBRIC_VERSION};
 
 mod example_drawings;
+mod plan_key;
 use example_drawings::example_drawing_judgments;
+use plan_key::{note_replacement, plan_key};
 
 /// Lowercase ASCII words, split on anything that is not a letter or a digit
 /// and inside identifiers where their case changes, the way `spelled_words` in
@@ -666,7 +668,7 @@ pub(crate) fn sanitize_example_drawing_candidate(
                         );
                         let kept = clean(text, &note);
                         if kind == "improvements" {
-                            replacements.insert(text.to_owned(), kept.clone());
+                            note_replacement(&mut replacements, text, kept.clone());
                         }
                         *value = serde_json::json!(kept);
                         removed += 1;
@@ -682,7 +684,7 @@ pub(crate) fn sanitize_example_drawing_candidate(
         for item in items {
             if let Some(weakness) = item.get_mut("weakness")
                 && let Some(text) = weakness.as_str()
-                && let Some(kept) = replacements.get(text)
+                && let Some(Some(kept)) = replacements.get(&plan_key(text))
             {
                 *weakness = serde_json::json!(kept);
                 removed += 1;
@@ -915,13 +917,6 @@ fn apply_weakness_tags(report: &mut serde_json::Value) {
 /// forgiven. A match against two improvements, or a paraphrase, is left for
 /// validation to refuse.
 fn snap_plan_weaknesses(raw: &serde_json::Value) -> serde_json::Value {
-    let normal = |text: &str| {
-        text.split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ")
-            .trim_end_matches('.')
-            .to_lowercase()
-    };
     let improvements = ["codingFeedback", "communicationFeedback"]
         .iter()
         .filter_map(|key| raw.get(*key)?.get("improvements")?.as_array())
@@ -945,7 +940,7 @@ fn snap_plan_weaknesses(raw: &serde_json::Value) -> serde_json::Value {
         }
         let matches = improvements
             .iter()
-            .filter(|improvement| normal(improvement) == normal(weakness))
+            .filter(|improvement| plan_key(improvement) == plan_key(weakness))
             .collect::<Vec<_>>();
         if let [only] = matches.as_slice() {
             item["weakness"] = serde_json::Value::String(only.to_string());

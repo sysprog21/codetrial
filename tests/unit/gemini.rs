@@ -1591,7 +1591,7 @@ fn repeated_drawing_advice_keeps_the_report_without_visual_feedback() {
     ] {
         let mut raw = valid_report();
         raw["codingFeedback"]["improvements"][0] = json!(text);
-        raw["improvementPlan"][0]["weakness"] = json!(text);
+        raw["improvementPlan"][0]["weakness"] = json!(text.to_lowercase().trim_end_matches('.'));
         raw["summary"] = json!(format!("You explained a map-based approach. {text}"));
         let (clean, _) = crate::agent::sanitize_example_drawing_candidate(
             raw.clone(),

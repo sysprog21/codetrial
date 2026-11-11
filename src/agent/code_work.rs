@@ -283,6 +283,7 @@ pub(super) fn split_comments(language: &str, code: &str) -> (Vec<char>, String) 
             continue;
         }
         match character {
+            '\'' if digit_separator(language, &kept, chars.peek()) => kept.push(character),
             '"' | '\'' | '`' => {
                 let triple = hash_comments && tripled(&chars, character);
                 kept.push(character);
@@ -316,6 +317,54 @@ pub(super) fn split_comments(language: &str, code: &str) -> (Vec<char>, String) 
     kept.retain(|character| !character.is_whitespace());
     (kept, comments)
 }
+
+/// Whether a quote inside a number is C or C++'s digit separator, as in
+/// `1'000'000` or `0xFF'FF`, and not the start of a character literal. The
+/// number is the run of letters, digits, underscores and dots before the quote,
+/// and it has to begin with a digit, or a dot and a digit, so `a'b'`, `case'b'`
+/// and `u8'A'` all open
+/// a literal. The browser's tokenizer reads a separator the same way in C++,
+/// and this reads one in C as well, since C23 has them.
+fn digit_separator(language: &str, kept: &[char], after: Option<&char>) -> bool {
+    if !matches!(language, "c" | "cpp")
+        || !kept.last().is_some_and(char::is_ascii_hexdigit)
+        || !after.is_some_and(char::is_ascii_hexdigit)
+    {
+        return false;
+    }
+
+    // Back over the number so far, including the separators already in it: a
+    // quote between two hex digits is one of them, as in `0xFF'FF'FF`. Bounded,
+    // so a long chain of them is not read again from its start at every quote;
+    // a run that fills the window is a number, not an identifier before a
+    // character literal.
+    let mut number_start = kept.len();
+    let mut ended = false;
+    for at in (0..kept.len()).rev().take(NUMBER_LOOKBACK) {
+        let character = kept[at];
+        let inside = character.is_ascii_alphanumeric()
+            || matches!(character, '_' | '.')
+            || (character == '\''
+                && at >= 1
+                && kept[at - 1].is_ascii_hexdigit()
+                && kept.get(at + 1).is_some_and(char::is_ascii_hexdigit));
+        if !inside {
+            ended = true;
+            break;
+        }
+        number_start = at;
+    }
+    if !ended && number_start > 0 {
+        return true;
+    }
+    kept.get(number_start).is_some_and(|&first| {
+        first.is_ascii_digit()
+            || (first == '.' && kept.get(number_start + 1).is_some_and(char::is_ascii_digit))
+    })
+}
+
+/// How far back a digit separator looks for the start of its number.
+const NUMBER_LOOKBACK: usize = 64;
 
 /// Changed by enough that an analysis of `before` may not describe `code`:
 /// another language, more than 80 characters of code added and removed
