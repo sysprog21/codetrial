@@ -6,7 +6,8 @@ use crate::accounts::{Accounts, blocking};
 
 use super::store::{Handle, clear_handle, delivery_handles};
 use super::{
-    Clock, DeliveryProvider, Failure, Recorder, Recording, RecordingState, audit, transition,
+    Clock, DeliveryProvider, Failure, Recorder, Recording, RecordingState, audit, gcs_object_path,
+    transition,
 };
 
 /// One step of releasing a recording's media: what to ask the provider for, and
@@ -63,7 +64,8 @@ pub async fn delete_recording(
     // named a permission that was already gone, and the retry's revoke failed
     // on it forever. Clearing each handle as its step lands makes the row the
     // progress, and every step idempotent by construction, because a handle
-    // that is null is a step nothing repeats.
+    // that is null is a step nothing repeats. The object is the one exception:
+    // see below.
     let mut releases = Vec::new();
     if let (Some(file_id), Some(permission_id)) =
         (drive_file_id.as_deref(), drive_permission_id.as_deref())
@@ -86,14 +88,24 @@ pub async fn delete_recording(
             call: Call::DeleteFile(file_id),
         });
     }
-    if let Some(object) = gcs_object.as_deref() {
-        releases.push(Release {
-            step: "delete_object",
-            clear_step: "clear_object",
-            handle: Handle::GcsObject,
-            call: Call::DeleteObject(object),
-        });
-    }
+
+    // The column is written when a delivery stages the object, but egress
+    // writes the file from the moment it starts. A recording withdrawn before
+    // any delivery has no column and still has bytes in the bucket, at the path
+    // the id derives; a 404 on a file that never landed counts as done.
+    //
+    // So this step is pushed on every pass whatever the column holds, and must
+    // stay unconditional: a retry after `clear_object` landed deletes the
+    // derived path again and takes the 404 as done. It also means deleting a
+    // row that never had media calls storage, so it needs the storage token.
+    let gcs_object =
+        gcs_object.unwrap_or_else(|| gcs_object_path(&recorder.config.gcs_prefix, &recording.id));
+    releases.push(Release {
+        step: "delete_object",
+        clear_step: "clear_object",
+        handle: Handle::GcsObject,
+        call: Call::DeleteObject(&gcs_object),
+    });
 
     let mut failed = None;
     for Release {

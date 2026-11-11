@@ -194,7 +194,8 @@ pub fn begin_recording(
 /// It is never overwritten. A slow first attempt and a sweeper retry can both
 /// come back with a job, and the second to arrive must not replace the first:
 /// that would leave a job nothing can name. `false` means somebody else's id is
-/// already there, and the caller has a job of its own to stop.
+/// already there, or the row was deleted meanwhile and has no room name left
+/// to stop it by, and the caller has a job of its own to stop.
 pub fn record_egress_id(
     accounts: &Accounts,
     clock: &dyn Clock,
@@ -209,7 +210,7 @@ pub fn record_egress_id(
         SET egress_id = ?2,
             state = CASE WHEN state = 'starting' THEN 'recording' ELSE state END,
             updated_at = ?3
-        WHERE id = ?1 AND egress_id IS NULL
+        WHERE id = ?1 AND egress_id IS NULL AND deleted_at IS NULL
         ",
             (recording_id, egress_id, now),
         )?;
