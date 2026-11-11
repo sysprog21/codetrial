@@ -116,10 +116,6 @@ const LANGUAGES = {
       "nextTree",
     ],
     capacity: {
-      // KNOWN: findTreeNode queues every node of its tree on the stack, so a
-      // tree past 4096 nodes writes beyond it. Delete this entry with the fix;
-      // the audit fails once the array is gone, so the entry cannot outlive it.
-      findTreeNode: ["queue[4096]"],
       // Nodes are added only while count < 1024 and every ID is checked below
       // 1024.
       json_graph: ["nodes[1024]", "seen[1024]"],
@@ -380,17 +376,7 @@ function coverJudges(entries, keep) {
 // line is deleted. The pattern is what the failure must look like, so an
 // unrelated one (a compile error, a timeout) cannot keep an entry alive after
 // its bug is fixed.
-const KNOWN_BROKEN = new Map([
-  [
-    "c:lowest-common-ancestor-of-a-binary-tree",
-    {
-      reason:
-        "findTreeNode overruns its stack queue on a tree of more than 4096 nodes",
-      failure:
-        /index 4096 out of bounds for type 'TreeNode \*\[4096\]'|AddressSanitizer: stack-buffer-overflow[\s\S]*? in findTreeNode/,
-    },
-  ],
-]);
+const KNOWN_BROKEN = new Map();
 
 // A run with no compiler or no sanitizer skips every audit and still exits 0,
 // which on a machine that is meant to run it is a green gate that checked
