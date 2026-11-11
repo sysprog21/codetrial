@@ -143,7 +143,23 @@ impl EvidenceLedger {
         let failed = total.saturating_sub(passed);
         let executed = total > 0 && !run_failed_to_start(payload);
         let signature = failure_signature(payload);
-        let previous = self.tests.clone();
+
+        // Two runs in different languages are different programs: the starter
+        // run after a switch of tab passes nothing, and read against the run
+        // that passed it is a regression of code that did not change.
+        let language = payload.get("language").and_then(serde_json::Value::as_str);
+        let switched = executed
+            && language
+                .zip(self.last_test_language.as_deref())
+                .is_some_and(|(now, before)| now != before);
+        let previous = if switched {
+            TestState::default()
+        } else {
+            self.tests.clone()
+        };
+        if executed && let Some(language) = language {
+            self.last_test_language = Some(language.to_string());
+        }
         let newly_passed = delta(passed, previous.passed);
         self.progress.runner_attempted = true;
         self.record_sequence("test");
@@ -252,3 +268,7 @@ impl EvidenceLedger {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/unit/agent/evidence_languages.rs"]
+mod language_tests;
