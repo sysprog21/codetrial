@@ -741,8 +741,23 @@ printf 'python:%s\\n' "$*" >> "$CALLS"
         # The schedule and the dispatch exist for this job alone.
         gates = gates_job()
         self.assertIn(f"    if: {NOT_AVATAR}\n", gates)
+        # The avatar job reaches the cargo cache through the composite that
+        # restores it last, after the compiler and toolchain its key hashes.
+        wrapper = (ROOT / ".github/actions/rust-build-env/action.yml").read_text()
+        order = [
+            wrapper.index(f"uses: ./.github/actions/{name}")
+            for name in ("apt-install", "webrtc-clang", "restore-cargo-cache")
+        ]
+        self.assertEqual(order, sorted(order))
+        self.assertLess(order[1], wrapper.index("rustup toolchain install"))
+        self.assertLess(wrapper.index("rustup toolchain install"), order[2])
+        self.assertNotIn("actions/cache/save", wrapper)
+        self.assertNotIn("uses: actions/cache@", wrapper)
+        self.assertIn(
+            "        uses: ./.github/actions/rust-build-env",
+            support.step(avatar, "Set up the Rust build").splitlines(),
+        )
         for name, action in (
-            ("Restore cargo cache", "restore-cargo-cache"),
             ("Restore vendored bytes", "restore-vendor"),
             ("Install Chromium", "chromium"),
         ):

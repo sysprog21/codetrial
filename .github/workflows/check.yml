@@ -700,23 +700,15 @@ jobs:
       - name: Reclaim runner disk
         uses: ./.github/actions/reclaim-disk
 
-      - name: Install native build dependency
-        uses: ./.github/actions/apt-install
-        with:
-          packages: libglib2.0-dev mold sqlite3
-      - name: Install WebRTC C++ compiler
-        uses: ./.github/actions/webrtc-clang
-
-      - name: Install Rust
-        run: rustup toolchain install
-
       # Restore, never save. The gates job owns this cache; four shards writing
       # a 1 GB entry under one key would be four uploads for the copy that
       # happens to finish last. Restoring a prior lockfile's artifacts is what
       # keeps each shard's baseline build incremental rather than cold, which is
       # the whole reason `--in-place` is worth using.
-      - name: Restore cargo cache
-        uses: ./.github/actions/restore-cargo-cache
+      - name: Set up the Rust build
+        uses: ./.github/actions/rust-build-env
+        with:
+          packages: libglib2.0-dev mold sqlite3
 
       # Needed even though no browser runs here: a Rust test serves the
       # fetched MediaPipe binaries and asserts their content types, and
@@ -1252,16 +1244,10 @@ jobs:
         with:
           persist-credentials: false
       # browser-check.sh builds the server, and webrtc-sys needs Clang 21+.
-      - name: Install system packages
-        uses: ./.github/actions/apt-install
+      - name: Set up the Rust build
+        uses: ./.github/actions/rust-build-env
         with:
           packages: libglib2.0-dev mold
-      - name: Install WebRTC C++ compiler
-        uses: ./.github/actions/webrtc-clang
-      - name: Install Rust
-        run: rustup toolchain install
-      - name: Restore cargo cache
-        uses: ./.github/actions/restore-cargo-cache
       - name: Report disk after restoring the build cache
         run: df -h /
       - name: Restore vendored bytes
