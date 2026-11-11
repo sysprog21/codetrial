@@ -4931,7 +4931,7 @@ fn a_long_phrase_list_is_counted_rather_than_cut_midway() {
     let mut report = valid_report();
     report["improvementPlan"][1]["successCriterion"] = json!(
         "Mind accent, dialect, typing speed, speech rate, filler words, disfluency, eye contact, \
-         posture, body language, facial expression, voice tone and physical appearance."
+         body posture, body language, facial expression, voice tone and physical appearance."
     );
     let errors = crate::agent::validate_report_for_round(
         &report,

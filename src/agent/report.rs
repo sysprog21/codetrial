@@ -12,8 +12,10 @@
 use super::{InterviewMode, Problem, RUBRIC_VERSION};
 
 mod example_drawings;
+mod judgment_rules;
 mod plan_key;
 use example_drawings::example_drawing_judgments;
+use judgment_rules::{JUDGMENT_RULES, SPEECH_WORDS};
 use plan_key::{note_replacement, plan_key};
 
 /// Lowercase ASCII words, split on anything that is not a letter or a digit
@@ -479,7 +481,16 @@ impl ReportRounds {
         Self {
             behavioral_opened: super::BehavioralRound::of(state).opened(),
             follow_ups_released: super::coding_round_complete(state),
-            candidate_turns: state.evidence_ledger.conversation.candidate_turns,
+
+            // Turns the recognizer returned in another script are hidden from
+            // the report, so they are no evidence of communication.
+            candidate_turns: if super::transcript::only_unrecognized_candidate_turns(
+                &state.transcript,
+            ) {
+                0
+            } else {
+                state.evidence_ledger.conversation.candidate_turns
+            },
         }
     }
 }
@@ -1033,189 +1044,6 @@ const IMPROVEMENT_PATHS: [&str; 4] = [
     "$.followUps",
 ];
 
-/// A class of claim a report may not make about a person, the reason the
-/// repair is told, and the phrases that make it. Phrases are named in the
-/// error because the lists are ours and the model cannot see them: told only
-/// that a check is unsupported, a repair swaps "appeared nervous" for "sounded
-/// confident" and fails again. Each phrase is whole words, spelled with the
-/// spaces `refused_judgments` pads the text with.
-struct JudgmentRule {
-    reason: &'static str,
-    /// Only where the report says what to fix, rather than everywhere.
-    improvements_only: bool,
-    phrases: &'static [&'static str],
-    /// Words that break the rule only when a speech word follows, directly or
-    /// through "language", as "a Japanese response" or "a Spanish-language
-    /// answer" does.
-    before_speech: &'static [&'static str],
-}
-
-/// What a report calls a candidate's spoken turn. Not "text" or "characters",
-/// which a text exercise's input has too.
-const SPEECH_WORDS: &[&str] = &[
-    "response",
-    "responses",
-    "answer",
-    "answers",
-    "reply",
-    "replies",
-    "remark",
-    "remarks",
-    "statement",
-    "statements",
-    "explanation",
-    "explanations",
-    "utterance",
-    "utterances",
-    "speech",
-    "transcript",
-    "transcripts",
-    "transcription",
-    "turn",
-    "turns",
-];
-
-const JUDGMENT_RULES: [JudgmentRule; 3] = [
-    JudgmentRule {
-        reason: "unsupported delivery or personality judgment",
-        improvements_only: false,
-        phrases: &[
-            " accent ",
-            " accents ",
-            " dialect ",
-            " dialects ",
-            " typing speed ",
-            " typing pace ",
-            " typed slowly ",
-            " typed quickly ",
-            " type slowly ",
-            " type quickly ",
-            " speech rate ",
-            " filler word ",
-            " filler words ",
-            " disfluency ",
-            " disfluencies ",
-            // A disfluency by another name: an accepted success criterion asked
-            // for an answer "without hesitation". Not the verb, since "do not
-            // hesitate to ask a clarifying question" is coaching about the
-            // conversation rather than a judgment of how it sounded.
-            " hesitation ",
-            " hesitations ",
-            " hesitant ",
-            " hesitantly ",
-            " eye contact ",
-            " posture ",
-            " body language ",
-            " facial expression ",
-            " facial expressions ",
-            " voice tone ",
-            " vocal tone ",
-            " tone of voice ",
-            " attractiveness ",
-            " physical appearance ",
-            " nervous ",
-            " nervousness ",
-            " nervously ",
-            " anxious ",
-            " anxiety ",
-            " confident demeanor ",
-            " lacked confidence ",
-            " lack of confidence ",
-            " personality ",
-            " introvert ",
-            " extrovert ",
-            " charisma ",
-            " appeared confident ",
-            " appears confident ",
-            " seemed confident ",
-            " looked confident ",
-            " sounded confident ",
-            " come across as confident ",
-            " comes across as confident ",
-        ],
-        before_speech: &[],
-    },
-    // The language a transcript came out in is the recognizer's output, not the
-    // candidate's: a report that said "an irrelevant response in Mandarin"
-    // failed an English speaker for it. Named languages only with "in", except
-    // the two that name nothing but speech, and none of "another language" or
-    // "switched languages", because a candidate changing C++ for Python is a
-    // coding event. The cost is a technical sentence such as "input in Chinese
-    // characters" on a text exercise, refused and repaired; matching only after
-    // a speech word would miss "answered the question in Japanese". The
-    // adjective, "a Japanese response", is refused only before a speech word,
-    // where it names the transcript's language rather than an input's.
-    JudgmentRule {
-        reason: "the recognizer's language attributed to the candidate",
-        improvements_only: false,
-        phrases: &[
-            " in chinese ",
-            " in japanese ",
-            " in korean ",
-            " in hindi ",
-            " in spanish ",
-            " in french ",
-            " in german ",
-            " in portuguese ",
-            " mandarin ",
-            " cantonese ",
-            " non english ",
-            " foreign language ",
-            " native language ",
-            " broken english ",
-            " english proficiency ",
-            " english fluency ",
-            " fluent english ",
-            " language barrier ",
-        ],
-        before_speech: &[
-            "chinese",
-            "japanese",
-            "korean",
-            "hindi",
-            "spanish",
-            "french",
-            "german",
-            "portuguese",
-        ],
-    },
-    // Improvements only: the summary may say evidence was limited by
-    // transcription. After one misrecognized turn a report asked for
-    // explanations "in English to avoid transcription ambiguity", which is what
-    // this refuses. A neutral mention of transcription is left alone: a report
-    // that suggested typing a key point as a code comment "when a transcription
-    // gap occurs" was refused through both repairs, and an incomplete report
-    // costs the candidate their verdict. Not "english" alone either: "describe
-    // the approach in plain English" is ordinary advice, and the live prompt
-    // asks the interviewer for it. "Avoid" and "prevent" are what turn a
-    // mention into blame: a seeded report asked for answers "clearly
-    // articulated to avoid transcription ambiguity".
-    JudgmentRule {
-        reason: "a speech-recognition gap is not the candidate's weakness",
-        improvements_only: true,
-        phrases: &[
-            " avoid transcription ",
-            " prevent transcription ",
-            " in english ",
-            " speak english ",
-            " your english ",
-            " spoken english ",
-            " primary language ",
-            " interview language ",
-            " language of the interview ",
-            " audible ",
-            " audibly ",
-            " speak more clearly ",
-            " speak clearly ",
-            " enunciate ",
-            " enunciation ",
-            " pronounce ",
-            " pronunciation ",
-        ],
-        before_speech: &[],
-    },
-];
-
 /// Every rule `text` breaks, each with every phrase it breaks it with, so a
 /// repair need not discover another violation in the same field on its next
 /// attempt. Listed phrases come in list order, then adjectives before a speech
@@ -1622,3 +1450,7 @@ pub fn final_report(
     eprintln!("codetrial report_incomplete reason={reason}{detail}");
     fallback_report(hints_used, reason)
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/report_rounds.rs"]
+mod rounds_tests;
