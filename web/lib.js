@@ -868,8 +868,8 @@ const textEncoder = new TextEncoder();
 /// function-local, moving it left the whole suite green with the supported-card
 /// branch no longer rendering, which is the defect a local constant invites.
 export const ACTIVE_CONTRACT = {
-  bundleVersion: 44,
-  livePromptVersion: 33,
+  bundleVersion: 45,
+  livePromptVersion: 34,
   reportPromptVersion: 25,
   reportSchemaVersion: 4,
   rubricVersion: 1,

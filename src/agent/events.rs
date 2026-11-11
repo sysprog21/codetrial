@@ -666,7 +666,14 @@ fn apply_test_results(
         };
     }
 
-    let summary = format_test_run_for_reaction(payload, state.test_runs);
+    // Fenced like every other candidate-derived block: the failure labels and
+    // values come from the candidate's own program, and the prompt tells the
+    // model that test summaries are fenced as untrusted.
+    let summary = super::untrusted_block(
+        "TEST RUN",
+        "",
+        &format_test_run_for_reaction(payload, state.test_runs),
+    );
     let excerpt = changed_excerpt(&state.language, &state.code_shown, &state.code);
     if excerpt.is_some() {
         state.code_shown = state.code.clone();
