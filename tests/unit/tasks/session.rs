@@ -671,8 +671,8 @@ async fn a_check_reference_past_the_cap_is_marked_as_overflow() {
 
 #[path = "session_clock.rs"]
 mod clock;
-#[path = "session_revisions.rs"]
-mod session_revisions;
+#[path = "session_capacity.rs"]
+mod session_capacity;
 
 #[tokio::test]
 async fn a_refused_discuss_changes_nothing_but_the_overflow_flag() {

@@ -248,3 +248,7 @@ pub fn recorded_account_id() -> std::io::Result<i64> {
     // insert rather than quietly joining two people to one account.
     Ok(i64::MIN + (i64::from_be_bytes(bytes) & i64::MAX))
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/accounts/interview_release.rs"]
+mod release_tests;

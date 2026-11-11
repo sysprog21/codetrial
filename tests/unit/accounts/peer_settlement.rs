@@ -340,6 +340,36 @@ fn feedback_stores_only_the_rubric_fields() {
         .unwrap();
 }
 
+/// A rubric that was submitted is final: the upsert that saves a draft would
+/// otherwise let it be replaced after the partner may already have read it.
+#[test]
+fn a_submitted_feedback_is_not_replaced() {
+    let (accounts, mut session) = fixture();
+    activate(&mut session);
+    session.rounds[0].status = "feedback".into();
+    session.rounds[0].sealed_at = Some(1600);
+    accounts
+        .with(|c| {
+            save(c, &session)?;
+            c.execute(
+                "INSERT INTO peer_feedback(session_id,round_idx,author_slot,kind,rubric_version,payload_json,submitted_at)
+                 VALUES(?1,0,1,'interviewer','peer-rubric-v1','{\"submitted\":true}',1700)",
+                [&session.id],
+            )?;
+            let body = json!({"submitted":false,
+                "dimensions":{"preparation":{"score":2,"example":"e","improvement":"i"}}});
+            assert_eq!(
+                feedback(c, &session, 1, 0, &body, 1800)?.unwrap_err(),
+                "feedback_submitted"
+            );
+            let stored: String =
+                c.query_row("SELECT payload_json FROM peer_feedback", [], |r| r.get(0))?;
+            assert_eq!(stored, "{\"submitted\":true}");
+            Ok(())
+        })
+        .unwrap();
+}
+
 #[test]
 fn leaving_one_session_keeps_the_reservation_held_by_another() {
     let (accounts, mut session) = fixture();

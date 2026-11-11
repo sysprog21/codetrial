@@ -648,3 +648,32 @@ fn a_profile_reports_the_nickname_that_was_saved() {
     set_profile(&a, 1, "Alice", 100).unwrap().unwrap();
     assert_eq!(profile(&a, 1).unwrap(), json!({"nickname":"Alice"}));
 }
+
+/// One host cannot be asked by more than eight people at once; the ninth is
+/// told, and the first eight are unaffected.
+#[test]
+fn a_ninth_pending_request_to_one_host_is_refused() {
+    let a = fixture();
+    a.with(|c| {
+        c.execute_batch(
+            "INSERT INTO users(id,github_id,login,created_at,updated_at) VALUES
+             (4,4,'u4',1,1),(5,5,'u5',1,1),(6,6,'u6',1,1),(7,7,'u7',1,1),
+             (8,8,'u8',1,1),(9,9,'u9',1,1),(10,10,'u10',1,1)",
+        )
+    })
+    .unwrap();
+    let host = available(&a, 1, 200);
+    for user in 2..=9 {
+        set_profile(&a, user, &format!("Name{user}"), 200)
+            .unwrap()
+            .unwrap();
+        request(&a, user, &host.id, 201)
+            .unwrap()
+            .unwrap_or_else(|code| panic!("request {user} refused: {code}"));
+    }
+    set_profile(&a, 10, "Name10", 200).unwrap().unwrap();
+    assert_eq!(
+        request(&a, 10, &host.id, 201).unwrap().unwrap_err(),
+        "request_limit"
+    );
+}
