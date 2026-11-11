@@ -973,6 +973,52 @@ mark.del {
   padding: 0.15rem 0.5rem;
 }
 
+/* One left edge says the state of the handoff after Send, of the answer coach
+   and of the reflection form: --edge is set per state, from the page's tokens. */
+.handoff,
+.answer-coach,
+#reflection-form[data-state="unsaved"],
+#reflection-form[data-state="saved"] {
+  border-left: 3px solid var(--edge, var(--hairline));
+  padding-left: 0.75rem;
+}
+.handoff[data-tone="working"],
+.handoff[data-tone="reply"],
+.answer-coach[data-state="good"],
+.answer-coach[data-state="unsure"],
+#reflection-form[data-state="saved"] {
+  --edge: var(--accent-fill);
+}
+.handoff[data-tone="away"],
+.handoff[data-tone="stale"],
+.answer-coach[data-state="ungrounded"],
+.answer-coach[data-state="unrelated"],
+.answer-coach[data-state="copy_hint"],
+#reflection-form[data-state="unsaved"] {
+  --edge: var(--control-border);
+}
+.handoff[data-tone="error"],
+.answer-coach[data-state="empty"],
+.answer-coach[data-state="short"],
+.answer-coach[data-state="copied"] {
+  --edge: var(--danger);
+}
+.handoff {
+  margin: 0 0 1rem;
+  padding-block: 0.25rem;
+}
+.handoff #reviewer-presence,
+.handoff #resume-copy {
+  margin: 0 0 0.5rem;
+}
+.handoff #resume-copy[hidden] {
+  display: none;
+}
+.answer-coach[data-refused="true"] {
+  outline: 2px solid var(--danger);
+  outline-offset: 2px;
+}
+
 /* Shown while the reviewer holds the answer and has not replied. It is motion
    with no meaning of its own: the sentence above it says what is happening. */
 .waiting {

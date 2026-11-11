@@ -12,6 +12,7 @@ import subprocess
 import time
 import sys
 import tempfile
+from unittest import mock
 import unittest
 from urllib.parse import urlsplit
 
@@ -57,6 +58,15 @@ class WorkbenchTest(unittest.TestCase):
 
     def write_manifest(self):
         (self.root / "manifest.json").write_text(json.dumps(self.manifest))
+
+    def test_auto_reviewer_is_managed_only_when_codex_is_installed(self):
+        # A manual reviewer answers only while a chat turn listens, so the page
+        # would sit on "Feedback is pending"; auto avoids that when it can.
+        for found, expected in ((None, "manual"), ("/bin/codex", "codex")):
+            with mock.patch.object(workbench.shutil, "which", return_value=found):
+                self.assertEqual(workbench.resolve_reviewer("auto"), expected)
+        self.assertEqual(workbench.resolve_reviewer("manual"), "manual")
+        self.assertEqual(workbench.resolve_reviewer("codex"), "codex")
 
     def test_rename_quotes_use_metadata_without_matching_path_suffixes_or_hunk_text(
         self,
@@ -927,11 +937,140 @@ class WorkbenchTest(unittest.TestCase):
         cjk = "為什麼缺少審查證據時要阻止這次推送並說明貢獻者的問題"
         self.assertTrue(u.copied(cjk, [cjk]))
 
-    def test_unsure_answers_are_always_sendable(self):
+    def test_not_knowing_is_sendable(self):
         u = workbench.load_understanding()
-        for text in ("I don't know", "Not sure what the retry covers.", "不知道"):
-            self.assertIsNone(u.problem(u.check(text, None, "")), text)
+        for text in (
+            "I don't know",
+            "Not sure what the retry covers.",
+            "不知道",
+            "I'm unsure.",
+        ):
+            checks = u.check(text, None, "")
+            self.assertEqual(u.state(checks), "unsure", text)
+            self.assertIsNone(u.problem(checks), text)
+        honest = "I don't know yet; I would read the retry loop and its caller first"
+        self.assertIsNone(u.problem(u.check(honest, None, "")))
         self.assertIsNotNone(u.problem(u.check("Because it is better", None, "")))
+
+    def test_an_unsure_answer_can_name_a_first_check(self):
+        u = workbench.load_understanding()
+        patch = "+persist_record(budget)\n"
+        vague = "I don't know, I would read the surrounding code and think about it"
+        self.assertEqual(u.state(u.check(vague, None, patch)), "unsure")
+        named = "I don't know, I would read `persist_record` and its callers first"
+        self.assertEqual(u.state(u.check(named, None, patch)), "unsure")
+        # Naming the identifier outside backticks counts as well.
+        plain = "I don't know, I would read persist_record and then its callers"
+        self.assertEqual(u.state(u.check(plain, None, patch)), "unsure")
+
+    def test_naming_the_file_asked_about_is_a_first_check(self):
+        u = workbench.load_understanding()
+        patch = "+persist_record(budget)\n"
+        question = {"path": "src/example.rs", "prompt": "Why?"}
+        text = "I don't know, I would read example.rs and then trace its callers first"
+        self.assertEqual(u.state(u.check(text, question, patch)), "unsure")
+        self.assertEqual(u.state(u.check(text, None, patch)), "unsure")
+
+    def test_an_answer_about_something_else_is_flagged(self):
+        u = workbench.load_understanding()
+        patch = "+persist_record(budget)\n"
+        question = {
+            "path": "src/example.rs",
+            "prompt": "Why does the retry budget stop persisting records first?",
+            "quote": "+persist_record(budget)",
+        }
+        elsewhere = "I really like banana pancakes on sunny mornings because they taste good with honey"
+        checks = u.check(elsewhere, question, patch)
+        self.assertEqual(u.state(checks), "unrelated")
+        self.assertIsNone(u.problem(checks))
+        # The question's own words, or code named as code, make it about the question.
+        for text in (
+            "The retry budget stops persisting records so the reply is not blocked on storage",
+            "It calls persist_record before replying so a crash cannot lose what the caller was told",
+        ):
+            self.assertEqual(u.state(u.check(text, question, patch)), "good", text)
+        # With nothing asked, or in a language this cannot judge, nothing is refused.
+        self.assertEqual(u.state(u.check(elsewhere, None, patch)), "ungrounded")
+        cjk = "這段程式碼在回覆之前先保存紀錄，所以當機時也不會遺失呼叫者已經得到的結果"
+        self.assertNotEqual(u.state(u.check(cjk, question, patch)), "unrelated")
+
+    def test_explanations_in_other_languages_are_sendable(self):
+        u = workbench.load_understanding()
+        question = {"prompt": "Why does the retry budget stop persisting records?"}
+        for answer in (
+            "El programa guarda los datos antes de responder para evitar pérdidas cuando ocurre un fallo inesperado",
+            "Le programme conserve les données avant de répondre afin de prévenir leur perte lors d'une panne imprévue",
+        ):
+            self.assertIsNone(
+                u.problem(u.check(answer, question, "+persist_record(budget)\n"))
+            )
+
+    def test_hidden_workspace_source_does_not_refuse_an_answer(self):
+        u = workbench.load_understanding()
+        page = "Commit-size coverage is incomplete. Inspect the full commit series before submission; a small final diff does not rule out a large commit."
+        checks = self.app.checks({"motivation": page})
+        self.assertIsNone(u.problem(checks))
+
+    def test_mixed_language_copy_share_counts_cjk_characters(self):
+        u = workbench.load_understanding()
+        question = {
+            "prompt": "Why does the retry budget stop persisting records before responding?"
+        }
+        answer = "這段程式碼確保即使服務發生錯誤，資料也不會在回應之前遺失。 the retry budget stop persisting records 因此需要先檢查重試狀態，再決定是否保存資料。"
+        self.assertIsNone(
+            u.problem(u.check(answer, question, "+persist_record(budget)\n"))
+        )
+        half_copied = "the retry budget stop persisting records 檢查保存狀態"
+        self.assertTrue(u.check(half_copied, question, "")["copy_hint"])
+        interrupted = "the retry budget 檢查保存狀態 stop persisting records"
+        self.assertFalse(u.check(interrupted, question, "")["copy_hint"])
+
+    def test_common_question_phrasing_is_only_a_copy_hint(self):
+        u = workbench.load_understanding()
+        question = {
+            "prompt": "Why must we save data before returning the response to callers?"
+        }
+        answer = "It must save data before returning the response to prevent data loss."
+        checks = u.check(answer, question, "")
+        self.assertEqual(u.state(checks), "copy_hint")
+        self.assertIsNone(u.problem(checks))
+
+    def test_cjk_interrupts_eight_word_runs_in_both_answer_and_source(self):
+        u = workbench.load_understanding()
+        run = "the retry budget stops persisting records before responding"
+        interrupted = "the retry budget stops 資料 persisting records before responding"
+        self.assertTrue(u.copied(run, [run]))
+        self.assertFalse(u.copied(interrupted, [run]))
+        self.assertFalse(u.copied(run, [interrupted]))
+
+    def test_filler_is_not_an_answer(self):
+        u = workbench.load_understanding()
+        filler = "because " * 14
+        checks = u.check(filler, None, "")
+        self.assertEqual(u.state(checks), "short")
+        self.assertIsNotNone(u.problem(checks))
+
+    def test_repetitive_answer_explains_the_distinct_word_requirement(self):
+        u = workbench.load_understanding()
+        checks = u.check(
+            "The cache and the database use the same cache for the database.", None, ""
+        )
+        self.assertEqual(checks["words"], 12)
+        self.assertIn("8 different", u.problem(checks))
+
+    def test_a_pasted_comment_with_a_little_padding_is_still_a_copy(self):
+        u = workbench.load_understanding()
+        patch = (
+            "+# the lookup comes first so a miss still reaches the database\n"
+            "+persist_record(budget)\n"
+        )
+        padded = (
+            "Basically the lookup comes first so a miss still reaches the database okay"
+        )
+        checks = u.check(padded, None, patch)
+        self.assertEqual(u.state(checks), "copied")
+        own = "Cold requests must fall through to storage, so the cache is consulted ahead of anything else"
+        self.assertEqual(u.state(u.check(own, None, patch)), "ungrounded")
 
     def test_send_refuses_thin_or_copied_answers_and_reports_what_is_unnamed(self):
         prompt = "Why does the retry budget stop persisting records before the reply is sent to the caller"
@@ -1005,12 +1144,32 @@ class WorkbenchTest(unittest.TestCase):
         self.assertEqual(state(""), "empty")
         self.assertEqual(state("Too short"), "short")
         self.assertEqual(state("I don't know"), "unsure")
+        self.assertEqual(
+            state("I don't know; I would read `persist_record` and its callers first"),
+            "unsure",
+        )
         long = "The reply must not wait, so the work is deferred until the caller has what it asked for"
         self.assertEqual(state(long), "ungrounded")
         self.assertEqual(state(long + " using `persist_record`"), "good")
         self.assertEqual(app.snapshot()["answers"], {})
         with self.assertRaisesRegex(ValueError, "Session changed"):
             app.check_draft({"identity": "x", "text": "y"})
+
+    def test_checks_say_whether_a_send_would_be_refused(self):
+        app = workbench.Workbench(self.root, self.questions)
+        self.assertIs(app.reported_checks({"motivation": "short"})["blocks_send"], True)
+        text = "The reply must not wait, so the work is deferred until the caller has what it asked for"
+        self.assertIs(app.reported_checks({"motivation": text})["blocks_send"], False)
+
+    def test_a_reviewer_that_signalled_and_went_quiet_is_lapsed_not_offline(self):
+        app = workbench.Workbench(self.root, self.questions)
+        self.assertEqual(app.snapshot()["reviewer"], "offline")
+        app.presence("reading", 60)
+        self.assertEqual(app.snapshot()["reviewer"], "reading")
+        app.presence("reading", -1)
+        self.assertEqual(app.snapshot()["reviewer"], "lapsed")
+        app.presence("offline", -1)
+        self.assertEqual(app.snapshot()["reviewer"], "offline")
 
     def test_message_names_unmentioned_code_only_when_there_is_something_to_name(self):
         (self.root / "pr.diff").write_text(
@@ -1080,7 +1239,7 @@ class WorkbenchTest(unittest.TestCase):
     def test_a_typographic_apostrophe_still_says_unsure(self):
         u = workbench.load_understanding()
         for text in ("I don't know", "I don\u2019t know", "I do not know"):
-            self.assertEqual(u.state(u.check(text, None, "")), "unsure", text)
+            self.assertTrue(u.check(text, None, "")["unsure"], text)
 
     def test_wrapping_the_question_in_backticks_does_not_make_it_an_answer(self):
         u = workbench.load_understanding()
@@ -1092,7 +1251,7 @@ class WorkbenchTest(unittest.TestCase):
         own = "It reads `persist_record(budget)` first, then it decides whether the reply may be sent at all"
         self.assertIsNone(u.problem(u.check(own, None, "")))
 
-    def test_ordinary_ways_of_saying_unsure_are_accepted(self):
+    def test_ordinary_ways_of_saying_unsure_are_recognized(self):
         u = workbench.load_understanding()
         for text in (
             "I'm not sure",
@@ -1103,8 +1262,8 @@ class WorkbenchTest(unittest.TestCase):
             "不确定",
             "沒概念",
         ):
-            self.assertEqual(u.state(u.check(text, None, "")), "unsure", text)
-        self.assertNotEqual(u.state(u.check("I know exactly why", None, "")), "unsure")
+            self.assertTrue(u.check(text, None, "")["unsure"], text)
+        self.assertFalse(u.check("I know exactly why", None, "")["unsure"])
 
     def test_naming_a_function_the_question_names_still_counts_as_naming_code(self):
         u = workbench.load_understanding()

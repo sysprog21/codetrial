@@ -61,13 +61,23 @@ The original question, submitted explanation and reflection stay bound to the
 review snapshot as context for subsequent agent work.
 
 While you write, the page counts words against a minimum of 12 and offers the
-identifiers from the changed lines as buttons. Sending is refused only for an
-answer that is too short or that repeats the question or the code word for
-word; "I don't know" is acceptable however short, though it does not excuse
-pasting the question or the code after it. An answer that names nothing from
-the changed lines is accepted with a hint, and the reviewer then asks how the
-quoted code behaves. Pasting a prompt or an agent-written summary is the thing
-being discouraged: the explanation is yours.
+identifiers from the changed lines as buttons. Sending is refused for an
+answer that is too short, that repeats a few words to reach the length, or that
+repeats the question or the code word for word. Shorter overlapping passages
+and possible relevance mismatches are hints, since automatic checks cannot
+reliably judge their meaning or every language. "I don't know"
+is acceptable however short; the review can begin with what you would read or
+run first. An answer that names nothing from the changed lines is
+accepted with a hint, and the reviewer then asks how the quoted code behaves.
+Pasting a prompt or an agent-written summary is the thing being discouraged: the
+explanation is yours.
+
+A pull request often goes through several rounds of review, with more commits,
+a rebase or a force push. Each new head over the thresholds needs its own
+interactive review, and the post-rewrite hook says so after a rebase or an
+amend. The core question changes between rounds: it goes to a change or an angle
+the earlier rounds did not ask about, so the explanation covers the branch and
+not one passage again.
 
 The agent still inspects all changed areas, contracts, failure paths and
 executed checks; reducing the form does not waive code review.
@@ -99,8 +109,7 @@ a score or claim that a contributor has been certified. The explanation can be
 in the contributor's language locally.
 
 The workspace also offers an optional, private intent record: the contributor's
-own short answers on why the change exists, what must stay true, what was not
-done, and which check pins it. It is for the contributor to copy into the
+own short answers on why the change exists and which check fails if it breaks. It is for the contributor to copy into the
 English PR body and is never read by the hook or CI
 ([the workbench](../.claude/skills/codetrial-review/workbench.md#three-debts-what-the-change-leaves-behind)).
 

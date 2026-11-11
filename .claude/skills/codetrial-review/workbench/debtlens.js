@@ -40,10 +40,7 @@ export function renderDebt(root, debt, onCite) {
 
 const LABELS = [
   ["goal", "Goal"],
-  ["constraints", "Must stay true"],
-  ["alternatives", "Not done, and why"],
   ["check", "Checked by"],
-  ["backup", "Also understood by"],
 ];
 
 // The record as a section for a pull request description: only what was written,

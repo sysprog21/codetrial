@@ -315,7 +315,7 @@ test(
     await page.getByText("Sent to your review task", { exact: true }).waitFor();
     assert.equal(
       await page.locator("#feedback-status").textContent(),
-      "Saved and awaiting reviewer feedback",
+      "Sent and saved, but no reviewer is listening, so nothing will appear here yet. Tell your agent in the terminal to read the submission.",
     );
     const before = inspect();
     writeFileSync(
@@ -336,6 +336,7 @@ test(
       }),
     );
     await page.getByText(/The reviewer could not finish/).waitFor();
+    assert.equal(await page.locator("#send").textContent(), "Retry");
     await page.locator("#send").click();
     await page.waitForFunction(
       (requestId) =>
@@ -344,6 +345,234 @@ test(
       before.request_id,
     );
     assert.notEqual(inspect().request_id, before.request_id);
+  },
+);
+
+const SENT_ANSWER =
+  "The current workflow loses the submission handoff, which is why the previous record has to stay readable after a failed write.";
+
+test(
+  "repeated Send clicks while the answer check is pending submit only once",
+  { timeout: 30000 },
+  async (t) => {
+    if (!browser) return t.skip("playwright chromium unavailable");
+    const { page, inspect } = await start(t);
+    let releaseCheck;
+    const checksHeld = new Promise((resolve) => (releaseCheck = resolve));
+    let checkStarted;
+    const checking = new Promise((resolve) => (checkStarted = resolve));
+    let requests = 0;
+    await page.route("**/api/check", async (route) => {
+      checkStarted();
+      await checksHeld;
+      await route.continue();
+    });
+    await page.route("**/api/review", async (route) => {
+      requests++;
+      await route.continue();
+    });
+    await page.locator('textarea[name="motivation"]').fill(SENT_ANSWER);
+    await page.locator("#save").click();
+    await page.getByText("Saved on this computer", { exact: true }).waitFor();
+    await page.locator("#send").click();
+    await checking;
+    await page.locator("#send").evaluate((button) => button.click());
+    releaseCheck();
+    await page.getByText("Sent to your review task", { exact: true }).waitFor();
+    await page.getByRole("button", { name: "Sent, waiting" }).waitFor();
+    assert.equal(requests, 1);
+    assert.equal(inspect().status, "awaiting_review");
+    assert.equal(await page.locator("#error").isVisible(), false);
+  },
+);
+
+test(
+  "refresh cannot race a send while its answer check is pending",
+  { timeout: 30000 },
+  async (t) => {
+    if (!browser) return t.skip("playwright chromium unavailable");
+    const { page, inspect } = await start(t);
+    let releaseCheck;
+    const checksHeld = new Promise((resolve) => (releaseCheck = resolve));
+    let checkStarted;
+    const checking = new Promise((resolve) => (checkStarted = resolve));
+    await page.route("**/api/check", async (route) => {
+      checkStarted();
+      await checksHeld;
+      await route.continue();
+    });
+    await page.locator('textarea[name="motivation"]').fill(SENT_ANSWER);
+    await page.locator("#save").click();
+    await page.getByText("Saved on this computer", { exact: true }).waitFor();
+    await page.evaluate(() => {
+      window.__sessionReads = 0;
+      const fetch = window.fetch;
+      window.fetch = (...args) => {
+        if (args[0] === "/api/session") window.__sessionReads++;
+        return fetch(...args);
+      };
+    });
+    await page.locator("#send").click();
+    await checking;
+    const reads = await page.evaluate(() => {
+      document.getElementById("refresh").click();
+      return window.__sessionReads;
+    });
+    releaseCheck();
+    await page.getByText("Sent to your review task", { exact: true }).waitFor();
+    assert.equal(reads, 0, "refresh must wait for the send to finish");
+    assert.equal(inspect().status, "awaiting_review");
+  },
+);
+
+test(
+  "saving and reflecting cannot race a pending send check",
+  { timeout: 30000 },
+  async (t) => {
+    if (!browser) return t.skip("playwright chromium unavailable");
+    const { page, inspect } = await start(t, [], true);
+    await page.locator('textarea[name="motivation"]').fill(SENT_ANSWER);
+    await page.locator("#send").click();
+    await page.locator("#reflection-form").waitFor({ state: "visible" });
+    await page.reload();
+    await page.locator("#reflection-form").waitFor({ state: "visible" });
+    await page.locator("#self-grade").selectOption("got");
+    let releaseCheck;
+    const checksHeld = new Promise((resolve) => (releaseCheck = resolve));
+    let checkStarted;
+    const checking = new Promise((resolve) => (checkStarted = resolve));
+    await page.route("**/api/check", async (route) => {
+      checkStarted();
+      await checksHeld;
+      await route.continue();
+    });
+    await page.evaluate(() => {
+      window.__otherWrites = 0;
+      const fetch = window.fetch;
+      window.fetch = (...args) => {
+        if (["/api/answers", "/api/reflection"].includes(args[0]))
+          window.__otherWrites++;
+        return fetch(...args);
+      };
+    });
+    await page.locator("#send").click();
+    await checking;
+    const writes = await page.evaluate(() => {
+      document.getElementById("reflection-form").requestSubmit();
+      document.getElementById("answers-form").requestSubmit();
+      return window.__otherWrites;
+    });
+    releaseCheck();
+    await page.getByText(/already have feedback/).waitFor();
+    assert.equal(writes, 0, "other writes must wait for the send to finish");
+    await page.locator("#reflect-save").click();
+    await page.locator("#completion-notice").waitFor({ state: "visible" });
+    assert.equal(inspect().status, "explanation_complete");
+  },
+);
+
+test(
+  "a send nobody is listening for says so, keeps Send usable and offers the resume line",
+  { timeout: 30000 },
+  async (t) => {
+    if (!browser) return t.skip("playwright chromium unavailable");
+    const { page } = await start(t);
+    await page.locator('textarea[name="motivation"]').fill(SENT_ANSWER);
+    await page.locator("#send").click();
+    await page.getByText("Sent to your review task", { exact: true }).waitFor();
+    const handoff = page.locator("#handoff");
+    assert.equal(await handoff.getAttribute("data-tone"), "away");
+    assert.equal(await page.locator("#resume-copy").isVisible(), true);
+    assert.equal(await page.locator("#send").textContent(), "Sent, waiting");
+    assert.notEqual(
+      await page.locator("#send").getAttribute("aria-disabled"),
+      "true",
+    );
+    // The banner is not a second live region: one status region carries it.
+    assert.equal(await page.locator("#handoff[role]").count(), 0);
+    // An edit while it waits makes the button a plain Send again.
+    await page
+      .locator('textarea[name="motivation"]')
+      .pressSequentially(" More.");
+    assert.equal(await page.locator("#send").textContent(), "Send to reviewer");
+    assert.equal(await handoff.getAttribute("data-tone"), "idle");
+  },
+);
+
+test(
+  "a reviewer that signalled and then went quiet is not called absent",
+  { timeout: 30000 },
+  async (t) => {
+    if (!browser) return t.skip("playwright chromium unavailable");
+    const { page, bundle, inspect } = await start(t);
+    await page.locator('textarea[name="motivation"]').fill(SENT_ANSWER);
+    const signal = (state, seconds) =>
+      writeFileSync(
+        join(bundle, "explanation-agent.json"),
+        JSON.stringify({
+          identity: inspect().identity,
+          state,
+          until: Date.now() / 1000 + seconds,
+        }),
+      );
+    await page.locator("#send").click();
+    await page.getByText("Sent to your review task", { exact: true }).waitFor();
+    signal("reading", 600);
+    await page.locator('#handoff[data-tone="working"]').waitFor();
+    assert.match(
+      await page.locator("#waiting-time").textContent(),
+      /on this page$/,
+    );
+    // The signal is past its time: the server calls it lapsed, whatever this
+    // page has or has not watched.
+    signal("reading", -5);
+    await page.locator('#handoff[data-tone="away"]').waitFor();
+    assert.match(
+      await page.locator("#reviewer-presence").textContent(),
+      /No reviewer signal for 2 minutes/,
+    );
+    assert.match(
+      await page.locator("#feedback-status").textContent(),
+      /stopped signalling/,
+    );
+    assert.equal(await page.locator("#resume-copy").isVisible(), false);
+  },
+);
+
+test(
+  "a refused send is said beside the answer, with focus on it, and nothing is sent",
+  { timeout: 30000 },
+  async (t) => {
+    if (!browser) return t.skip("playwright chromium unavailable");
+    const { page, inspect } = await start(t);
+    const box = page.locator('textarea[name="motivation"]');
+    await box.fill("Too short to say anything");
+    await page.locator('#answer-coach[data-state="short"]').waitFor();
+    await page.locator("#send").click();
+    await page.locator('#answer-coach[data-refused="true"]').waitFor();
+    // The message is said again a frame later, so wait for the words.
+    await page.waitForFunction(() =>
+      /at least 12 words/.test(
+        document.getElementById("coach-message").textContent,
+      ),
+    );
+    assert.equal(await page.locator("#error").isVisible(), false);
+    assert.equal(
+      await box.evaluate((node) => node === document.activeElement),
+      true,
+    );
+    assert.notEqual(inspect().status, "awaiting_review");
+    // Typing on clears the ring, and an answer that can be sent is marked so.
+    await box.fill(SENT_ANSWER);
+    await page
+      .locator(
+        '#answer-coach[data-state="good"],#answer-coach[data-state="ungrounded"]',
+      )
+      .waitFor();
+    assert.equal(
+      await page.locator("#answer-coach").getAttribute("data-refused"),
+      null,
+    );
   },
 );
 
@@ -557,7 +786,7 @@ test(
     await page
       .locator('[name="motivation"]')
       .fill(
-        "Keep earlier evidence available when writing fails, which is why the previous record has to stay readable after a failed write.",
+        "Replace the existing behavior so earlier evidence stays available when writing fails, which is why the previous record has to stay readable after a failed write.",
       );
     await page.locator('[data-path="tests/example.rs"]').click();
     await page
@@ -572,7 +801,7 @@ test(
     await page.locator("#main-question").click();
     assert.equal(
       await page.locator('[name="motivation"]').inputValue(),
-      "Keep earlier evidence available when writing fails, which is why the previous record has to stay readable after a failed write.",
+      "Replace the existing behavior so earlier evidence stays available when writing fails, which is why the previous record has to stay readable after a failed write.",
     );
     await page.locator('[data-path="tests/example.rs"]').click();
     assert.equal(
@@ -582,7 +811,7 @@ test(
     await page.locator("#all-diff").click();
     assert.equal(
       await page.locator('[name="motivation"]').inputValue(),
-      "Keep earlier evidence available when writing fails, which is why the previous record has to stay readable after a failed write.",
+      "Replace the existing behavior so earlier evidence stays available when writing fails, which is why the previous record has to stay readable after a failed write.",
     );
     await page.locator('[data-path="tests/example.rs"]').click();
     await page.locator("#send").click();
@@ -1700,7 +1929,6 @@ test("the intent record is the contributor's own, survives a reload and copies a
   await page
     .locator("#intent-check")
     .fill("tests/cache_test.rs::miss_reaches_db");
-  await page.locator("#intent-home").selectOption("pr");
   // A poll must not overwrite what is being typed: wait for one, and for the page to handle it.
   await afterPoll(page);
   assert.equal(
@@ -1723,7 +1951,10 @@ test("the intent record is the contributor's own, survives a reload and copies a
     await page.locator("#intent-goal").inputValue(),
     "A miss must still reach the database.",
   );
-  assert.equal(await page.locator("#intent-home").inputValue(), "pr");
+  assert.equal(
+    await page.locator("#intent-check").inputValue(),
+    "tests/cache_test.rs::miss_reaches_db",
+  );
   await page.evaluate(() => {
     window.__copied = null;
     Object.defineProperty(navigator, "clipboard", {
@@ -1785,18 +2016,14 @@ test("the intent record copies every answer under its label, in one line each", 
     return [
       intentMarkdown({
         goal: "A\n   B",
-        constraints: "C",
-        alternatives: "D",
         check: "E",
-        backup: "F",
-        home: "pr",
       }),
-      intentMarkdown({ goal: "  ", home: "pr" }),
+      intentMarkdown({ goal: "  " }),
     ];
   });
   assert.equal(
     full,
-    "### Why this change exists\n\n- **Goal:** A B\n- **Must stay true:** C\n- **Not done, and why:** D\n- **Checked by:** E\n- **Also understood by:** F\n",
+    "### Why this change exists\n\n- **Goal:** A B\n- **Checked by:** E\n",
   );
   assert.equal(blank, "", "nothing written, nothing to copy");
 });
@@ -1913,15 +2140,15 @@ test(
       "Optional · not started",
     );
     await openIntent(page);
-    // A record that only says where the why will live is still a record.
-    await page.locator("#intent-home").selectOption("pr");
+    // A record that answers only one question is still a record.
+    await page.locator("#intent-check").fill("make test");
     await page.locator("#intent-save").click();
     await page.getByText("Saved on this computer", { exact: true }).waitFor();
     assert.equal(await step("keep").getAttribute("data-state"), "done");
     await page.locator("#intent-goal").fill("Keep the why next to the change.");
     assert.match(
       await page.locator("#intent-summary-state").textContent(),
-      /^2 of \d+ answered · unsaved changes$/,
+      /^2 of 2 answered · unsaved changes$/,
     );
     assert.equal(await step("keep").getAttribute("data-state"), "current");
     // Cmd with Enter saves as Ctrl does.

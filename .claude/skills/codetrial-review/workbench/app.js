@@ -77,7 +77,10 @@ function addField(container, key, label, hint = "") {
     answers[key] = input.value;
     dirty = true;
     $("save-status").textContent = "Unsaved changes";
-    if (key === "motivation") scheduleCoach();
+    if (key === "motivation") {
+      delete $("answer-coach").dataset.refused;
+      scheduleCoach();
+    }
     renderProgress();
     renderFiles();
     renderFeedback();
@@ -137,6 +140,7 @@ function renderCoach(checks) {
   $("answer-coach").hidden = !shown;
   if (!shown) return;
   const first = checks.state === "empty";
+  $("answer-coach").dataset.state = checks.state;
   $("coach-meter").max = checks.minimum;
   $("coach-meter").value = Math.min(checks.words, checks.minimum);
   $("coach-count").textContent = first
@@ -145,7 +149,7 @@ function renderCoach(checks) {
   if ($("coach-message").textContent !== checks.message)
     $("coach-message").textContent = checks.message;
   const offer =
-    ["empty", "short", "ungrounded"].includes(checks.state) &&
+    ["empty", "short", "ungrounded", "unrelated"].includes(checks.state) &&
     checks.anchors.length;
   $("coach-anchors").hidden = !offer;
   $("coach-chips").replaceChildren(
@@ -178,25 +182,31 @@ function refreshCoach() {
   scheduleCoach(true);
 }
 
+// What the server says about this text; one request per text, shared by the
+// coach and by a send.
+async function coachChecks(text) {
+  const { identity } = session;
+  if (coachLast?.text === text && coachLast.identity === identity)
+    return coachLast.checks;
+  const checks = await api("/api/check", {
+    method: "PUT",
+    body: JSON.stringify({ identity, text }),
+  });
+  // Kept for the snapshot it was asked about, not for whichever is open now.
+  coachLast = { text, identity, checks };
+  return checks;
+}
+
 function scheduleCoach(immediate = false) {
   clearTimeout(coachTimer);
   if (finished || !coachActive()) return renderCoach(null);
   coachTimer = setTimeout(
     async () => {
       const seq = ++coachSeq;
-      const text = inputs.get("motivation").value;
       try {
-        const reuse =
-          coachLast?.text === text && coachLast.identity === session.identity;
-        const checks = reuse
-          ? coachLast.checks
-          : await api("/api/check", {
-              method: "PUT",
-              body: JSON.stringify({ identity: session.identity, text }),
-            });
+        const checks = await coachChecks(inputs.get("motivation").value);
         // Only the newest question may leave a result behind.
         if (seq !== coachSeq) return;
-        coachLast = { text, identity: session.identity, checks };
         renderCoach(checks);
       } catch {
         // A hint that cannot be fetched is not worth an error banner.
@@ -228,8 +238,7 @@ const STEP_STATE = {
   current: " (current step)",
   todo: "",
 };
-// Any answer counts, the choice of where the why lives included, as the
-// summary counts it.
+// Any answer counts, as the summary counts it.
 const intentWritten = (fields) =>
   Object.values(fields ?? {}).some((value) => String(value ?? "").trim());
 function intentSaved() {
@@ -369,6 +378,15 @@ function selectFile(path) {
 // none, the sentence says to resume the review task and motion would mislead.
 let waitingSince = null;
 let waitingTimer = null;
+let sending = false;
+// The server says "lapsed" for a reviewer that signalled for this answer and
+// then went quiet: not absent, since the task may still be working.
+function reviewerGone() {
+  return (
+    session.status === "awaiting_review" &&
+    ["offline", "lapsed"].includes(session.reviewer)
+  );
+}
 function renderWaiting() {
   const waiting =
     session.status === "awaiting_review" &&
@@ -383,13 +401,51 @@ function renderWaiting() {
   if (waitingSince === null) waitingSince = Date.now();
   const tick = () => {
     const seconds = Math.floor((Date.now() - waitingSince) / 1000);
-    $("waiting-time").textContent =
+    // What this page has watched, not the age of the submission.
+    $("waiting-time").textContent = `${
       seconds < 60
         ? `${seconds} s`
-        : `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+        : `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`
+    } on this page`;
   };
   tick();
   waitingTimer ??= setInterval(tick, 1000);
+}
+
+// One tone for the whole handoff, so the three lines under the heading read as
+// one state: nothing sent yet, a reviewer at work, a reviewer that is not
+// there, a failure, or a reply. Styling only; the words stay where they were.
+const RESUME = "resume codetrial-review";
+function renderHandoff(feedback, current) {
+  const awaiting = session.status === "awaiting_review" && !dirty;
+  const tone = !awaiting
+    ? feedback && !current
+      ? "stale"
+      : feedback
+        ? "reply"
+        : "idle"
+    : session.reviewer === "error"
+      ? "error"
+      : reviewerGone()
+        ? "away"
+        : "working";
+  $("handoff").dataset.tone = tone;
+  $("resume-copy").hidden = tone !== "away" || session.reviewer === "lapsed";
+  renderSendLabel(tone);
+}
+
+// The label follows what Send would do now. It stays a button that can be
+// pressed (aria-disabled only while the request is in flight), so an edited
+// answer can always be sent again.
+function renderSendLabel(tone) {
+  const label = sending
+    ? "Sending…"
+    : tone === "error"
+      ? "Retry"
+      : tone === "working" || tone === "away"
+        ? "Sent, waiting"
+        : "Send to reviewer";
+  if ($("send").textContent !== label) $("send").textContent = label;
 }
 
 function renderFeedback() {
@@ -407,7 +463,11 @@ function renderFeedback() {
         : statusLabels[session.status]
       : "Earlier feedback is shown below. Your latest answers still need review."
     : session.status === "awaiting_review"
-      ? statusLabels.awaiting_review
+      ? reviewerGone()
+        ? session.reviewer === "lapsed"
+          ? "Sent and saved. The reviewer has stopped signalling, which can also mean it is still working."
+          : "Sent and saved, but no reviewer is listening, so nothing will appear here yet. Tell your agent in the terminal to read the submission."
+        : statusLabels.awaiting_review
       : "Choose Send to reviewer when you are ready for feedback on your explanation.";
   if (!dirty) $("confidence").value = answers.confidence || "";
   if (reflectionDigest !== session.feedback_digest) {
@@ -443,10 +503,17 @@ function renderFeedback() {
       : "Record reflection";
   $("reflect-save").setAttribute(
     "aria-disabled",
-    String(dirty || complete || reflectionSaving),
+    String(dirty || complete || reflectionSaving || sending),
   );
-  if (!saving) $("send").setAttribute("aria-disabled", String(complete));
+  if (!saving) $("save").setAttribute("aria-disabled", String(sending));
+  if (!saving && !sending)
+    $("send").setAttribute("aria-disabled", String(complete));
   $("reflection-form").hidden = !current || !session.submission;
+  $("reflection-form").dataset.state = complete
+    ? "saved"
+    : reflectionDirty
+      ? "unsaved"
+      : "idle";
   $("reflection-state").textContent = complete
     ? "Interactive review complete. Reflection recorded. This is participation evidence, not code approval."
     : reflectionDirty && session.reflection
@@ -462,12 +529,15 @@ function renderFeedback() {
             "Your review task received the saved explanations. Feedback is pending.",
           offline:
             "No active review task is waiting. Your explanations stay saved; resume codetrial-review to receive AI feedback.",
+          lapsed:
+            "No reviewer signal for 2 minutes. Your submission is saved. Check your agent, or reviewer.log, or send again.",
           error:
             "The reviewer could not finish. Your explanation is saved. Choose Send to reviewer to retry, or ask your review task to check reviewer.log.",
         }[session.reviewer];
   if ($("reviewer-presence").textContent !== presence)
     $("reviewer-presence").textContent = presence;
   renderWaiting();
+  renderHandoff(feedback, current);
   renderNotes(feedback);
   renderYours(feedback, current);
 }
@@ -614,15 +684,21 @@ $("intent-form").addEventListener("submit", async (event) => {
   }
 });
 
-$("intent-copy").addEventListener("click", async () => {
+async function copyText(text) {
   try {
-    await navigator.clipboard.writeText(intentMarkdown(readIntent()));
-    $("intent-status").textContent =
-      "Copied. Paste it into your pull request description.";
+    await navigator.clipboard.writeText(text);
+    return true;
   } catch {
-    $("intent-status").textContent =
-      "Copying was blocked. Select the text in the fields and copy it.";
+    return false;
   }
+}
+
+$("intent-copy").addEventListener("click", async () => {
+  $("intent-status").textContent = (await copyText(
+    intentMarkdown(readIntent()),
+  ))
+    ? "Copied. Paste it into your pull request description."
+    : "Copying was blocked. Select the text in the fields and copy it.";
 });
 
 // A citation in a reference note opens the line it names in the diff.
@@ -643,7 +719,7 @@ function showCitation(ev) {
 }
 
 async function loadSession() {
-  if (requestPending || saving) return;
+  if (requestPending || saving || sending) return;
   requestPending = true;
   $("retry").hidden = true;
   try {
@@ -760,12 +836,12 @@ async function saveAnswers() {
     return false;
   } finally {
     saving = false;
-    $("save").removeAttribute("aria-disabled");
+    $("save").setAttribute("aria-disabled", String(sending));
   }
 }
 $("answers-form").addEventListener("submit", (event) => {
   event.preventDefault();
-  saveAnswers();
+  if (!sending) saveAnswers();
 });
 // Ctrl or Cmd with Enter in a box does what finishing that box means: the
 // answer is sent, the intent record saved. Plain Enter still writes a newline.
@@ -784,24 +860,60 @@ $("intent-form").addEventListener("keydown", (event) => {
   event.preventDefault();
   $("intent-form").requestSubmit();
 });
+// Send is refused for what the coach already names: say it beside the answer,
+// where the contributor is looking, and keep focus on the box to fix it.
+async function refusedByCoach() {
+  // The core answer, whichever question is showing.
+  const text = answers.motivation ?? "";
+  let checks;
+  try {
+    checks = await coachChecks(text);
+  } catch {
+    return false;
+  }
+  if (!checks.blocks_send) return false;
+  // The coach is hidden for an answer already sent; say it where errors go.
+  if (!coachActive()) {
+    showError(new Error(checks.message));
+    return true;
+  }
+  renderCoach(checks);
+  $("answer-coach").dataset.refused = "true";
+  // Said again, so a screen reader announces it though the words are unchanged.
+  $("coach-message").textContent = "";
+  requestAnimationFrame(() => {
+    $("coach-message").textContent = checks.message;
+  });
+  if (!inputs.has("motivation") && session.questions[0])
+    selectFile(session.questions[0].path);
+  inputs.get("motivation")?.focus();
+  return true;
+}
 $("send").addEventListener("click", async () => {
   if (
+    sending ||
     saving ||
     requestPending ||
     (!dirty && session.status === "explanation_complete")
   )
     return;
-  if (dirty && !(await saveAnswers())) return;
-  if (dirty) return;
-  if (session.missing.length) {
-    showError(new Error("Explain your motivation before sending."));
-    if (session.questions[0]) selectFile(session.questions[0].path);
-    inputs.get("motivation")?.focus();
-    return;
-  }
-  saving = true;
+  sending = true;
   $("send").setAttribute("aria-disabled", "true");
+  renderFeedback();
   try {
+    if (dirty && !(await saveAnswers())) return;
+    if (dirty) return;
+    if (session.missing.length) {
+      showError(new Error("Explain your motivation before sending."));
+      if (session.questions[0]) selectFile(session.questions[0].path);
+      inputs.get("motivation")?.focus();
+      return;
+    }
+    const { revision } = session;
+    if (await refusedByCoach()) return;
+    // Edited or replaced by another tab while the check was out: send neither.
+    if (dirty || session.revision !== revision) return;
+    saving = true;
     session = await api("/api/review", {
       method: "PUT",
       body: JSON.stringify({
@@ -818,11 +930,16 @@ $("send").addEventListener("click", async () => {
     showError(error);
   } finally {
     saving = false;
+    sending = false;
     $("send").setAttribute(
       "aria-disabled",
       String(!dirty && session.status === "explanation_complete"),
     );
+    renderFeedback();
   }
+});
+$("resume-copy").addEventListener("click", async () => {
+  $("resume-copy").textContent = (await copyText(RESUME)) ? "Copied" : RESUME;
 });
 $("confidence").addEventListener("change", () => {
   if ($("confidence").value) answers.confidence = $("confidence").value;
@@ -843,6 +960,7 @@ $("reflection-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   if (
     dirty ||
+    sending ||
     saving ||
     requestPending ||
     (session.status === "explanation_complete" && reflectionMatches())
@@ -928,7 +1046,9 @@ $("close-window").addEventListener("click", async () => {
     showError(new Error("Save your latest edit before finishing."));
     return;
   }
+  $("finish-note").textContent = "";
   $("close-window").setAttribute("aria-disabled", "true");
+  $("close-window").textContent = "Finishing…";
   finishing = true;
   clearTimeout(coachTimer);
   const boxes = [...inputs.values(), $("confidence")];
@@ -941,11 +1061,12 @@ $("close-window").addEventListener("click", async () => {
   } catch (error) {
     finishing = false;
     $("close-window").setAttribute("aria-disabled", "false");
+    $("close-window").textContent = "Finish and close";
     for (const box of boxes) {
       box.readOnly = false;
       box.disabled = false;
     }
-    showError(error);
+    $("finish-note").textContent = error.message;
     return;
   }
   finished = true;
