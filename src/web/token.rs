@@ -100,6 +100,43 @@ enum TokenBodyReadError {
     Rejected,
 }
 
+/// The body of a request nothing has authenticated yet, or a refusal to send
+/// as the answer: a stalled client is told it timed out and an oversized one
+/// that it sent too much, so neither holds the connection open.
+#[expect(
+    clippy::result_large_err,
+    reason = "the error is the response sent to the client"
+)]
+pub(crate) async fn read_body_or_refuse(body: Body, max_bytes: usize) -> Result<Bytes, Response> {
+    read_body_with(body, max_bytes, || {
+        StatusCode::PAYLOAD_TOO_LARGE.into_response()
+    })
+    .await
+}
+
+/// The same read for a route that answers an oversized body in a shape of its
+/// own: the stalled client still gets the timeout, so no route holds a
+/// connection open for a body that is never finished.
+#[expect(
+    clippy::result_large_err,
+    reason = "the error is the response sent to the client"
+)]
+pub(crate) async fn read_body_with(
+    body: Body,
+    max_bytes: usize,
+    too_large: impl FnOnce() -> Response,
+) -> Result<Bytes, Response> {
+    read_token_body(body, TOKEN_BODY_READ_LIMIT, max_bytes)
+        .await
+        .map_err(|error| match error {
+            TokenBodyReadError::TimedOut => json_response(
+                StatusCode::REQUEST_TIMEOUT,
+                json!({ "error": "Request body timed out." }),
+            ),
+            TokenBodyReadError::Rejected => too_large(),
+        })
+}
+
 /// A release carries the join token `/api/token` minted, and that token embeds
 /// the start's metadata, built from a request body of at most
 /// `MAX_BODY_BYTES`. Escaped once more as a string inside the claims it at
@@ -998,8 +1035,9 @@ pub(crate) async fn observer_token_handler(
             );
         }
     };
-    let Ok(body) = to_bytes(request.into_body(), MAX_BODY_BYTES).await else {
-        return StatusCode::PAYLOAD_TOO_LARGE.into_response();
+    let body = match read_body_or_refuse(request.into_body(), MAX_BODY_BYTES).await {
+        Ok(body) => body,
+        Err(refusal) => return refusal,
     };
     let Some(room_name) = serde_json::from_slice::<Value>(&body)
         .ok()

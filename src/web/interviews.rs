@@ -4,7 +4,7 @@
 
 use std::time::Instant;
 
-use axum::body::{Body, to_bytes};
+use axum::body::Body;
 use axum::extract::{Path as UriPath, State};
 use axum::http::{Request, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -18,6 +18,7 @@ use crate::current_epoch_seconds_i64;
 
 use super::auth::Owner;
 use super::recordings::finish_recording;
+use super::token::{read_body_or_refuse, read_body_with};
 use super::{
     AppState, MAX_BODY_BYTES, MAX_REPORT_BYTES, json_response, rate_limited_response,
     replay_response,
@@ -72,8 +73,9 @@ pub(crate) async fn save_report_handler(
     Owner { accounts, user }: Owner,
     request: Request<Body>,
 ) -> Response {
-    let Ok(body) = to_bytes(request.into_body(), MAX_REPORT_BYTES).await else {
-        return StatusCode::PAYLOAD_TOO_LARGE.into_response();
+    let body = match read_body_or_refuse(request.into_body(), MAX_REPORT_BYTES).await {
+        Ok(body) => body,
+        Err(refusal) => return refusal,
     };
     let Ok(payload) = serde_json::from_slice::<Value>(&body) else {
         return json_response(
@@ -147,8 +149,9 @@ pub(crate) async fn create_interview_handler(
             json!({ "code": "recording_not_enabled", "error": "This server does not record interviews." }),
         );
     }
-    let Ok(body) = to_bytes(request.into_body(), MAX_BODY_BYTES).await else {
-        return StatusCode::PAYLOAD_TOO_LARGE.into_response();
+    let body = match read_body_or_refuse(request.into_body(), MAX_BODY_BYTES).await {
+        Ok(body) => body,
+        Err(refusal) => return refusal,
     };
     let version = serde_json::from_slice::<Value>(&body)
         .ok()
@@ -288,11 +291,15 @@ pub(crate) async fn replay_events_handler(
         return rate_limited_response("Too much replay at once. Wait a minute.");
     }
 
-    let Ok(body) = to_bytes(request.into_body(), MAX_REPLAY_BATCH_BYTES).await else {
-        return json_response(
+    let too_large = || {
+        json_response(
             StatusCode::PAYLOAD_TOO_LARGE,
             json!({ "code": "replay_batch_too_large", "error": "Too much replay at once." }),
-        );
+        )
+    };
+    let body = match read_body_with(request.into_body(), MAX_REPLAY_BATCH_BYTES, too_large).await {
+        Ok(body) => body,
+        Err(refusal) => return refusal,
     };
     let Some(events) = serde_json::from_slice::<Value>(&body)
         .ok()

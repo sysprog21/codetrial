@@ -1,6 +1,6 @@
 //! Account-bound task unlock and public exercise loading.
 
-use axum::body::{Body, to_bytes};
+use axum::body::Body;
 use axum::extract::{ConnectInfo, Path, Query, State};
 use axum::http::{HeaderMap, Request, StatusCode, header};
 use axum::response::Response;
@@ -13,6 +13,7 @@ use crate::tasks::access::{
 };
 
 use super::auth::Owner;
+use super::token::read_body_with;
 use super::{AppState, MAX_BODY_BYTES, json_response};
 
 pub(crate) fn task_error(error: AccessError) -> Response {
@@ -359,8 +360,13 @@ pub(crate) async fn task_unlock_handler(
     if learner.github_id.is_none() {
         return refuse("authentication_required");
     }
-    let Ok(bytes) = to_bytes(request.into_body(), MAX_BODY_BYTES).await else {
-        return refuse("request_too_large");
+    let bytes = match read_body_with(request.into_body(), MAX_BODY_BYTES, || {
+        refuse("request_too_large")
+    })
+    .await
+    {
+        Ok(bytes) => bytes,
+        Err(refusal) => return refusal,
     };
     let Ok(body) = serde_json::from_slice::<UnlockRequest>(&bytes) else {
         return refuse("site_invalid");
@@ -486,8 +492,13 @@ pub(crate) async fn task_start_handler(
             retry_after: Some(60),
         });
     }
-    let Ok(bytes) = to_bytes(request.into_body(), MAX_BODY_BYTES).await else {
-        return refuse("request_too_large");
+    let bytes = match read_body_with(request.into_body(), MAX_BODY_BYTES, || {
+        refuse("request_too_large")
+    })
+    .await
+    {
+        Ok(bytes) => bytes,
+        Err(refusal) => return refusal,
     };
     let Ok(body) = serde_json::from_slice::<AdmissionRequest>(&bytes) else {
         return refuse("client_override");

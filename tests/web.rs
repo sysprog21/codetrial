@@ -1415,6 +1415,9 @@ mod peer_auth;
 #[path = "web/accounts.rs"]
 mod accounts;
 
+#[path = "web/login_form.rs"]
+mod login_form;
+
 #[path = "web/routes.rs"]
 mod routes;
 

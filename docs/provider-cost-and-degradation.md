@@ -520,9 +520,10 @@ room otherwise gets the refusal it had before the stop. Provider projects are
 rotated and their LiveKit connection-minute quota is refreshed in the
 background, and known-exhausted projects are skipped.
 
-The token endpoint allows 30 starts per 60-second bucket. Signed-in buckets are
-keyed by account and anonymous buckets by client address, so anonymous traffic
-cannot spend an authenticated candidate's allowance.
+The token endpoint allows 30 starts per 60-second bucket. Signed-in and
+anonymous requests are counted in separate buckets, each keyed by client address
+(an IPv6 client by its /64), so anonymous traffic cannot spend an authenticated
+candidate's allowance. Candidates behind one address share the signed-in bucket.
 
 Reciprocal practice shares one `CODETRIAL_PEER_MAX_SESSIONS` cap (8 by default)
 across advertised waiting rooms and bound sessions. Opening availability creates
