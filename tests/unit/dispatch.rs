@@ -145,6 +145,7 @@ async fn no_show_dispatch_enforces_the_configured_cap() {
             "interview-second",
             &provider,
             "candidate-second",
+            None,
             None
         ),
         Err(DispatchRefusal::AtCapacity)
@@ -363,7 +364,10 @@ async fn a_concurrent_burst_never_overbooks_and_released_capacity_returns() {
                 Reservation::GuestRoomInUse => {
                     panic!("signed-in reservations must not hit the guest room limit")
                 }
-                Reservation::Existing | Reservation::Finalizing | Reservation::Closed => {
+                Reservation::Existing
+                | Reservation::Finalizing
+                | Reservation::Closed
+                | Reservation::TooManyWaiting => {
                     panic!("burst ids are unique and the dispatcher is open")
                 }
             }
@@ -695,7 +699,7 @@ fn release_dispatcher(max_concurrent: usize) -> LocalDispatcher {
 }
 
 fn started(dispatcher: &LocalDispatcher, room: &str, guest: bool, candidate: &str) -> Slot {
-    match dispatcher.reserve_for(room, guest, Some(candidate.to_string())) {
+    match dispatcher.reserve_for(room, guest, Some(candidate.to_string()), None) {
         Reservation::New(slot) => slot,
         _ => panic!("{room} should be free to start"),
     }
@@ -751,12 +755,12 @@ async fn a_released_room_is_refused_until_its_slot_drops() {
     assert!(dispatcher.release_start("interview-leaving", "candidate-a"));
 
     assert!(matches!(
-        dispatcher.reserve_for("interview-leaving", false, Some("candidate-b".into())),
+        dispatcher.reserve_for("interview-leaving", false, Some("candidate-b".into()), None),
         Reservation::Finalizing
     ));
     drop(slot);
     assert!(matches!(
-        dispatcher.reserve_for("interview-leaving", false, Some("candidate-b".into())),
+        dispatcher.reserve_for("interview-leaving", false, Some("candidate-b".into()), None),
         Reservation::New(_)
     ));
 }
@@ -863,7 +867,7 @@ async fn a_second_token_for_a_running_room_cannot_release_it() {
     let dispatcher = release_dispatcher(2);
     let _slot = started(&dispatcher, "interview-shared", false, "candidate-a");
     assert!(matches!(
-        dispatcher.reserve_for("interview-shared", false, Some("candidate-c".into())),
+        dispatcher.reserve_for("interview-shared", false, Some("candidate-c".into()), None),
         Reservation::Existing
     ));
 
@@ -979,7 +983,7 @@ async fn a_closed_dispatcher_admits_no_new_room_but_keeps_the_ones_it_has() {
         Err(DispatchRefusal::Stopping)
     );
     assert_eq!(
-        dispatcher.ensure_agent_with_no_show_release("no-show", &provider, "candidate", None),
+        dispatcher.ensure_agent_with_no_show_release("no-show", &provider, "candidate", None, None),
         Err(DispatchRefusal::Stopping)
     );
     // The room that was admitted is still the dispatcher's, and still live.
@@ -1018,4 +1022,111 @@ fn a_dispatcher_with_nothing_to_close_ignores_the_request() {
         plain.ensure_agent("room", &provider, AgentJob::Interview),
         Ok(())
     );
+}
+
+/// A room task that panics ends its start like any other failure. Dropped, its
+/// handle detaches, so nothing would give the consent claim back, and the
+/// candidate's next start would find the room's interview still held. A panic
+/// before a candidate joined is contained as a start that failed before one,
+/// which is what returns consent; one after the join is an interview that
+/// began,
+/// whose consent is not given back as if nobody came.
+#[tokio::test]
+async fn a_room_task_that_panics_is_settled_by_whether_a_candidate_joined() {
+    let panics = || async {
+        if true {
+            panic!("the room task broke");
+        }
+        Ok(crate::livekit::RoomRunOutcome::Completed)
+    };
+
+    let before = contain_panic(panics(), || false)
+        .await
+        .expect("a panic before the join is an outcome");
+    assert!(no_show_release_required(&before), "consent is given back");
+    assert!(matches!(
+        before,
+        crate::livekit::RoomRunOutcome::FailedBeforeCandidate(_)
+    ));
+
+    let after = contain_panic(panics(), || true).await;
+    assert!(
+        after
+            .as_ref()
+            .is_err_and(|error| error.to_string().contains("panicked")),
+        "a panic after the join is an error that releases nothing: {after:?}"
+    );
+
+    // Anything that does not panic passes through as it was.
+    let done = contain_panic(
+        async { Ok(crate::livekit::RoomRunOutcome::Completed) },
+        || true,
+    )
+    .await;
+    assert!(matches!(
+        done,
+        Ok(crate::livekit::RoomRunOutcome::Completed)
+    ));
+}
+
+fn roomy_dispatcher() -> LocalDispatcher {
+    LocalDispatcher {
+        config: crate::config::load_from_pairs([
+            ("LIVEKIT_URL", "wss://primary.example"),
+            ("LIVEKIT_API_KEY", "primary-key"),
+            ("LIVEKIT_API_SECRET", "primary-secret"),
+            ("GOOGLE_API_KEY", "primary-google"),
+        ])
+        .unwrap(),
+        runtime: tokio::runtime::Handle::current(),
+        state: Arc::default(),
+        max_concurrent: 64,
+    }
+}
+
+/// An account holds a few starts nobody has joined, and no more. Each start
+/// reserves a slot and spawns an agent that joins LiveKit and bills a
+/// connection minute, and a signed-in session is free to mint, so without a
+/// bound one account could fill every slot with rooms it never enters.
+#[tokio::test]
+async fn an_account_holds_a_few_unjoined_starts_and_no_more() {
+    let dispatcher = roomy_dispatcher();
+    let mut held = Vec::new();
+    for index in 0..MAX_WAITING_STARTS_PER_ACCOUNT {
+        let Reservation::New(slot) =
+            dispatcher.reserve_for(&format!("interview-own-{index}"), false, None, Some(7))
+        else {
+            panic!("start {index} is within the bound");
+        };
+        held.push(slot);
+    }
+    assert!(matches!(
+        dispatcher.reserve_for("interview-own-over", false, None, Some(7)),
+        Reservation::TooManyWaiting
+    ));
+
+    // Someone else's account and a start with no account are not charged to it.
+    assert!(matches!(
+        dispatcher.reserve_for("interview-other", false, None, Some(8)),
+        Reservation::New(_)
+    ));
+    assert!(matches!(
+        dispatcher.reserve_for("interview-none", false, None, None),
+        Reservation::New(_)
+    ));
+
+    // A start that ends, or whose candidate joined, stops counting.
+    held.pop();
+    assert!(matches!(
+        dispatcher.reserve_for("interview-after-drop", false, None, Some(7)),
+        Reservation::New(_)
+    ));
+    let joined = held.remove(0);
+    assert!(!joined.has_joined());
+    assert!(joined.claim_join(), "the candidate is accepted");
+    assert!(joined.has_joined());
+    assert!(matches!(
+        dispatcher.reserve_for("interview-after-join", false, None, Some(7)),
+        Reservation::New(_)
+    ));
 }

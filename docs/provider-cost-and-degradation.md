@@ -505,7 +505,11 @@ gets a fresh room. Strict always
 uses fresh room names. Practice does too without a development pin, which
 production ignores, so a reload can overlap the previous attempt's cleanup.
 Guests never reuse a live room and have a separate limit of two
-within the global cap. Task completion and panic release slots. A report
+within the global cap. A signed-in account may hold four starts that no
+candidate has joined, and a fifth is refused with 429, so one account cannot
+fill the slots with rooms it never enters (the log line reads
+`dispatch_refused ... reason=too_many_waiting`); a start whose candidate joined, or
+that ended, stops counting. Task completion and panic release slots. A report
 recovery window keeps its slot and LiveKit connection until expiry or 30 seconds
 after candidate departure, at most five minutes plus a 125-second regeneration
 and a 30-second rejoin. Provider outages can therefore fill the slots with
@@ -663,7 +667,7 @@ may still be.
 ## Operating it
 
 Watch `codetrial dispatch_refused ... reason=at_capacity` and
-`reason=finalizing`, `livekit quota:` transitions, token HTTP 429 with
+`reason=finalizing` and `reason=too_many_waiting`, `livekit quota:` transitions, token HTTP 429 with
 `Retry-After`, `gemini report transport_failed call=... retry=...`, `gemini
 report retry_unavailable` (a key rotation lost during backoff, without another
 HTTP call), `codetrial report_recovery_notice_failed`, `codetrial

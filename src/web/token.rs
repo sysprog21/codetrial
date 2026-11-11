@@ -642,7 +642,13 @@ async fn dispatch_or_release_consent(
     let dispatch_result = if owner.is_none() {
         dispatcher.ensure_guest_agent(room_name, provider, identity)
     } else {
-        dispatcher.ensure_agent_with_no_show_release(room_name, provider, identity, no_show.clone())
+        dispatcher.ensure_agent_with_no_show_release(
+            room_name,
+            provider,
+            identity,
+            no_show.clone(),
+            owner.map(|owner| owner.user.id),
+        )
     };
 
     let Err(refusal) = dispatch_result else {
@@ -663,6 +669,12 @@ async fn dispatch_or_release_consent(
     }
 
     let error = match refusal {
+        super::DispatchRefusal::TooManyWaiting => {
+            return Some(json_response(
+                StatusCode::TOO_MANY_REQUESTS,
+                json!({ "error": "You already have several interviews waiting to start. Join or close one, or wait a few minutes." }),
+            ));
+        }
         super::DispatchRefusal::AtCapacity => {
             "The server is running as many interviews as it can right now. Try again in a few minutes."
         }

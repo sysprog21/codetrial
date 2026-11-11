@@ -787,15 +787,18 @@ pub trait RoomDispatcher: Send + Sync + 'static {
     /// keep their existing behavior.
     ///
     /// `candidate` is the identity the start's token joins as, the one
-    /// [`RoomDispatcher::release_start`] has to be shown to end the wait.
+    /// [`RoomDispatcher::release_start`] has to be shown to end the wait, and
+    /// `owner` the account that made the start, whether or not a consent was
+    /// recorded for it, so a dispatcher can bound what one account holds.
     fn ensure_agent_with_no_show_release(
         &self,
         room_name: &str,
         provider: &crate::config::Provider,
         candidate: &str,
         no_show: Option<NoShowConsent>,
+        owner: Option<i64>,
     ) -> Result<(), DispatchRefusal> {
-        let _ = (candidate, no_show);
+        let _ = (candidate, no_show, owner);
         self.ensure_agent(room_name, provider, AgentJob::Interview)
     }
 
@@ -869,6 +872,7 @@ pub enum AgentJob {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DispatchRefusal {
     AtCapacity,
+    TooManyWaiting,
     Finalizing,
     Stopping,
 }

@@ -519,8 +519,6 @@ fn read_max_concurrent(values: &BTreeMap<String, String>) -> usize {
     max_concurrent
 }
 
-/// Zero unless the operator states how many proxies front this server, so the
-/// default never trusts a forwarded client address.
 /// Recording without an OAuth app is a server that refuses every interview.
 ///
 /// The delivery target is the primary verified address GitHub returns, and
