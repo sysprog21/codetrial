@@ -37,7 +37,7 @@ pub(super) async fn isolate_local_agent(
             return Ok(());
         }
         for identity in &duplicate_agents {
-            eprintln!("removing duplicate LiveKit agent participant identity={identity}");
+            eprintln!("{}", removing_duplicate_line(room_name, identity));
             remove_room_participant(config, room_name, identity, now_seconds).await?;
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
@@ -55,11 +55,7 @@ pub(super) async fn isolate_local_agent(
     // interviewers talking over each other is bad; no interviewer, no editor
     // and no report is worse, and the operator can see this line and act on it
     // while the candidate finishes.
-    eprintln!(
-        "WARNING: duplicate LiveKit agent participants remained after \
-         {DUPLICATE_AGENT_ISOLATION_ATTEMPTS} attempts, continuing anyway: \
-         {duplicate_agents:?}"
-    );
+    eprintln!("{}", duplicates_remained_line(room_name, &duplicate_agents));
     Ok(())
 }
 
@@ -109,7 +105,7 @@ async fn remove_room_participant(
     )
     .await?;
     if is_twirp_not_found(status, &text) {
-        eprintln!("duplicate LiveKit agent participant already gone identity={identity}");
+        eprintln!("{}", participant_gone_line(room_name, identity));
         return Ok(());
     }
     if !status.is_success() {
@@ -180,6 +176,39 @@ fn is_agent_participant(participant: &serde_json::Value) -> bool {
             .is_some_and(|kind| kind == "AGENT")
 }
 
+/// The lines on the removal path below say which room they are for, since one
+/// process hosts several and the removals run from tasks of their own.
+fn removing_duplicate_line(room_name: &str, identity: &str) -> String {
+    format!("removing duplicate LiveKit agent participant room={room_name} identity={identity}")
+}
+
+fn participant_gone_line(room_name: &str, identity: &str) -> String {
+    format!("duplicate LiveKit agent participant already gone room={room_name} identity={identity}")
+}
+
+fn duplicates_remained_line(room_name: &str, identities: &[String]) -> String {
+    format!(
+        "WARNING: duplicate LiveKit agent participants remained after \
+         {DUPLICATE_AGENT_ISOLATION_ATTEMPTS} attempts, continuing anyway: \
+         room={room_name} {identities:?}"
+    )
+}
+
+/// Says which room a late duplicate is being removed from.
+fn eviction_line(room_name: &str, identity: &str) -> String {
+    format!(
+        "removing late duplicate LiveKit agent participant room={room_name} identity={identity}"
+    )
+}
+
+/// Says which room a failed removal was for, since it is written from a task
+/// that outlives the loop arm that knew.
+fn eviction_failure_line(room_name: &str, error: &str) -> String {
+    format!(
+        "removing the duplicate agent failed room={room_name} ({error}); continuing the interview"
+    )
+}
+
 /// A second agent in the room would answer over the top of this one, so the
 /// late joiner is removed rather than tolerated.
 pub(super) async fn evict_duplicate_agent(
@@ -188,8 +217,34 @@ pub(super) async fn evict_duplicate_agent(
     identity: &str,
     now_seconds: u64,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    eprintln!("removing late duplicate LiveKit agent participant identity={identity}");
+    eprintln!("{}", eviction_line(room_name, identity));
     remove_room_participant(config, room_name, identity, now_seconds).await
+}
+
+/// Evicts a duplicate agent from a task of its own. The room loop calls this
+/// and must not wait on it: the call to LiveKit has a client timeout of thirty
+/// seconds, and the loop drains the model's audio and fires the hard deadline.
+/// Best effort, as it was inline: a duplicate left in place costs some
+/// confusion in the room, while ending the loop over it cost the report.
+///
+/// Detached on purpose, unlike a side call: it makes one request that its own
+/// client timeout ends within thirty seconds, writes at most one log line and
+/// holds the cloned config only for that time, so an interview that ends under
+/// it leaves nothing running that nothing else bounds.
+pub(super) fn spawn_duplicate_eviction(
+    config: &AgentConfig,
+    room_name: &str,
+    identity: String,
+    now_seconds: u64,
+) {
+    let config = config.clone();
+    let room_name = room_name.to_owned();
+    tokio::spawn(async move {
+        if let Err(error) = evict_duplicate_agent(&config, &room_name, &identity, now_seconds).await
+        {
+            eprintln!("{}", eviction_failure_line(&room_name, &error.to_string()));
+        }
+    });
 }
 
 #[cfg(test)]

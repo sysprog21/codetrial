@@ -1334,13 +1334,65 @@ async fn closing_the_room_still_collects_what_the_capture_tasks_send() {
     server.abort();
 }
 
-/// The observer's failure arm writes the same status, and reports it the same
-/// way. The write's result is read in the source, since the arm runs only when
-/// the observer task fails and the database fails with it.
+/// A drop guard runs its cleanup exactly when it is dropped, and not before.
 #[test]
-fn the_observer_failure_arm_reports_a_status_write_that_failed() {
+fn a_drop_guard_runs_its_cleanup_when_dropped() {
+    let ran = std::sync::atomic::AtomicBool::new(false);
+    let guard = OnDrop(Some(|| {
+        ran.store(true, std::sync::atomic::Ordering::SeqCst);
+    }));
+    assert!(!ran.load(std::sync::atomic::Ordering::SeqCst));
+    drop(guard);
+    assert!(ran.load(std::sync::atomic::Ordering::SeqCst));
+}
+
+/// The room guard closes from a task of its own, since `close` is async, and
+/// only when a runtime is there to run it. A room cannot be built here, so this
+/// pins what `leave_room_on_drop` is made of: the close it is given runs after
+/// the drop, and a drop outside a runtime is not a panic.
+#[tokio::test]
+async fn closing_on_drop_runs_the_close_after_the_drop() {
+    let (done, closed) = tokio::sync::oneshot::channel();
+    let guard = close_on_drop(move || async move {
+        let _ = done.send(());
+    });
+    drop(guard);
+    tokio::time::timeout(Duration::from_secs(2), closed)
+        .await
+        .expect("the close ran")
+        .expect("the close reported");
+}
+
+#[test]
+fn closing_on_drop_outside_a_runtime_is_not_a_panic() {
+    drop(close_on_drop(|| async {}));
+}
+
+/// A failed status write is reported, and a successful one is not.
+#[test]
+fn only_a_failed_audio_status_write_is_reported() {
+    assert!(log_audio_status_failure::<()>(
+        "session-1",
+        &Err("database_unavailable")
+    ));
+    assert!(!log_audio_status_failure("session-1", &Ok(())));
+}
+
+/// Every status write the observer makes is bound and then reported, and none
+/// is
+/// discarded. The failure arm runs only when the observer task fails and the
+/// database fails with it, so the wiring is read in the source: each write
+/// binds
+/// `marked`, each `marked` is handed to the reporter, and the one spelling that
+/// threw the result away is gone.
+#[test]
+fn every_status_write_the_observer_makes_is_reported() {
     let source = include_str!("../../../../src/web/peer/observer.rs");
     let production = source.split("#[cfg(test)]").next().unwrap();
+    let writes = production.matches("let marked = db(").count();
+    let reports = production.matches("log_audio_status_failure(&").count();
+    assert!(writes >= 5, "the writes are still found: {writes}");
+    assert_eq!(writes, reports, "each write is reported");
     assert!(
         !production.contains("let _ = db(&accounts"),
         "a status write's result is not discarded"

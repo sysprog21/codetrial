@@ -1423,7 +1423,7 @@ pub(super) async fn flush_thinking_notice(room: &RoomLink, state: &mut RuntimeSt
 /// publish used to end the room loop and with it the report.
 pub(super) async fn publish_control(room: &RoomLink, notice: &serde_json::Value, what: &str) {
     let sent = match browser_packet(TOPIC_CONTROL, notice) {
-        Ok(packet) => room.publish_data(packet).await,
+        Ok(packet) => room.publish_data_within_notice_limit(packet).await,
         Err(error) => Err(error.into()),
     };
     if let Err(error) = sent {
@@ -2361,7 +2361,7 @@ async fn publish_framework_progress(
     room: &RoomLink,
     phases: &[&'static str],
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    room.publish_data(browser_packet(
+    room.publish_data_within_notice_limit(browser_packet(
         TOPIC_CONTROL,
         &serde_json::json!({
             "type": "framework_state",

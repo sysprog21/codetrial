@@ -540,6 +540,51 @@ async fn a_late_duplicate_is_evicted_by_name() {
     );
 }
 
+/// The room loop does not wait for the eviction. It is a call to LiveKit with
+/// a timeout of thirty seconds, and the loop drains audio and fires the hard
+/// deadline, so the helper returns at once and the removal happens on its own.
+#[tokio::test]
+async fn a_duplicate_is_evicted_without_the_caller_waiting() {
+    let service = RoomService::start(vec![(200, "{}")]).await;
+
+    spawn_duplicate_eviction(
+        &service.config(),
+        "interview-abc12345",
+        "agent-late".to_owned(),
+        1_700_000_000,
+    );
+
+    let arrived = async {
+        loop {
+            if let Some(request) = service.requests().into_iter().next() {
+                return request;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    };
+    let (path, body) = tokio::time::timeout(std::time::Duration::from_secs(5), arrived)
+        .await
+        .expect("the removal is made in the background");
+    assert_eq!(path, "/twirp/livekit.RoomService/RemoveParticipant");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&body).unwrap()["identity"],
+        "agent-late"
+    );
+}
+
+/// The room loop reaches the eviction only through the helper. A live room
+/// cannot be built here, so the wiring is pinned in the source: an inline
+/// await would put a thirty second call back in the loop with no test failing.
+#[test]
+fn the_room_loop_evicts_a_duplicate_only_through_the_helper() {
+    let hub = include_str!("../../../src/livekit.rs");
+    assert_eq!(hub.matches("spawn_duplicate_eviction(config").count(), 1);
+    assert!(
+        !hub.contains("evict_duplicate_agent(config"),
+        "the loop must not await the removal itself"
+    );
+}
+
 /// A removal that finds nobody is done, and every other refusal is not.
 ///
 /// The predicate is unit tested above; this is the path that consults it,
@@ -617,6 +662,30 @@ async fn isolation_removes_a_duplicate_and_confirms_the_room_is_clear() {
         ],
         "it lists, removes what it found, and lists again to confirm"
     );
+}
+
+/// Evictions run in a task of their own, outliving the arm of the loop that
+/// names the room, and several rooms share a process. Both lines say whose
+/// room a duplicate was in.
+#[test]
+fn every_line_on_the_eviction_path_names_the_room() {
+    for line in [
+        removing_duplicate_line("interview-abc12345", "agent-old"),
+        participant_gone_line("interview-abc12345", "agent-old"),
+        duplicates_remained_line("interview-abc12345", &["agent-old".to_string()]),
+    ] {
+        assert!(line.contains("room=interview-abc12345"), "{line}");
+    }
+}
+
+#[test]
+fn the_eviction_lines_name_the_room() {
+    let removing = eviction_line("interview-abc12345", "agent-late");
+    assert!(removing.contains("room=interview-abc12345"), "{removing}");
+    assert!(removing.contains("identity=agent-late"), "{removing}");
+    let failed = eviction_failure_line("interview-abc12345", "timed out");
+    assert!(failed.contains("room=interview-abc12345"), "{failed}");
+    assert!(failed.contains("timed out"), "{failed}");
 }
 
 #[test]
