@@ -849,7 +849,7 @@ pub fn prepare(
 
     if guest_mode_recording_conflict(config.guest_mode_enabled, config.recording.is_some()) {
         eprintln!(
-            "WARNING: CODETRIAL_GUEST_MODE_ENABLED=true is ignored while recording is enabled; \\
+            "WARNING: CODETRIAL_GUEST_MODE_ENABLED=true is ignored while recording is enabled; \
              guest mode is unavailable"
         );
     }
