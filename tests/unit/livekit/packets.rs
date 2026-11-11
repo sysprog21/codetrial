@@ -134,3 +134,45 @@ fn a_test_result_reads_its_reaction_clock_for_received_and_server_packets() {
         }
     }
 }
+
+/// Only the candidate's own two ways of ending are the browser's to name. A
+/// custom client can send any reason, and the one it picks gates the wrap-up
+/// and becomes the report's account of who ended it, so a received end that
+/// names another is the candidate's own. The server's end keeps its reason.
+#[test]
+fn a_received_end_can_only_name_the_candidates_own_reasons() {
+    let end = |reason: &str, received: bool| {
+        let start = Instant::now();
+        let mut state = RuntimeState::default();
+        let mut activity = RuntimeActivity::for_interview(start, 0, 7);
+        reduce_data_packet(
+            &mut state,
+            &mut activity,
+            TOPIC_CONTROL,
+            &serde_json::json!({"type": "end_interview", "reason": reason}),
+            received,
+            1000,
+        )
+        .finish_interview
+    };
+    assert_eq!(end("time_up", true).as_deref(), Some("time_up"));
+    assert_eq!(
+        end("face_missing_severe", true).as_deref(),
+        Some("face_missing_severe"),
+        "integrity detection ends the interview with its own reason"
+    );
+    assert_eq!(
+        end("candidate_ended", true).as_deref(),
+        Some("candidate_ended")
+    );
+    assert_eq!(
+        end("interviewer_unavailable", true).as_deref(),
+        Some("candidate_ended"),
+        "a browser cannot say the interviewer ended it"
+    );
+    assert_eq!(
+        end("interviewer_unavailable", false).as_deref(),
+        Some("interviewer_unavailable"),
+        "the server's own end keeps its reason"
+    );
+}

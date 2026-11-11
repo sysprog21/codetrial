@@ -1185,11 +1185,11 @@ fn the_five_minute_warning_ends_a_hold_and_the_goodbye_ends_another() {
     control(&mut state, json!({"type":"thinking","thinking":true}));
     let ended = control(
         &mut state,
-        json!({"type":"end_interview","reason":"time_expired"}),
+        json!({"type":"end_interview","reason":"time_up"}),
     );
     assert_eq!(ended.thinking_changed, Some(false));
     assert!(!state.thinking_hold.is_active());
-    assert_eq!(ended.finish_interview.as_deref(), Some("time_expired"));
+    assert_eq!(ended.finish_interview.as_deref(), Some("time_up"));
 }
 
 #[test]

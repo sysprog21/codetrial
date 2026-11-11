@@ -1178,6 +1178,12 @@ test("sanitizeReport clamps scores and strips markup from a hostile report", () 
     sanitizeReport({ endReason: "interviewer_unavailable" }).endReason,
     "interviewer_unavailable",
   );
+  // Integrity detection ends the interview with its own reason, which the
+  // replay shows as that and not as the countdown's.
+  assert.equal(
+    sanitizeReport({ endReason: "face_missing_severe" }).endReason,
+    "face_missing_severe",
+  );
   assert.equal(
     sanitizeReport({ endReason: "abandoned_by_llm" }).endReason,
     null,
