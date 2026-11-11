@@ -17,6 +17,7 @@ mod floor;
 mod observations;
 mod recovery;
 mod tool_calls;
+mod wrap_up;
 
 use floor::write_floor;
 pub(super) use floor::{observe_floor, reconcile_floor};
@@ -30,6 +31,9 @@ pub(super) use recovery::{
     prepare_plain_context,
 };
 use tool_calls::on_tool_calls;
+#[cfg(test)]
+pub(in crate::livekit) use wrap_up::goodbye_heard;
+pub(in crate::livekit) use wrap_up::send_wrap_up_and_wait;
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -2391,64 +2395,6 @@ pub(super) fn transcript_stream_options(
 fn transcript_text(text: &str) -> Option<&str> {
     let text = text.trim();
     (!text.is_empty()).then_some(text)
-}
-
-/// The goodbye has been said and has played. Settled output alone is not
-/// enough: the wrap-up can go out behind an acknowledgement that stalled and
-/// was released, and that turn's late ending settles the floor before the
-/// goodbye has begun. The goodbye's own prompt stays owed across it, since it
-/// went out behind a turn, so it is waited on too.
-pub(super) fn goodbye_heard(activity: &RuntimeActivity, audio_playing: bool) -> bool {
-    output_settled(activity.floor, audio_playing) && !activity.owes_prompt()
-}
-
-pub(super) async fn send_wrap_up_and_wait(
-    room: &RoomLink,
-    context: &mut GeminiEventContext<'_>,
-    reason: &str,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let farewell = with_timer(
-        context.state,
-        wrap_up(
-            reason,
-            context.state.behavioral_round_started
-                && crate::agent::evidence_tool_declared(context.state.interview_mode),
-        ),
-    );
-    send_model_text(
-        context.gemini,
-        context.state,
-        ModelInputKind::Turn,
-        TurnCause::Turn,
-        &farewell,
-    )
-    .await?;
-    context
-        .activity
-        .mark_prompted(Instant::now(), Some(&farewell), false);
-    let deadline = Instant::now() + WRAP_UP_WAIT;
-    loop {
-        if Instant::now() >= deadline {
-            return Ok(());
-        }
-        // The closing message is the one turn that plays to the end.
-        if goodbye_heard(context.activity, context.output_audio.is_playing()) {
-            context.activity.mark_listening();
-            set_agent_state(room, context.agent_state, AGENT_STATE_LISTENING);
-            return Ok(());
-        }
-        tokio::select! {
-            event = context.gemini.next_event() => {
-                let Some(event) = event else { return Ok(()) };
-                // The closing message is the one turn that plays to the end.
-                handle_gemini_event(room, context, event, Interruptible::No).await?;
-            }
-            _ = tokio::time::sleep_until(context.output_audio.playout_deadline.into()), if context.activity.floor == Floor::AwaitingPlayout => {}
-            _ = tokio::time::sleep_until(deadline.into()) => {
-                return Ok(());
-            }
-        }
-    }
 }
 
 /// Throws away agent audio that is queued but no longer wanted.
