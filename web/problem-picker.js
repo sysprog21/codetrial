@@ -1,3 +1,5 @@
+import { frameworkPhases, IMPROVEMENT_PLAN_TEXT_MAX } from "./lib.js";
+
 export const LEVELS = ["Easy", "Medium", "Hard"];
 
 /// How many results in a row at one level move a candidate off it. One is a
@@ -62,6 +64,8 @@ export function suggestDifficulty(problems, reports) {
 }
 
 const sharedFocusKey = "codetrial.sharedPracticeFocus";
+const selectedPracticeFocusKey = "codetrial.selectedPracticeFocus";
+const PRACTICE_FOCUS_PHASES = new Set(frameworkPhases);
 
 /// The focus a candidate chose to share, handed from the lobby to the interview
 /// in this tab's session storage rather than the address bar. A URL carrying
@@ -84,6 +88,70 @@ export function consumeSharedFocus(storage) {
     return typeof focus === "string" ? focus : "";
   } catch {
     return "";
+  }
+}
+
+export function practiceFocusFrom(item) {
+  if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+
+  const { phase, weakness, drill, successCriterion } = item;
+  if (!PRACTICE_FOCUS_PHASES.has(phase)) return null;
+
+  const text = (value) =>
+    typeof value === "string" &&
+    value.length > 0 &&
+    value === value.trim() &&
+    Array.from(value).length <= IMPROVEMENT_PLAN_TEXT_MAX;
+
+  if (![weakness, drill, successCriterion].every(text)) return null;
+
+  return {
+    phase,
+    weakness,
+    drill,
+    successCriterion,
+  };
+}
+
+/// Store only the one explicit report choice needed to reach the lobby.
+/// The lobby consumes this value once; persistence beyond that lobby session
+/// is deliberately outside this feature's scope.
+export function storeSelectedPracticeFocus(storage, item) {
+  const focus = practiceFocusFrom(item);
+  if (!focus) return false;
+
+  try {
+    storage.setItem(selectedPracticeFocusKey, JSON.stringify(focus));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function storeReportPracticeFocus(storage, report, button) {
+  const item = report?.improvementPlan?.[Number(button.dataset.practiceFocus)];
+  if (storeSelectedPracticeFocus(storage, item)) return true;
+  const status = button.parentElement?.querySelector(
+    "[data-practice-focus-status]",
+  );
+  if (status) status.textContent = "Could not save this practice focus.";
+  return false;
+}
+
+export function consumeSelectedPracticeFocus(storage) {
+  try {
+    const raw = storage.getItem(selectedPracticeFocusKey);
+    storage.removeItem(selectedPracticeFocusKey);
+    if (!raw) return null;
+
+    return practiceFocusFrom(JSON.parse(raw));
+  } catch {
+    try {
+      storage.removeItem(selectedPracticeFocusKey);
+    } catch {
+      /* clearing is best effort */
+    }
+    return null;
   }
 }
 

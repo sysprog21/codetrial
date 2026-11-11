@@ -3,10 +3,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  consumeSelectedPracticeFocus,
   consumeSharedFocus,
   pickProblem,
   practiceFocus,
+  practiceFocusFrom,
   sequelSuggestion,
+  storeSelectedPracticeFocus,
   storeSharedFocus,
   suggestDifficulty,
 } from "../../web/problem-picker.js";
@@ -688,6 +691,99 @@ test("a shared focus is handed over once, in session storage, and unsharing clea
     "",
     "blocked storage shares nothing",
   );
+});
+
+test("a selected practice focus is handed to the lobby once", () => {
+  const values = new Map();
+  const storage = {
+    getItem: (key) => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, String(value)),
+    removeItem: (key) => values.delete(key),
+  };
+  const item = {
+    phase: "Test",
+    weakness: "Test boundaries",
+    drill: "Build a test table",
+    successCriterion: "Predict each output",
+    durationMin: 10,
+    extra: "not carried",
+  };
+  const expected = {
+    phase: "Test",
+    weakness: "Test boundaries",
+    drill: "Build a test table",
+    successCriterion: "Predict each output",
+  };
+
+  assert.deepEqual(practiceFocusFrom(item), expected);
+  assert.equal(storeSelectedPracticeFocus(storage, item), true);
+  assert.deepEqual(consumeSelectedPracticeFocus(storage), expected);
+  assert.equal(
+    consumeSelectedPracticeFocus(storage),
+    null,
+    "the report choice is consumed by the first lobby load",
+  );
+});
+
+test("invalid selected practice focus is not stored", () => {
+  const values = new Map();
+  const storage = {
+    getItem: (key) => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, String(value)),
+    removeItem: (key) => values.delete(key),
+  };
+
+  assert.equal(
+    storeSelectedPracticeFocus(storage, {
+      phase: "Unknown",
+      weakness: "Test boundaries",
+      drill: "Build a test table",
+      successCriterion: "Predict each output",
+    }),
+    false,
+  );
+  assert.equal(storage.getItem("codetrial.selectedPracticeFocus"), null);
+});
+
+test("practice focus rejects invalid text in every field", () => {
+  const valid = {
+    phase: "Test",
+    weakness: "Test boundaries",
+    drill: "Build a test table",
+    successCriterion: "Predict each output",
+  };
+
+  for (const field of ["weakness", "drill", "successCriterion"]) {
+    for (const [name, value] of [
+      ["overlong", "🙂".repeat(401)],
+      ["untrimmed", " Test boundaries "],
+      ["empty", ""],
+    ]) {
+      assert.equal(
+        practiceFocusFrom({ ...valid, [field]: value }),
+        null,
+        `${field} should reject ${name} text`,
+      );
+    }
+  }
+
+  // Length is counted in Unicode code points, not UTF-16 code units.
+  assert.deepEqual(
+    practiceFocusFrom({ ...valid, weakness: "🙂".repeat(400) }),
+    { ...valid, weakness: "🙂".repeat(400) },
+  );
+});
+
+test("invalid JSON is discarded from selected practice storage", () => {
+  const key = "codetrial.selectedPracticeFocus";
+  const values = new Map([[key, "{invalid json"]]);
+  const storage = {
+    getItem: (key) => values.get(key) ?? null,
+    removeItem: (key) => values.delete(key),
+  };
+
+  assert.equal(consumeSelectedPracticeFocus(storage), null);
+  assert.equal(values.has(key), false);
 });
 
 test("the interview reads the focus from session storage, never from its address", async () => {

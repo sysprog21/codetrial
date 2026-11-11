@@ -16,8 +16,10 @@ import {
   withLocalCode,
 } from "./history.js";
 import {
+  consumeSelectedPracticeFocus,
   pickProblem,
   practiceFocus,
+  practiceFocusFrom,
   sequelSuggestion,
   storeSharedFocus,
   suggestDifficulty,
@@ -33,6 +35,7 @@ import {
   categoryComparisonMarkup,
   FINAL_CODE_NOT_SAVED,
   mountFinalCodeCopy,
+  phaseName,
   reportMarkdown,
   reportMarkup,
 } from "./render.js";
@@ -122,6 +125,8 @@ let loginResult = null;
 // only on reload, so it is read once rather than probed again through a getter
 // that throws.
 const tabStorage = storageArea("sessionStorage");
+// One report-to-lobby handoff; after this read the lobby owns the selection.
+let selectedPracticeFocus = consumeSelectedPracticeFocus(tabStorage);
 const tabStorageBlocked = !tabStorage;
 // Said once the session asks for sign-in, and again on a Start press there:
 // assumes a block on storage also refuses the session cookie.
@@ -731,6 +736,7 @@ for (const button of document.querySelectorAll("[data-mode]")) {
     // click now would light a surface the interview is not going to use.
     if (starting) return;
     setInterviewMode(button.dataset.mode);
+    renderPracticeFocus();
     rememberSettings();
   });
 }
@@ -824,9 +830,6 @@ start.addEventListener("click", async () => {
     destination.searchParams.set("seniority", profile.seniority);
   if (profile.targetCompany)
     destination.searchParams.set("company", profile.targetCompany);
-  const focus = nodes.practiceFocusShareInput.checked
-    ? practiceFocus(reports)
-    : null;
   let packet;
   try {
     packet = selectedGroundingPacket(
@@ -869,6 +872,9 @@ start.addEventListener("click", async () => {
     signInFirst = false;
   }
   start.textContent = "Starting...";
+  const focus = nodes.practiceFocusShareInput.checked
+    ? (selectedPracticeFocus ?? practiceFocus(reports))
+    : null;
   if (!nodes.groundingConsent.checked) packet = null;
   try {
     if (strict) resetAssignments(tabStorage);
@@ -1408,6 +1414,7 @@ async function deleteSavedReports() {
         "good small",
       );
       reports = [];
+      selectedPracticeFocus = null;
       showProgress([], "saved");
       settle();
       return;
@@ -1698,17 +1705,21 @@ function recommend(note = "", mode = "recommend") {
     : `${note}Selected problem: ${title(choice.picked)}.`;
 }
 
-/// Read off `reports` alone, so it is rendered wherever those change: the two
-/// history paths below, and nowhere the selection moves.
+/// An explicit report choice overrides the automatic carry-forward focus for
+/// this lobby session. The phase label follows the surface the next interview
+/// will use, while the stored focus keeps its canonical phase.
 function renderPracticeFocus() {
-  const focus = practiceFocus(reports);
+  const focus = selectedPracticeFocus ?? practiceFocus(reports);
+  const prefix = selectedPracticeFocus
+    ? `Selected practice focus · ${phaseName(focus.phase, mode === "whiteboard")}`
+    : `Carry forward${focus?.occurrences === 1 ? "" : ` (${focus?.occurrences} reports)`}`;
   nodes.practiceFocus.textContent = focus
-    ? `Carry forward${focus.occurrences === 1 ? "" : ` (${focus.occurrences} reports)`}: ${focus.weakness}. Drill: ${focus.drill}. Success: ${focus.successCriterion}.`
+    ? `${prefix}: ${focus.weakness}. Drill: ${focus.drill}. Success: ${focus.successCriterion}.`
     : "";
   nodes.practiceFocus.hidden = focus === null;
   nodes.practiceFocusShare.hidden = focus === null;
-  // Consent is to share this text. Reloaded history can change it, and a box
-  // left ticked would then send words the candidate never saw beside it.
+  // Consent applies to the focus currently shown. A different explicit or
+  // automatic focus must not inherit an earlier choice to share.
   if (focus?.weakness !== sharedFocus)
     nodes.practiceFocusShareInput.checked = false;
   sharedFocus = focus?.weakness ?? null;
@@ -1949,6 +1960,7 @@ function showProgressError(message) {
   // load one account's history went on answering from whichever account's
   // history it had last managed to load.
   reports = [];
+  selectedPracticeFocus = null;
   progressNormalized = [];
   nodes.progressProblem.length = 1;
   nodes.progressProblem.value = "all";
@@ -2196,6 +2208,30 @@ function renderAttemptHistory(attempts) {
     });
     mountFinalCodeCopy(report, attempt.code);
     report.querySelector(".report-actions")?.remove();
+    for (const button of report.querySelectorAll("[data-practice-focus]")) {
+      button.addEventListener("click", () => {
+        if (starting) return;
+        const item =
+          attempt.report.improvementPlan?.[
+            Number(button.dataset.practiceFocus)
+          ];
+        const focus = practiceFocusFrom(item);
+        if (!focus) return;
+        selectedPracticeFocus = focus;
+        nodes.practiceFocusShareInput.checked = false;
+        renderPracticeFocus();
+        // Only the latest selected item should announce success.
+        for (const status of nodes.attemptHistory.querySelectorAll(
+          "[data-practice-focus-status]",
+        )) {
+          status.textContent = "";
+        }
+        const status = button.parentElement?.querySelector(
+          "[data-practice-focus-status]",
+        );
+        if (status) status.textContent = "Set as your practice focus.";
+      });
+    }
     report.hidden = true;
     open.addEventListener("click", () => {
       if (!report.hidden) {
@@ -2235,6 +2271,7 @@ function renderAttemptHistory(attempts) {
       setDuration(minutes, savedDuration !== null);
       setInterviewLoop(attempt.interviewLoop);
       setInterviewMode(attempt.interviewMode);
+      renderPracticeFocus();
       rememberSettings();
       const adjustment =
         savedDuration !== null && duration !== savedDuration

@@ -1909,6 +1909,44 @@ test("improvement plan drops unrelated and hostile items and ranks valid drills"
   assert.equal(report.improvementPlan[2].durationMin, 30);
 });
 
+test("improvement plan ignores empty weaknesses without dropping valid items", () => {
+  const report = sanitizeReport({
+    codingFeedback: {
+      improvements: ["", "  Test boundaries  "],
+    },
+    communicationFeedback: {
+      improvements: ["   "],
+    },
+    improvementPlan: [
+      {
+        phase: "Test",
+        weakness: "",
+        impact: "high",
+        frequency: 1,
+        drill: "Build a test table",
+        durationMin: 10,
+        successCriterion: "Cover boundary cases",
+        selfReview: ["Check boundaries"],
+      },
+      {
+        phase: "Test",
+        weakness: "Test boundaries",
+        impact: "high",
+        frequency: 1,
+        drill: "Build a boundary test table",
+        durationMin: 10,
+        successCriterion: "Cover boundary cases",
+        selfReview: ["Check boundaries"],
+      },
+    ],
+  });
+
+  assert.deepEqual(
+    report.improvementPlan.map((item) => item.weakness),
+    ["Test boundaries"],
+  );
+});
+
 test("a partial improvement plan is rejected instead of hiding an emitted weakness", () => {
   const report = sanitizeReport({
     codingFeedback: { improvements: ["Explain complexity", "Test boundaries"] },

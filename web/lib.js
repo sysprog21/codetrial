@@ -679,6 +679,10 @@ export const frameworkPhases = Object.values(FRAMEWORKS).flatMap((framework) =>
   framework.steps.map((step) => step.label),
 );
 
+/// Maximum code points for improvement-plan text. The same bound is used when
+/// sanitizing reports and when carrying one selected item back to the lobby.
+export const IMPROVEMENT_PLAN_TEXT_MAX = 400;
+
 /// The steps of one round, each marked done or not.
 ///
 /// Anything the interviewer sends that is not a known id is dropped rather than
@@ -1273,10 +1277,11 @@ export function sanitizeReport(raw) {
   });
   const codingFeedback = feedback(raw?.codingFeedback);
   const communicationFeedback = feedback(raw?.communicationFeedback);
-  const weaknesses = new Set([
-    ...codingFeedback.improvements,
-    ...communicationFeedback.improvements,
-  ]);
+  const weaknesses = new Set(
+    [...codingFeedback.improvements, ...communicationFeedback.improvements]
+      .map((improvement) => improvement.trim())
+      .filter(Boolean),
+  );
   const phases = new Set(frameworkPhases);
   const plannedWeaknesses = new Set();
   const impactRank = { high: 3, medium: 2, low: 1 };
@@ -1288,16 +1293,16 @@ export function sanitizeReport(raw) {
       const phase = typeof item?.phase === "string" ? item.phase : "";
       const weakness =
         typeof item?.weakness === "string"
-          ? boundedText(item.weakness, 400).trim()
+          ? boundedText(item.weakness, IMPROVEMENT_PLAN_TEXT_MAX).trim()
           : "";
       const impact = typeof item?.impact === "string" ? item.impact : "";
       const drill =
         typeof item?.drill === "string"
-          ? boundedText(item.drill, 400).trim()
+          ? boundedText(item.drill, IMPROVEMENT_PLAN_TEXT_MAX).trim()
           : "";
       const successCriterion =
         typeof item?.successCriterion === "string"
-          ? boundedText(item.successCriterion, 400).trim()
+          ? boundedText(item.successCriterion, IMPROVEMENT_PLAN_TEXT_MAX).trim()
           : "";
       const frequency = Math.trunc(Number(item?.frequency));
       const durationMin = Math.trunc(Number(item?.durationMin));
@@ -1316,6 +1321,7 @@ export function sanitizeReport(raw) {
         frequency < 1 ||
         !Number.isFinite(durationMin) ||
         durationMin < 1 ||
+        !weakness ||
         !drill ||
         !successCriterion ||
         selfReview.length === 0

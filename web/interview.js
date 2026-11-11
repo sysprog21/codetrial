@@ -36,7 +36,10 @@ import {
   loadProblem,
 } from "./problem-data.js";
 import { downloadMarkdown, reportFilename } from "./download.js";
-import { consumeSharedFocus } from "./problem-picker.js";
+import {
+  consumeSharedFocus,
+  storeReportPracticeFocus,
+} from "./problem-picker.js";
 import { normalizeProgressEntries } from "./progress.js";
 import { compareCategoryAttempt } from "./practice-insights.js";
 import {
@@ -1207,7 +1210,7 @@ function bindEvents() {
   nodes.retryReport.addEventListener("click", () => reportRecovery.retry());
   nodes.skipReport.addEventListener("click", () => void skipReport());
   nodes.forceReport.addEventListener("click", showReport);
-  nodes.leaveRoom.addEventListener("click", leaveRoom);
+  nodes.leaveRoom.addEventListener("click", () => void leaveRoom());
   nodes.candidateCaseAdd.addEventListener("click", () => {
     if (state.candidateCaseEdit) {
       void saveCandidateCaseEdit();
@@ -1424,6 +1427,11 @@ function bindEvents() {
     },
   });
   nodes.report.addEventListener("click", (event) => {
+    const practiceButton = event.target.closest("[data-practice-focus]");
+    if (practiceButton) {
+      void leaveRoom(practiceButton);
+      return;
+    }
     if (event.target.closest("#done")) leaveRoom();
     if (event.target.closest("#download-report")) void downloadReport();
   });
@@ -4554,7 +4562,7 @@ async function skipReport() {
   await leaveRoom();
 }
 
-async function leaveRoom() {
+async function leaveRoom(practiceButton = null) {
   if (state.downloadingReport) return;
   if (state.phase === "report_recovery") {
     if (state.reportSkipped) {
@@ -4569,6 +4577,12 @@ async function leaveRoom() {
     !state.reportPersisted &&
     state.phase === "report" &&
     !window.confirm("This report may not be saved. Leave this page anyway?")
+  ) {
+    return;
+  }
+  if (
+    practiceButton &&
+    !storeReportPracticeFocus(tabStorage, state.report, practiceButton)
   ) {
     return;
   }
@@ -4686,6 +4700,15 @@ function reportRenderFailed(error, { offlineSummary }) {
   nodes.skipReport.hidden = true;
 }
 
+function syncPracticeFocusButtons() {
+  for (const button of nodes.report.querySelectorAll("[data-practice-focus]")) {
+    button.disabled =
+      state.reportReceiving ||
+      state.downloadingReport ||
+      !state.reportSaveComplete;
+  }
+}
+
 function renderReport() {
   if (strict) updateRunAvailability();
   // The interview is over. Both report paths, agent-sent and offline, land
@@ -4718,6 +4741,7 @@ function renderReport() {
     unclearLines: unclearLines(),
     categoryComparison: state.categoryComparison,
   });
+  syncPracticeFocusButtons();
   mountFinalCodeCopy(nodes.report, currentCode());
   void loadOriginalProblem(nodes.report, problem.page);
   localRecording.finish(nodes.report);
@@ -4812,6 +4836,7 @@ function renderReportSaveStatus(result) {
   node.textContent = status.message;
   node.className = status.className;
   state.reportSaveComplete = true;
+  syncPracticeFocusButtons();
   nodes.report.querySelector("#done").disabled = state.downloadingReport;
 }
 
@@ -4890,6 +4915,7 @@ async function downloadReport() {
   const done = nodes.report.querySelector?.("#done");
   if (state.downloadingReport || button?.disabled) return;
   state.downloadingReport = true;
+  syncPracticeFocusButtons();
   if (button) button.disabled = true;
   if (done) done.disabled = true;
   let timer;
@@ -4911,6 +4937,7 @@ async function downloadReport() {
   } finally {
     clearTimeout(timer);
     state.downloadingReport = false;
+    syncPracticeFocusButtons();
     if (button) button.disabled = false;
     // Saving and exporting can finish in either order. Both must settle
     // before Done can leave the report without interrupting either one.

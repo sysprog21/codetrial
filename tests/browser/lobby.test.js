@@ -3812,6 +3812,200 @@ lobbyTest(
 );
 
 lobbyTest(
+  "Practice this selects the exact focus without changing lobby settings",
+  async (page) => {
+    const selectedAttempt = focusedAttempt(EASY[0], {
+      phase: "Coding",
+      weaknesses: ["Automatic recurring focus", "Trace the algorithm clearly"],
+    });
+    selectedAttempt.payload.date = "2026-01-02T00:00:00Z";
+    selectedAttempt.payload.report.improvementPlan[1].drill =
+      "Trace one example";
+    selectedAttempt.payload.report.improvementPlan[1].successCriterion =
+      "Explain every step";
+
+    const recurringAttempt = focusedAttempt(EASY[1], {
+      weaknesses: ["Automatic recurring focus"],
+    });
+    recurringAttempt.payload.date = "2026-01-01T00:00:00Z";
+
+    reports = [selectedAttempt, recurringAttempt];
+
+    const initial = await lobby(page);
+
+    assert.match(
+      initial.focus,
+      /^Carry forward \(2 reports\): Automatic recurring focus\./,
+    );
+
+    const before = await snapshot(page);
+
+    const editorOptions = page
+      .getByRole("group", { name: "Editor options" })
+      .getByRole("checkbox");
+
+    const beforeEditorOptions = await editorOptions.evaluateAll((inputs) =>
+      inputs.map((input) => ({
+        checked: input.checked,
+        disabled: input.disabled,
+      })),
+    );
+
+    const beforeIndent = await page.locator("#editor-indent").inputValue();
+
+    const history = page.locator("#attempt-history");
+
+    await history.getByRole("button", { name: "Open report" }).first().click();
+
+    await history
+      .getByRole("button", {
+        name: "Practice this: Trace one example",
+        exact: true,
+      })
+      .click();
+    assert.equal(
+      await history
+        .getByRole("button", {
+          name: "Practice this: Trace one example",
+          exact: true,
+        })
+        .locator("xpath=..")
+        .locator("[data-practice-focus-status]")
+        .textContent(),
+      "Set as your practice focus.",
+    );
+    let state = await snapshot(page);
+
+    assert.equal(
+      state.focus,
+      "Selected practice focus · Coding: Trace the algorithm clearly. Drill: Trace one example. Success: Explain every step.",
+    );
+
+    assert.equal(
+      await page.locator("#practice-focus-share-input").isChecked(),
+      false,
+      "selecting a focus must not opt the candidate into sharing it",
+    );
+    // Selecting another item clears the previous item's confirmation.
+    const firstButton = history.getByRole("button", {
+      name: "Practice this: Trace one example",
+      exact: true,
+    });
+    const firstStatus = firstButton
+      .locator("xpath=..")
+      .locator("[data-practice-focus-status]");
+
+    const secondButton = history.getByRole("button", {
+      name: "Practice this: Build a test table",
+      exact: true,
+    });
+    const secondStatus = secondButton
+      .locator("xpath=..")
+      .locator("[data-practice-focus-status]");
+
+    await secondButton.click();
+
+    assert.equal(await firstStatus.textContent(), "");
+    assert.equal(
+      await secondStatus.textContent(),
+      "Set as your practice focus.",
+    );
+
+    await firstButton.click();
+
+    assert.equal(await secondStatus.textContent(), "");
+    assert.equal(
+      await firstStatus.textContent(),
+      "Set as your practice focus.",
+    );
+
+    // Choosing a focus must not change the interview configuration.
+    assert.equal(state.card, before.card);
+    assert.equal(state.duration, before.duration);
+    assert.deepEqual(state.levels, before.levels);
+    assert.equal(
+      await page.getAttribute('[data-mode="coding"]', "aria-pressed"),
+      "true",
+    );
+
+    assert.deepEqual(
+      await editorOptions.evaluateAll((inputs) =>
+        inputs.map((input) => ({
+          checked: input.checked,
+          disabled: input.disabled,
+        })),
+      ),
+      beforeEditorOptions,
+      "selecting a practice focus must not change editor settings",
+    );
+
+    assert.equal(
+      await page.locator("#editor-indent").inputValue(),
+      beforeIndent,
+      "selecting a practice focus must not change indentation",
+    );
+
+    // The stored phase stays canonical, but its candidate-facing label follows
+    // the surface the next interview will use.
+    await page.locator('[data-mode="whiteboard"]').click();
+    state = await snapshot(page);
+    assert.match(state.focus, /^Selected practice focus · Trace:/);
+
+    await page.locator('[data-mode="coding"]').click();
+    state = await snapshot(page);
+    assert.match(state.focus, /^Selected practice focus · Coding:/);
+
+    // Sharing remains a separate explicit opt-in and uses the selected focus.
+    await page.locator("#practice-focus-share-input").check();
+    await page.click("#start");
+    await page.waitForURL(/\/interview/);
+
+    assert.equal(
+      await page.evaluate(() =>
+        sessionStorage.getItem("codetrial.sharedPracticeFocus"),
+      ),
+      "Trace the algorithm clearly",
+    );
+  },
+);
+
+lobbyTest(
+  "a report selection reaches the lobby once and overrides Carry forward",
+  async (page) => {
+    reports = [focusedAttempt(EASY[0])];
+    await lobby(page);
+    await page.evaluate(() => {
+      sessionStorage.setItem(
+        "codetrial.selectedPracticeFocus",
+        JSON.stringify({
+          phase: "Coding",
+          weakness: "Trace the algorithm",
+          drill: "Trace one example",
+          successCriterion: "Explain every step",
+        }),
+      );
+    });
+    const selected = await lobby(page);
+    assert.equal(
+      selected.focus,
+      "Selected practice focus · Coding: Trace the algorithm. Drill: Trace one example. Success: Explain every step.",
+    );
+    assert.equal(
+      await page.locator("#practice-focus-share-input").isChecked(),
+      false,
+    );
+    assert.equal(
+      await page.evaluate(() =>
+        sessionStorage.getItem("codetrial.selectedPracticeFocus"),
+      ),
+      null,
+    );
+    const restored = await lobby(page);
+    assert.match(restored.focus, /^Carry forward: Test boundaries/);
+  },
+);
+
+lobbyTest(
   "a candidate explicitly chooses whether to share the practice focus",
   async (page) => {
     reports = [focusedAttempt(EASY[0])];
@@ -6201,6 +6395,57 @@ lobbyTest(
 );
 
 lobbyTest(
+  "Practice this cannot change the shared focus while Start is pending",
+  async (page) => {
+    session = { signedIn: false, loginRequired: true };
+    await page.addInitScript(
+      (entry) =>
+        localStorage.setItem("codetrial_history", JSON.stringify([entry])),
+      focusedAttempt(EASY[0], {
+        weaknesses: ["First focus", "Second focus"],
+      }).payload,
+    );
+    await lobby(page);
+    const history = page.locator("#attempt-history");
+    await history.getByRole("button", { name: "Open report" }).first().click();
+    const choices = history.getByRole("button", {
+      name: "Practice this: Build a test table",
+    });
+    await choices.first().click();
+    await page.check("#practice-focus-share-input");
+    let releaseLogin;
+    holdLogin = new Promise((resolve) => (releaseLogin = resolve));
+    try {
+      await page.fill("#github-login", "candidate");
+      await page.click("#start");
+
+      await reaches(
+        page,
+        () =>
+          document.querySelector("#start").textContent ===
+          "Recording GitHub...",
+      );
+      await choices.nth(1).click();
+      assert.match(
+        await page.locator("#practice-focus").textContent(),
+        /First focus/,
+      );
+      releaseLogin();
+      await page.waitForURL(/\/interview/);
+      assert.equal(
+        await page.evaluate(() =>
+          sessionStorage.getItem("codetrial.sharedPracticeFocus"),
+        ),
+        "First focus",
+      );
+    } finally {
+      holdLogin = null;
+      releaseLogin();
+    }
+  },
+);
+
+lobbyTest(
   "a start ships the length that was on screen when it was pressed",
   async (page) => {
     // The duration row stays live while the sign-in round trip is in flight, so
@@ -7132,6 +7377,34 @@ lobbyTest(
 );
 
 lobbyTest(
+  "deleting saved reports clears the selected practice focus",
+  async (page) => {
+    reports = [focusedAttempt(EASY[0])];
+    await lobby(page);
+    const history = page.locator("#attempt-history");
+    await history.getByRole("button", { name: "Open report" }).first().click();
+    await history
+      .getByRole("button", { name: /^Practice this:/ })
+      .first()
+      .click();
+    await page.check("#practice-focus-share-input");
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.click("#delete-reports");
+    await reaches(
+      page,
+      () =>
+        document.querySelector("#report-delete-status").textContent ===
+        "Saved reports and progress were deleted.",
+    );
+    assert.equal(await page.locator("#practice-focus").isHidden(), true);
+    assert.equal(
+      await page.locator("#practice-focus-share-input").isChecked(),
+      false,
+    );
+  },
+);
+
+lobbyTest(
   "a failed report deletion retains the current progress",
   async (page) => {
     reports = [savedAttempt(EASY[0])];
@@ -7985,6 +8258,16 @@ lobbyTest(
     assert.match(
       await page.locator("#progress-summary").textContent(),
       /1 of 1 attempts shown/,
+    );
+    const history = page.locator("#attempt-history");
+    await history.getByRole("button", { name: "Open report" }).first().click();
+    await history
+      .getByRole("button", { name: /^Practice this:/ })
+      .first()
+      .click();
+    assert.match(
+      await page.locator("#practice-focus").textContent(),
+      /^Selected practice focus/,
     );
     const problem = page.getByRole("combobox", {
       name: "Problem",

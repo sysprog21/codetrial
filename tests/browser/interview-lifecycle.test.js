@@ -6,7 +6,8 @@ import {
 } from "../../web/before-unload.js";
 import { reportIsPersisted } from "../../web/history.js";
 import { MAX_REPORT_BODY_BYTES, withUnclearLines } from "../../web/lib.js";
-import { functionBody, read } from "./source.js";
+import { functionBody, loadInterview, read } from "./source.js";
+import { storeReportPracticeFocus } from "../../web/problem-picker.js";
 
 function beforeUnloadEvent(target) {
   const event = new Event("beforeunload", { cancelable: true });
@@ -241,6 +242,165 @@ test("the Leave button releases the warning before tearing down the session", as
     "navigate:/",
   ]);
   assert.equal(target.removed, 1);
+});
+
+test("Practice this enables after saving and handles report clicks", () => {
+  const button = { disabled: false };
+  const report = new EventTarget();
+  const done = {};
+  const saveStatus = {};
+
+  report.querySelectorAll = () => [button];
+  report.querySelector = (selector) =>
+    selector === "#report-save-status" ? saveStatus : done;
+
+  const state = {
+    report: {
+      improvementPlan: [
+        {
+          phase: "Test",
+          weakness: "Test boundaries",
+          drill: "Build a test table",
+          successCriterion: "Predict each output",
+        },
+      ],
+    },
+    reportReceiving: true,
+    reportSaveComplete: true,
+    downloadingReport: false,
+    transcript: new Map(),
+  };
+
+  const { renderReport, renderReportSaveStatus } = loadInterview(
+    ["syncPracticeFocusButtons", "renderReport", "renderReportSaveStatus"],
+    {
+      state,
+      nodes: { report, ending: {} },
+      strict: false,
+      exampleBoard: null,
+      board: { snapshots: [] },
+      reportMarkup: () =>
+        '<button data-practice-focus="0">Practice this</button>',
+      reportSaveStatus: () => ({ message: "Saved", className: "good" }),
+    },
+    { stubMissing: true },
+  );
+
+  // The action stays disabled until saving finishes.
+  renderReport();
+  assert.match(report.innerHTML, /data-practice-focus="0"/);
+  assert.equal(state.reportSaveComplete, false);
+  assert.equal(button.disabled, true);
+
+  state.reportReceiving = false;
+  renderReportSaveStatus({ local: "saved" });
+  assert.equal(button.disabled, false);
+  assert.equal(done.disabled, false);
+
+  // Exercise the actual delegated report click handler.
+  const body = functionBody(read("web/interview.js"), "bindEvents");
+  const listener = body.match(
+    /  nodes\.report\.addEventListener\("click",[\s\S]*?\n  \}\);/,
+  )?.[0];
+  assert.ok(listener);
+
+  let selected;
+  new Function("nodes", "leaveRoom", "downloadReport", listener)(
+    { report },
+    (value) => {
+      selected = value;
+    },
+    () => {
+      throw new Error("download must not run");
+    },
+  );
+
+  const click = new Event("click");
+  Object.defineProperty(click, "target", {
+    value: {
+      closest: (selector) =>
+        selector === "[data-practice-focus]" ? button : null,
+    },
+  });
+  report.dispatchEvent(click);
+
+  assert.equal(selected, button);
+});
+
+test("Practice this stores the selected item and stays on failure", async () => {
+  const body = functionBody(read("web/interview.js"), "leaveRoom");
+  const item = {
+    phase: "Test",
+    weakness: "Test boundaries",
+    drill: "Build a test table",
+    successCriterion: "Predict each output",
+  };
+  for (const storageFails of [false, true]) {
+    const stored = [];
+    const status = { textContent: "" };
+    const windowMock = {
+      location: { href: "" },
+      confirm: () => true,
+    };
+    let disposed = false;
+    const button = {
+      dataset: { practiceFocus: "0" },
+      parentElement: {
+        querySelector: () => status,
+      },
+    };
+    const storage = {
+      setItem(key, value) {
+        if (storageFails) throw new Error("storage blocked");
+        stored.push([key, JSON.parse(value)]);
+      },
+    };
+    const leaveRoom = new Function(
+      "state",
+      "reportRecovery",
+      "beforeUnloadGuard",
+      "window",
+      "stopEndingClock",
+      "stopAvatar",
+      "stopLocalMedia",
+      "localRecording",
+      "storeReportPracticeFocus",
+      "tabStorage",
+      `${body}\n}\nreturn leaveRoom;`,
+    )(
+      {
+        phase: "report",
+        reportReceiving: false,
+        reportPersisted: true,
+        report: { improvementPlan: [item] },
+        room: null,
+      },
+      { finish() {}, stop() {} },
+      {
+        dispose() {
+          disposed = true;
+        },
+      },
+      windowMock,
+      () => {},
+      () => {},
+      () => {},
+      { stop: async () => {} },
+      storeReportPracticeFocus,
+      storage,
+    );
+    await leaveRoom(button);
+    assert.deepEqual(
+      stored,
+      storageFails ? [] : [["codetrial.selectedPracticeFocus", item]],
+    );
+    assert.equal(windowMock.location.href, storageFails ? "" : "/");
+    assert.equal(
+      status.textContent,
+      storageFails ? "Could not save this practice focus." : "",
+    );
+    assert.equal(disposed, !storageFails);
+  }
 });
 
 /// `saveHistory` from web/interview.js, compiled against the module state it
