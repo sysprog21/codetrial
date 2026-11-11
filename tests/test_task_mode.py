@@ -354,6 +354,16 @@ class TaskSidecarTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 judge_options({"kind": "function", "outputParam": value})
 
+    def test_prefix_and_cycle_indexes_must_name_a_parameter(self):
+        from problem_bank.task_structure import judge_options
+
+        # The loader refuses an index past the parameters, so packaging does.
+        for key in ("outputPrefixParam", "cyclePosParam"):
+            judge = {"kind": "function", "paramNames": ["a", "b"]}
+            judge_options({**judge, key: 1})
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                judge_options({**judge, key: 2})
+
 
 if __name__ == "__main__":
     unittest.main()

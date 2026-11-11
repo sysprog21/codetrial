@@ -613,15 +613,21 @@ impl TaskSession {
         let limit = default_number("revisionSnapshots") as usize
             - usize::from(self.final_revision_id.is_none() && !final_slot);
         if self.revisions.len() >= limit {
+            // A revision a run was made on is evidence, and the ids sort at
+            // random, so the first unprotected id could be one. Give up a
+            // revision nobody ran first.
+            let unprotected = |id: &&String| {
+                id.as_str() != "initial"
+                    && !self.evidence_revisions.contains(*id)
+                    && !self.pending_run_revisions.contains_key(*id)
+                    && self.final_revision_id.as_deref() != Some(id.as_str())
+            };
             let evict = self
                 .revisions
                 .keys()
-                .find(|id| {
-                    id.as_str() != "initial"
-                        && !self.evidence_revisions.contains(*id)
-                        && !self.pending_run_revisions.contains_key(*id)
-                        && self.final_revision_id.as_deref() != Some(id.as_str())
-                })
+                .filter(unprotected)
+                .find(|id| !self.runs.values().any(|run| &run.revision_id == *id))
+                .or_else(|| self.revisions.keys().find(unprotected))
                 .cloned();
             self.mark_overflow();
             if let Some(id) = evict {
