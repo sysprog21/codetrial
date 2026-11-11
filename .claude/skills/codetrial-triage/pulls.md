@@ -201,8 +201,10 @@ report the sweep's `superseded` count rather than approving or cancelling them.
 Most changes requested here are the same few requests typed again: run
 `make hooks` and fix the commit messages, run `make indent`, rebase instead of
 merge, open the PR from a topic branch, drop the AI attribution, fix the CI
-regressions before asking for review. A request to show a screenshot of a page
-change is the same kind but goes out as a plain comment, not a review.
+regressions before asking for review, and rework a long series into minimal
+commits (`fragmented_series`, thresholds in `hygiene.sh`: #624 had ten commits
+for 257 lines). A request to show a screenshot of a page change is the same
+kind but goes out as a plain comment, not a review.
 `hygiene.sh` decides each of them for one PR at its current head and prints
 the review text, the maintainers' own wording for every item that applies.
 `apply-pr-actions.sh --hygiene` runs it for every open PR and posts each
@@ -260,10 +262,12 @@ run keeps one visible copy of each item and says what to do with the others in
 `hide`: `repeated` is an older copy of a request a newer one carries, `stale` is
 a copy carrying a request whose evidence is gone (the gate passes now, the
 messages are fixed). A stale review that also carried requests that still hold
-is replaced, those going out in the new review. `apply-pr-actions.sh --hygiene`
-hides each entry as Outdated after the new review is posted, never before, or
-at once when there is no new review to post, and leaves them alone when the head
-moved or the post failed. Hiding does not
+is replaced, those going out in the new review. A request whose evidence cannot
+be read at this head (a check still running, a mergeability GitHub has not
+computed, a merge in the series, an unknown size) is neither posted nor hidden.
+`apply-pr-actions.sh --hygiene` hides each entry as Outdated after the new
+review is posted, never before, or at once when there is no new review to post,
+and leaves them alone when the head moved or the post failed. Hiding does not
 dismiss a review; the PR stays at changes requested until a maintainer
 re-reviews. A copy hidden by hand no longer stands, so the request is asked
 again. The rebase request and the screenshot comment keep their own rules
@@ -363,7 +367,9 @@ changes-requested state stays until a maintainer re-reviews, which the merge
 needs anyway. The script also counts the other wordings maintainers type by
 hand for the same request (the list is `known` in `pr-sweep.sh`), so earlier
 copies land in `hide`. When the maintainers adopt a new wording, add it there,
-or the next sweep asks again and leaves the old copy visible.
+or the next sweep asks again and leaves the old copy visible. The long-series
+request of `hygiene.sh` is not one of them: a fixed request is hidden as
+outdated once the author pushes, and this one stands while the series is long.
 
 The sweep is a snapshot, and an author may push between it and the post. Check
 each PR again right before posting, and skip it unless its head still matches
@@ -483,7 +489,9 @@ row's reason. Two readings the rows do not spell out: every changes request a
 maintainer made since their own last approval counts, so one approval does not
 hide another's request and the sweep's later rebase review does not hide an
 earlier substantive one, and a request counts as a rebase only when it opens
-with the word. `high` includes a
+with the word and does not ask for functionally minimal commits, so a
+long-series request (`fragmented_series`) grades like any other changes request,
+`blocked`. `high` includes a
 PR nobody has reviewed yet, so `decision` null with `high` means ready for a
 first review, not approved.
 
@@ -529,7 +537,10 @@ is the account that ran the sweep: a maintainer's own PR goes to another
 reviewer rather than into their own queue. A failing job whose name
 `main`'s latest run also fails says so in `why`; the lane runs several gates,
 so only `ci-failure.sh` can tell a failure `main` shares, which is the
-maintainer's, from the PR's own in the same lane.
+maintainer's, from the PR's own in the same lane. `rework` is true while a
+long-series request stands at the head: the PR is `blocked` on its author, and
+the sweep's review leaves it alone until the series is rewritten, unless it has
+an open thread.
 
 `moved` lists the PRs whose head, mergeability, decision, grade, `waits_on`,
 checks or threads changed, each field as `[before, after]`, plus `{pr, new: true}` for a PR

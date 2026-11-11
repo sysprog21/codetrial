@@ -1,8 +1,9 @@
 # Review the pull requests waiting on their authors
 
-A bare sweep reviews every open PR the merge grade puts at `low` or `blocked`,
-and any other PR (a draft included) with an open review thread, and posts what
-survives as inline comments, without a confirmation. Those are
+A bare sweep reviews every open PR the merge grade puts at `low` or `blocked`
+(bar one with a series rework requested, see "Pick the PRs"), and any other
+PR (a draft included) with an open review thread, and posts what survives as
+inline comments, without a confirmation. Those are
 the PRs waiting on their authors, and a finding posted while the author is
 still working costs them one push instead of one round trip. A PR at `medium`
 or `high` with no open thread waits on a maintainer's own review, which this
@@ -22,7 +23,9 @@ its review is in rather than after the slowest one.
 `review-pick.sh` reads the sweep and prints one JSON object per PR to review:
 the PRs graded `low` or `blocked`, or with an open thread, not the viewer's
 own, minus those whose current head is already in the ledger with the same
-number of open threads. Each object carries what the brief below asks for, so nothing is typed by hand: `since` (the head the ledger last
+number of open threads, and minus those with a series rework requested
+(`rework` in the sweep, no open thread: the commits are about to be rewritten,
+whatever else the PR still owes). Each object carries what the brief below asks for, so nothing is typed by hand: `since` (the head the ledger last
 recorded for the PR, or null), `outdated` (the thread ids and paths to
 recheck), `collide` (the other PR, the file and the function) and `why`.
 

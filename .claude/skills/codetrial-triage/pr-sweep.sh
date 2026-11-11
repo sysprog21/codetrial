@@ -49,7 +49,8 @@
 #             with its reasons. The grade is
 #             the worst row of the table in grade() that the PR matches, from
 #             blocked, low, medium and medium-high down to high when none
-#             does; draft PRs are set aside. pulls.md, "Rank by size and
+#             does; draft PRs are set aside. rework is true while a long-series
+#             request (hygiene.sh) stands at the head. pulls.md, "Rank by size and
 #             merge confidence", says how to read it. waits_on names whose
 #             move it is (author, maintainer, ci, approval), the first of
 #             waits_on_all, which names everyone with a move left; why names a
@@ -353,9 +354,11 @@ def threads: .author.login as $a
 # the author; one the author pushed past waits on a re-review. A hidden review
 # still counts in reviewDecision, which is what says a re-review is owed. A
 # request is a rebase only when it opens with the word, as a rebase comment is
-# read above, so "no rebase is needed" is not one. requests reads a review that
-# mentions rebase anywhere as asking for one, which only keeps the sweep from
-# asking twice; here the mistake would hide a substantive request.
+# read above, so "no rebase is needed" is not one, and only when it does not ask
+# for functionally minimal commits (the long-series request of hygiene.sh opens
+# with the word too, but the author has to rework the series). requests reads a
+# review that mentions rebase anywhere as asking for one, which only keeps the
+# sweep from asking twice; here the mistake would hide a substantive request.
 def verdicts: [.reviews.nodes[]
     | select(human and staff and (.isMinimized | not)
       and (.state == "APPROVED" or .state == "CHANGES_REQUESTED"))]
@@ -366,7 +369,8 @@ def open_requests: .headRefOid as $head
       | (map(.state == "APPROVED") | rindex(true)) as $ok
       | if $ok == null then .[] else .[$ok + 1:][] end)
   | [.[] | select(.state == "CHANGES_REQUESTED" and .commit.oid == $head)
-    | {rebase: (.body | opens_with_rebase)}];
+    | (.body | test("functionally minimal"; "i")) as $series
+    | {series: $series, rebase: ((.body | opens_with_rebase) and ($series | not))}];
 # An approval is of the code it was left on. GitHub keeps it after a push
 # unless the branch protection dismisses stale reviews, so reviewDecision can
 # read APPROVED for a head nobody approved: true when every maintainer whose
@@ -439,6 +443,7 @@ def grade($c; $t): .isDraft as $draft | open_requests as $r
   | {grade: (if $draft then "draft"
       else $ladder[[$hit[].grade as $g | $ladder | index($g)] | max // 0] end),
      why: [$hit[].why | strings],
+     rework: any($r[]; .series),
      waits_on_all: (if $draft then ["author"]
        else [$turn | reverse[] | select(IN($hit[].who))]
          | if length == 0 then ["maintainer"] else . end end)}

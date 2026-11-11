@@ -1324,6 +1324,27 @@ class PrSweepTests(SweepCase):
             sorted(entry["id"] for entry in swept["hide"]), ["IC_old", "R_ci"]
         )
 
+    def test_the_series_request_is_not_hidden_as_an_outdated_rebase(self):
+        # A fixed rebase request is hidden once the author pushes, and hygiene.sh
+        # would then ask again, one review per push (pulls.md).
+        old = review("maint", "CHANGES_REQUESTED", 5, REWORK, oid="old")
+        swept = self.run_pulls(pull(1, reviews=listed(old | {"id": "R_series"})))
+        self.assertEqual((swept["hide"], swept["hide_ask"]), ([], []))
+
+    def test_a_series_request_grades_like_a_changes_request_not_a_rebase(self):
+        # It opens with the word Rebase, but the author has to rework the series,
+        # so it is not the rebase-only request that grades medium.
+        series = review("maint", "CHANGES_REQUESTED", 1, REWORK, oid="head1")
+        plain = review("maint", "CHANGES_REQUESTED", 1, "Add a test.", oid="head2")
+        swept = self.run_pulls(
+            pull(1, reviews=listed(series)), pull(2, reviews=listed(plain))
+        )
+        got = {
+            s["pr"]: (s["grade"], s["waits_on"], s["rework"]) for s in swept["status"]
+        }
+        self.assertEqual(got[1], ("blocked", "author", True))
+        self.assertEqual(got[2], ("blocked", "author", False))
+
     def test_a_later_comment_never_hides_the_review_that_holds_the_request(self):
         reviews = listed(review("maint", "CHANGES_REQUESTED", 5, FIXED))
         comments = listed(request("IC_1", 1, FIXED))
@@ -2497,6 +2518,22 @@ def commit(message, parents=1, at="2026-10-20T00:00:00Z"):
     }
 
 
+REWORK = (
+    "Rebase the current branch onto the upstream default branch and rework the "
+    "series into functionally minimal commits, folding similar ones and "
+    "enforcing the project's commit message rules."
+)
+
+
+def series(count):
+    return [commit(GOOD_MESSAGE) for _ in range(count)]
+
+
+def size(lines):
+    """The PR's changed-line totals, as `gh pr view` reports them."""
+    return {"additions": lines, "deletions": 0}
+
+
 # One commit for each commit rule: a bad message, an agent co-author, a merge.
 EVERY_RULE = [
     commit("added a thing."),
@@ -2787,6 +2824,85 @@ class HygieneTests(unittest.TestCase):
         for key, (commits, fields) in cases.items():
             with self.subTest(key):
                 self.assertEqual(self.keys(commits, **fields), (None, [key]))
+
+    def test_a_long_series_for_a_small_change_is_asked_to_be_reworked(self):
+        # #624: ten commits for 257 changed lines.
+        out = self.hygiene(series(10), **size(257))
+        self.assertEqual([i["key"] for i in out["items"]], ["fragmented_series"])
+        self.assertEqual(out["body"], REWORK)
+        cases = {
+            "six commits at thirty lines each": (series(6), size(180), True),
+            "one line more per commit than that": (series(6), size(181), False),
+            "five commits is a short series": (series(5), size(10), False),
+            "no size known": (series(10), {}, False),
+        }
+        for name, (commits, fields, asked) in cases.items():
+            with self.subTest(name):
+                keys = self.keys(commits, **fields)[1]
+                self.assertEqual("fragmented_series" in keys, asked)
+
+    def test_a_long_series_is_left_to_rebase_when_that_request_covers_it(self):
+        commits = series(10)
+        # A conflict, or one still unknown, goes to rebase.md, which asks the
+        # same rework.
+        for mergeable in ("CONFLICTING", "UNKNOWN"):
+            with self.subTest(mergeable):
+                self.assertEqual(
+                    self.keys(commits, mergeable=mergeable, **size(120))[1], []
+                )
+        # A maintainer's request in either wording stands at this head.
+        for said in (
+            "Rework the series into functionally minimal commits.",
+            "Rework the series into minimal, logically coherent commits.",
+        ):
+            with self.subTest(said):
+                comment = {
+                    "author": {"login": "maint"},
+                    "createdAt": "2026-10-22T00:00:00Z",
+                    "body": said,
+                }
+                self.assertEqual(
+                    self.keys(
+                        commits,
+                        [comment],
+                        env={"FAKE_PUSHED": "2026-10-21T00:00:00Z"},
+                        **size(120),
+                    )[1],
+                    [],
+                )
+
+    def test_a_series_request_stands_then_goes_stale_once_the_series_is_reworked(self):
+        long, fields = series(10), size(120)
+        old = review("maint", "CHANGES_REQUESTED", 3, REWORK, oid="h0") | {
+            "id": "R_old"
+        }
+        other = self.hygiene([commit("added a thing.")])["body"]
+        mixed = old | {"body": REWORK + "\n\n" + other}
+        # The evidence is unknown (or a merge hides it): nothing is hidden, even
+        # a copy that also carries a request that no longer holds, which cannot be
+        # posted again.
+        merged = long + [commit("Merge main", parents=2)]
+        for name, commits, review_, extra in (
+            ("still long", long, old, {}),
+            ("a mixed copy", long, mixed, {"mergeable": "UNKNOWN"}),
+            ("a merge", merged, old, {}),
+        ):
+            with self.subTest(name):
+                out = self.hygiene(commits, reviews=[review_], **fields | extra)
+                self.assertEqual(out["hide"], [])
+                self.assertNotIn("fragmented_series", [i["key"] for i in out["items"]])
+        # Reworked into a short series: the copy no longer describes the PR.
+        out = self.hygiene([commit(GOOD_MESSAGE)], reviews=[old], **fields)
+        self.assertEqual(out["items"], [])
+        self.assertEqual(
+            out["hide"], [{"id": "R_old", "key": "fragmented_series", "why": "stale"}]
+        )
+        # A CI regression arrives on the same long series: the regression request
+        # (rebase.md) takes over, and the older copy is replaced.
+        ci = {"head": "h1", "stale_base": False, "failing": [failing_job(["clippy"])]}
+        out = self.hygiene(long, reviews=[old], ci=ci, **fields)
+        self.assertEqual([i["key"] for i in out["items"]], ["ci_regression"])
+        self.assertEqual([h["id"] for h in out["hide"]], ["R_old"])
 
     def test_ci_items_need_a_failure_the_branch_made_at_this_head(self):
         good = [commit(GOOD_MESSAGE)]
@@ -3517,6 +3633,22 @@ class ReviewQueueTests(unittest.TestCase):
             ],
         }
         self.assertEqual([p["pr"] for p in self.pick(sweep)], [1, 4])
+
+    def test_pick_leaves_a_pr_waiting_on_a_series_rework_to_its_author(self):
+        # The series is about to be rewritten, so a review of this head would be
+        # read against commits that are gone. Open threads still bring it back.
+        entry = self.status_entry
+        sweep = {
+            "viewer": "maint",
+            "outdated": [],
+            "collide": [],
+            "status": [
+                entry(1, "blocked") | {"rework": True},
+                entry(2, "blocked", human=1) | {"rework": True},
+                entry(3, "blocked"),
+            ],
+        }
+        self.assertEqual([p["pr"] for p in self.pick(sweep)], [2, 3])
 
     def test_pick_rereads_a_head_only_when_open_threads_grew(self):
         self.ledger.parent.mkdir(parents=True, exist_ok=True)
