@@ -97,13 +97,9 @@ fn variant_input(item: &Item, variant: &Variant) -> Value {
     input
 }
 
-fn candidate_turns(input: &Value) -> u32 {
-    input["transcript"]
-        .as_str()
-        .unwrap()
-        .lines()
-        .filter(|line| line.starts_with("Candidate:"))
-        .count() as u32
+fn communication_evidence(input: &Value) -> crate::agent::CommunicationEvidence {
+    let transcript = input["transcript"].as_str().unwrap();
+    crate::agent::communication_evidence(&transcript.lines().map(str::to_owned).collect::<Vec<_>>())
 }
 
 fn prompt(input: &Value) -> String {
@@ -133,7 +129,7 @@ fn prompt(input: &Value) -> String {
             crate::agent::BehavioralRound::NeverOpened
         },
         follow_ups_released: input["follow_ups_released"].as_bool().unwrap(),
-        candidate_turns: candidate_turns(input),
+        communication_evidence: communication_evidence(input),
     })
 }
 
@@ -1643,7 +1639,7 @@ mod runner {
                     }
                     journal.start_row(&id)?;
                     let input = variant_input(item, variant);
-                    let turn_count = candidate_turns(&input);
+                    let evidence = communication_evidence(&input);
                     let refused = std::sync::atomic::AtomicBool::new(false);
                     let calls = ReportCalls {
                         keys,
@@ -1652,7 +1648,7 @@ mod runner {
                         communication_assessed: crate::agent::ReportRounds {
                             behavioral_opened: input["behavioral_opened"].as_bool().unwrap(),
                             follow_ups_released: input["follow_ups_released"].as_bool().unwrap(),
-                            candidate_turns: turn_count,
+                            communication_evidence: evidence,
                         }
                         .communication_assessed(),
                         budget: ReportCallBudget::new(),
@@ -1675,7 +1671,7 @@ mod runner {
                                 follow_ups_released: input["follow_ups_released"]
                                     .as_bool()
                                     .unwrap(),
-                                candidate_turns: turn_count,
+                                communication_evidence: evidence,
                             },
                         ),
                     )
@@ -1964,7 +1960,7 @@ mod runner {
             crate::agent::ReportRounds {
                 behavioral_opened: true,
                 follow_ups_released: false,
-                candidate_turns: 1,
+                communication_evidence: crate::agent::CommunicationEvidence::Sufficient,
             },
         )
         .await

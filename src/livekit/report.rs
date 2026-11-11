@@ -1240,7 +1240,8 @@ fn report_prompt_text(
             .prompt_evidence(crate::agent::ViewFor::Report)
             .join("\n")
     };
-    let transcript = transcript_for_report(&crate::agent::report_transcript_lines(state));
+    let lines = crate::agent::report_transcript_lines(state);
+    let transcript = transcript_for_report(&lines);
     let test_summary = if state.code_execution_disabled {
         "Code execution was disabled by the candidate; testing evidence is the candidate's hand trace of written code, not executed cases.".to_string()
     } else {
@@ -1264,7 +1265,9 @@ fn report_prompt_text(
         evidence: &evidence,
         behavioral_round: crate::agent::BehavioralRound::of(state),
         follow_ups_released: crate::agent::coding_round_complete(state),
-        candidate_turns: crate::agent::ReportRounds::of(state).candidate_turns,
+        communication_evidence: crate::agent::communication::report_communication_evidence(
+            state, &lines,
+        ),
     })
 }
 

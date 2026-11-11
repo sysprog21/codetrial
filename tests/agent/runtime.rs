@@ -161,7 +161,7 @@ fn unsupported_delivery_and_personality_judgments_are_rejected_atomically() {
             ReportRounds {
                 behavioral_opened: true,
                 follow_ups_released: true,
-                candidate_turns: 1,
+                communication_evidence: CommunicationEvidence::Sufficient,
             },
             InterviewMode::Coding,
             false,

@@ -41,7 +41,7 @@
             "type": "STRING"
           },
           "maxItems": 4,
-          "minItems": 2,
+          "minItems": 0,
           "type": "ARRAY"
         },
         "strengths": {
@@ -49,7 +49,7 @@
             "type": "STRING"
           },
           "maxItems": 4,
-          "minItems": 2,
+          "minItems": 0,
           "type": "ARRAY"
         }
       },
@@ -66,6 +66,7 @@
     "communicationScore": {
       "maximum": 100,
       "minimum": 0,
+      "nullable": true,
       "type": "INTEGER"
     },
     "decision": {

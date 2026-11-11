@@ -131,7 +131,7 @@ fn g2_seed_report_state(state: &mut crate::agent::RuntimeState) {
         .unwrap();
     }
     state.behavioral_round_started = true;
-    state.evidence_ledger.conversation.candidate_turns = 1;
+    state.transcript.push("Candidate: I keep each previously visited value in a map so that I can find its matching complement without scanning the array again.".into());
     let rounds = crate::agent::ReportRounds::of(state);
     assert!(
         rounds.behavioral_opened && rounds.follow_ups_released && rounds.communication_assessed()

@@ -22,6 +22,44 @@ Use clear candidate clarification or independent engineering evidence, and state
 when reliable communication evidence is insufficient. The gap itself is neither
 clear nor unclear communication, so it cannot by itself decide the verdict.
 
+The report's minimum speech requirement is deterministic: at least 20 eligible
+words in total, with one turn of at least 8, counted after recognition masking
+and the report's byte cutoff. These are uncalibrated starting values, not a
+measure of communication quality. A word is a maximal Unicode alphanumeric
+run, case-insensitive; punctuation, including apostrophes and underscores,
+separates words. The fixed lists in `src/agent/communication.rs` exclude filler
+words, acknowledgement-only turns, explicit non-speech annotations and turns
+consisting entirely of bare noise markers. Filler frequency is never a penalty.
+An unattributed suffix of an oversized turn cannot establish eligibility.
+
+For both no recorded speech and insufficient evidence, the hiring decision
+uses the assessed coding evidence. A supported HIRE remains possible below the
+speech threshold, so clear communication is a requirement only when it can be
+assessed. This avoids treating missing or unreliable speech as poor performance,
+at the cost of leaving the communication bar unchecked in those sessions.
+When speech is recorded but insufficient, a clearly established technical gap
+belongs only in coding feedback. Filler, noise, interviewer echo, and missing
+speech alone do not establish that the candidate left a question unanswered.
+
+A candidate turn of at least 5 normalized words matching a contiguous passage
+in either of the two preceding retained interviewer turns with normalized words
+contributes no eligible words. Filler words are removed from both speakers before matching.
+This is uncertain attribution, not acoustic echo detection:
+genuine repetition is a false positive, while partial, paraphrased or older
+echo may escape it. Delivered and cancelled turns share the same window. For a
+cancelled turn, the classifier uses the original text only to exclude possible
+echo. The report prompt still receives the cancellation marker.
+The eligibility classifier also cannot identify answers to out-of-turn
+behavioral questions. Those answers can satisfy the word threshold even
+though the report must exclude them from scoring and feedback. If too little
+permitted speech remains, the report must return a null communication score
+and empty communication feedback. The server accepts this unassessed output
+even when the classifier found enough words before that exclusion.
+The brief distinguishes no recorded candidate speech from insufficient retained
+evidence; both require a null communication score and empty communication
+feedback. The distinction is not persisted, and report and replay retain the
+existing "Not assessed" presentation. No additional model call is made.
+
 The interim notes and the report never read a candidate turn written mostly
 in a non-Latin script: the English interview makes such a turn the
 recognizer's output, and they read a fixed marker saying it was not recognized

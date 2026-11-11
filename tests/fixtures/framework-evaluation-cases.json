@@ -43,16 +43,16 @@
     {
       "id": "alternative-optimal",
       "coverage": ["alternative-optimal"],
-      "reaction": {"kind":"report", "code":"def two_sum(nums, target):\n    pairs = sorted((n, i) for i, n in enumerate(nums))\n    # two pointers preserve original indices", "required":["different solution with the same complexity and sound", "approach on its merits"], "forbidden":["penalize a different solution", "must use the expected"]},
-      "transcript":"Candidate proposed a direct-address table under a proven bounded-value constraint and justified O(n) time.",
+      "reaction": {"kind":"report", "code":"def two_sum(nums, target):\n    pairs = sorted((n, i) for i, n in enumerate(nums))\n    # two pointers preserve original indices", "required":["different solution with the same complexity and sound", "approach on its merits", "COMMUNICATION EVIDENCE: sufficient."], "forbidden":["penalize a different solution", "must use the expected"]},
+      "transcript":"Candidate: The values are bounded, so I can use a direct address table. I scan the input once and check each complement in constant time.",
       "evidence":[{"phase":"algorithm","source":"candidate_speech","kind":"observed","confidence":90,"summary":"Justified a different optimal algorithm under stated constraints."}],
       "hintsUsed":0, "round":"none", "assessed":["Algorithm"]
     },
     {
       "id": "explicit-hint-use",
       "coverage": ["explicit-hint-use"],
-      "reaction": {"kind":"report", "code":"def two_sum(nums, target): return []", "required":["2 total", "never as a numeric deduction"], "forbidden":["meaningfully reduce this score", "0 total"]},
-      "transcript":"Interviewer suggested tracking prior complements; candidate then described a map.",
+      "reaction": {"kind":"report", "code":"def two_sum(nums, target): return []", "required":["2 total", "never as a numeric deduction", "COMMUNICATION EVIDENCE: insufficient."], "forbidden":["meaningfully reduce this score", "0 total"]},
+      "transcript":"Interviewer: Try tracking prior complements.\nCandidate: I can store them in a map.",
       "evidence":[{"phase":"algorithm","source":"candidate_speech","kind":"inferred","confidence":70,"summary":"Described the map after an explicit interviewer hint."}],
       "hintsUsed":2, "round":"none", "assessed":["Algorithm"]
     },
@@ -72,7 +72,7 @@
     {
       "id": "transcript-loss",
       "coverage": ["transcript-loss"],
-      "reaction": {"kind":"report", "code":"def two_sum(nums, target): return [0, 1]", "required":["no speech was captured", "too quiet to judge"], "forbidden":["intended to", "confident"]},
+      "reaction": {"kind":"report", "code":"def two_sum(nums, target): return [0, 1]", "required":["no speech was captured", "too quiet to judge", "COMMUNICATION EVIDENCE: no_speech."], "forbidden":["intended to", "confident"]},
       "transcript":"", "evidence":[{"phase":"coding","source":"editor_snapshot","kind":"observed","confidence":100,"summary":"Final editor snapshot is available despite transcript loss."}],
       "hintsUsed":0, "round":"none", "assessed":["Coding"]
     },
@@ -94,8 +94,8 @@
     {
       "id": "we-without-personal-action",
       "coverage": ["weak-star-we"],
-      "reaction": {"kind":"report", "code":"def two_sum(nums, target): return []", "required":["personal Action", "platform opened the behavioral round"], "forbidden":["Candidate personally fixed", "Candidate was confident"]},
-      "transcript":"Interviewer: Tell me about an outage. Candidate: We had an outage and we fixed it quickly; the service recovered.",
+      "reaction": {"kind":"report", "code":"def two_sum(nums, target): return []", "required":["personal Action", "platform opened the behavioral round", "COMMUNICATION EVIDENCE: insufficient."], "forbidden":["Candidate personally fixed", "Candidate was confident"]},
+      "transcript":"Interviewer: Tell me about an outage.\nCandidate: We had an outage and we fixed it quickly; the service recovered.",
       "evidence":[
         {"phase":"situation","source":"candidate_speech","kind":"observed","confidence":85,"summary":"Named an outage context."},
         {"phase":"result","source":"candidate_speech","kind":"observed","confidence":75,"summary":"Said the service recovered."}
@@ -105,8 +105,8 @@
     {
       "id": "qualitative-result",
       "coverage": ["qualitative-result"],
-      "reaction": {"kind":"report", "code":"def two_sum(nums, target): return []", "required":["truthful qualitative behavioral result", "Never invent a number"], "forbidden":["must quantify"]},
-      "transcript":"Candidate added a dry-run review; later migrations had a clear rollback owner and mistakes were caught before deployment.",
+      "reaction": {"kind":"report", "code":"def two_sum(nums, target): return []", "required":["truthful qualitative behavioral result", "Never invent a number", "COMMUNICATION EVIDENCE: sufficient."], "forbidden":["must quantify"]},
+      "transcript":"Candidate: I added a dry run review. On later migrations, everyone knew who owned rollback, and we caught configuration mistakes before deployment.",
       "evidence":[{"phase":"result","source":"candidate_speech","kind":"observed","confidence":90,"summary":"Reported a concrete qualitative improvement without a metric."}],
       "hintsUsed":0, "round":"started", "assessed":["Result"]
     },
