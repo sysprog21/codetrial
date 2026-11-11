@@ -136,7 +136,7 @@ class CalibrationTests(unittest.TestCase):
 
     def test_coding_only_star_scores_must_be_null(self):
         for phase, value, source in itertools.product(
-            STAR_PHASES, (0, 50, 100), ("model", "human", "both")
+            STAR_PHASES, (0, 50, 100), ("model", "human", "both", "partial")
         ):
             with self.subTest(phase=phase, value=value, source=source):
                 raw = self.fixture("passing-synthetic.json")
@@ -146,17 +146,85 @@ class CalibrationTests(unittest.TestCase):
                 if source in ("human", "both"):
                     for rating in sample["humanRatings"]:
                         rating["scores"][phase] = value
-                marker = (
-                    "not applicable to coding_only"
-                    if source == "both"
-                    else "assessability mismatch"
-                )
-                with self.assertRaisesRegex(ValueError, marker):
+                if source == "partial":
+                    for rating in sample["humanRatings"]:
+                        del rating["scores"][phase]
+                    sample["humanRatings"].append(
+                        {"reviewerId": "reviewer-c", "scores": {phase: value}}
+                    )
+                with self.assertRaisesRegex(
+                    ValueError, "not applicable to coding_only"
+                ):
                     CAL.analyze(raw)
                 if source == "both":
                     sample["loop"] = "coding_behavioral"
                     result = CAL.analyze(raw)
                     self.assertEqual(result["status"], "PASS", result["failures"])
+
+    def test_inapplicable_star_judgments_may_be_omitted(self):
+        for raw, status, failures in (
+            (self.fixture("passing-synthetic.json"), "PASS", []),
+            (
+                self.applicable_scored_fixture(),
+                "NOT_CALIBRATED",
+                ["unassessable phase coverage missing"],
+            ),
+        ):
+            expected_pairs = sum(
+                value is not None
+                for sample in raw["samples"]
+                for value in sample["modelScores"].values()
+            )
+            for recorded in (0, 1, 2):
+                with self.subTest(status=status, recorded=recorded):
+                    modified = copy.deepcopy(raw)
+                    for sample in modified["samples"]:
+                        if sample["loop"] == "coding_only":
+                            for rating in sample["humanRatings"][recorded:]:
+                                for phase in STAR_PHASES:
+                                    del rating["scores"][phase]
+                    result = CAL.analyze(modified)
+                    self.assertEqual(result["status"], status, result["failures"])
+                    self.assertEqual(result["failures"], failures)
+                    self.assertEqual(
+                        result["counts"]["assessedPhasePairs"], expected_pairs
+                    )
+
+    def test_inapplicable_model_phase_keys_remain_required(self):
+        for phase in STAR_PHASES:
+            with self.subTest(phase=phase):
+                raw = self.fixture("passing-synthetic.json")
+                del raw["samples"][0]["modelScores"][phase]
+                with self.assertRaisesRegex(ValueError, "modelScores: missing="):
+                    CAL.analyze(raw)
+
+    def test_recorded_count_includes_partial_adjudicator(self):
+        raw = self.fixture("passing-synthetic.json")
+        baseline = CAL.analyze(raw)
+        sample = raw["samples"][0]
+        original = sample["humanRatings"]
+        model_score = sample["modelScores"]["Repeat"]
+        old_error = abs(
+            model_score - sum(rating["scores"]["Repeat"] for rating in original) / 2
+        )
+        remaining_score = original[1]["scores"]["Repeat"]
+        del original[0]["scores"]["Repeat"]
+        third = {"reviewerId": "reviewer-c", "scores": {"Repeat": 90}}
+        expected_error = abs(
+            model_score - (remaining_score + third["scores"]["Repeat"]) / 2
+        )
+        for ratings in itertools.permutations([*original, third]):
+            with self.subTest(order=[rating["reviewerId"] for rating in ratings]):
+                sample["humanRatings"] = list(ratings)
+                result = CAL.analyze(raw)
+                self.assertEqual(result["status"], "PASS", result["failures"])
+                self.assertEqual(result["counts"], baseline["counts"])
+                self.assertAlmostEqual(
+                    result["metrics"]["modelHumanMae"],
+                    baseline["metrics"]["modelHumanMae"]
+                    + (expected_error - old_error)
+                    / baseline["counts"]["assessedPhasePairs"],
+                )
 
     def test_partial_adjudicator_only_contributes_recorded_scores(self):
         raw = self.fixture("passing-synthetic.json")
@@ -223,7 +291,7 @@ class CalibrationTests(unittest.TestCase):
                         {"reviewerId": "reviewer-c", "scores": {phase: model_score}}
                     )
                 with self.assertRaisesRegex(
-                    ValueError, rf"{phase}: need at least two independent human ratings"
+                    ValueError, rf"{phase}: need at least two human ratings"
                 ):
                     CAL.analyze(raw)
 
@@ -293,6 +361,14 @@ class CalibrationTests(unittest.TestCase):
         sample["modelScores"]["Situation"] = 80
         for rating in sample["humanRatings"]:
             rating["scores"]["Situation"] = 80
+        omitted = self.fixture("passing-synthetic.json")
+        for sample in omitted["samples"]:
+            if sample["loop"] == "coding_only":
+                for rating in sample["humanRatings"]:
+                    for phase in STAR_PHASES:
+                        del rating["scores"][phase]
+        inapplicable_human = copy.deepcopy(omitted)
+        inapplicable_human["samples"][0]["humanRatings"][0]["scores"]["Situation"] = 80
         cases = (
             ("control", self.fixture("passing-synthetic.json"), 0, "PASS"),
             ("zero", zero, 1, "NOT_CALIBRATED"),
@@ -301,6 +377,8 @@ class CalibrationTests(unittest.TestCase):
             ("partial", partial, 0, "PASS"),
             ("insufficient", insufficient, 2, None),
             ("inapplicable", inapplicable, 2, None),
+            ("omitted", omitted, 0, "PASS"),
+            ("inapplicable-human", inapplicable_human, 2, None),
         )
         with tempfile.TemporaryDirectory() as directory:
             for name, raw, code, status in cases:
@@ -325,10 +403,10 @@ class CalibrationTests(unittest.TestCase):
                             self.assertEqual(result.stdout, "")
                             if name == "insufficient":
                                 self.assertIn(
-                                    "Repeat: need at least two independent human ratings",
+                                    "Repeat: need at least two human ratings",
                                     result.stderr,
                                 )
-                            elif name == "inapplicable":
+                            elif name.startswith("inapplicable"):
                                 self.assertIn(
                                     "Situation: not applicable to coding_only",
                                     result.stderr,

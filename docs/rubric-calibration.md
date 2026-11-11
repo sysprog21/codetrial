@@ -25,10 +25,12 @@ loops. The inapplicable STAR `null` values in coding-only sessions do not meet
 this requirement. A non-null STAR score from the model or any human reviewer
 in a coding-only session is invalid input (exit 2), even if all scores agree;
 inapplicable scores never enter phase coverage or numeric metrics.
+Human keys for these inapplicable phases may be omitted or recorded as `null`;
+no human judgments are required for them.
 Unassessable coverage is not required for every phase or stratum. The existing
 input rules still apply, including at least two distinct human reviewers per
-sample and every required model phase key. Each phase needs at least two
-recorded human judgments, all numeric for an assessed phase or all `null` for
+sample and every required model phase key. Each applicable phase needs at least
+two recorded human judgments, all numeric for an assessed phase or all `null` for
 an unassessable phase.
 
 Each assessable phase is scored independently by at least two trained reviewers
@@ -44,7 +46,11 @@ An adjudicator who reviews only disputed phases omits the other keys from their
 not assign roles. Only recorded judgments enter assessability validation and
 numeric metrics; missing judgments are never replaced with scores or `null`.
 Unknown phase keys and invalid score values remain invalid input. Omissions
-cannot reduce any phase below two independent recorded human judgments.
+cannot reduce any applicable phase below two recorded human judgments from
+different reviewer IDs; an adjudicator's recorded judgment also counts. The
+input carries no reviewer roles, so the analyzer does not establish that these
+are two independent original ratings. Independence and blinding must be ensured
+by the review process.
 Every recorded human judgment participates in assessability validation: a null
 and a numeric score disagree even when two other reviewers gave numeric scores.
 Such a mismatch is invalid input (exit 2), before coverage or metric results are

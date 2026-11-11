@@ -20,6 +20,7 @@ PHASES = (
     "Action",
     "Result",
 )
+STAR_PHASES = ("Situation", "Task", "Action", "Result")
 BANDS = ((0, 39), (40, 59), (60, 74), (75, 89), (90, 100))
 THRESHOLDS = {
     "sessions": 30,
@@ -31,11 +32,11 @@ THRESHOLDS = {
 }
 
 
-def exact_keys(value, expected, path, *, optional=()):
+def exact_keys(value, expected, path):
     if not isinstance(value, dict):
         raise ValueError(f"{path}: expected object")
     unknown = sorted(set(value) - set(expected))
-    missing = sorted(set(expected) - set(value) - set(optional))
+    missing = sorted(set(expected) - set(value))
     if missing or unknown:
         raise ValueError(f"{path}: missing={missing} unknown={unknown}")
 
@@ -178,14 +179,24 @@ def analyze(raw):
                     f"{rating_path}.reviewerId: expected distinct pseudonym"
                 )
             reviewers.add(reviewer)
-            exact_keys(
-                rating["scores"], PHASES, f"{rating_path}.scores", optional=PHASES
-            )
-            for phase, raw_value in rating["scores"].items():
+            scores = rating["scores"]
+            if not isinstance(scores, dict):
+                raise ValueError(f"{rating_path}.scores: expected object")
+            if unknown := sorted(set(scores) - set(PHASES)):
+                raise ValueError(f"{rating_path}.scores: unknown={unknown}")
+            for phase, raw_value in scores.items():
                 value = score(raw_value, f"{rating_path}.scores.{phase}")
                 human[phase].append((reviewer, value))
         for phase in PHASES:
             values = human[phase]
+            if sample["loop"] == "coding_only" and phase in STAR_PHASES:
+                if model[phase] is not None or any(
+                    value is not None for _, value in values
+                ):
+                    raise ValueError(
+                        f"{path}.{phase}: not applicable to coding_only; expected null"
+                    )
+                continue
             for reviewer, value in values:
                 if (model[phase] is None) != (value is None):
                     raise ValueError(
@@ -193,20 +204,7 @@ def analyze(raw):
                         f" ({reviewer})"
                     )
             if len(values) < 2:
-                raise ValueError(
-                    f"{path}.{phase}: need at least two independent human ratings"
-                )
-            if sample["loop"] == "coding_only" and phase in (
-                "Situation",
-                "Task",
-                "Action",
-                "Result",
-            ):
-                if model[phase] is not None:
-                    raise ValueError(
-                        f"{path}.{phase}: not applicable to coding_only; expected null"
-                    )
-                continue
+                raise ValueError(f"{path}.{phase}: need at least two human ratings")
             if model[phase] is None:
                 has_unassessable = True
                 continue
