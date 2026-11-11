@@ -37,6 +37,14 @@ export const MAX_STROKES = 600;
 /// saying something else.
 export const MAX_STROKES_MESSAGE =
   "Drawing limit reached. Undo or clear before adding more.";
+/// Use four pages as a provisional planning ceiling for a 128 MiB per-session
+/// whiteboard budget. Assuming 8-byte numeric slots, the raw coordinate
+/// payload is 4 * 600 * 1200 * 2 coordinates * 2 copies * 8 bytes =
+/// 92,160,000 bytes (about 87.9 MiB) for the board strokes and undrained
+/// journal copy. A heap benchmark of that state measured about 106 MiB,
+/// including array and object overhead. The budget therefore depends on
+/// draining each page's journal and is not a hard allocator limit.
+export const MAX_PAGES = 4;
 export const TEXT_SIZE = 32;
 export const TEXT_MIN_SIZE = 12;
 export const TEXT_MAX_SIZE = 128;
@@ -382,6 +390,31 @@ export function createBoard() {
       const taken = journal;
       journal = [];
       return taken;
+    },
+  };
+}
+
+/// The whiteboard pages, each with its own drawing and edit history.
+///
+/// Page selection belongs to the interview UI. This model only owns the
+/// collection so navigation can switch between complete `createBoard`
+/// instances without sharing Undo, Redo or Clear state.
+/// Each page journal currently has no page identity; the follow-up navigation
+/// and recording step must drain every page and tag each operation before
+/// replay, rather than draining only the visible page.
+export function createBoardPages() {
+  const pages = [createBoard()];
+
+  return {
+    count: () => pages.length,
+    get(index) {
+      return Number.isInteger(index) ? pages[index] : undefined;
+    },
+    /// The index of the new page, or -1 once MAX_PAGES are open.
+    add() {
+      if (pages.length >= MAX_PAGES) return -1;
+      pages.push(createBoard());
+      return pages.length - 1;
     },
   };
 }
