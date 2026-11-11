@@ -648,3 +648,178 @@ fn a_key_that_is_not_base64_is_refused_without_quoting_it() {
         .expect_err("a body that is not base64 is not a key");
     assert_eq!(error, "the private key is not base64");
 }
+
+/// The upload session's address is a capability: whoever holds it can write to
+/// the upload. A failed status query reaches the audit log inside an error
+/// string, and reqwest appends the address it was sending to, so the address
+/// has to be left out of it.
+#[tokio::test]
+async fn a_failed_status_query_does_not_name_the_session_address() {
+    let delivery = delivery_reading_from("http://127.0.0.1:9".to_string());
+    let error = delivery
+        .session_progress("http://127.0.0.1:9/upload?upload_id=SECRET-UPLOAD-ID", 10)
+        .await
+        .unwrap_err();
+    assert!(!error.contains("SECRET-UPLOAD-ID"), "{error}");
+    assert!(error.contains("could not be queried"), "{error}");
+}
+
+/// What a status query on an upload session can mean, one case each: the bytes
+/// it holds, a finished file whose last acknowledgement was lost, a service
+/// that is only unwell, and a session that is gone.
+#[tokio::test]
+async fn a_session_status_says_progress_finished_unwell_or_gone() {
+    use axum::response::IntoResponse;
+    let answer = |status: u16, range: Option<&'static str>, body: &'static str| async move {
+        let router = axum::Router::new().fallback(move || async move {
+            let mut response =
+                (axum::http::StatusCode::from_u16(status).unwrap(), body).into_response();
+            if let Some(range) = range {
+                response.headers_mut().insert(
+                    axum::http::header::RANGE,
+                    axum::http::HeaderValue::from_static(range),
+                );
+            }
+            response
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let delivery = delivery_reading_from(base.clone());
+        delivery
+            .session_progress(&format!("{base}/session"), 100)
+            .await
+    };
+    assert_eq!(
+        answer(308, Some("bytes=0-49"), "").await,
+        Ok(SessionState::Holds(50))
+    );
+    assert_eq!(
+        answer(200, None, r#"{"id":"file-9"}"#).await,
+        Ok(SessionState::Finished("file-9".to_string())),
+        "the last chunk landed and only its answer was lost"
+    );
+    assert!(answer(201, None, "{}").await.is_err(), "no file id to name");
+    for status in RETRYABLE_STATUSES {
+        assert_eq!(
+            answer(status, None, "").await,
+            Ok(SessionState::Unwell),
+            "{status}"
+        );
+    }
+    assert_eq!(answer(404, None, "").await, Ok(SessionState::Gone));
+}
+
+/// A transfer whose one chunk is answered `503`, with the session answering
+/// `query` when it is asked what it holds. Returns the result and how many
+/// times the chunk was sent.
+async fn transfer_whose_chunk_fails(
+    query: u16,
+    query_body: &'static str,
+) -> (Result<String, String>, usize) {
+    use axum::body::Bytes;
+    use axum::extract::State;
+    use axum::http::{HeaderMap, Method, StatusCode, Uri};
+    use axum::response::{IntoResponse, Response};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct Stub {
+        base: String,
+        query: u16,
+        query_body: &'static str,
+        chunks: AtomicUsize,
+    }
+
+    async fn answer(
+        State(stub): State<Arc<Stub>>,
+        method: Method,
+        uri: Uri,
+        headers: HeaderMap,
+        _body: Bytes,
+    ) -> Response {
+        let range = headers
+            .get(axum::http::header::CONTENT_RANGE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("");
+        match uri.path() {
+            "/session" if method == Method::PUT && range == "bytes */3" => (
+                StatusCode::from_u16(stub.query).unwrap(),
+                [(axum::http::header::CONTENT_TYPE, "application/json")],
+                stub.query_body,
+            )
+                .into_response(),
+            "/session" if method == Method::PUT => {
+                stub.chunks.fetch_add(1, Ordering::SeqCst);
+                StatusCode::SERVICE_UNAVAILABLE.into_response()
+            }
+            "/drive/v3/files" => axum::Json(json!({"files": []})).into_response(),
+            "/b/staging/o/recording.mp4" if uri.query() == Some("alt=media") => {
+                (StatusCode::PARTIAL_CONTENT, vec![b'x'; 3]).into_response()
+            }
+            "/b/staging/o/recording.mp4" => axum::Json(json!({"size": 3})).into_response(),
+            "/upload/drive/v3/files" => (
+                StatusCode::OK,
+                [(
+                    axum::http::header::LOCATION,
+                    format!("{}/session", stub.base),
+                )],
+            )
+                .into_response(),
+            _ => StatusCode::NOT_FOUND.into_response(),
+        }
+    }
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let stub = Arc::new(Stub {
+        base: base.clone(),
+        query,
+        query_body,
+        chunks: AtomicUsize::new(0),
+    });
+    let router = axum::Router::new()
+        .fallback(answer)
+        .with_state(Arc::clone(&stub));
+    let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+
+    let delivery = delivery_reading_from(base);
+    *delivery.token.lock().await = Some(CachedToken {
+        value: "token".to_string(),
+        expires_at: 100_000,
+    });
+    let result = tokio::time::timeout(
+        Duration::from_secs(10),
+        delivery.transfer("recording.mp4", "interview.mp4", "rec-1"),
+    )
+    .await
+    .expect("transfer should not hang");
+    server.abort();
+    (result, stub.chunks.load(Ordering::SeqCst))
+}
+
+/// A chunk whose answer was lost, and then the session's own account of itself.
+///
+/// A session that says the file is finished is believed, and the chunk is not
+/// sent again; one that is unwell is asked again on the budget it already
+/// spent, and gives up when it runs out; one that is gone ends the attempt.
+#[tokio::test]
+async fn a_failed_chunk_is_settled_by_what_the_session_says() {
+    let (result, chunks) = transfer_whose_chunk_fails(200, r#"{"id":"file-9"}"#).await;
+    assert_eq!(result, Ok("file-9".to_string()));
+    assert_eq!(chunks, 1, "a finished upload is not sent again");
+
+    let (result, chunks) = transfer_whose_chunk_fails(503, "{}").await;
+    assert_eq!(result, Err("the upload ran out of retries".to_string()));
+    assert_eq!(
+        chunks,
+        UPLOAD_RETRY_BUDGET as usize + 1,
+        "an unwell session spends the budget and no more"
+    );
+
+    let (result, chunks) = transfer_whose_chunk_fails(404, "{}").await;
+    assert_eq!(
+        result,
+        Err("the upload session is no longer open".to_string())
+    );
+    assert_eq!(chunks, 1);
+}
