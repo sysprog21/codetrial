@@ -41,7 +41,7 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
 gh pr view "$pr" --repo "$repo" --json \
-    number,headRefOid,headRefName,isCrossRepository,isDraft,baseRefName,mergeable,author,body,files,reviews,comments \
+    number,headRefOid,headRefName,isCrossRepository,isDraft,baseRefName,mergeable,author,body,files,additions,deletions,reviews,comments \
     > "$work/pr.json"
 head=$(jq -r .headRefOid "$work/pr.json")
 
@@ -171,6 +171,20 @@ jq -n -L "$(dirname "$0")" --slurpfile p "$work/pr.json" --slurpfile c "$work/co
   | (if $again != $pr.headRefOid or ($commits | last | .sha) != $pr.headRefOid
      then "the head moved while it was read"
      else null end) as $skip
+  # The series is longer than the change warrants: at least six commits that
+  # average no more than thirty changed lines (the whole PR over the commit
+  # count, not a per-commit limit), as #624 had with ten commits for 257 lines
+  # (pulls.md). A merge makes the count inconclusive, and so does an unknown
+  # size, which asks for nothing.
+  | ($commits | length) as $n
+  | any($commits[]; (.parents | length) > 1) as $has_merge
+  | (if ($pr.additions | type) == "number" and ($pr.deletions | type) == "number"
+     then $pr.additions + $pr.deletions else null end) as $lines
+  | ($pr.mergeable != "UNKNOWN" and ($has_merge | not) and $lines != null) as $decidable
+  # A CI failure the branch made, which rebase.md answers, and which that text
+  # asks the same rework for.
+  | ($pr.mergeable == "MERGEABLE" and ($ci.stale_base != true)
+     and any($failing[]; .on_main == false and .gates != ["indent"])) as $regression
   # Every request, with whether the evidence for it holds at this head.
   | def item($key; $when; $marker; $text):
       {key: $key, when: $when, marker: $marker, text: $text};
@@ -178,7 +192,7 @@ jq -n -L "$(dirname "$0")" --slurpfile p "$work/pr.json" --slurpfile c "$work/co
       item("fork_main"; $pr.isCrossRepository and $pr.headRefName == "main";
         "branch of your fork|topic branch";
         "This pull request is opened from the `main` branch of your fork, so every later commit you push there joins it. Open a new pull request from a topic branch and close this one; see `CONTRIBUTING.md`."),
-      item("merge_commit"; any($commits[]; (.parents | length) > 1);
+      item("merge_commit"; $has_merge;
         "git merge|merge commit";
         "Do not merge `main` into this branch with `git merge`. Drop the merge commits, put your own commits on top of the latest `main`, and force-push."),
       item("commit_rules"; $bad > 0; "cbea\\.ms|chris\\.beams|make hooks";
@@ -186,14 +200,21 @@ jq -n -L "$(dirname "$0")" --slurpfile p "$work/pr.json" --slurpfile c "$work/co
       item("co_authored"; $ai > 0;
         "co-authored|attribution|agent marker";
         "Remove AI agent markers (`Co-authored-by` an agent, \"Generated with\") from Git commit messages, as this attribution does not improve collaboration."),
+      # Only on a branch that merges: a conflicting one gets rebase.md, which
+      # asks for the same rework, and UNKNOWN may still turn out a conflict.
+      # Not a fixed wording in pr-sweep.sh (pulls.md): that one grades it by the
+      # phrase "functionally minimal" instead.
+      item("fragmented_series";
+        $decidable and $pr.mergeable == "MERGEABLE" and ($regression | not)
+        and $n >= 6 and $lines <= 30 * $n;
+        "functionally minimal|minimal, logically coherent|fold similar|squash closely";
+        "Rebase the current branch onto the upstream default branch and rework the series into functionally minimal commits, folding similar ones and enforcing the project'\''s commit message rules."),
       item("indent"; any($failing[]; .on_main == false
           and any(.gates[]; . == "indent")); "make indent";
         "CI fails on the `indent` gate. Run `make indent`, then amend and force-push."),
       # A conflicting PR is asked to rebase first, and a rebase may be the
       # whole answer to the failure; UNKNOWN may still turn out a conflict.
-      item("ci_regression";
-        $pr.mergeable == "MERGEABLE" and ($ci.stale_base != true)
-        and any($failing[]; .on_main == false and .gates != ["indent"]);
+      item("ci_regression"; $regression;
         "regression|rebase";
         $fix | rtrimstr("\n"))
     ]) as $defs
@@ -206,15 +227,17 @@ jq -n -L "$(dirname "$0")" --slurpfile p "$work/pr.json" --slurpfile c "$work/co
      or (($ci.held // []) | length > 0)
      or any($ci.failing // [] | .[]; .current == true and .name != "check" and .gates == null)
     ) as $unknown
-  | def holds: . as $k
-      | ($k | IN($active[])) or ($unknown and $k == "indent");
+  # The items whose evidence cannot be read at this head: a copy that carries one
+  # stays visible (nothing is hidden on no evidence) and none is posted afresh.
+  | ((if $unknown then ["indent"] else [] end)
+     + (if $decidable then [] else ["fragmented_series"] end)) as $undecided
   # The copies of these requests that are still visible, whatever head they
   # were left on, newest first. A request stands while its evidence holds, so
   # a push that leaves the failure as it was does not ask again. A copy that
   # carries a request whose evidence is gone no longer describes the PR and is
   # hidden; the requests it carried that still hold go out in the new review.
   # The CI regression belongs to rebase.md and pr-sweep.sh hides it.
-  def own($id; $at; $body):
+  | def own($id; $at; $body):
       [$defs[] | select(.key != "ci_regression") | . as $d
        | select($body | contains($d.text))] as $found
       # Only a body made of our texts: a maintainer who added feedback of their
@@ -228,8 +251,7 @@ jq -n -L "$(dirname "$0")" --slurpfile p "$work/pr.json" --slurpfile c "$work/co
    + [$pr.comments[] | select(staff and (.isMinimized | not))
       | own(.id; .createdAt; .body // "")]
    | sort_by(.at) | reverse) as $ours
-  | def keep: all(.keys[]; holds)
-      or ($unknown and any(.keys[]; . == "indent"));
+  | def keep: any(.keys[]; IN($undecided[])) or all(.keys[]; IN($active[]));
   ($ours | map(select(keep | not))) as $stale
   | (reduce ($ours[] | select(keep)) as $o
       ({covered: [], drop: []};
