@@ -287,6 +287,95 @@ print(json.dumps(seen))
             check=False,
         )
 
+    def rewritten(self):
+        return self.gate("rewritten")
+
+    def test_post_rewrite_does_not_run_code_introduced_by_amend(self):
+        shutil.copy2(ROOT / "scripts/install-git-hooks.sh", self.repo / "scripts")
+        hook = self.repo / "scripts/git-post-rewrite.sh"
+        hook.write_text("#!/bin/sh\ntouch rewrite-ran\n")
+        self.git("add", "-f", "scripts/git-post-rewrite.sh")
+        self.git("commit", "-qm", "Install the rewrite fixture")
+        self.run_command(["sh", "scripts/install-git-hooks.sh"])
+        for installed in (self.repo / ".git/hooks").iterdir():
+            if installed.name != "post-rewrite":
+                installed.unlink()
+        local = self.repo / ".git/hooks/post-rewrite.local"
+        local.write_text("#!/bin/sh\ncat > rewrite-input\n")
+        local.chmod(0o755)
+        old = self.git("rev-parse", "HEAD").stdout.strip()
+        (self.repo / "change.txt").write_text("an amended fixture\n")
+        self.git("add", "change.txt")
+        self.git("commit", "--amend", "-qm", "Amend only the fixture")
+        self.assertTrue((self.repo / "rewrite-ran").exists())
+        self.assertTrue((self.repo / "rewrite-input").read_text().startswith(old))
+        (self.repo / "rewrite-ran").unlink()
+        self.run_command([".git/hooks/post-rewrite", "amend"], data=old + "\n")
+        self.assertFalse((self.repo / "rewrite-ran").exists())
+        self.assertEqual((self.repo / "rewrite-input").read_text(), old + "\n")
+        hook.write_text("#!/bin/sh\ntouch rewrite-ran\n# new code\n")
+        self.git("add", "-f", "scripts/git-post-rewrite.sh")
+        self.git("commit", "--amend", "-qm", "Amend the rewrite fixture")
+        self.assertFalse((self.repo / "rewrite-ran").exists())
+
+    def test_a_rewrite_of_a_small_change_says_nothing(self):
+        self.large(10)
+        result = self.rewritten()
+        self.assertEqual((result.returncode, result.stdout), (0, ""))
+
+    def test_a_rewrite_of_a_large_change_asks_for_a_new_review(self):
+        self.large()
+        self.prepare()
+        self.assertEqual(self.rewritten().stdout, "")
+        # An amend gives the branch a head the review never saw.
+        self.git("commit", "--amend", "-qm", "Add the reviewable fixture again")
+        advice = self.rewritten().stdout
+        self.assertIn("Run /codetrial-review", advice)
+        self.assertIn("different area", advice)
+
+    def test_a_rewrite_with_no_base_to_measure_against_says_nothing(self):
+        self.large()
+        self.git("update-ref", "-d", "refs/remotes/upstream/main")
+        result = self.rewritten()
+        self.assertEqual((result.returncode, result.stdout), (0, ""))
+
+    def test_rewrite_uses_canonical_remote_even_when_its_name_is_custom(self):
+        self.git("remote", "rename", "upstream", "codetrial")
+        self.git("remote", "add", "origin", str(self.fork))
+        self.git("update-ref", "refs/remotes/origin/main", self.base)
+        self.large()
+        self.git("update-ref", "refs/remotes/codetrial/main", "HEAD")
+        with (self.repo / "change.txt").open("a") as fixture:
+            fixture.write("small topic change\n")
+        self.commit("Add a small topic fixture")
+        self.assertEqual(self.rewritten().stdout, "")
+
+        with (self.repo / "change.txt").open("a") as fixture:
+            fixture.write("more topic lines\n" * 220)
+        self.commit("Add a large topic fixture")
+        self.assertIn("Run /codetrial-review", self.rewritten().stdout)
+
+    def test_certifying_remembers_which_file_was_asked_about(self):
+        def asked():
+            return json.loads(self.gate("asked").stdout)
+
+        self.assertEqual(asked(), [])
+        self.large()
+        _, head = self.prepare()
+        entries = asked()
+        self.assertEqual(entries[0]["head"], head)
+        asked_about = entries[0]["questions"][0]
+        self.assertEqual(asked_about["path"], "change.txt")
+        self.assertIn("fixture boundary", asked_about["prompt"])
+
+    def test_an_unwritable_question_history_does_not_fail_certification(self):
+        history = self.repo / ".git/codetrial-review/asked.jsonl"
+        history.mkdir(parents=True)
+        self.large()
+        self.prepare()
+        self.assertEqual(self.gate("status").returncode, 0)
+        self.assertEqual(json.loads(self.gate("status").stdout)["status"], "complete")
+
     def test_a_small_change_is_under_the_thresholds(self):
         self.large(10)
         result = self.gate("pr")

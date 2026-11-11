@@ -483,6 +483,10 @@ until `rechain` restamps it.
 (chain, thresholds and evidence, the workbench server and worker, the hooks in a
 scratch repository, and the page in a browser) without the rest of the gate.
 
+post-rewrite only advises, after a rebase or an amend, that a branch still over
+the interactive-review thresholds has no review of its new head; it runs only
+when the rewrite changed neither the hook scripts nor the review skill.
+
 post-commit never runs scripts that the commit itself brought in: it is
 skipped for a commit that changes the hook scripts or the review skill, and
 during a merge, rebase or cherry-pick sequence. Such a commit keeps the
