@@ -1333,3 +1333,16 @@ async fn closing_the_room_still_collects_what_the_capture_tasks_send() {
     );
     server.abort();
 }
+
+/// The observer's failure arm writes the same status, and reports it the same
+/// way. The write's result is read in the source, since the arm runs only when
+/// the observer task fails and the database fails with it.
+#[test]
+fn the_observer_failure_arm_reports_a_status_write_that_failed() {
+    let source = include_str!("../../../../src/web/peer/observer.rs");
+    let production = source.split("#[cfg(test)]").next().unwrap();
+    assert!(
+        !production.contains("let _ = db(&accounts"),
+        "a status write's result is not discarded"
+    );
+}

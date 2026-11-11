@@ -76,7 +76,7 @@ impl PeerObservers {
                         .unwrap_or_else(|e| e.into_inner())
                         .take(),
                 );
-                let _ = db(&accounts, move |a| {
+                let marked = db(&accounts, move |a| {
                     crate::peer_audio::mark_failed(
                         a,
                         &session_id,
@@ -85,6 +85,7 @@ impl PeerObservers {
                     record::status(a, &session_id, "unavailable", Some(reason))
                 })
                 .await;
+                log_audio_status_failure(&marked);
             }
         });
         tasks.insert(
@@ -167,6 +168,15 @@ async fn db<T: Send + 'static>(
     blocking(move || task(&accounts))
         .await
         .map_err(|_| "database_unavailable")
+}
+
+/// A failed status write leaves the recording marked in progress with the file
+/// on disk, so the partner's status and download never settle. Nothing else
+/// reports it, since these writes run after the response is gone.
+fn log_audio_status_failure<T>(written: &Result<T, &'static str>) {
+    if let Err(code) = written {
+        eprintln!("peer audio status was not recorded: {code}");
+    }
 }
 fn settled_session(accounts: &Accounts, id: &str, now: i64) -> rusqlite::Result<Option<Session>> {
     accounts.transaction(|connection| {
@@ -327,10 +337,11 @@ impl Observation {
                 self.incomplete |= failed;
                 if failed {
                     let id = self.session.id.clone();
-                    let _ = db(&self.accounts, move |a| {
+                    let marked = db(&self.accounts, move |a| {
                         crate::peer_audio::mark_failed(a, &id, crate::current_epoch_seconds_i64())
                     })
                     .await;
+                    log_audio_status_failure(&marked);
                 }
                 chunk
             }
@@ -618,7 +629,7 @@ async fn run(
         let key = id.clone();
         match result {
             Ok(artifact) => {
-                let _ = db(&accounts, move |a| {
+                let marked = db(&accounts, move |a| {
                     crate::peer_audio::mark_ready(
                         a,
                         &key,
@@ -627,12 +638,14 @@ async fn run(
                     )
                 })
                 .await;
+                log_audio_status_failure(&marked);
             }
             Err(_) => {
-                let _ = db(&accounts, move |a| {
+                let marked = db(&accounts, move |a| {
                     crate::peer_audio::mark_failed(a, &key, crate::current_epoch_seconds_i64())
                 })
                 .await;
+                log_audio_status_failure(&marked);
             }
         }
     }

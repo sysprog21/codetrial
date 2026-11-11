@@ -272,7 +272,7 @@ impl RoomService {
 ///
 /// The Twirp path is a contract with LiveKit that no test named: a wrong
 /// method segment reaches a real server and 404s, which
-/// `is_participant_gone` then has to be careful not to read as a departed
+/// `is_twirp_not_found` then has to be careful not to read as a departed
 /// participant. The success path returned the parsed body and the failure
 /// path had to keep the method, the status and the body, because that
 /// string is the only thing the caller can tell them apart by.
@@ -714,46 +714,6 @@ fn livekit_http_base_rewrites_a_scheme_in_any_case() {
         livekit_http_base("HTTPS://example.livekit.cloud"),
         "https://example.livekit.cloud"
     );
-}
-
-/// All three parts are required, and nothing said so.
-///
-/// The predicate exists because the opposite shipped. A removal that finds
-/// nothing to remove has done what it was asked to do, and this used to
-/// propagate the 404 instead: the agent greeted the candidate, tried to
-/// evict a duplicate that had already left on its own, took the `not_found`
-/// as fatal, and exited. The candidate was left in a room with no
-/// interviewer, the status pill correctly reading "Waiting" and nothing on
-/// screen explaining why. Losing that race is the common case, not the
-/// exceptional one, which is why the first assertion here is the one that
-/// has to keep passing.
-///
-/// The three refusals are the other half. Each conjunct is load bearing for
-/// a different reason: the method keeps a 404 from any other RoomService
-/// call fatal, the status distinguishes a refusal from a failure, and the
-/// Twirp code separates a participant that is gone from an HTML error page
-/// at the wrong route. Dropping any one of them widens this to a
-/// participant that is still there, and the caller treats that as a
-/// successful eviction.
-///
-/// Each case therefore withholds exactly one part and supplies the other
-/// two, which is what makes them separate the conjuncts. A case missing two
-/// at once is refused whichever conjunct is dropped, so it pins nothing.
-#[test]
-fn a_participant_is_gone_only_when_all_three_parts_say_so() {
-    let gone = "RemoveParticipant failed: 404 {\"code\":\"not_found\"}";
-    assert!(is_participant_gone(gone));
-
-    for missing in [
-        // Another RoomService call answering 404 is still fatal.
-        "ListParticipants failed: 404 {\"code\":\"not_found\"}",
-        // The right call and the right code, but not a refusal.
-        "RemoveParticipant failed: 500 {\"code\":\"not_found\"}",
-        // A 404 from the wrong route, which is an error page and not Twirp.
-        "RemoveParticipant failed: 404 <html>no such route</html>",
-    ] {
-        assert!(!is_participant_gone(missing), "{missing}");
-    }
 }
 
 #[test]

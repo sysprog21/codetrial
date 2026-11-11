@@ -903,7 +903,13 @@ pub(crate) async fn current_user(
     else {
         return Ok(None);
     };
-    blocking(move || session_user(&accounts, &session_id)).await
+
+    // Every caller turns this into a bare 500, so the cause is only recorded
+    // here: a locked or corrupt database otherwise fails all signed-in traffic
+    // with nothing for the operator to read.
+    blocking(move || session_user(&accounts, &session_id))
+        .await
+        .inspect_err(|error| eprintln!("account session lookup failed: {error}"))
 }
 
 /// Signs `name=value`, not the value alone. Both cookies share one secret and

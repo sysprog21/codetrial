@@ -567,7 +567,10 @@ pub(crate) async fn task_start_handler(
     let pending = service.unanswered_start(learner.id, &body.request_key, claim_id);
     let (room_name, provider) = match super::token::reserved_room(&state, false).await {
         Ok(reserved) => reserved,
-        Err(_) => return refuse("setup_failed"),
+        Err(_) => {
+            eprintln!("task start refused: no room could be reserved");
+            return refuse("setup_failed");
+        }
     };
     let identity = super::token::generated_candidate_identity();
     let metadata = json!({"assessmentMode": "task", "setId": set_id, "setVersion": task.config.version, "taskId": task_id, "candidateIdentity": identity, "taskContractVersion": 1}).to_string();
@@ -582,7 +585,10 @@ pub(crate) async fn task_start_handler(
         agent: false,
     }) {
         Ok(token) => token,
-        Err(_) => return refuse("setup_failed"),
+        Err(error) => {
+            eprintln!("task start refused: the join token could not be signed: {error}");
+            return refuse("setup_failed");
+        }
     };
     if dispatcher
         .ensure_agent(

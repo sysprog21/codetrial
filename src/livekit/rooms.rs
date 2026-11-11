@@ -118,14 +118,6 @@ async fn remove_room_participant(
     parse_room_service_response("RemoveParticipant", &text).map(|_| ())
 }
 
-/// The old "already gone" check, kept so the unit tests that pin it still
-/// compile unedited. Production removal uses [`is_twirp_not_found`] instead of
-/// searching the formatted error string.
-#[cfg(test)]
-fn is_participant_gone(error: &str) -> bool {
-    error.contains("RemoveParticipant") && error.contains("404") && error.contains("not_found")
-}
-
 /// Proves credentials like `check-gemini` proves a Google key: the server
 /// must accept a signed request. `ListRooms` needs no room to exist.
 pub(crate) async fn validate_livekit_credentials(
