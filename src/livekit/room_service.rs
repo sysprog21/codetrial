@@ -29,6 +29,21 @@ pub(super) async fn post_room_service(
     Ok((status, response.text().await?))
 }
 
+/// How much of a refusal's body an error quotes. A wrong host answers with an
+/// HTML page, and the message is logged and handed to callers.
+const FAILURE_BODY_LIMIT: usize = 200;
+
+/// The error for a RoomService call that did not succeed: the method, the
+/// status and the start of the body, which is where a refusal explains itself.
+pub(super) fn room_service_failure(
+    method: &str,
+    status: reqwest::StatusCode,
+    text: &str,
+) -> String {
+    let quoted = crate::quote::quoted_body(text, FAILURE_BODY_LIMIT);
+    format!("LiveKit RoomService {method} failed: {status} {quoted}")
+}
+
 /// A room-scoped call under a `roomAdmin` token, answered with LiveKit's parsed
 /// reply.
 pub(super) async fn livekit_room_service_request(
@@ -43,7 +58,7 @@ pub(super) async fn livekit_room_service_request(
     let token = livekit_room_admin_token(api_key, api_secret, room_name, now_seconds)?;
     let (status, text) = post_room_service(&livekit_http_base(url), &token, method, &body).await?;
     if !status.is_success() {
-        return Err(format!("LiveKit RoomService {method} failed: {status} {text}").into());
+        return Err(room_service_failure(method, status, &text).into());
     }
     parse_room_service_response(method, &text)
 }
@@ -84,7 +99,7 @@ pub(crate) async fn delete_room(
         return Ok(());
     }
     if !status.is_success() {
-        return Err(format!("LiveKit RoomService DeleteRoom failed: {status} {text}").into());
+        return Err(room_service_failure("DeleteRoom", status, &text).into());
     }
     parse_room_service_response("DeleteRoom", &text).map(|_| ())
 }
@@ -188,7 +203,7 @@ async fn create_room_with(
         if status == reqwest::StatusCode::CONFLICT || twirp_code_is(&text, "already_exists") {
             return Ok(());
         }
-        last = format!("LiveKit RoomService CreateRoom failed: {status} {text}");
+        last = room_service_failure("CreateRoom", status, &text);
         if status != reqwest::StatusCode::TOO_MANY_REQUESTS && !status.is_server_error() {
             break;
         }

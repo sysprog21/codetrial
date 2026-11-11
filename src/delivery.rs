@@ -482,9 +482,10 @@ fn pkcs8_der(pem: &str) -> Result<Vec<u8>, String> {
         .filter(|line| !line.starts_with("-----"))
         .flat_map(|line| line.chars().filter(|character| !character.is_whitespace()))
         .collect();
+    // Not the decode error: it names the offending byte, a piece of the key.
     STANDARD
         .decode(body)
-        .map_err(|error| format!("the private key is not base64: {error}"))
+        .map_err(|_| "the private key is not base64".to_string())
 }
 
 /// RSASSA-PKCS1-v1_5 over SHA-256, which is what `RS256` means.

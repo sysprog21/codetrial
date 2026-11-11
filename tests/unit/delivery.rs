@@ -640,3 +640,11 @@ async fn the_token_refreshes_at_the_sixty_second_margin() {
     assert_eq!(delivery.access_token().await, Ok("fresh-token".to_string()));
     assert_eq!(seen.lock().unwrap().len(), 1);
 }
+
+#[test]
+fn a_key_that_is_not_base64_is_refused_without_quoting_it() {
+    // The decode error names the offending byte, which is part of the key.
+    let error = rsa_key("-----BEGIN PRIVATE KEY-----\nSECRET$KEY\n-----END PRIVATE KEY-----\n")
+        .expect_err("a body that is not base64 is not a key");
+    assert_eq!(error, "the private key is not base64");
+}

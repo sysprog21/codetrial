@@ -7,6 +7,7 @@ pub mod gemini;
 pub mod launch;
 pub mod livekit;
 mod peer_audio;
+mod quote;
 pub mod recording;
 pub mod runtime;
 pub mod tasks;

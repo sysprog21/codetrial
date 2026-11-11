@@ -17,7 +17,7 @@ use crate::token::livekit_room_admin_token;
 use super::DUPLICATE_AGENT_ISOLATION_ATTEMPTS;
 use super::room_service::{
     is_twirp_not_found, livekit_room_service_request, parse_room_service_response,
-    post_room_service,
+    post_room_service, room_service_failure,
 };
 
 pub(super) async fn isolate_local_agent(
@@ -113,9 +113,7 @@ async fn remove_room_participant(
         return Ok(());
     }
     if !status.is_success() {
-        return Err(
-            format!("LiveKit RoomService RemoveParticipant failed: {status} {text}").into(),
-        );
+        return Err(room_service_failure("RemoveParticipant", status, &text).into());
     }
     parse_room_service_response("RemoveParticipant", &text).map(|_| ())
 }
@@ -155,15 +153,8 @@ pub(crate) async fn validate_livekit_credentials(
     // "did not work" to someone who already knows that. Bounded, because a
     // wrong host answers with an HTML page and the form is one line.
     const REASON_LIMIT: usize = 200;
-    let reason: String = text.chars().take(REASON_LIMIT).collect();
-    let ellipsis = if text.chars().count() > REASON_LIMIT {
-        "..."
-    } else {
-        ""
-    };
-    Err(format!(
-        "LiveKit ListRooms failed: {status} {reason}{ellipsis}"
-    ))
+    let reason = crate::quote::quoted_body(&text, REASON_LIMIT);
+    Err(format!("LiveKit ListRooms failed: {status} {reason}"))
 }
 
 fn duplicate_agent_identities(

@@ -289,7 +289,10 @@ impl LiveKitEgress {
         let status = response.status();
         let text = response.text().await.unwrap_or_default();
         if !status.is_success() {
-            return Err(format!("LiveKit {method} failed: {status} {text}"));
+            return Err(format!(
+                "LiveKit {method} failed: {status} {}",
+                crate::quote::quoted_body(&text, 200)
+            ));
         }
         serde_json::from_str(&text)
             .map_err(|error| format!("LiveKit {method} returned invalid JSON: {error}"))
