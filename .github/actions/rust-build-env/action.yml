@@ -1,0 +1,33 @@
+name: Rust build environment
+description: Install the native packages, the WebRTC compiler and the pinned toolchain, then restore the cargo cache.
+
+# The order is the contract. The cache key hashes rustc and CXX, so the
+# compiler and the toolchain have to exist before the restore, or the job
+# computes a different key from the lane that saved the entry and never hits.
+# Jobs that skip a step (the gates' browser and portable lanes) or add one
+# between them (the desktop key) spell the steps out instead.
+inputs:
+  packages:
+    description: Space-separated apt packages for the build.
+    required: true
+outputs:
+  key:
+    description: The exact cache key.
+    value: ${{ steps.cache.outputs.key }}
+  prefix:
+    description: The cache key without the lockfile.
+    value: ${{ steps.cache.outputs.prefix }}
+  cache-hit:
+    description: Whether the exact key was restored.
+    value: ${{ steps.cache.outputs.cache-hit }}
+runs:
+  using: composite
+  steps:
+    - uses: ./.github/actions/apt-install
+      with:
+        packages: ${{ inputs.packages }}
+    - uses: ./.github/actions/webrtc-clang
+    - shell: sh
+      run: rustup toolchain install
+    - id: cache
+      uses: ./.github/actions/restore-cargo-cache
