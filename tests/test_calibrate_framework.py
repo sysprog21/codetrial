@@ -14,6 +14,7 @@ SPEC = importlib.util.spec_from_file_location(
 )
 CAL = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(CAL)
+STAR_PHASES = ("Situation", "Task", "Action", "Result")
 
 
 class CalibrationTests(unittest.TestCase):
@@ -30,12 +31,7 @@ class CalibrationTests(unittest.TestCase):
             ]
             for row in rows:
                 for phase in CAL.PHASES:
-                    if sample["loop"] == "coding_only" and phase in (
-                        "Situation",
-                        "Task",
-                        "Action",
-                        "Result",
-                    ):
+                    if sample["loop"] == "coding_only" and phase in STAR_PHASES:
                         continue
                     if row[phase] is None:
                         row[phase] = 82
@@ -49,11 +45,9 @@ class CalibrationTests(unittest.TestCase):
         for sample_index, phase in itertools.product(
             range(len(raw["samples"])), CAL.PHASES
         ):
-            if raw["samples"][sample_index]["loop"] == "coding_only" and phase in (
-                "Situation",
-                "Task",
-                "Action",
-                "Result",
+            if (
+                raw["samples"][sample_index]["loop"] == "coding_only"
+                and phase in STAR_PHASES
             ):
                 continue
             with self.subTest(sample=sample_index, phase=phase):
@@ -95,18 +89,8 @@ class CalibrationTests(unittest.TestCase):
                     rating["scores"][phase] is None for rating in sample["humanRatings"]
                 )
                 for sample in raw["samples"]
-                for phase in (
-                    CAL.PHASES
-                    if sample["loop"] == "coding_behavioral"
-                    else (
-                        "Repeat",
-                        "Example",
-                        "Algorithm",
-                        "Coding",
-                        "Test",
-                        "Optimizations",
-                    )
-                )
+                for phase in CAL.PHASES
+                if sample["loop"] == "coding_behavioral" or phase not in STAR_PHASES
             )
         )
 
@@ -149,6 +133,30 @@ class CalibrationTests(unittest.TestCase):
                         ValueError, rf"assessability mismatch \({reviewer_pattern}\)$"
                     ):
                         CAL.analyze(raw)
+
+    def test_coding_only_star_scores_must_be_null(self):
+        for phase, value, source in itertools.product(
+            STAR_PHASES, (0, 50, 100), ("model", "human", "both")
+        ):
+            with self.subTest(phase=phase, value=value, source=source):
+                raw = self.fixture("passing-synthetic.json")
+                sample = raw["samples"][0]
+                if source in ("model", "both"):
+                    sample["modelScores"][phase] = value
+                if source in ("human", "both"):
+                    for rating in sample["humanRatings"]:
+                        rating["scores"][phase] = value
+                marker = (
+                    "not applicable to coding_only"
+                    if source == "both"
+                    else "assessability mismatch"
+                )
+                with self.assertRaisesRegex(ValueError, marker):
+                    CAL.analyze(raw)
+                if source == "both":
+                    sample["loop"] = "coding_behavioral"
+                    result = CAL.analyze(raw)
+                    self.assertEqual(result["status"], "PASS", result["failures"])
 
     def test_partial_adjudicator_only_contributes_recorded_scores(self):
         raw = self.fixture("passing-synthetic.json")
@@ -280,6 +288,11 @@ class CalibrationTests(unittest.TestCase):
         insufficient = copy.deepcopy(partial)
         for rating in insufficient["samples"][0]["humanRatings"][:2]:
             del rating["scores"]["Repeat"]
+        inapplicable = self.fixture("passing-synthetic.json")
+        sample = inapplicable["samples"][0]
+        sample["modelScores"]["Situation"] = 80
+        for rating in sample["humanRatings"]:
+            rating["scores"]["Situation"] = 80
         cases = (
             ("control", self.fixture("passing-synthetic.json"), 0, "PASS"),
             ("zero", zero, 1, "NOT_CALIBRATED"),
@@ -287,6 +300,7 @@ class CalibrationTests(unittest.TestCase):
             ("mixed", mixed, 2, None),
             ("partial", partial, 0, "PASS"),
             ("insufficient", insufficient, 2, None),
+            ("inapplicable", inapplicable, 2, None),
         )
         with tempfile.TemporaryDirectory() as directory:
             for name, raw, code, status in cases:
@@ -312,6 +326,11 @@ class CalibrationTests(unittest.TestCase):
                             if name == "insufficient":
                                 self.assertIn(
                                     "Repeat: need at least two independent human ratings",
+                                    result.stderr,
+                                )
+                            elif name == "inapplicable":
+                                self.assertIn(
+                                    "Situation: not applicable to coding_only",
                                     result.stderr,
                                 )
                             else:

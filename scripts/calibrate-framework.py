@@ -196,14 +196,19 @@ def analyze(raw):
                 raise ValueError(
                     f"{path}.{phase}: need at least two independent human ratings"
                 )
+            if sample["loop"] == "coding_only" and phase in (
+                "Situation",
+                "Task",
+                "Action",
+                "Result",
+            ):
+                if model[phase] is not None:
+                    raise ValueError(
+                        f"{path}.{phase}: not applicable to coding_only; expected null"
+                    )
+                continue
             if model[phase] is None:
-                if sample["loop"] == "coding_behavioral" or phase not in (
-                    "Situation",
-                    "Task",
-                    "Action",
-                    "Result",
-                ):
-                    has_unassessable = True
+                has_unassessable = True
                 continue
             assessed_phases.add(phase)
             observed_bands.add(band(model[phase]))

@@ -22,7 +22,10 @@ Unassessable coverage requires at least one applicable session/phase pair whose
 model and human scores are all `null`, across the whole dataset. All REACTO
 phases apply to both loop types; STAR phases apply only to coding-plus-behavioral
 loops. The inapplicable STAR `null` values in coding-only sessions do not meet
-this requirement. It is not required for every phase or stratum. The existing
+this requirement. A non-null STAR score from the model or any human reviewer
+in a coding-only session is invalid input (exit 2), even if all scores agree;
+inapplicable scores never enter phase coverage or numeric metrics.
+Unassessable coverage is not required for every phase or stratum. The existing
 input rules still apply, including at least two distinct human reviewers per
 sample and every required model phase key. Each phase needs at least two
 recorded human judgments, all numeric for an assessed phase or all `null` for
