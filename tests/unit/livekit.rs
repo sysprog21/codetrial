@@ -25,10 +25,9 @@ use crate::runtime::TOPIC_REPORT;
 
 /// An `OutputAudio` wired to a channel instead of a room.
 ///
-/// `pub(super)` and defined here rather than in each of the two test modules
-/// that build one: `media`'s tests are a descendant of `livekit`, so they can
-/// name it, and a second copy is a second thing to keep in step with the
-/// fields.
+/// `pub(super)` and defined once rather than in each of the two test modules
+/// that build one: `media`'s tests descend from `livekit`, so they can name it,
+/// and a second copy is a second thing to keep in step with the fields.
 ///
 /// The rate is the constant rather than the 24000 it expands to, because
 /// `accepts` compares it against the rate in the mime type a caller hands
@@ -46,6 +45,7 @@ pub(super) fn test_output_audio() -> (OutputAudio, mpsc::Receiver<QueuedOutputFr
             ),
             GEMINI_OUTPUT_AUDIO_SAMPLE_RATE,
             frames,
+            "test-room".to_string(),
         ),
         queued_frames,
     )

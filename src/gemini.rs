@@ -30,6 +30,7 @@ mod pressure;
 mod report_calls;
 mod setup;
 mod socket;
+mod tool_ack;
 pub use credentials::GeminiKeys;
 #[cfg(test)]
 pub(crate) use lifecycle::{
@@ -62,6 +63,7 @@ pub(crate) use report_calls::{
     ReportMaterial, ReportRun, generate_report_with_keys, is_report_schema_failure,
     report_regeneration_retry_after,
 };
+use tool_ack::tool_ack_pcm;
 #[cfg(test)]
 use {
     http_calls::{
@@ -1078,31 +1080,6 @@ async fn tool_ack_clip_at(
     )
     .await?;
     tool_ack_pcm(&response, sample_rate)
-}
-
-/// The PCM in a speech response, refusing anything but raw 16-bit samples at
-/// the output track's rate: a container or a codec would play as noise.
-fn tool_ack_pcm(
-    response: &Value,
-    sample_rate: u32,
-) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
-    let data = &response["candidates"][0]["content"]["parts"][0]["inlineData"];
-
-    // Media types are case-insensitive, and the speech model answers in lower
-    // case: "audio/l16; rate=24000; channels=1".
-    let mime = data["mimeType"].as_str().unwrap_or_default();
-    let lower = mime.to_ascii_lowercase();
-    let raw = lower.starts_with("audio/l16") || lower.starts_with("audio/pcm");
-    let rate = format!("rate={sample_rate}");
-    if !raw || !lower.split(';').any(|param| param.trim() == rate) {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("acknowledgement audio is {mime:?}, not {sample_rate} Hz PCM"),
-        )
-        .into());
-    }
-    let encoded = data["data"].as_str().unwrap_or_default();
-    Ok(STANDARD.decode(encoded)?)
 }
 
 /// No `?key=` here on purpose. A `reqwest` error Displays the URL it was built

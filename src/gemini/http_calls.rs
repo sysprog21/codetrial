@@ -218,6 +218,53 @@ pub(super) fn response_text(
     })
 }
 
+/// The most of an answer read before it is refused. A report is cut at 256 KiB
+/// of text later; this is the envelope around it (candidates, usage, thinking
+/// metadata), with room to spare, and exists so that an endpoint streaming
+/// without end cannot grow the buffer until the request timeout.
+const MAX_RESPONSE_BODY_BYTES: usize = 4 * 1024 * 1024;
+
+/// The stage a failed read of an answer's body is logged under: the size cap is
+/// the one error this module makes itself, a body that would not decode is the
+/// `reqwest` decode error, and anything else is the read itself failing, a
+/// reset or a timeout, which says nothing about the body.
+pub(super) fn body_stage(error: &(dyn std::error::Error + 'static)) -> &'static str {
+    if error.is::<io::Error>() {
+        "body_limit"
+    } else if error
+        .downcast_ref::<reqwest::Error>()
+        .is_some_and(reqwest::Error::is_decode)
+    {
+        "decode"
+    } else {
+        "body_read"
+    }
+}
+
+/// The answer's JSON, read a chunk at a time so the size is checked before it
+/// is held, not after.
+async fn read_json_capped(
+    mut response: reqwest::Response,
+) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await? {
+        if body.len() + chunk.len() > MAX_RESPONSE_BODY_BYTES {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("response exceeds {MAX_RESPONSE_BODY_BYTES} bytes"),
+            )
+            .into());
+        }
+        body.extend_from_slice(&chunk);
+    }
+
+    // Decoded by reqwest from the bytes already held, so a malformed answer
+    // still surfaces as the decode failure the diagnostics classify.
+    Ok(reqwest::Response::from(axum::http::Response::new(body))
+        .json::<Value>()
+        .await?)
+}
+
 /// The transport half of `generate_content_once`, for a caller that reads
 /// something other than text out of the answer.
 pub(super) async fn post_generate_content(
@@ -238,15 +285,14 @@ pub(super) async fn post_generate_content(
         .inspect_err(|error| observe_http_failure(error, "send", started, timeout))?;
     let status = response.status();
     if !status.is_success() {
-        let body = response.json::<Value>().await.unwrap_or(Value::Null);
+        let body = read_json_capped(response).await.unwrap_or(Value::Null);
         let failure = ApiFailure::from_response(status.as_u16(), &body);
         observe_http_failure(&failure, "http_status", started, timeout);
         return Err(failure.into());
     }
-    let response = response
-        .json::<Value>()
-        .await
-        .inspect_err(|error| observe_http_failure(error, "decode", started, timeout))?;
+    let response = read_json_capped(response).await.inspect_err(|error| {
+        observe_http_failure(error.as_ref(), body_stage(error.as_ref()), started, timeout);
+    })?;
     let usage = response
         .get("usageMetadata")
         .map(TokenUsage::from_metadata)
@@ -254,3 +300,7 @@ pub(super) async fn post_generate_content(
     eprintln!("gemini {what} usage {}", usage.log_fields());
     Ok(response)
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/gemini/http_stage.rs"]
+mod stage_tests;

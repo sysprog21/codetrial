@@ -641,6 +641,57 @@ async fn a_tail_short_of_a_frame_is_padded_out() {
     assert_eq!(output.tail_padding(), None);
 }
 
+/// A reply that outruns the worker by more than the queue holds is cut short,
+/// not fatal: the error used to leave the room loop and end the interview with
+/// no report, because Gemini can send faster than real time and the worker
+/// drains at real time. Only frames that were queued count toward playout.
+#[tokio::test]
+async fn a_full_output_queue_drops_the_rest_of_the_reply_and_carries_on() {
+    let (mut output, mut frames) = test_output_audio();
+    let before = output.playout_deadline;
+    let queued = output
+        .capture(&[1; 480 * 6], "audio/pcm;rate=24000")
+        .await
+        .expect("a full queue is not an error");
+    assert!(queued, "the frames that fit were queued");
+    assert_eq!(output.queued_frames(), 4);
+    assert!(
+        output.playout_deadline.saturating_duration_since(before) < Duration::from_millis(45),
+        "four frames are 40 ms of playout; a dropped frame adds none"
+    );
+
+    assert!(
+        !output
+            .capture(&[1; 480], "audio/pcm;rate=24000")
+            .await
+            .unwrap(),
+        "a chunk that finds the queue already full queued nothing"
+    );
+
+    while frames.try_recv().is_ok() {}
+    assert!(
+        output
+            .capture(&[1; 480], "audio/pcm;rate=24000")
+            .await
+            .unwrap(),
+        "the next chunk is queued once the worker has caught up"
+    );
+}
+
+/// A worker that has stopped is the other way a send fails, and that one is
+/// still an error the caller must see.
+#[tokio::test]
+async fn a_stopped_output_worker_is_still_an_error() {
+    let (mut output, frames) = test_output_audio();
+    drop(frames);
+    assert!(
+        output
+            .capture(&[1; 480], "audio/pcm;rate=24000")
+            .await
+            .is_err()
+    );
+}
+
 #[tokio::test]
 async fn latency_marker_follows_only_the_first_complete_frame() {
     let (mut output, mut frames) = test_output_audio();
@@ -1070,4 +1121,42 @@ async fn stacked_sdk_and_ingress_stores_exceed_the_local_age_bound_in_capture_ag
     assert!(ingress.pop(drained_at + Duration::from_secs(40)).is_none());
     assert_eq!(ingress.dropped_bytes, 4000 * 320);
     assert!(ingress.is_empty());
+}
+
+/// A queue that stays full says so once per backlog, naming the room, through
+/// the path that fills it. A backlog ends when the worker has taken everything:
+/// under sustained overload it frees a slot between chunks, and a line each
+/// time would repeat for every chunk of the reply.
+#[tokio::test]
+async fn a_full_output_queue_is_reported_once_per_backlog_with_its_room() {
+    let (mut output, mut frames) = test_output_audio();
+    let mime = format!("audio/pcm;rate={GEMINI_OUTPUT_AUDIO_SAMPLE_RATE}");
+    // Ten frames into a queue of four.
+    let chunk = vec![0_u8; 240 * 2 * 10];
+
+    output.capture(&chunk, &mime).await.unwrap();
+    assert_eq!(output.queue_full_lines, 1, "the first drop is reported");
+    assert!(output.queue_full_line().contains("room=test-room"));
+
+    output.capture(&chunk, &mime).await.unwrap();
+    assert_eq!(
+        output.queue_full_lines, 1,
+        "the same backlog is not repeated"
+    );
+
+    // The worker frees one slot between chunks: still the same backlog.
+    frames.try_recv().unwrap();
+    output.capture(&chunk, &mime).await.unwrap();
+    assert_eq!(
+        output.queue_full_lines, 1,
+        "sustained overload is one backlog"
+    );
+
+    // Once everything was taken, the next full queue is a new backlog.
+    while frames.try_recv().is_ok() {}
+    output.capture(&chunk, &mime).await.unwrap();
+    assert_eq!(
+        output.queue_full_lines, 2,
+        "a drained queue ends the backlog"
+    );
 }

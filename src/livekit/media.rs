@@ -416,6 +416,12 @@ pub(super) struct OutputAudio {
     pub(super) pending_bytes: Vec<u8>,
     pub(super) playout_deadline: Instant,
     pub(super) frames: mpsc::Sender<QueuedOutputFrame>,
+    /// Names the room on the one line this writes about a full queue.
+    room_name: String,
+    /// Full-queue lines written, one per backlog, and whether this backlog has
+    /// had its line. A backlog ends when the worker has taken every frame.
+    queue_full_lines: u32,
+    backlog_reported: bool,
     pub(super) output_cancellation: CancellationToken,
 }
 
@@ -469,6 +475,7 @@ impl OutputAudio {
         source: NativeAudioSource,
         sample_rate: u32,
         frames: mpsc::Sender<QueuedOutputFrame>,
+        room_name: String,
     ) -> Self {
         Self {
             source,
@@ -480,8 +487,31 @@ impl OutputAudio {
             pending_bytes: Vec::new(),
             playout_deadline: Instant::now(),
             frames,
+            room_name,
+            queue_full_lines: 0,
+            backlog_reported: false,
             output_cancellation: CancellationToken::new(),
         }
+    }
+
+    /// The line for a full worker queue, which names the room since one
+    /// process hosts several.
+    fn queue_full_line(&self) -> String {
+        format!(
+            "output audio worker queue full room={}; the rest of this chunk is dropped",
+            self.room_name
+        )
+    }
+
+    /// The line to write when the worker's queue is full, or `None` while this
+    /// backlog already had one: a line per dropped chunk would repeat for every
+    /// audio event of a reply.
+    fn note_queue_full(&mut self) -> Option<String> {
+        if std::mem::replace(&mut self.backlog_reported, true) {
+            return None;
+        }
+        self.queue_full_lines += 1;
+        Some(self.queue_full_line())
     }
 
     pub(super) fn interrupt(&mut self) {
@@ -586,14 +616,19 @@ impl OutputAudio {
             return Ok(false);
         }
         let mut queued = false;
+
+        // The worker has taken everything, so a full queue from here on is a
+        // new backlog. Under sustained overload it frees one slot at a time and
+        // never gets here, which is one backlog and one line.
+        if self.queued_frames() == 0 {
+            self.backlog_reported = false;
+        }
         for samples in take_pcm16_frames(
             bytes,
             self.sample_rate,
             LIVEKIT_OUTPUT_CHANNELS,
             &mut self.pending_bytes,
         ) {
-            queued = true;
-
             // Ten milliseconds, which is what `take_pcm16_frames` cut this
             // into. Dividing the sample count by the channel count says the
             // same thing, but the channel count is one, so it says it with an
@@ -602,22 +637,38 @@ impl OutputAudio {
             let samples_per_channel = self.sample_rate / 100;
             let frame_duration =
                 Duration::from_secs_f64(samples_per_channel as f64 / self.sample_rate as f64);
-            self.playout_deadline = self.playout_deadline.max(Instant::now()) + frame_duration;
             let frame = QueuedOutputFrame {
                 output_cancellation: self.output_cancellation.clone(),
                 samples,
                 latency_marker: self.latency_marker.take(),
             };
-            if let Err(error) = self.frames.try_send(frame) {
-                let message = match &error {
-                    mpsc::error::TrySendError::Full(_) => "output audio worker queue full",
-                    mpsc::error::TrySendError::Closed(_) => "output audio worker stopped",
-                };
-                if let Some(marker) = error.into_inner().latency_marker {
-                    let record = enqueue_failure_record(marker, Instant::now());
-                    super::latency::log(&record);
+            match self.frames.try_send(frame) {
+                Ok(()) => {
+                    queued = true;
+                    self.playout_deadline =
+                        self.playout_deadline.max(Instant::now()) + frame_duration;
                 }
-                return Err(std::io::Error::other(message).into());
+                Err(error) => {
+                    let stopped = matches!(error, mpsc::error::TrySendError::Closed(_));
+                    if let Some(marker) = error.into_inner().latency_marker {
+                        let record = enqueue_failure_record(marker, Instant::now());
+                        super::latency::log(&record);
+                    }
+                    if stopped {
+                        return Err(std::io::Error::other("output audio worker stopped").into());
+                    }
+
+                    // The worker plays at real time and Gemini can send faster,
+                    // so a long reply can fill the queue. Drop the rest of this
+                    // chunk: an error here leaves the room loop and ends the
+                    // interview with no report. Frames that were not queued add
+                    // nothing to the playout deadline. A later chunk of the
+                    // reply is queued again once the worker frees space.
+                    if let Some(line) = self.note_queue_full() {
+                        eprintln!("{line}");
+                    }
+                    break;
+                }
             }
         }
         Ok(queued)
@@ -781,7 +832,7 @@ pub(super) async fn publish_output_audio(
         sample_rate,
         queued_frames,
     ));
-    Ok(OutputAudio::new(source, sample_rate, frames))
+    Ok(OutputAudio::new(source, sample_rate, frames, room.name()))
 }
 
 /// Root-mean-square level, in PCM16 units, above which a frame counts as the
