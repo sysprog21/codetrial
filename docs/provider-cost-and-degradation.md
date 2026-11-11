@@ -274,7 +274,8 @@ keeps running. Both share the ceiling of 48 calls per interview, of which a
 coding round at a typed editor leaves 8 for a behavioral round still to come.
 Each reads at most 6 KiB of transcript tail and 6 KiB of editor. A rate limit on
 a judgment does not cool the key, so the judge cannot leave the final report
-without one.
+without one, and neither does a rate limit on a peer transcription, which
+shares the report keys with the interviews running beside it.
 
 ## Candidate absence and room lifetime
 
