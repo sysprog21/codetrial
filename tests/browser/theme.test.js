@@ -155,6 +155,24 @@ after(async () => {
   await new Promise((closed) => (server ? server.close(closed) : closed()));
 });
 
+test("task dialogs keep their backdrop in both system themes", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  for (const colorScheme of ["light", "dark"]) {
+    const page = await browser.newPage({ colorScheme });
+    t.after(() => page.close());
+    await page.route(/\.js(\?|$)/, (route) => route.abort());
+    await page.goto(`${base}/task.html`, { waitUntil: "domcontentloaded" });
+    const dialog = page.locator("#confirm");
+    await dialog.evaluate((node) => node.showModal());
+    assert.equal(
+      await dialog.evaluate(
+        (node) => getComputedStyle(node, "::backdrop").backgroundColor,
+      ),
+      "rgba(0, 0, 0, 0.65)",
+    );
+  }
+});
+
 test("the task editor stays dark on a light system while the interview's follows it", async (t) => {
   if (!browser) return t.skip("playwright chromium unavailable");
   const editorBackground = async (path) => {

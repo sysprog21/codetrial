@@ -1,4 +1,4 @@
-import { mountProblemGrid } from "./problem-grid.js";
+import { mountProblemGrid, setProblemPickerOpener } from "./problem-grid.js";
 import { resetAssignments } from "./selection.js";
 import {
   COMMUNICATION_SCORE_LABEL,
@@ -339,6 +339,12 @@ async function loadTopics() {
 nodes.problemPicker.addEventListener("toggle", () => {
   if (nodes.problemPicker.open) void loadTopics();
 });
+document
+  .querySelector(".problem-picker-close")
+  .addEventListener("click", () => {
+    nodes.problemPicker.open = false;
+    focusProblemPicker();
+  });
 const editorControls = [...document.querySelectorAll('[name="editor-option"]')];
 const savedEditorOptions = loadEditorOptions();
 for (const input of editorControls) {
@@ -397,7 +403,7 @@ for (const card of cards) {
         setProblem(null);
         nodes.recommendation.textContent = "";
       }
-      if (card.button.hidden) focusPickerSummary();
+      if (card.button.hidden) focusProblemPicker();
       else if (hadFocus) card.button.focus();
       return;
     }
@@ -410,10 +416,11 @@ for (const card of cards) {
     nodes.recommendation.textContent = `Selected problem: ${title(card)}.`;
 
     // Close the picker after a manual problem selection.
+    setProblemPickerOpener(null);
     nodes.problemPicker.open = false;
 
     // Keep keyboard focus on a visible control.
-    focusPickerSummary();
+    focusProblemPicker();
 
     // Scroll to the selected problem after the picker collapses.
     requestAnimationFrame(() => {
@@ -520,7 +527,7 @@ function renderPracticeList() {
   if (nodes.problemOnlyList.checked) applyTitleSearchFilters();
   nodes.practiceListStatus.textContent = count
     ? `${count} problem${count === 1 ? "" : "s"} in your list. Draws use all checked problems, regardless of filters. ${storageNote}`
-    : `0 problems in your list. Open the problem picker below to check problems. ${storageNote}`;
+    : `0 problems in your list. Check problems in the problem picker to add them. ${storageNote}`;
 }
 
 for (const input of levels) {
@@ -1150,8 +1157,8 @@ function settle() {
   // still stands, so the button the account refresh held down needs releasing
   // here rather than there.
   syncLobbyControls();
-  // If the card that held focus got hidden, recover focus to the picker summary
-  if (focusedCard?.button.hidden) focusPickerSummary();
+  // If the focused card got hidden, recover focus to a visible picker control.
+  if (focusedCard?.button.hidden) focusProblemPicker();
 }
 
 async function loadAccount(generation) {
@@ -2054,8 +2061,10 @@ function showProgress(entries, suffix) {
   renderProgress();
 }
 
-function focusPickerSummary() {
-  nodes.problemPicker.querySelector("summary").focus();
+function focusProblemPicker() {
+  nodes.problemPicker
+    .querySelector(nodes.problemPicker.open ? "input[type=search]" : "summary")
+    .focus();
 }
 
 function weakTopicFocused() {
@@ -2066,7 +2075,7 @@ function weakTopicFocused() {
 }
 
 function hideRecentPerformance() {
-  if (weakTopicFocused()) focusPickerSummary();
+  if (weakTopicFocused()) focusProblemPicker();
   nodes.recentPerformance.hidden = true;
   nodes.recentPerformanceSummary.textContent = "";
   nodes.recentWeakTopics.textContent = "";
@@ -2081,12 +2090,15 @@ function weakTopicButton(topic) {
   button.dataset.topic = topic;
   button.setAttribute("aria-label", `Filter problems by ${topic}`);
   button.addEventListener("click", () => {
+    setProblemPickerOpener(button);
     nodes.problemPicker.open = true;
     if (nodes.problemTopic.value !== topic) {
       nodes.problemTopic.value = topic;
       nodes.problemTopic.dispatchEvent(new Event("change", { bubbles: true }));
     }
-    nodes.problemTopic.focus();
+    nodes.problemTopic.focus({
+      preventScroll: typeof window.HTMLDialogElement === "function",
+    });
   });
   return button;
 }
@@ -2160,7 +2172,7 @@ function renderRecentPerformance() {
   nodes.recentPerformance.hidden = false;
   if (focusedTopic !== undefined) {
     if (restoredFocus) restoredFocus.focus();
-    else focusPickerSummary();
+    else focusProblemPicker();
   }
 }
 
