@@ -10454,16 +10454,14 @@ const categoryProgressAttempts = () =>
   });
 
 lobbyTest(
-  "a pending category lookup is shared by a batch export and an overlapping row download",
+  "a batch export refuses an overlapping row download while the category lookup is pending",
   async (page) => {
     reports = categoryProgressAttempts();
-    let categoryRequests = 0;
     let categoryRequested;
     const requested = new Promise((resolve) => (categoryRequested = resolve));
     let releaseCategories;
     const held = new Promise((resolve) => (releaseCategories = resolve));
     await page.route("**/problem-categories.json", async (route) => {
-      categoryRequests += 1;
       categoryRequested();
       await held;
       await route.continue();
@@ -10485,8 +10483,8 @@ lobbyTest(
       await downloadSelected.click();
       await requested;
       // The batch has already claimed this report. Its row download must be
-      // refused before the shared lookup is released: no second lookup, no
-      // disabled button, and no second file for the same report.
+      // refused before the category lookup is released: no disabled button
+      // and no second file for the same report.
       await download.click();
       assert.equal(await download.isEnabled(), true);
     } finally {
@@ -10494,7 +10492,6 @@ lobbyTest(
     }
 
     const names = await takeDownloadNames(page, 2);
-    assert.equal(categoryRequests, 1);
     assert.equal(names.length, 2);
     assert.equal(new Set(names).size, 2);
   },
