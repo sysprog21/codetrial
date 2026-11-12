@@ -179,6 +179,7 @@ fn room_service_credential_accepted(
 struct RoomService {
     url: String,
     seen: Arc<Mutex<Vec<(String, String)>>>,
+    tokens: Arc<Mutex<Vec<String>>>,
 }
 
 impl RoomService {
@@ -187,6 +188,8 @@ impl RoomService {
         let url = format!("http://{}", listener.local_addr().unwrap());
         let seen = Arc::new(Mutex::new(Vec::new()));
         let recorded = Arc::clone(&seen);
+        let tokens = Arc::new(Mutex::new(Vec::new()));
+        let recorded_tokens = Arc::clone(&tokens);
         tokio::spawn(async move {
             let mut replies = replies.into_iter().peekable();
             let mut last = (200, "{}");
@@ -226,6 +229,9 @@ impl RoomService {
                 }
                 let accepted =
                     room_service_credential_accepted(&head, &path, STUB_API_KEY, STUB_API_SECRET);
+                if let Some(token) = bearer_token(&head) {
+                    recorded_tokens.lock().unwrap().push(token.to_owned());
+                }
                 recorded
                     .lock()
                     .unwrap()
@@ -250,7 +256,7 @@ impl RoomService {
                 let _ = socket.flush().await;
             }
         });
-        Self { url, seen }
+        Self { url, seen, tokens }
     }
 
     fn config(&self) -> AgentConfig {
@@ -263,6 +269,21 @@ impl RoomService {
         .unwrap()
     }
 
+    /// The `exp` claim of every credential a call carried.
+    fn expiries(&self) -> Vec<u64> {
+        self.tokens
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|token| {
+                let payload = token.split('.').nth(1)?;
+                let claims: serde_json::Value =
+                    serde_json::from_slice(&URL_SAFE_NO_PAD.decode(payload).ok()?).ok()?;
+                claims.get("exp")?.as_u64()
+            })
+            .collect()
+    }
+
     fn requests(&self) -> Vec<(String, String)> {
         self.seen.lock().unwrap().clone()
     }
@@ -272,7 +293,7 @@ impl RoomService {
 ///
 /// The Twirp path is a contract with LiveKit that no test named: a wrong
 /// method segment reaches a real server and 404s, which
-/// `is_participant_gone` then has to be careful not to read as a departed
+/// `is_twirp_not_found` then has to be careful not to read as a departed
 /// participant. The success path returned the parsed body and the failure
 /// path had to keep the method, the status and the body, because that
 /// string is the only thing the caller can tell them apart by.
@@ -540,6 +561,59 @@ async fn a_late_duplicate_is_evicted_by_name() {
     );
 }
 
+/// The room loop does not wait for the eviction. It is a call to LiveKit with
+/// a timeout of thirty seconds, and the loop drains audio and fires the hard
+/// deadline, so the helper returns at once and the removal happens on its own.
+#[tokio::test]
+async fn a_duplicate_is_evicted_without_the_caller_waiting() {
+    let service = RoomService::start(vec![(200, "{}")]).await;
+
+    spawn_duplicate_eviction(
+        &service.config(),
+        "interview-abc12345",
+        "agent-late".to_owned(),
+    );
+
+    let arrived = async {
+        loop {
+            if let Some(request) = service.requests().into_iter().next() {
+                return request;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    };
+    let (path, body) = tokio::time::timeout(std::time::Duration::from_secs(5), arrived)
+        .await
+        .expect("the removal is made in the background");
+    assert_eq!(path, "/twirp/livekit.RoomService/RemoveParticipant");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&body).unwrap()["identity"],
+        "agent-late"
+    );
+}
+
+/// The room loop reaches the eviction only through the helper. A live room
+/// cannot be built here, so the wiring is pinned in the source: an inline
+/// await would put a thirty second call back in the loop with no test failing.
+#[test]
+fn the_room_loop_evicts_a_duplicate_only_through_the_helper() {
+    let hub = include_str!("../../../src/livekit.rs");
+    assert_eq!(hub.matches("spawn_duplicate_eviction(config").count(), 1);
+    assert!(
+        !hub.contains("evict_duplicate_agent(config"),
+        "the loop must not await the removal itself"
+    );
+
+    // The credential it signs lives five minutes, so the helper reads the clock
+    // itself: a time handed down from when the interview began would have
+    // lapsed by the time a duplicate joins.
+    let helper = include_str!("../../../src/livekit/rooms.rs")
+        .split("fn spawn_duplicate_eviction")
+        .nth(1)
+        .unwrap();
+    assert!(helper.contains("crate::current_epoch_seconds()"));
+}
+
 /// A removal that finds nobody is done, and every other refusal is not.
 ///
 /// The predicate is unit tested above; this is the path that consults it,
@@ -594,14 +668,9 @@ async fn isolation_removes_a_duplicate_and_confirms_the_room_is_clear() {
     ])
     .await;
 
-    isolate_local_agent(
-        &service.config(),
-        "interview-abc12345",
-        "agent-me",
-        1_700_000_000,
-    )
-    .await
-    .unwrap();
+    isolate_local_agent(&service.config(), "interview-abc12345", "agent-me")
+        .await
+        .unwrap();
 
     let methods: Vec<String> = service
         .requests()
@@ -617,6 +686,50 @@ async fn isolation_removes_a_duplicate_and_confirms_the_room_is_clear() {
         ],
         "it lists, removes what it found, and lists again to confirm"
     );
+}
+
+/// Isolation runs after the wait for the candidate, so what it signs is dated
+/// when it runs and not when the interview began: a credential that lives five
+/// minutes, signed before a five minute wait, is refused by the first call.
+#[tokio::test]
+async fn isolation_signs_with_a_credential_that_has_not_lapsed() {
+    let service = RoomService::start(vec![(200, r#"{"participants":[]}"#)]).await;
+
+    isolate_local_agent(&service.config(), "interview-abc12345", "agent-me")
+        .await
+        .unwrap();
+
+    let now = crate::current_epoch_seconds();
+    let expiries = service.expiries();
+    assert!(!expiries.is_empty());
+    assert!(
+        expiries.iter().all(|exp| *exp > now),
+        "{expiries:?} vs {now}"
+    );
+}
+
+/// Evictions run in a task of their own, outliving the arm of the loop that
+/// names the room, and several rooms share a process. Both lines say whose
+/// room a duplicate was in.
+#[test]
+fn every_line_on_the_eviction_path_names_the_room() {
+    for line in [
+        removing_duplicate_line("interview-abc12345", "agent-old"),
+        participant_gone_line("interview-abc12345", "agent-old"),
+        duplicates_remained_line("interview-abc12345", &["agent-old".to_string()]),
+    ] {
+        assert!(line.contains("room=interview-abc12345"), "{line}");
+    }
+}
+
+#[test]
+fn the_eviction_lines_name_the_room() {
+    let removing = eviction_line("interview-abc12345", "agent-late");
+    assert!(removing.contains("room=interview-abc12345"), "{removing}");
+    assert!(removing.contains("identity=agent-late"), "{removing}");
+    let failed = eviction_failure_line("interview-abc12345", "timed out");
+    assert!(failed.contains("room=interview-abc12345"), "{failed}");
+    assert!(failed.contains("timed out"), "{failed}");
 }
 
 #[test]
@@ -714,46 +827,6 @@ fn livekit_http_base_rewrites_a_scheme_in_any_case() {
         livekit_http_base("HTTPS://example.livekit.cloud"),
         "https://example.livekit.cloud"
     );
-}
-
-/// All three parts are required, and nothing said so.
-///
-/// The predicate exists because the opposite shipped. A removal that finds
-/// nothing to remove has done what it was asked to do, and this used to
-/// propagate the 404 instead: the agent greeted the candidate, tried to
-/// evict a duplicate that had already left on its own, took the `not_found`
-/// as fatal, and exited. The candidate was left in a room with no
-/// interviewer, the status pill correctly reading "Waiting" and nothing on
-/// screen explaining why. Losing that race is the common case, not the
-/// exceptional one, which is why the first assertion here is the one that
-/// has to keep passing.
-///
-/// The three refusals are the other half. Each conjunct is load bearing for
-/// a different reason: the method keeps a 404 from any other RoomService
-/// call fatal, the status distinguishes a refusal from a failure, and the
-/// Twirp code separates a participant that is gone from an HTML error page
-/// at the wrong route. Dropping any one of them widens this to a
-/// participant that is still there, and the caller treats that as a
-/// successful eviction.
-///
-/// Each case therefore withholds exactly one part and supplies the other
-/// two, which is what makes them separate the conjuncts. A case missing two
-/// at once is refused whichever conjunct is dropped, so it pins nothing.
-#[test]
-fn a_participant_is_gone_only_when_all_three_parts_say_so() {
-    let gone = "RemoveParticipant failed: 404 {\"code\":\"not_found\"}";
-    assert!(is_participant_gone(gone));
-
-    for missing in [
-        // Another RoomService call answering 404 is still fatal.
-        "ListParticipants failed: 404 {\"code\":\"not_found\"}",
-        // The right call and the right code, but not a refusal.
-        "RemoveParticipant failed: 500 {\"code\":\"not_found\"}",
-        // A 404 from the wrong route, which is an error page and not Twirp.
-        "RemoveParticipant failed: 404 <html>no such route</html>",
-    ] {
-        assert!(!is_participant_gone(missing), "{missing}");
-    }
 }
 
 #[test]

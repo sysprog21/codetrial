@@ -491,3 +491,32 @@ async fn peer_waiting_room_provisioning_reuses_idempotent_bounded_transport() {
     assert!(error.contains("CreateRoom"));
     assert_eq!(service.requests().len(), 1);
 }
+
+/// A wrong host answers with a whole HTML page, and the error is logged and
+/// returned to callers, so the answer is cut to a line.
+#[test]
+fn a_failed_call_quotes_a_bounded_answer() {
+    let page = format!("<html>{}</html>", "x".repeat(10_000));
+    let message = room_service_failure("DeleteRoom", StatusCode::BAD_GATEWAY, &page);
+    assert!(
+        message.starts_with("LiveKit RoomService DeleteRoom failed: 502 Bad Gateway <html>"),
+        "{message}"
+    );
+    assert!(message.ends_with("..."), "{message}");
+    assert!(message.len() < 400, "{} bytes", message.len());
+
+    // The cut falls between 200 and 201 characters, and counts characters, not
+    // the bytes a multi-byte one takes.
+    let whole = "é".repeat(200);
+    let message = room_service_failure("DeleteRoom", StatusCode::BAD_GATEWAY, &whole);
+    assert!(message.ends_with(&whole), "{message}");
+    let over = "é".repeat(201);
+    let message = room_service_failure("DeleteRoom", StatusCode::BAD_GATEWAY, &over);
+    assert!(message.ends_with(&format!("{whole}...")), "{message}");
+
+    let short = room_service_failure("DeleteRoom", StatusCode::NOT_FOUND, r#"{"code":"x"}"#);
+    assert_eq!(
+        short,
+        r#"LiveKit RoomService DeleteRoom failed: 404 Not Found {"code":"x"}"#
+    );
+}

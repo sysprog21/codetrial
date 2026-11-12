@@ -718,7 +718,9 @@ Withdrawn consent closes ingest for good, and closes it in the same shape as an
 id that was never this account's. A browser that buffered events before the
 withdrawal will try to flush them afterwards, and consent that stops the video
 while the replay keeps growing is not withdrawal. What is already stored is the
-deletion path's to remove, not ingest's.
+deletion path's to remove, not ingest's, with one exception: an interview that
+has no recording has no deletion to wait for, so withdrawing consent removes its
+replay in the same transaction.
 
 Cross-account is `404` rather than `403`, the same as everywhere else an
 interview id arrives from a browser: an account that does not own an interview
@@ -1233,7 +1235,9 @@ Deletion is four steps, in this order, each written down as it succeeds:
 
 1. Revoke the reader permission, then clear `drive_permission_id`.
 2. Delete the Shared Drive file, then clear `drive_file_id`.
-3. Delete the staged object, then clear `gcs_object`.
+3. Delete the staged object, then clear `gcs_object`. A row that never staged
+   has no `gcs_object`, and the object is deleted at the path its id derives; a
+   missing file counts as deleted.
 4. Tombstone the row, which deletes the interview's replay events in the same
    write.
 
@@ -1242,7 +1246,10 @@ could not remove still on the row, and the ones it did remove gone. That is what
 makes the next attempt a resumption rather than a repeat: a second revoke on a
 permission that is already gone is a call that fails forever. The row is the
 progress, and every step is idempotent by construction, because a handle that is
-null is a step nothing repeats.
+null is a step nothing repeats. The one exception is the staged object of a row
+that never staged: its handle is null from the start, and the object is
+deleted at the path its id derives on every pass, so a deletion needs the
+storage credentials even for a row that never had media.
 
 A step whose remote call worked and whose handle could not be cleared is
 reported as a failure too. The next pass repeats that step, which answers `404`
@@ -1260,6 +1267,11 @@ still `transferring` is being uploaded, and withdrawal moves it out of that
 state on its own. A recording that failed for some other reason and was never
 delivered has no deadline at all: its staged object is the bucket's lifecycle
 rule to collect, which is why that rule is provisioned rather than optional.
+The one failure that can leave a Drive file, `drive_failed`, is the exception:
+its row is due the retention window after its last failure, which is also how
+long an operator has to retry the delivery before the deletion pass takes the
+file, the address and the replay. A retry that fails again starts the window
+over.
 
 `cleanup_failed` is an alert, not a state anything retries silently. It is also
 picked up by the next retention pass, so an outage that ends means the deletion

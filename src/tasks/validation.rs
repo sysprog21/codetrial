@@ -187,8 +187,25 @@ pub(super) fn bank(problem: &Value, judge: &Value, variant: &Value) -> Result<()
             text(value)?;
         }
     }
+
+    // The page reads the argument an index names, so one past the parameters is
+    // a task that fails every case rather than one worth loading.
+    let arity = judge
+        .get("paramNames")
+        .and_then(Value::as_array)
+        .map(Vec::len);
+
+    // `outputParam` is left to the compiled-language check, which already
+    // bounds it where a typed harness needs it.
     for key in ["outputParam", "outputPrefixParam", "cyclePosParam"] {
-        if judge.get(key).is_some_and(|value| value.as_u64().is_none()) {
+        let Some(value) = judge.get(key) else {
+            continue;
+        };
+        let named = value.as_u64().and_then(|index| usize::try_from(index).ok());
+        let bounded = key != "outputParam";
+        if named.is_none()
+            || (bounded && named.is_some_and(|index| arity.is_some_and(|arity| index >= arity)))
+        {
             return Err(invalid("invalid judge parameter index"));
         }
     }

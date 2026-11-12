@@ -571,7 +571,36 @@ fn a_tool_acknowledgement_is_taken_only_at_the_output_rate() {
     assert!(tool_ack_pcm(&response("audio/L16;codec=pcm;rate=16000"), 24_000).is_err());
     assert!(tool_ack_pcm(&response("audio/L16;codec=pcm;rate=240000"), 24_000).is_err());
     assert!(tool_ack_pcm(&response("audio/wav;rate=24000"), 24_000).is_err());
+    // A codec whose name merely starts with a raw type is not that type.
+    assert!(tool_ack_pcm(&response("audio/pcmu;rate=24000"), 24_000).is_err());
+    assert!(tool_ack_pcm(&response("audio/pcma;rate=24000"), 24_000).is_err());
+    assert!(tool_ack_pcm(&response("audio/l16x;rate=24000"), 24_000).is_err());
     assert!(tool_ack_pcm(&json!({}), 24_000).is_err());
+}
+
+/// "Mm, okay." is a second of speech. A missing or empty clip would count as
+/// success and play as silence, and a clip of minutes is not an
+/// acknowledgement, so both are refused.
+#[test]
+fn a_tool_acknowledgement_has_a_bounded_length() {
+    let clip = |bytes: Vec<u8>| {
+        json!({"candidates": [{"content": {"parts": [{"inlineData": {
+            "mimeType": "audio/pcm;rate=24000", "data": STANDARD.encode(bytes)
+        }}]}}]})
+    };
+    assert!(tool_ack_pcm(&clip(Vec::new()), 24_000).is_err());
+    assert!(
+        tool_ack_pcm(
+            &json!({"candidates": [{"content": {"parts": [{"inlineData": {
+                "mimeType": "audio/pcm;rate=24000"
+            }}]}}]}),
+            24_000
+        )
+        .is_err()
+    );
+    let ten_seconds = 24_000 * 2 * 10;
+    assert!(tool_ack_pcm(&clip(vec![1; ten_seconds]), 24_000).is_ok());
+    assert!(tool_ack_pcm(&clip(vec![1; ten_seconds + 2]), 24_000).is_err());
 }
 
 /// The acknowledgement is asked for in the interview's accent when it has one,
@@ -1386,4 +1415,45 @@ async fn open_fixture_at(
     )
     .await
     .expect("the fixture provider must complete setup")
+}
+
+/// The size is checked as the body arrives, so an endpoint that never stops
+/// cannot make this buffer all of it before the report's own cap applies.
+#[tokio::test]
+async fn an_oversized_answer_is_refused_while_it_is_read() {
+    let padding = "x".repeat(5 * 1024 * 1024);
+    let app =
+        axum::Router::new().route(
+            "/",
+            axum::routing::post(move || {
+                let padding = padding.clone();
+                async move {
+                    axum::Json(json!({"candidates":[{"content":{"parts":[{"text":padding}]}}]}))
+                }
+            }),
+        );
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    let error = post_generate_content(
+        "oversized-test-key",
+        &url,
+        &json!({}),
+        Duration::from_secs(20),
+        "oversized",
+    )
+    .await
+    .expect_err("an answer past the cap is refused");
+    assert!(error.to_string().contains("exceeds"), "{error}");
+
+    // A refusal by us is told apart from a body that would not decode, in the
+    // log line and in the report attempt's stage.
+    assert_eq!(super::http_calls::body_stage(error.as_ref()), "body_limit");
+    assert_eq!(
+        super::report_calls::report_attempt_failure(&Err(error)).map(|f| f.stage),
+        Some("body_limit")
+    );
+    server.abort();
 }

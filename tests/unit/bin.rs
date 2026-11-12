@@ -96,6 +96,21 @@ fn spelling_out_the_published_default_does_not_count_as_setting_one() {
     }
 }
 
+/// A count that does not parse is not "no proxy": reading `one` as zero would
+/// let a loopback bind behind a proxy pass for a local run.
+#[test]
+fn a_malformed_proxy_hop_count_is_refused_and_counts_as_a_proxy() {
+    let bad = values(&[("CODETRIAL_TRUSTED_PROXY_HOPS", "one")]);
+    assert!(matches!(
+        super::reachable_from_elsewhere(&bad, addr("127.0.0.1:3000")),
+        Some(super::Reachable::DeclaredProxy)
+    ));
+    let pool = codetrial::config::ProviderPool { providers: vec![] };
+    let error = super::web_server_config(&bad, pool, false, &super::CliOptions::default())
+        .expect_err("a malformed hop count must not start the server");
+    assert!(error.contains("CODETRIAL_TRUSTED_PROXY_HOPS"), "{error}");
+}
+
 /// A bind address cannot see a reverse proxy. Declaring hops is the
 /// operator saying requests reach this process from somewhere else, which
 /// makes a loopback socket as public as the proxy in front of it.

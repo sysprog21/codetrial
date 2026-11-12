@@ -66,6 +66,16 @@ impl RoomLink {
         &self.name
     }
 
+    /// Leaves the room when `result` is an error, and hands the result back.
+    /// Dropping a room does not disconnect it, so an exit that fails after the
+    /// join would leave the candidate with a silent agent in the room.
+    pub(super) async fn close_on_error<T, E>(&self, result: Result<T, E>) -> Result<T, E> {
+        if result.is_err() {
+            super::leave_room(self).await;
+        }
+        result
+    }
+
     /// The connected room, for what only it can do: media tracks, the event
     /// stream at startup, and the report's delivery receipts. A test link has
     /// none, and reaching here from one means the test drove a path it cannot
@@ -80,6 +90,19 @@ impl RoomLink {
 
     pub(super) async fn publish_data(&self, packet: DataPacket) -> Result<(), Error> {
         self.participant().publish_data(packet).await
+    }
+
+    /// A publish the room loop awaits for a notice the interview does not
+    /// depend on. A reconnecting connection holds a publish for up to a
+    /// minute, and the loop drains audio and fires the hard deadline, so the
+    /// wait is bounded and a timeout is an error like any other failure.
+    pub(super) async fn publish_data_within_notice_limit(
+        &self,
+        packet: DataPacket,
+    ) -> Result<(), Error> {
+        tokio::time::timeout(super::RECONNECT_NOTICE_LIMIT, self.publish_data(packet))
+            .await
+            .unwrap_or_else(|_| Err("timed out".into()))
     }
 
     /// The agent participant, for a writer task that outlives one call.
@@ -363,3 +386,7 @@ pub(super) async fn observe_retry_backoff(
     })
     .await;
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/livekit/room_link.rs"]
+mod tests;

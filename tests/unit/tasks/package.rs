@@ -513,3 +513,25 @@ fn each_manifest_rule_refuses_on_its_own() {
         assert_eq!(open(&keep, vec![7; size]), expected, "{size}");
     }
 }
+
+#[test]
+fn the_site_clock_is_read_only_from_a_date_it_can_trust() {
+    let with = |value: Option<&str>| {
+        let mut headers = reqwest::header::HeaderMap::new();
+        if let Some(value) = value {
+            headers.insert(reqwest::header::DATE, value.parse().unwrap());
+        }
+        site_seconds(&headers)
+    };
+    assert_eq!(
+        with(Some("Tue, 06 Oct 2026 12:00:00 GMT")),
+        Some(parse_close("2026-10-06T12:00:00Z").unwrap())
+    );
+    assert_eq!(with(None), None, "no header");
+    assert_eq!(with(Some("yesterday")), None, "not a date");
+    assert_eq!(
+        with(Some("Fri, 01 Jan 1960 00:00:00 GMT")),
+        None,
+        "before 1970"
+    );
+}

@@ -25,7 +25,11 @@ pub(crate) async fn generate_peer_content(
         .endpoint
         .clone()
         .unwrap_or_else(|| gemini_generate_content_url(&config.model));
-    let text = side_call_once(&config.keys, &url, &request, "peer-observer", scope, true).await?;
+
+    // A rate limit does not cool the key: peer rooms share the report keys with
+    // interviews, and the final report of a concurrent one must not find them
+    // all cooled, as a phase judgment's rate limit does not either.
+    let text = side_call_once(&config.keys, &url, &request, "peer-observer", scope, false).await?;
     Ok(serde_json::from_str(&text)?)
 }
 

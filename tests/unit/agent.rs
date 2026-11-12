@@ -218,6 +218,80 @@ fn uncommented_chars_drops_comments_and_keeps_literals() {
     );
 }
 
+/// C and C++ separate digits with a quote, `1'000'000`, and the browser's
+/// tokenizer reads it so. Read as a string it never closes, and the comment on
+/// the line after it would count as code instead of as an explanation.
+#[test]
+fn a_digit_separator_is_not_a_quote_in_c_or_cpp() {
+    let kept = |language: &str, code: &str| {
+        uncommented_chars(language, code)
+            .into_iter()
+            .collect::<String>()
+    };
+    assert_eq!(
+        kept("cpp", "const int M = 1'000'000'007; // mod"),
+        "constintM=1'000'000'007;"
+    );
+    assert_eq!(typed_comments("c", "int m = 0xFF'FF; // why\n"), " why\n");
+    // Several separators, where each part may begin with a letter.
+    assert_eq!(
+        typed_comments("cpp", "auto m = 0xFF'FF'FF; // why\n"),
+        " why\n"
+    );
+    // The `u8` prefix of a character literal ends in a digit, and is not one.
+    assert_eq!(typed_comments("cpp", "char c = u8'A'; // x\n"), " x\n");
+
+    // Only a number takes a separator: a quote after an identifier that ends in
+    // a hex letter opens a character literal, and the comment after it stays
+    // one.
+    assert_eq!(
+        typed_comments("cpp", "switch (c) { case'b': // why\n}"),
+        " why\n"
+    );
+    assert_eq!(typed_comments("cpp", "x = a'b'; // c\n"), " c\n");
+
+    // A separator has a hex digit on each side, and the number may be the first
+    // thing in the code.
+    assert_eq!(typed_comments("cpp", "n = 1'g'; // c\n"), " c\n");
+    assert_eq!(typed_comments("cpp", "1'0; // why\n"), " why\n");
+    // Only the run of the number is read, not what is before a space.
+    assert_eq!(typed_comments("cpp", "v = a 1'0; // why\n"), " why\n");
+
+    // The lookback is bounded: a number longer than it is still a number, and a
+    // long prefix that is not one is still not.
+    let long_number = format!("m = 0x{}'F; // why\n", "F".repeat(70));
+    assert_eq!(typed_comments("cpp", &long_number), " why\n");
+    let long_prefix = format!("{}a'b'; // c\n", "x = 1; ".repeat(12));
+    assert_eq!(typed_comments("cpp", &long_prefix), " c\n");
+    assert_eq!(typed_comments("cpp", "a'b'; // c\n"), " c\n");
+
+    // A character literal's closing quote is not a separator, though a digit
+    // follows it and a hex digit is inside it.
+    assert_eq!(typed_comments("cpp", "c = 'g'1'0; // why\n"), " why\n");
+    assert_eq!(typed_comments("cpp", "c = 'a'.5'0; // why\n"), " why\n");
+    // A number may begin with a dot, as `.1'2` does.
+    assert_eq!(typed_comments("cpp", "double d = .1'2; // why\n"), " why\n");
+    // A character literal is still a string, and so is any quote elsewhere.
+    assert_eq!(typed_comments("cpp", "char c = '/'; // x\n"), " x\n");
+    assert_eq!(kept("cpp", "char c = 'a'; // x"), "charc='a';");
+    assert_eq!(kept("javascript", "s = 1'000 // x"), "s=1'000//x");
+}
+
+/// Reading separators does not make lexing quadratic. A long chain of them is
+/// one number, and each quote looked back over all that came before it.
+#[test]
+fn a_long_chain_of_digit_separators_is_read_in_linear_time() {
+    let chain = "0'".repeat(60_000);
+    let code = format!("long m = {chain}0; // why\n");
+    let started = std::time::Instant::now();
+    assert_eq!(typed_comments("cpp", &code), " why\n");
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(2),
+        "{:?}",
+        started.elapsed()
+    );
+}
+
 /// A typed explanation is whatever the comparison leaves out, from the same
 /// lexer: a comment trailing code counts, and a marker inside a string, even
 /// one opening a line of a docstring, does not.

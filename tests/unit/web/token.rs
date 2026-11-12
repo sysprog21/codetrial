@@ -32,6 +32,29 @@ async fn token_body_read_has_a_deadline() {
     );
 }
 
+/// The routes reachable without a credential read their body through the same
+/// deadline, and answer a stalled client with a status instead of holding the
+/// connection.
+#[tokio::test(start_paused = true)]
+async fn a_stalled_body_is_refused_with_a_timeout_status() {
+    let stalled = futures_util::stream::pending::<Result<Bytes, std::io::Error>>();
+    let refusal = read_body_or_refuse(Body::from_stream(stalled), MAX_BODY_BYTES)
+        .await
+        .expect_err("a body that never finishes is refused");
+    assert_eq!(refusal.status(), StatusCode::REQUEST_TIMEOUT);
+
+    let oversized = Body::from(vec![0_u8; MAX_BODY_BYTES + 1]);
+    let refusal = read_body_or_refuse(oversized, MAX_BODY_BYTES)
+        .await
+        .expect_err("a body past the cap is refused");
+    assert_eq!(refusal.status(), StatusCode::PAYLOAD_TOO_LARGE);
+
+    let body = read_body_or_refuse(Body::from("{}"), MAX_BODY_BYTES)
+        .await
+        .expect("a small body is read");
+    assert_eq!(&body[..], b"{}");
+}
+
 #[test]
 fn generated_candidate_identity_has_the_livekit_prefix() {
     let generated = generated_candidate_identity();
@@ -118,6 +141,37 @@ fn client_ip_reads_the_hop_the_operator_declared() {
     );
 }
 
+/// A host holds a whole /64, so keying a limiter on the full address lets one
+/// client mint a fresh bucket per request by rotating inside it.
+#[test]
+fn client_ip_charges_an_ipv6_client_by_its_prefix() {
+    let one = client_ip(&forwarded("2001:db8:1:2::1"), peer(), 1);
+    let rotated = client_ip(&forwarded("2001:db8:1:2:ffff:eeee:dddd:cccc"), peer(), 1);
+    let neighbour = client_ip(&forwarded("2001:db8:1:3::1"), peer(), 1);
+    assert_eq!(one, rotated, "one /64 is one client");
+    assert_ne!(one, neighbour, "another /64 is another client");
+
+    let v6_peer = "[2001:db8:1:2:aaaa::7]:443".parse().unwrap();
+    assert_eq!(client_ip(&header::HeaderMap::new(), v6_peer, 0), one);
+}
+
+/// A dual-stack listener reports an IPv4 client as `::ffff:a.b.c.d`. Masked as
+/// an IPv6 address that is `::` for everyone, which put every IPv4 client in
+/// one bucket.
+#[test]
+fn client_ip_keeps_a_mapped_ipv4_client_apart() {
+    let first = client_ip(&forwarded("::ffff:1.2.3.4"), peer(), 1);
+    let second = client_ip(&forwarded("::ffff:5.6.7.8"), peer(), 1);
+    assert_eq!(first, IpAddr::from([1, 2, 3, 4]));
+    assert_ne!(first, second);
+
+    let mapped_peer = "[::ffff:9.9.9.9]:443".parse().unwrap();
+    assert_eq!(
+        client_ip(&header::HeaderMap::new(), mapped_peer, 0),
+        IpAddr::from([9, 9, 9, 9])
+    );
+}
+
 #[test]
 fn client_ip_handles_ports_and_ipv6() {
     assert_eq!(
@@ -126,12 +180,12 @@ fn client_ip_handles_ports_and_ipv6() {
     );
     assert_eq!(
         client_ip(&forwarded("2001:db8::1"), peer(), 1),
-        "2001:db8::1".parse::<IpAddr>().unwrap(),
+        "2001:db8::".parse::<IpAddr>().unwrap(),
         "IPv6 colons must not be mistaken for a port"
     );
     assert_eq!(
         client_ip(&forwarded("[2001:db8::1]:443"), peer(), 1),
-        "2001:db8::1".parse::<IpAddr>().unwrap()
+        "2001:db8::".parse::<IpAddr>().unwrap()
     );
     assert_eq!(
         client_ip(&forwarded("not-an-address"), peer(), 1),
@@ -337,4 +391,42 @@ fn random_style_draws_only_for_random_and_can_choose_every_option() {
         )
         .is_err()
     );
+}
+
+/// A proxy may add its own `X-Forwarded-For` line instead of appending to the
+/// client's, and HTTP reads several lines as one list, in order. The hop
+/// counted from the right has to come from the last line, the proxy's, and not
+/// from whichever line the client sent first.
+#[test]
+fn the_trusted_hop_is_counted_across_forwarded_header_lines() {
+    let mut headers = header::HeaderMap::new();
+    headers.append("x-forwarded-for", HeaderValue::from_static("203.0.113.7"));
+    headers.append("x-forwarded-for", HeaderValue::from_static("198.51.100.4"));
+    assert_eq!(
+        client_ip(&headers, peer(), 1),
+        IpAddr::from([198, 51, 100, 4])
+    );
+    assert_eq!(
+        client_ip(&headers, peer(), 2),
+        IpAddr::from([203, 0, 113, 7])
+    );
+}
+
+/// A route that answers an oversized body in its own shape still gives a
+/// stalled one the same timeout, so no route holds a connection open for a
+/// client that has stopped sending.
+#[tokio::test(start_paused = true)]
+async fn a_route_keeps_its_own_oversize_answer_and_gets_the_timeout() {
+    let own = || StatusCode::CONFLICT.into_response();
+    let stalled = futures_util::stream::pending::<Result<Bytes, std::io::Error>>();
+    let refusal = read_body_with(Body::from_stream(stalled), 8, own)
+        .await
+        .expect_err("a body that never finishes is refused");
+    assert_eq!(refusal.status(), StatusCode::REQUEST_TIMEOUT);
+    let refusal = read_body_with(Body::from(vec![0_u8; 9]), 8, own)
+        .await
+        .expect_err("a body past the cap is refused");
+    assert_eq!(refusal.status(), StatusCode::CONFLICT);
+    let body = read_body_with(Body::from("{}"), 8, own).await.unwrap();
+    assert_eq!(&body[..], b"{}");
 }

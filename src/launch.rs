@@ -100,7 +100,7 @@ pub fn web_server_config(
         room_prefix: value_or(values, "CODETRIAL_ROOM_PREFIX", DEFAULT_ROOM_PREFIX),
         fixed_room_name: nonempty(values, "INTERVIEW_ROOM_NAME"),
         production,
-        trusted_proxy_hops: trusted_proxy_hops(values),
+        trusted_proxy_hops: trusted_proxy_hops(values)?,
         allowed_hosts: allowed_hosts(values)?,
         compiler_explorer_enabled: compiler_explorer_enabled(values),
         guest_mode_enabled: guest_mode_enabled(values),
@@ -519,8 +519,6 @@ fn read_max_concurrent(values: &BTreeMap<String, String>) -> usize {
     max_concurrent
 }
 
-/// Zero unless the operator states how many proxies front this server, so the
-/// default never trusts a forwarded client address.
 /// Recording without an OAuth app is a server that refuses every interview.
 ///
 /// The delivery target is the primary verified address GitHub returns, and
@@ -594,10 +592,15 @@ pub fn allowed_hosts(values: &BTreeMap<String, String>) -> Result<Vec<String>, S
     Ok(hosts)
 }
 
-fn trusted_proxy_hops(values: &BTreeMap<String, String>) -> u32 {
-    nonempty(values, "CODETRIAL_TRUSTED_PROXY_HOPS")
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(0)
+/// Unset is zero hops; a value that is not a count is an error, since reading a
+/// typo as zero would treat a server behind a proxy as a local run.
+fn trusted_proxy_hops(values: &BTreeMap<String, String>) -> Result<u32, String> {
+    match nonempty(values, "CODETRIAL_TRUSTED_PROXY_HOPS") {
+        None => Ok(0),
+        Some(value) => value
+            .parse()
+            .map_err(|_| "CODETRIAL_TRUSTED_PROXY_HOPS must be a whole number".to_string()),
+    }
 }
 
 /// What a `codetrial web` start without `NODE_ENV=production` is allowing, in
@@ -677,7 +680,7 @@ pub fn reachable_from_elsewhere(
 ) -> Option<Reachable> {
     if !bound.ip().to_canonical().is_loopback() {
         Some(Reachable::Address)
-    } else if trusted_proxy_hops(values) > 0 {
+    } else if !matches!(trusted_proxy_hops(values), Ok(0)) {
         Some(Reachable::DeclaredProxy)
     } else {
         None
@@ -844,7 +847,7 @@ pub fn prepare(
 
     if guest_mode_recording_conflict(config.guest_mode_enabled, config.recording.is_some()) {
         eprintln!(
-            "WARNING: CODETRIAL_GUEST_MODE_ENABLED=true is ignored while recording is enabled; \\
+            "WARNING: CODETRIAL_GUEST_MODE_ENABLED=true is ignored while recording is enabled; \
              guest mode is unavailable"
         );
     }

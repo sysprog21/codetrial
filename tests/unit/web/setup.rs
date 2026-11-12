@@ -386,6 +386,38 @@ async fn assignment_links_land_on_setup_before_configuration_exists() {
     server.abort();
 }
 
+/// First-run Setup takes the keys, so no other page may frame it: the policy
+/// the full app puts on this page goes on it here too.
+#[tokio::test]
+async fn first_run_setup_cannot_be_framed() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let router = super::setup_service(
+        std::sync::Arc::new(tokio::sync::Notify::new()),
+        false,
+        addr.port(),
+        "unused-test-config".into(),
+        None,
+    );
+    let server = tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    let response = crate::http_client()
+        .get(format!("http://{addr}/"))
+        .send()
+        .await
+        .unwrap();
+    let policy = response
+        .headers()
+        .get("content-security-policy")
+        .expect("the setup page is served under a policy")
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(policy.contains("frame-ancestors 'none'"), "{policy}");
+    server.abort();
+}
+
 #[test]
 fn assignment_setup_refuses_missing_or_whitespace_google_keys() {
     for key in [

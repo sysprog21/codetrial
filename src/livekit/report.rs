@@ -1264,7 +1264,7 @@ fn report_prompt_text(
         evidence: &evidence,
         behavioral_round: crate::agent::BehavioralRound::of(state),
         follow_ups_released: crate::agent::coding_round_complete(state),
-        candidate_turns: state.evidence_ledger.conversation.candidate_turns,
+        candidate_turns: crate::agent::ReportRounds::of(state).candidate_turns,
     })
 }
 

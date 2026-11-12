@@ -12,7 +12,7 @@
 
 use std::sync::Arc;
 
-use axum::body::{Body, to_bytes};
+use axum::body::Body;
 use axum::extract::State;
 use axum::http::{Request, StatusCode, header};
 use axum::response::{IntoResponse, Response};
@@ -20,6 +20,7 @@ use serde_json::{Value, json};
 
 use crate::accounts::{Accounts, blocking};
 
+use super::super::token::read_body_or_refuse;
 use super::super::{AppState, MAX_WEBHOOK_BODY_BYTES, json_response};
 use super::finish_recording;
 
@@ -40,8 +41,9 @@ pub(crate) async fn recording_webhook_handler(
         return StatusCode::NOT_FOUND.into_response();
     };
     let (parts, body) = request.into_parts();
-    let Ok(body) = to_bytes(body, MAX_WEBHOOK_BODY_BYTES).await else {
-        return StatusCode::PAYLOAD_TOO_LARGE.into_response();
+    let body = match read_body_or_refuse(body, MAX_WEBHOOK_BODY_BYTES).await {
+        Ok(body) => body,
+        Err(refusal) => return refusal,
     };
     let authorization = parts
         .headers

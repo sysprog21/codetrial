@@ -17,9 +17,8 @@ use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use ::livekit::DisconnectReason;
-use ::livekit::ParticipantKind;
 use ::livekit::prelude::{DataPacket, RemoteParticipant, Room, RoomEvent, RoomOptions};
+use ::livekit::{DisconnectReason, ParticipantKind};
 
 use crate::agent::{
     INTERIM_CONTEXT_NOTES, InterimReviewInput, ModelInputKind, RuntimeState, WATCH_TICK_S,
@@ -153,7 +152,7 @@ use restart::{
     DeferredRestart, LiveOutcome, ResumeRecovery, output_settled, replaced_socket_age,
     take_restart_attempt,
 };
-use rooms::{evict_duplicate_agent, isolate_local_agent};
+use rooms::{evict_duplicate_agent, isolate_local_agent, spawn_duplicate_eviction};
 use side_calls::{
     PHASE_JUDGE_SETTLE, SideCall, control_type, defers_round_transition, finish_phase_judgment,
     settle_phase_judge, settles_phase_judge, spawn_interim_review, spawn_phase_judge,
@@ -1389,7 +1388,6 @@ pub(crate) async fn run_room_with_slot(
         room_name,
         agent: &agent_identity,
         candidate: &candidate_identity,
-        now_seconds,
     };
     let deadline_at = tokio::time::Instant::now() + interview_hard_deadline(boot.duration_min);
     let mut loops = RoomLoop {
@@ -1630,6 +1628,7 @@ pub(crate) async fn run_room_with_slot(
         eprintln!("{line}");
     }
     eprintln!("{}", turn.state.evidence_ledger.metrics.cost_line());
+    let result = room.close_on_error(result).await;
     let outcome = match &result {
         Err(error) => LiveOutcome::from_error(error.as_ref(), LiveOutcome::Error),
         Ok(()) => turn.activity.live_exit,
@@ -1685,7 +1684,6 @@ async fn handle_room_event(
         room_name,
         agent: agent_identity,
         candidate: candidate_identity,
-        now_seconds,
     } = *ids;
     let config = interview.config;
     match event {
@@ -1742,16 +1740,7 @@ async fn handle_room_event(
         RoomEvent::ParticipantConnected(participant)
             if is_duplicate_agent(&participant, agent_identity) =>
         {
-            // Best effort: a duplicate left in place costs some confusion in
-            // the room, while ending this loop over it cost the report.
-            if let Err(error) =
-                evict_duplicate_agent(config, room_name, &participant.identity().0, now_seconds)
-                    .await
-            {
-                eprintln!(
-                    "removing the duplicate agent failed ({error}); continuing the interview"
-                );
-            }
+            spawn_duplicate_eviction(config, room_name, participant.identity().0);
         }
         RoomEvent::ParticipantDisconnected(participant)
             if participant.identity().0 == candidate_identity =>
@@ -1817,7 +1806,6 @@ struct RoomIdentities<'a> {
     room_name: &'a str,
     agent: &'a str,
     candidate: &'a str,
-    now_seconds: u64,
 }
 
 #[derive(Clone, Copy)]

@@ -6,7 +6,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
 
-use axum::body::{Body, to_bytes};
+use axum::body::Body;
 use axum::extract::{ConnectInfo, FromRequestParts, State};
 use axum::http::request::Parts;
 use axum::http::{HeaderValue, Request, StatusCode, header};
@@ -19,6 +19,7 @@ use crate::accounts::{
     recorded_account_id, session_user, valid_github_login,
 };
 
+use super::token::read_body_or_refuse;
 use super::{
     AppState, MAX_BODY_BYTES, WebServerConfig, client_ip, json_response,
     oauth_not_configured_response, query_pairs, rate_limited_response, unauthorized_response,
@@ -163,6 +164,15 @@ pub(crate) async fn login_handler(
         .into_response()
 }
 
+/// Whether a request says its body is JSON, whatever the case or parameters.
+fn declares_json(headers: &header::HeaderMap) -> bool {
+    headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .is_some_and(|media| media.trim().eq_ignore_ascii_case("application/json"))
+}
+
 pub(crate) async fn record_login_handler(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
@@ -171,12 +181,22 @@ pub(crate) async fn record_login_handler(
     let Some(accounts) = state.accounts.clone() else {
         return state.accounts_error();
     };
+
+    // Declared JSON only. A cross-site form needs no preflight to post a body
+    // that merely parses as JSON, and this answer sets a session cookie.
+    if !declares_json(request.headers()) {
+        return json_response(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            json!({ "error": "GitHub login must be sent as JSON." }),
+        );
+    }
     let client = client_ip(request.headers(), peer, state.config.trusted_proxy_hops);
     if !state.login_limit.allow(client, Instant::now()) {
         return rate_limited_response("Too many login attempts. Wait a minute and try again.");
     }
-    let Ok(body) = to_bytes(request.into_body(), MAX_BODY_BYTES).await else {
-        return StatusCode::PAYLOAD_TOO_LARGE.into_response();
+    let body = match read_body_or_refuse(request.into_body(), MAX_BODY_BYTES).await {
+        Ok(body) => body,
+        Err(refusal) => return refusal,
     };
     let Ok(body) = serde_json::from_slice::<Value>(&body) else {
         return json_response(
@@ -250,8 +270,15 @@ fn github_failure(what: &str, error: impl std::fmt::Display) -> Response {
 /// can still resend it until `unexpired_state` turns it away.
 pub(crate) async fn callback_handler(
     State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     request: Request<Body>,
 ) -> Response {
+    // Each pass that reaches GitHub spends the OAuth app's quota with its
+    // client secret, so it is charged to the login bucket before any call.
+    let client = client_ip(request.headers(), peer, state.config.trusted_proxy_hops);
+    if !state.login_limit.allow(client, Instant::now()) {
+        return rate_limited_response("Too many login attempts. Wait a minute and try again.");
+    }
     let production = state.config.production;
     let mut response = callback_response(state, request).await;
     if let Ok(cookie) = HeaderValue::from_str(&clear_cookie(OAUTH_STATE_COOKIE, production)) {
@@ -876,7 +903,13 @@ pub(crate) async fn current_user(
     else {
         return Ok(None);
     };
-    blocking(move || session_user(&accounts, &session_id)).await
+
+    // Every caller turns this into a bare 500, so the cause is only recorded
+    // here: a locked or corrupt database otherwise fails all signed-in traffic
+    // with nothing for the operator to read.
+    blocking(move || session_user(&accounts, &session_id))
+        .await
+        .inspect_err(|error| eprintln!("account session lookup failed: {error}"))
 }
 
 /// Signs `name=value`, not the value alone. Both cookies share one secret and

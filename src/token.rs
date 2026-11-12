@@ -227,6 +227,11 @@ fn livekit_claims_with_ttl(
     }))
 }
 
+/// How long a management credential lives. Each is minted for one call, and a
+/// leaked one can act project-wide, so it does not last as long as an
+/// interview.
+pub const MANAGEMENT_TOKEN_TTL_SECONDS: u64 = 300;
+
 fn sign_livekit_claims(
     api_key: &str,
     api_secret: &str,
@@ -236,7 +241,13 @@ fn sign_livekit_claims(
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     sign_jwt(
         api_secret,
-        &livekit_claims(api_key, identity, now_seconds, video)?,
+        &livekit_claims_with_ttl(
+            api_key,
+            identity,
+            now_seconds,
+            MANAGEMENT_TOKEN_TTL_SECONDS,
+            video,
+        )?,
     )
 }
 

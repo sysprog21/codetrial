@@ -671,6 +671,8 @@ async fn a_check_reference_past_the_cap_is_marked_as_overflow() {
 
 #[path = "session_clock.rs"]
 mod clock;
+#[path = "session_capacity.rs"]
+mod session_capacity;
 
 #[tokio::test]
 async fn a_refused_discuss_changes_nothing_but_the_overflow_flag() {
@@ -1506,35 +1508,6 @@ async fn a_second_nudge_waits_for_exactly_the_interval() {
     assert!(interval > idle);
     assert!(session.tick(first + interval - 1, false).is_none());
     assert!(session.tick(first + interval, false).is_some());
-}
-
-#[tokio::test]
-async fn only_an_evicted_revision_that_was_run_is_recorded_as_dropped() {
-    let mut session = working().await;
-    session
-        .revision(capture("ran", "z-ran", "ran", "run"), 101)
-        .unwrap();
-    session
-        .run(practice("result", "z-ran", 1, 2, ""), 101)
-        .unwrap();
-    // Sorted before it, so these are the ones evicted, and none was run.
-    for index in 0..12 {
-        session
-            .revision(
-                capture(
-                    &format!("talk-{index}"),
-                    &format!("a-{index:02}"),
-                    "talk",
-                    "discuss",
-                ),
-                102 + index,
-            )
-            .unwrap();
-    }
-    assert!(session.capture_overflow);
-    assert!(!session.revisions.contains_key("a-00"));
-    assert!(session.revisions.contains_key("z-ran"));
-    assert!(session.dropped_run_revision_ids.is_empty());
 }
 
 #[tokio::test]

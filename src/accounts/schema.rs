@@ -5,7 +5,7 @@ use std::path::Path;
 /// Bumped whenever a migration is added below. SQLite carries it in the file
 /// header, so an existing database announces which migrations it has already
 /// run instead of quietly keeping an old shape behind `IF NOT EXISTS`.
-pub const ACCOUNT_SCHEMA_VERSION: i64 = 14;
+pub const ACCOUNT_SCHEMA_VERSION: i64 = 15;
 
 /// Migrations in order, each one taking the database from index `n` to `n + 1`.
 /// Append, never edit: an entry that has already run somewhere will not run
@@ -29,6 +29,7 @@ const ACCOUNT_MIGRATIONS: &[&str] = &[
         "\n",
         include_str!("../peer_audio/schema.sql")
     ),
+    INDEX_PEER_SESSIONS_BY_CREATOR,
 ];
 
 pub fn initialize_account_database(path: &Path) -> rusqlite::Result<()> {
@@ -338,6 +339,14 @@ const INDEX_RECORDINGS_BY_ROOM: &str = "
             ON recordings(room_name) WHERE room_name IS NOT NULL;
 ";
 
+/// One account's sessions by status, for the invitation cap, which counts an
+/// account's pending sessions on every create. The cleanup index leads with
+/// `status`, so without this the count read every account's pending rows.
+const INDEX_PEER_SESSIONS_BY_CREATOR: &str = "
+        CREATE INDEX IF NOT EXISTS peer_sessions_by_creator
+            ON peer_sessions(creator_id, status);
+";
+
 /// Every webhook LiveKit has delivered, by its own event id.
 ///
 /// Delivery is at-least-once: a retry is a fresh, validly signed message with a
@@ -535,3 +544,7 @@ mod migration_tests;
 #[cfg(test)]
 #[path = "../../tests/unit/accounts/peer_migration.rs"]
 mod peer_migration_tests;
+
+#[cfg(test)]
+#[path = "../../tests/unit/accounts/peer_sessions_index.rs"]
+mod peer_sessions_index_tests;

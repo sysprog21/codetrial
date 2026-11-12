@@ -7,6 +7,9 @@ mod wav;
 pub(crate) use wav::{PeerAudioArtifact, PeerAudioWriter, audio_path, ensure_private_directory};
 pub(crate) const RETENTION_SECONDS: i64 = 24 * 60 * 60;
 
+/// Records that a capture began. A row that failed is a capture the member is
+/// starting again, so it becomes a recording with a deadline of its own; any
+/// other row is left as it is, so a withdrawal is never resurrected.
 pub(crate) fn mark_started(
     accounts: &Accounts,
     id: &str,
@@ -14,7 +17,7 @@ pub(crate) fn mark_started(
     max_seconds: u64,
 ) -> rusqlite::Result<()> {
     accounts.with(|c| {
-        c.execute("INSERT INTO peer_audio_records(session_id,status,created_at,expires_at) VALUES(?1,'recording',?2,?3) ON CONFLICT(session_id) DO NOTHING",params![id,now,now.saturating_add(i64::try_from(max_seconds).unwrap_or(i64::MAX)).saturating_add(300)])?;
+        c.execute("INSERT INTO peer_audio_records(session_id,status,created_at,expires_at) VALUES(?1,'recording',?2,?3) ON CONFLICT(session_id) DO UPDATE SET status='recording',expires_at=excluded.expires_at WHERE peer_audio_records.status='failed'",params![id,now,now.saturating_add(i64::try_from(max_seconds).unwrap_or(i64::MAX)).saturating_add(300)])?;
         Ok(())
     })
 }
@@ -80,7 +83,25 @@ pub(crate) fn sweep(accounts: &Accounts, dir: &Path, now: i64) -> rusqlite::Resu
         .query_map([now], |r| r.get::<_, String>(0))?
         .collect::<rusqlite::Result<Vec<_>>>()
     })?;
+    purge(accounts, dir, now, ids)
+}
+
+/// Removes the files of rows the sweep read as expired. A row is claimed first,
+/// marked deleted only if it is still expired, as `withdraw` does before it
+/// touches a file: a capture that was started again after the read has a new
+/// deadline and is skipped, and one that starts after the claim finds the
+/// refusal instead of a file about to vanish.
+fn purge(accounts: &Accounts, dir: &Path, now: i64, ids: Vec<String>) -> rusqlite::Result<()> {
     for id in ids {
+        let claimed = accounts.with(|c| {
+            c.execute(
+                "UPDATE peer_audio_records SET status='deleted' WHERE session_id=?1 AND expires_at<=?2 AND purged_at IS NULL",
+                params![id, now],
+            )
+        })?;
+        if claimed == 0 {
+            continue;
+        }
         let path = match audio_path(dir, &id) {
             Ok(path) => path,
             Err(_) => continue,

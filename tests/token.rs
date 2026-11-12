@@ -176,10 +176,9 @@ fn each_token_carries_only_the_grant_its_purpose_needs() {
 
 #[test]
 fn every_token_expires() {
-    for (now_seconds, expires_at) in [
-        (NOW, NOW + TOKEN_TTL_SECONDS),
-        (u64::MAX - TOKEN_TTL_SECONDS, u64::MAX),
-    ] {
+    // The interview credentials last as long as an interview, and the
+    // management ones are minted for one call, so five minutes.
+    for now_seconds in [NOW, u64::MAX - TOKEN_TTL_SECONDS] {
         let tokens = [
             livekit_token(LivekitTokenInput {
                 api_key: KEY,
@@ -199,13 +198,13 @@ fn every_token_expires() {
             livekit_room_list_token(KEY, SECRET, now_seconds).unwrap(),
             livekit_room_create_token(KEY, SECRET, now_seconds).unwrap(),
         ];
-        for (token, identity) in tokens.into_iter().zip([
-            "candidate-1",
-            "observer-1",
-            "room-admin",
-            "recording",
-            "credential-check",
-            "room-cleanup",
+        for (token, (identity, ttl)) in tokens.into_iter().zip([
+            ("candidate-1", TOKEN_TTL_SECONDS),
+            ("observer-1", TOKEN_TTL_SECONDS),
+            ("room-admin", 300),
+            ("recording", 300),
+            ("credential-check", 300),
+            ("room-cleanup", 300),
         ]) {
             let (signing_input, signature) = token.rsplit_once('.').unwrap();
             assert!(verify_hs256(SECRET, signing_input, signature));
@@ -215,7 +214,7 @@ fn every_token_expires() {
             assert_eq!(claims["nbf"], json!(now_seconds));
             assert_eq!(
                 claims["exp"],
-                json!(expires_at),
+                json!(now_seconds + ttl),
                 "a token without an expiry is a permanent credential"
             );
         }
@@ -226,11 +225,12 @@ fn every_token_expires() {
 /// expiry saturates into a credential that never lapses.
 #[test]
 fn a_token_whose_expiry_overflows_is_refused() {
+    let management = u64::MAX - 300 + 1;
+    assert!(livekit_room_list_token(KEY, SECRET, management).is_err());
+    assert!(livekit_room_create_token(KEY, SECRET, management).is_err());
+    assert!(livekit_room_admin_token(KEY, SECRET, "r", management).is_err());
+    assert!(livekit_egress_token(KEY, SECRET, "r", management).is_err());
     let now_seconds = u64::MAX - TOKEN_TTL_SECONDS + 1;
-    assert!(livekit_room_list_token(KEY, SECRET, now_seconds).is_err());
-    assert!(livekit_room_create_token(KEY, SECRET, now_seconds).is_err());
-    assert!(livekit_room_admin_token(KEY, SECRET, "r", now_seconds).is_err());
-    assert!(livekit_egress_token(KEY, SECRET, "r", now_seconds).is_err());
     assert!(livekit_observer_token(KEY, SECRET, "o", "r", now_seconds).is_err());
     assert!(
         livekit_token(LivekitTokenInput {
@@ -592,4 +592,24 @@ fn peer_observer_token_cannot_publish_any_room_content() {
         livekit_join_from_token(KEY, SECRET, &token, NOW).unwrap(),
         ("peer-room".into(), "observer".into())
     );
+}
+
+/// Each management credential is minted for one call, and a leaked one can act
+/// project-wide (the room-create token deletes any room), so none of them
+/// lives as long as an interview: five minutes, as the peer token.
+#[test]
+fn management_credentials_are_short_lived() {
+    use codetrial::token::{
+        livekit_egress_token, livekit_room_admin_token, livekit_room_create_token,
+        livekit_room_list_token,
+    };
+    let tokens = [
+        livekit_room_admin_token(KEY, SECRET, "room", NOW).unwrap(),
+        livekit_room_list_token(KEY, SECRET, NOW).unwrap(),
+        livekit_room_create_token(KEY, SECRET, NOW).unwrap(),
+        livekit_egress_token(KEY, SECRET, "room", NOW).unwrap(),
+    ];
+    for token in tokens {
+        assert_eq!(claims_of(&token)["exp"], NOW + 300);
+    }
 }

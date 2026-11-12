@@ -868,8 +868,8 @@ const textEncoder = new TextEncoder();
 /// function-local, moving it left the whole suite green with the supported-card
 /// branch no longer rendering, which is the defect a local constant invites.
 export const ACTIVE_CONTRACT = {
-  bundleVersion: 44,
-  livePromptVersion: 33,
+  bundleVersion: 45,
+  livePromptVersion: 34,
   reportPromptVersion: 25,
   reportSchemaVersion: 4,
   rubricVersion: 1,
@@ -1084,11 +1084,13 @@ function reportRounds(raw, interviewLoop) {
 /// the browser's own countdown was doing before this field existed.
 /// `interviewer_unavailable` is the agent giving up on a Gemini socket that
 /// stopped answering, and reporting on the session instead of leaving silently.
+/// `face_missing_severe` is integrity detection ending the interview.
 const END_REASONS = [
   "time_up",
   "candidate_ended",
   "interview_complete",
   "interviewer_unavailable",
+  "face_missing_severe",
 ];
 
 export function endReason(raw) {

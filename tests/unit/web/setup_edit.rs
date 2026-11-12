@@ -73,6 +73,43 @@ fn merging_rewrites_only_the_replaced_keys() {
     );
 }
 
+/// A config copied from a shell may say `export KEY=value`, which launch reads
+/// as KEY. Setup has to match it the same way, or a new key is appended beside
+/// the old one and the old one keeps winning after a restart.
+#[test]
+fn merging_replaces_a_key_the_file_exports() {
+    let merged = merge(
+        "export GOOGLE_API_KEYS=old1,old2\nexport LIVEKIT_API_KEY=old\n",
+        &[
+            ("GOOGLE_API_KEY", "google"),
+            ("GOOGLE_API_KEYS", ""),
+            ("LIVEKIT_API_KEY", "new"),
+        ],
+    );
+    let mut values = BTreeMap::new();
+    crate::config::apply_config_file(&mut values, crate::config::parse_config(&merged).unwrap());
+    assert_eq!(crate::config::google_api_keys(&values).unwrap(), ["google"]);
+    assert_eq!(values["LIVEKIT_API_KEY"], "new");
+    assert_eq!(merged.matches("LIVEKIT_API_KEY").count(), 1, "{merged}");
+    // A file a shell also sources keeps the export on the line Setup rewrites.
+    assert!(merged.contains("export LIVEKIT_API_KEY=new\n"), "{merged}");
+}
+
+/// A shell takes any blanks after `export`, so a tab names the same key as a
+/// space does; a word that merely starts with it names a key of its own.
+#[test]
+fn a_tab_after_export_names_the_same_key() {
+    let merged = merge(
+        "export\tLIVEKIT_API_KEY=old\nexporter=kept\n",
+        &[("LIVEKIT_API_KEY", "new")],
+    );
+    assert_eq!(merged, "export LIVEKIT_API_KEY=new\nexporter=kept\n");
+    let parsed =
+        crate::config::parse_config("export\tLIVEKIT_API_KEY=new\nexporter=kept\n").unwrap();
+    let keys: Vec<_> = parsed.iter().map(|(key, _)| key.as_str()).collect();
+    assert_eq!(keys, ["LIVEKIT_API_KEY", "exporter"]);
+}
+
 #[test]
 fn only_a_standalone_loopback_launch_without_a_proxy_may_change_keys() {
     let scratch = Scratch::new();

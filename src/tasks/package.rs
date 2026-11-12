@@ -452,13 +452,7 @@ async fn fetch(
     {
         return Err(invalid("package response refused"));
     }
-    let site_time = response
-        .headers()
-        .get(reqwest::header::DATE)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| chrono::DateTime::parse_from_rfc2822(value).ok())
-        .and_then(|time| u64::try_from(time.timestamp()).ok())
-        .map(|at| (at, tokio::time::Instant::now()));
+    let site_time = site_seconds(response.headers()).map(|at| (at, tokio::time::Instant::now()));
     let mut bytes = Vec::new();
     while let Some(chunk) = response
         .chunk()
@@ -471,6 +465,17 @@ async fn fetch(
         bytes.extend_from_slice(&chunk);
     }
     Ok((bytes, site_time))
+}
+
+/// The site's clock in Unix seconds, from the `Date` header; none when the
+/// header is absent, not a date, or before 1970, so the caller falls back to
+/// its own clock rather than trusting a value it cannot read.
+fn site_seconds(headers: &reqwest::header::HeaderMap) -> Option<u64> {
+    headers
+        .get(reqwest::header::DATE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| chrono::DateTime::parse_from_rfc2822(value).ok())
+        .and_then(|time| u64::try_from(time.timestamp()).ok())
 }
 
 #[cfg(test)]

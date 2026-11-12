@@ -472,22 +472,14 @@ async fn login_endpoint_rate_limits_a_noisy_client() {
 async fn login_rejects_a_body_that_is_not_json() {
     let (base, server, path, client) = account_server("login-malformed").await;
 
-    let malformed = client
-        .post(format!("{base}/api/login"))
-        .header("content-type", "application/json")
-        .body("not json")
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(malformed.status(), 400);
-
-    let oversize = client
-        .post(format!("{base}/api/login"))
-        .body(vec![b'a'; MAX_BODY_BYTES + 1])
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(oversize.status(), 413);
+    let declared_json = |body: Vec<u8>| async {
+        let request = client
+            .post(format!("{base}/api/login"))
+            .header("content-type", "application/json");
+        request.body(body).send().await.unwrap().status()
+    };
+    assert_eq!(declared_json(b"not json".to_vec()).await, 400);
+    assert_eq!(declared_json(vec![b'a'; MAX_BODY_BYTES + 1]).await, 413);
 
     for handle in ["", "-bad-", "bad name", &"a".repeat(40)] {
         let rejected = client

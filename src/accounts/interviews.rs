@@ -216,8 +216,8 @@ pub fn withdraw_consent(
     account_id: i64,
     now: i64,
 ) -> rusqlite::Result<bool> {
-    accounts.with(|connection| {
-        connection
+    accounts.transaction(|connection| {
+        let owned = connection
             .query_row(
                 "
         UPDATE interviews SET consent_withdrawn_at = COALESCE(consent_withdrawn_at, ?3)
@@ -227,8 +227,27 @@ pub fn withdraw_consent(
                 (id, account_id, now),
                 |row| row.get::<_, i64>(0),
             )
-            .optional()
-            .map(|row| row.is_some())
+            .optional()?
+            .is_some();
+
+        // Only a live recording's deletion removes a replay, in the same write
+        // as its row, so one stored for an interview with none, or whose
+        // recording is already deleted, would outlive the consent it was kept
+        // under.
+        if owned {
+            connection.execute(
+                "
+        DELETE FROM replay_events
+        WHERE interview_id = ?1
+          AND NOT EXISTS (
+              SELECT 1 FROM recordings
+              WHERE recordings.interview_id = ?1 AND recordings.deleted_at IS NULL
+          )
+        ",
+                [id],
+            )?;
+        }
+        Ok(owned)
     })
 }
 
@@ -248,3 +267,7 @@ pub fn recorded_account_id() -> std::io::Result<i64> {
     // insert rather than quietly joining two people to one account.
     Ok(i64::MIN + (i64::from_be_bytes(bytes) & i64::MAX))
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/accounts/interview_lifecycle.rs"]
+mod lifecycle_tests;

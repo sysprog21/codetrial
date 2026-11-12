@@ -590,16 +590,13 @@ async fn end_is_intercepted_before_its_finish_producing_reducer() {
     if isolated("end_is_intercepted_before_its_finish_producing_reducer") {
         return;
     }
-    let payload = serde_json::json!({"type":"end_interview", "reason":"finish-producer-marker", "code":"fn final_reducer_marker() {}", "language":"rust"});
+    let payload = serde_json::json!({"type":"end_interview", "reason":"time_up", "code":"fn final_reducer_marker() {}", "language":"rust"});
     let mut rig = Rig::new("ws://127.0.0.1:9/".into()).await;
     let original = rig.turn.state.clone();
     let mut normally_reduced = original.clone();
     let reduced =
         crate::agent::apply_data_event(&mut normally_reduced, TOPIC_CONTROL, &payload, 0.0);
-    assert_eq!(
-        reduced.finish_interview.as_deref(),
-        Some("finish-producer-marker")
-    );
+    assert_eq!(reduced.finish_interview.as_deref(), Some("time_up"));
     assert!(normally_reduced.ended);
     assert_eq!(normally_reduced.code, "fn final_reducer_marker() {}");
 
@@ -719,7 +716,7 @@ async fn pending_eviction_service() -> PendingEviction {
             claims["exp"].as_u64().unwrap(),
             crate::current_epoch_seconds(),
         );
-        let ttl = crate::token::TOKEN_TTL_SECONDS;
+        let ttl = crate::token::MANAGEMENT_TOKEN_TTL_SECONDS;
         assert!(
             exp >= now && exp <= now + ttl && exp + 60 > now + ttl,
             "exp {exp} against now {now}"

@@ -372,6 +372,11 @@ struct RecordingDispatcher {
     at_capacity: std::sync::atomic::AtomicBool,
     /// Set to refuse, standing in for a fixed room still finishing a report.
     finalizing: std::sync::atomic::AtomicBool,
+    /// Set to refuse, standing in for an account holding too many unjoined
+    /// starts.
+    too_many_waiting: std::sync::atomic::AtomicBool,
+    /// The account each interview start was made by, as the route passed it.
+    owners: std::sync::Mutex<Vec<Option<i64>>>,
 }
 
 impl RoomDispatcher for RecordingDispatcher {
@@ -401,6 +406,12 @@ impl RoomDispatcher for RecordingDispatcher {
         if self.finalizing.load(std::sync::atomic::Ordering::Relaxed) {
             return Err(DispatchRefusal::Finalizing);
         }
+        if self
+            .too_many_waiting
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            return Err(DispatchRefusal::TooManyWaiting);
+        }
         self.staffed
             .lock()
             .unwrap()
@@ -414,8 +425,10 @@ impl RoomDispatcher for RecordingDispatcher {
         provider: &codetrial::config::Provider,
         candidate: &str,
         no_show: Option<NoShowConsent>,
+        owner: Option<i64>,
     ) -> Result<(), DispatchRefusal> {
         self.ensure_agent(room_name, provider, AgentJob::Interview)?;
+        self.owners.lock().unwrap().push(owner);
         self.candidates
             .lock()
             .unwrap()
@@ -1414,6 +1427,12 @@ mod peer_auth;
 
 #[path = "web/accounts.rs"]
 mod accounts;
+
+#[path = "web/login_form.rs"]
+mod login_form;
+
+#[path = "web/waiting_starts.rs"]
+mod waiting_starts;
 
 #[path = "web/routes.rs"]
 mod routes;

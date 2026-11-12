@@ -36,6 +36,19 @@ pub const UPLOAD_CHUNK_BYTES: u64 = 8 * 1024 * 1024;
 /// grant, a 404 means the file or the session is gone.
 pub const RETRYABLE_STATUSES: [u16; 5] = [429, 500, 502, 503, 504];
 
+/// What an upload session says about itself when asked after a failed chunk.
+#[derive(Debug, PartialEq, Eq)]
+enum SessionState {
+    /// It holds this many bytes.
+    Holds(u64),
+    /// The upload finished, and this is the file it made.
+    Finished(String),
+    /// The service answered with a retryable status, so nothing is known.
+    Unwell,
+    /// Neither open nor finished, as far as it will say.
+    Gone,
+}
+
 /// How many failed chunk writes one upload may absorb before it gives up and
 /// lets the queue's own schedule take over.
 ///
@@ -441,12 +454,14 @@ impl GoogleDelivery {
             .ok_or_else(|| "the upload session carried no Location".to_string())
     }
 
-    /// Where a session got to, in bytes, after a chunk failed.
+    /// Where a session got to after a chunk failed.
     ///
     /// `308` with a `Range` of `bytes=0-n` means the server holds `n + 1`
-    /// bytes; `308` with no `Range` means it holds none. Anything else means
-    /// the session is finished or gone, and the caller has to decide which.
-    async fn session_progress(&self, session: &str, total: u64) -> Result<Option<u64>, String> {
+    /// bytes, and `308` with no `Range` means it holds none. A `200` or `201`
+    /// means the last chunk landed and only its answer was lost, and names the
+    /// file. A retryable status says the service is unwell, not that the
+    /// session is gone, and anything else is a session that is.
+    async fn session_progress(&self, session: &str, total: u64) -> Result<SessionState, String> {
         let response = self
             .http
             .put(session)
@@ -454,11 +469,32 @@ impl GoogleDelivery {
             .header(reqwest::header::CONTENT_RANGE, format!("bytes */{total}"))
             .send()
             .await
-            .map_err(|error| format!("the upload session could not be queried: {error}"))?;
-        if response.status().as_u16() != 308 {
-            return Ok(None);
+            // Without the address: it is a capability to write to the upload,
+            // and this string reaches the audit log.
+            .map_err(|error| {
+                format!(
+                    "the upload session could not be queried: {}",
+                    error.without_url()
+                )
+            })?;
+        let status = response.status().as_u16();
+        if status == 308 {
+            return stored_bytes(&response, total).map(SessionState::Holds);
         }
-        stored_bytes(&response, total).map(Some)
+        if status == 200 || status == 201 {
+            let body: Value = response.json().await.map_err(|error| {
+                format!("the upload answer was not JSON: {}", error.without_url())
+            })?;
+            return body
+                .get("id")
+                .and_then(Value::as_str)
+                .map(|id| SessionState::Finished(id.to_string()))
+                .ok_or_else(|| "the upload answer carried no file id".to_string());
+        }
+        if RETRYABLE_STATUSES.contains(&status) {
+            return Ok(SessionState::Unwell);
+        }
+        Ok(SessionState::Gone)
     }
 }
 
@@ -482,9 +518,10 @@ fn pkcs8_der(pem: &str) -> Result<Vec<u8>, String> {
         .filter(|line| !line.starts_with("-----"))
         .flat_map(|line| line.chars().filter(|character| !character.is_whitespace()))
         .collect();
+    // Not the decode error: it names the offending byte, a piece of the key.
     STANDARD
         .decode(body)
-        .map_err(|error| format!("the private key is not base64: {error}"))
+        .map_err(|_| "the private key is not base64".to_string())
 }
 
 /// RSASSA-PKCS1-v1_5 over SHA-256, which is what `RS256` means.
@@ -612,10 +649,9 @@ impl DeliveryProvider for GoogleDelivery {
                 if let Ok(response) = response {
                     let status = response.status().as_u16();
                     if status == 200 || status == 201 {
-                        let body: Value = response
-                            .json()
-                            .await
-                            .map_err(|error| format!("the upload answer was not JSON: {error}"))?;
+                        let body: Value = response.json().await.map_err(|error| {
+                            format!("the upload answer was not JSON: {}", error.without_url())
+                        })?;
                         return body
                             .get("id")
                             .and_then(Value::as_str)
@@ -659,12 +695,20 @@ impl DeliveryProvider for GoogleDelivery {
                 }
                 budget -= 1;
                 match self.session_progress(&session, total).await? {
-                    Some(received) => sent = received,
+                    SessionState::Holds(received) => sent = received,
 
-                    // Not a 308, so the session is finished or gone. The
-                    // duplicate search on the next attempt is what finds out
-                    // which.
-                    None => return Err("the upload session is no longer open".to_string()),
+                    // The last chunk landed and only its answer was lost.
+                    SessionState::Finished(id) => return Ok(id),
+
+                    // The service is unwell, which says nothing about the
+                    // session: try the chunk again on the budget already spent.
+                    SessionState::Unwell => {}
+
+                    // Gone. The duplicate search on the next attempt is what
+                    // finds out whether it finished first.
+                    SessionState::Gone => {
+                        return Err("the upload session is no longer open".to_string());
+                    }
                 }
             }
             Err("the upload finished without an answer".to_string())

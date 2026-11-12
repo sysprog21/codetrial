@@ -13,6 +13,14 @@ use crate::web::{AgentJob, DispatchRefusal, NoShowConsent, RoomDispatcher};
 
 const MAX_CONCURRENT_GUEST_INTERVIEWS: usize = 2;
 
+/// Starts one signed-in account may hold that no candidate has joined. Each
+/// reserves a slot and spawns an agent that joins LiveKit, a signed-in session
+/// is free to mint, and the rate limit counts requests, not the rooms they
+/// leave
+/// waiting, so the count is bounded here. A page that is reloaded, or opened in
+/// a second tab, holds more than one for a moment, so it is not one.
+const MAX_WAITING_STARTS_PER_ACCOUNT: usize = 4;
+
 /// Interview admission state protected by a single mutex.
 #[derive(Default)]
 pub struct DispatchState {
@@ -30,6 +38,8 @@ struct Start {
     /// The identity in the token this start handed out. `None` for a start
     /// made without one, such as a task attempt, which no release can match.
     candidate: Option<String>,
+    /// The account that made it, where it was made by one.
+    owner: Option<i64>,
     phase: StartPhase,
     released: Arc<tokio::sync::Notify>,
 }
@@ -146,7 +156,7 @@ impl RoomDispatcher for LocalDispatcher {
         provider: &Provider,
         job: AgentJob,
     ) -> Result<(), DispatchRefusal> {
-        self.ensure_agent_with_kind(room_name, provider, None, None, job)
+        self.ensure_agent_with_kind(room_name, provider, None, None, None, job)
     }
 
     fn ensure_agent_with_no_show_release(
@@ -155,9 +165,17 @@ impl RoomDispatcher for LocalDispatcher {
         provider: &Provider,
         candidate: &str,
         no_show: Option<NoShowConsent>,
+        owner: Option<i64>,
     ) -> Result<(), DispatchRefusal> {
         let start = Some((candidate, false));
-        self.ensure_agent_with_kind(room_name, provider, start, no_show, AgentJob::Interview)
+        self.ensure_agent_with_kind(
+            room_name,
+            provider,
+            start,
+            no_show,
+            owner,
+            AgentJob::Interview,
+        )
     }
 
     fn ensure_guest_agent(
@@ -167,7 +185,7 @@ impl RoomDispatcher for LocalDispatcher {
         candidate: &str,
     ) -> Result<(), DispatchRefusal> {
         let start = Some((candidate, true));
-        self.ensure_agent_with_kind(room_name, provider, start, None, AgentJob::Interview)
+        self.ensure_agent_with_kind(room_name, provider, start, None, None, AgentJob::Interview)
     }
 
     fn release_start(&self, room_name: &str, candidate: &str) -> bool {
@@ -196,12 +214,13 @@ impl LocalDispatcher {
         provider: &Provider,
         start: Option<(&str, bool)>,
         no_show: Option<NoShowConsent>,
+        owner: Option<i64>,
         job: AgentJob,
     ) -> Result<(), DispatchRefusal> {
         let (candidate, guest) = start.map_or((None, false), |(candidate, guest)| {
             (Some(candidate.to_string()), guest)
         });
-        let slot = match self.reserve_for(room_name, guest, candidate) {
+        let slot = match self.reserve_for(room_name, guest, candidate, owner) {
             Reservation::Existing => return Ok(()),
             Reservation::Full { limit, guest_cap } => {
                 eprintln!(
@@ -216,6 +235,10 @@ impl LocalDispatcher {
                      reason=guest_room_in_use guest=true"
                 );
                 return Err(DispatchRefusal::AtCapacity);
+            }
+            Reservation::TooManyWaiting => {
+                eprintln!("codetrial dispatch_refused room={room_name} reason=too_many_waiting");
+                return Err(DispatchRefusal::TooManyWaiting);
             }
             Reservation::Finalizing => {
                 eprintln!("codetrial dispatch_refused room={room_name} reason=finalizing");
@@ -237,11 +260,14 @@ impl LocalDispatcher {
             eprintln!("codetrial dispatch room={}", slot.room_name);
             match job {
                 AgentJob::Interview => {
-                    let outcome = crate::livekit::run_room_with_slot(
-                        &config,
-                        &slot.room_name,
-                        crate::web::current_epoch_seconds(),
-                        Some(&slot),
+                    let outcome = contain_panic(
+                        crate::livekit::run_room_with_slot(
+                            &config,
+                            &slot.room_name,
+                            crate::web::current_epoch_seconds(),
+                            Some(&slot),
+                        ),
+                        || slot.has_joined(),
                     )
                     .await;
                     settle_interview(outcome, no_show, slot).await;
@@ -262,6 +288,30 @@ impl LocalDispatcher {
             }
         });
         Ok(())
+    }
+}
+
+/// Runs a room to its outcome, and turns a panic in it into one. The task is
+/// detached, so a panic would otherwise skip the settling below and leave the
+/// consent claim held, with no line in the log.
+///
+/// A panic before a candidate joined is a start that failed before one, which
+/// returns consent as a no-show does. After the join the interview had begun,
+/// and its consent is not given back as if nobody came: it is an error, logged
+/// and nothing more. `joined` is asked only after the panic.
+async fn contain_panic(
+    room: impl std::future::Future<
+        Output = Result<crate::livekit::RoomRunOutcome, Box<dyn std::error::Error + Send + Sync>>,
+    >,
+    joined: impl FnOnce() -> bool,
+) -> Result<crate::livekit::RoomRunOutcome, Box<dyn std::error::Error + Send + Sync>> {
+    use futures_util::FutureExt as _;
+    match std::panic::AssertUnwindSafe(room).catch_unwind().await {
+        Ok(outcome) => outcome,
+        Err(_) if joined() => Err("the room task panicked after the candidate joined".into()),
+        Err(_) => Ok(crate::livekit::RoomRunOutcome::FailedBeforeCandidate(
+            "the room task panicked".into(),
+        )),
     }
 }
 
@@ -324,7 +374,12 @@ async fn release_no_show(no_show: Option<NoShowConsent>, room_name: &str) -> boo
 enum Reservation {
     Existing,
     New(Slot),
-    Full { limit: usize, guest_cap: bool },
+    Full {
+        limit: usize,
+        guest_cap: bool,
+    },
+    /// The account already holds as many unjoined starts as it may.
+    TooManyWaiting,
     GuestRoomInUse,
     Finalizing,
     Closed,
@@ -333,13 +388,19 @@ enum Reservation {
 impl LocalDispatcher {
     #[cfg(test)]
     fn reserve_with_kind(&self, room_name: &str, guest: bool) -> Reservation {
-        self.reserve_for(room_name, guest, None)
+        self.reserve_for(room_name, guest, None, None)
     }
 
     /// `Existing` records nothing about `candidate`: the start already running
     /// in that room belongs to whoever began it, and a second token for the
     /// same room must not be able to end it.
-    fn reserve_for(&self, room_name: &str, guest: bool, candidate: Option<String>) -> Reservation {
+    fn reserve_for(
+        &self,
+        room_name: &str,
+        guest: bool,
+        candidate: Option<String>,
+        owner: Option<i64>,
+    ) -> Reservation {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
 
         // A room already in use cannot be reused for another interview.
@@ -384,6 +445,17 @@ impl LocalDispatcher {
             };
         }
 
+        if owner.is_some_and(|owner| {
+            let waiting = state
+                .starts
+                .values()
+                .filter(|start| start.owner == Some(owner) && start.phase == StartPhase::Waiting)
+                .count();
+            waiting >= MAX_WAITING_STARTS_PER_ACCOUNT
+        }) {
+            return Reservation::TooManyWaiting;
+        }
+
         state.live.insert(room_name.to_string(), true);
         if guest {
             state.guest_live.insert(room_name.to_string());
@@ -393,6 +465,7 @@ impl LocalDispatcher {
             room_name.to_string(),
             Start {
                 candidate,
+                owner,
                 phase: StartPhase::Waiting,
                 released: Arc::clone(&released),
             },
@@ -430,6 +503,15 @@ impl Slot {
             .starts
             .get(&self.room_name)
             .is_some_and(|start| start.phase == StartPhase::Released)
+    }
+
+    /// Whether a candidate was accepted into this start.
+    fn has_joined(&self) -> bool {
+        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        state
+            .starts
+            .get(&self.room_name)
+            .is_some_and(|start| start.phase == StartPhase::Joined)
     }
 
     /// Records that a candidate was accepted, unless the start was released

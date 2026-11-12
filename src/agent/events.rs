@@ -111,6 +111,19 @@ fn apply_data_event_at_with_received(
         _ => DataEventResult::default(),
     };
 
+    // The page ends the interview three ways: its own button, its own clock,
+    // and integrity detection. Any other reason a received end names is a
+    // custom client's, and would gate the wrap-up and decide the report's
+    // account of who ended it.
+    if let Some(reason) = result.finish_interview.as_mut().filter(|_| received)
+        && !matches!(
+            reason.as_str(),
+            "candidate_ended" | "time_up" | "face_missing_severe"
+        )
+    {
+        *reason = "candidate_ended".to_string();
+    }
+
     // Whether Test can be recorded is a question about the state, not about
     // which event changed it: switching back to the language of a credited run
     // puts that run's code on screen again with no run arriving. Asked after
@@ -666,7 +679,14 @@ fn apply_test_results(
         };
     }
 
-    let summary = format_test_run_for_reaction(payload, state.test_runs);
+    // Fenced like every other candidate-derived block: the failure labels and
+    // values come from the candidate's own program, and the prompt tells the
+    // model that test summaries are fenced as untrusted.
+    let summary = super::untrusted_block(
+        "TEST RUN",
+        "",
+        &format_test_run_for_reaction(payload, state.test_runs),
+    );
     let excerpt = changed_excerpt(&state.language, &state.code_shown, &state.code);
     if excerpt.is_some() {
         state.code_shown = state.code.clone();

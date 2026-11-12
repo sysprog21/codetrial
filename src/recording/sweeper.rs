@@ -147,19 +147,29 @@ pub async fn start_and_record_egress(
         // overtaking this one, or the write failed. Either way this attempt
         // owns a job the row does not, so it stops the one it just made rather
         // than leaving two running.
-        eprintln!(
-            "recording {} started a job its row does not name; stopping it",
-            recording.id
-        );
-        let _ = recorder
-            .provider
-            .stop(&egress_id, &request.room_name)
-            .await
-            .inspect_err(|error| {
-                eprintln!("recording {} left a job running: {error}", recording.id);
-            });
+        stop_unrecorded_job(recorder, &recording.id, &egress_id, &request.room_name).await;
     }
     Ok(stored)
+}
+
+/// Stops a job the recording's row does not name, and says so. A failed stop is
+/// logged and not retried: the room name that finds a job again is gone once
+/// the
+/// row is deleted.
+async fn stop_unrecorded_job(
+    recorder: &Recorder,
+    recording_id: &str,
+    egress_id: &str,
+    room_name: &str,
+) {
+    eprintln!("recording {recording_id} started a job its row does not name; stopping it");
+    let _ = recorder
+        .provider
+        .stop(egress_id, room_name)
+        .await
+        .inspect_err(|error| {
+            eprintln!("recording {recording_id} left a job running: {error}");
+        });
 }
 
 /// Stops a job whose recording stopped being active while the provider was
@@ -678,19 +688,38 @@ async fn retry_start(accounts: &Arc<Accounts>, recorder: &Recorder, recording: &
                 "recording {} already had an Egress job; adopting it rather than starting a second",
                 recording.id
             );
-            let stored = {
+            let recorded = {
                 let accounts = Arc::clone(accounts);
                 let clock = Arc::clone(&recorder.clock);
                 let id = recording.id.clone();
                 let egress_id = egress_id.clone();
-                blocking(move || record_egress_id(&accounts, clock.as_ref(), &id, &egress_id))
-                    .await
-                    .unwrap_or(false)
+                blocking(move || record_egress_id(&accounts, clock.as_ref(), &id, &egress_id)).await
             };
-            if stored {
-                settle_new_egress(accounts, recorder, &recording.id, &egress_id).await;
-            }
-            return stored;
+            return match recorded {
+                Ok(true) => {
+                    settle_new_egress(accounts, recorder, &recording.id, &egress_id).await;
+                    true
+                }
+
+                // The row does not name this job: it was deleted since the
+                // retry claimed it, or another caller recorded a job first.
+                // Either way nothing else can find this one, so it is stopped.
+                Ok(false) => {
+                    stop_unrecorded_job(recorder, &recording.id, &egress_id, &room_name).await;
+                    false
+                }
+
+                // The write failed, which says nothing about the job. It is
+                // left running for the next retry, which asks the provider
+                // again.
+                Err(error) => {
+                    eprintln!(
+                        "recording {} could not record the job it was to adopt: {error}",
+                        recording.id
+                    );
+                    false
+                }
+            };
         }
         Ok(None) => {}
         Err(error) => {

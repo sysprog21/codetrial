@@ -92,6 +92,13 @@ def judge_options(judge):
             type(judge[key]) is not int or not 0 <= judge[key] < 2**64
         ):
             raise ValueError("invalid judge parameter index")
+    # The page reads the argument an index names, so the two that always do
+    # must name one, as the loader checks. outputParam is left to the
+    # compiled-language check.
+    names = judge.get("paramNames")
+    for key in ("outputPrefixParam", "cyclePosParam"):
+        if isinstance(names, list) and key in judge and judge[key] >= len(names):
+            raise ValueError("invalid judge parameter index")
 
 
 def structural(problem, judge, variant):

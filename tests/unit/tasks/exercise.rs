@@ -881,6 +881,26 @@ fn a_compiled_language_needs_the_types_its_harness_is_built_from() {
     }
 }
 
+/// The page reads the argument a judge parameter names, so an index past the
+/// parameters is a task that fails every case, and is refused here instead.
+#[test]
+fn a_judge_parameter_index_must_name_a_parameter() {
+    let row = fixture("customized");
+    let arity = row["judge"]["paramNames"].as_array().unwrap().len();
+    for key in ["outputPrefixParam", "cyclePosParam"] {
+        let mut last = row.clone();
+        last["judge"][key] = json!(arity - 1);
+        assert!(record(&last).is_ok(), "{key} on the last parameter");
+        let mut past = row.clone();
+        past["judge"][key] = json!(arity);
+        assert_eq!(
+            record(&past).map(|_| ()).unwrap_err().0,
+            "invalid judge parameter index",
+            "{key} one past them"
+        );
+    }
+}
+
 #[test]
 fn c_is_offered_only_for_a_function_judge() {
     let mut row = fixture("class-renamed-method");

@@ -49,6 +49,7 @@ pub(crate) async fn withdraw_consent_handler(
             // failed stop leaves a withdrawal that is recorded and a recording
             // the sweeper will find. The other order loses the withdrawal.
             if let Some(recorder) = state.recorder.clone() {
+                let named = interview_id.clone();
                 let found = {
                     let accounts = Arc::clone(&accounts);
                     blocking(move || {
@@ -56,6 +57,14 @@ pub(crate) async fn withdraw_consent_handler(
                     })
                     .await
                 };
+
+                // The withdrawal is recorded, but a recording that is still
+                // running is stopped from here, so a failed read is said.
+                if let Err(error) = &found {
+                    eprintln!(
+                        "could not read the recording of interview {named} to stop it after a withdrawal: {error}"
+                    );
+                }
                 if let Ok(Some(recording)) = found
                     && recording.state.is_active()
                     && let Err(error) = crate::recording::stop_recording(

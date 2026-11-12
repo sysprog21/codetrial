@@ -1591,7 +1591,7 @@ fn repeated_drawing_advice_keeps_the_report_without_visual_feedback() {
     ] {
         let mut raw = valid_report();
         raw["codingFeedback"]["improvements"][0] = json!(text);
-        raw["improvementPlan"][0]["weakness"] = json!(text);
+        raw["improvementPlan"][0]["weakness"] = json!(text.to_lowercase().trim_end_matches('.'));
         raw["summary"] = json!(format!("You explained a map-based approach. {text}"));
         let (clean, _) = crate::agent::sanitize_example_drawing_candidate(
             raw.clone(),
@@ -4931,7 +4931,7 @@ fn a_long_phrase_list_is_counted_rather_than_cut_midway() {
     let mut report = valid_report();
     report["improvementPlan"][1]["successCriterion"] = json!(
         "Mind accent, dialect, typing speed, speech rate, filler words, disfluency, eye contact, \
-         posture, body language, facial expression, voice tone and physical appearance."
+         body posture, body language, facial expression, voice tone and physical appearance."
     );
     let errors = crate::agent::validate_report_for_round(
         &report,

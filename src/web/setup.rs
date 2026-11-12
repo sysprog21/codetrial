@@ -77,7 +77,14 @@ pub fn setup_service(
         .layer(middleware::from_fn(
             move |request: Request, next: Next| async move {
                 if host_is_loopback(request.headers().get(header::HOST), port) {
-                    next.run(request).await
+                    // The policy the full app serves this page under, so a page
+                    // that takes the keys cannot be framed before the app is
+                    // up.
+                    let mut response = next.run(request).await;
+                    response
+                        .headers_mut()
+                        .insert(header::CONTENT_SECURITY_POLICY, page_policy());
+                    response
                 } else {
                     super::json_response(
                         StatusCode::FORBIDDEN,
@@ -467,7 +474,9 @@ const SETUP_PAGE: &str = r#"<!doctype html>
       if (trimmed === '' || trimmed.startsWith('#')) continue;
       const equals = trimmed.indexOf('=');
       if (equals < 0) throw new Error('line ' + number + ' is not KEY=value');
-      values[trimmed.slice(0, equals).trim()] = trimmed
+      // A shell takes any blank after export, as config_key does; a key that
+      // merely starts with the word, or a bare export, is its own key.
+      values[trimmed.slice(0, equals).trim().replace(/^export\s+/, '')] = trimmed
         .slice(equals + 1)
         .trim()
         .replace(/^"+|"+$/g, '')

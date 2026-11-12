@@ -7,6 +7,15 @@
 use crate::sha256_hex;
 use serde::{Deserialize, Serialize};
 
+mod node_kinds;
+mod run_signals;
+pub(super) use node_kinds::comment_kind;
+use node_kinds::{
+    closure_kind, control_kind, data_structure_kind, interface_kind, loop_kind, unnest,
+};
+pub(super) use run_signals::DiagnosticCategory;
+pub(crate) use run_signals::run_failed_to_start;
+
 const LEDGER_VERSION: u32 = 1;
 const MAX_LEDGER_ENTRIES: usize = 256;
 const MAX_CONVERSATION_SEQUENCE: usize = 16;
@@ -168,36 +177,6 @@ pub struct TestState {
     pub consecutive_identical_failures: u32,
     pub failure_signature: Option<String>,
     pub source_timestamp_ms: Option<u64>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(super) enum DiagnosticCategory {
-    Syntax,
-    Type,
-    Linker,
-    RuntimeSignal,
-    Timeout,
-    Warning,
-    Other,
-}
-
-impl DiagnosticCategory {
-    /// The closed list a runner may name, in the words the wire spells them.
-    ///
-    /// One reading for both readers: the sanitizer that decides what survives
-    /// ingest and the reducer that counts it. They each spelled the list out,
-    /// and they drifted once already, the sanitizer allowing `other` while the
-    /// reducer dropped it, so the reducer honored six of the seven categories
-    /// the wire allows and nothing said so.
-    ///
-    /// Read through the derive above rather than a second list of the same
-    /// words, which the compiler could not hold to the enum: a variant added
-    /// there would have serialized fine and been dropped on the way in.
-    pub(crate) fn from_wire(category: &str) -> Option<Self> {
-        use serde::de::value::{Error, StrDeserializer};
-        Self::deserialize(StrDeserializer::<Error>::new(category)).ok()
-    }
 }
 
 /// # Why a zero is not written down
@@ -430,6 +409,11 @@ pub struct EvidenceLedger {
     /// rather than prompt state: it is bookkeeping for one counter and says
     /// nothing a model should read.
     pub candidate_edits_at_last_test: u64,
+    /// The language of the last executed run, which decides whether the next
+    /// is measured against it. Bookkeeping like the counter above, so it is
+    /// not part of the ledger a replay compares.
+    #[serde(skip)]
+    last_test_language: Option<String>,
     pub entries: Vec<EvidenceEntry>,
     pub code: CodeState,
     pub tests: TestState,
@@ -449,6 +433,7 @@ impl Default for EvidenceLedger {
             version: LEDGER_VERSION,
             next_sequence: 1,
             candidate_edits_at_last_test: 0,
+            last_test_language: None,
             entries: Vec::new(),
             code: CodeState::default(),
             tests: TestState::default(),
@@ -852,152 +837,6 @@ impl EvidenceLedger {
         );
     }
 
-    /// # A run that never ran
-    ///
-    /// A runner that fails to start produces no case outcomes, and the browser
-    /// sends that the same way it sends a real result. Folding it into the
-    /// deltas made a transient 503 from the compiler service read as two
-    /// failures fixed, and then made the next run of the same untouched code
-    /// read as three cases newly passing: a network error became progress. So
-    /// the counts, the deltas and the progress flags belong to runs that
-    /// executed, and a run that did not still records its attempt, its
-    /// diagnostic and its entry.
-    ///
-    /// `total` alone is not what separates them. The browser fills `total` from
-    /// the judge spec before it runs anything, so a compile error arrives as
-    /// nought of five with an empty `failures` array, not as nought of nought:
-    /// reading the count alone turned a C++ build failure after a green run
-    /// into five cases newly failed and a regression, which is the reading this
-    /// section exists to refuse. A setup error is the runner saying it never
-    /// reached the cases, and the two together are what say a run executed.
-    pub(crate) fn record_test(
-        &mut self,
-        source_timestamp_ms: Option<u64>,
-        receipt_timestamp_ms: u64,
-        payload: &serde_json::Value,
-    ) {
-        let total = payload
-            .get("total")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or(0)
-            .min(u64::from(u32::MAX)) as u32;
-        let passed = payload
-            .get("passed")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or(0)
-            .min(u64::from(total)) as u32;
-        let failed = total.saturating_sub(passed);
-        let executed = total > 0 && !run_failed_to_start(payload);
-        let signature = failure_signature(payload);
-        let previous = self.tests.clone();
-        let newly_passed = delta(passed, previous.passed);
-        self.progress.runner_attempted = true;
-        self.record_sequence("test");
-        if executed {
-            self.tests = TestState {
-                total,
-                passed,
-                failed,
-
-                // Widened before subtracting. Both operands are clamped to 99
-                // by `sanitize_test_run` on every path the browser reaches, but
-                // this reducer is public and takes the raw value, so the
-                // arithmetic holds the invariant itself rather than borrowing
-                // the caller's.
-                newly_passed,
-                newly_failed: delta(failed, previous.failed),
-
-                // Only executed runs overwrite this state, and an executed run
-                // has cases, so a total is what an earlier one leaves behind.
-                follows_executed_run: previous.total > 0,
-                regression: passed < previous.passed,
-
-                // A streak needs a signature on both sides. Two failing runs
-                // that named no failures at all are not evidence of the same
-                // failure twice, and counting them as one drove the repeated
-                // failure signal that asks the interviewer to step in.
-                //
-                // Cases that started passing end the streak whatever the
-                // signature says. Only the first few failures are reported, so
-                // a candidate who fixes six of ten and leaves the reported four
-                // untouched hashes the same as before: the signal that says
-                // they are stuck on one failure would fire at the moment they
-                // made the largest gain of the session.
-                consecutive_identical_failures: match (failed > 0, &signature) {
-                    (true, Some(_))
-                        if newly_passed <= 0 && signature == previous.failure_signature =>
-                    {
-                        previous.consecutive_identical_failures + 1
-                    }
-                    (true, _) => 1,
-                    (false, _) => 0,
-                },
-                failure_signature: signature.clone(),
-                source_timestamp_ms,
-            };
-            self.progress.tested = true;
-            self.progress.test_progress |= self.tests.newly_passed > 0;
-            if self.tests.newly_passed > 0 {
-                self.stuck.last_test_progress_ms = Some(receipt_timestamp_ms);
-                self.stuck.test_progress_latency_ms = self
-                    .stuck
-                    .last_meaningful_change_ms
-                    .map(|meaningful| receipt_timestamp_ms.saturating_sub(meaningful));
-            }
-            self.progress.all_tests_passed_once |= passed == total;
-            self.stuck.repeated_failure_count = self.tests.consecutive_identical_failures;
-        }
-
-        // An edit and then a run is one cycle; the Run button pressed twelve
-        // times over an untouched buffer is one cycle and eleven retries, and
-        // counting those as cycles told the report the candidate was iterating
-        // when they were waiting.
-        if self.code.candidate_edits > self.candidate_edits_at_last_test {
-            self.stuck.edit_test_cycles += 1;
-        }
-        self.candidate_edits_at_last_test = self.code.candidate_edits;
-        if let Some((category, diagnostic)) = diagnostic(payload) {
-            self.record_diagnostic(
-                source_timestamp_ms,
-                receipt_timestamp_ms,
-                category,
-                &diagnostic,
-            );
-        }
-        self.append(
-            ObservationFamily::Test,
-            Provenance::BrowserClaim,
-            source_timestamp_ms,
-            receipt_timestamp_ms,
-            serde_json::json!({
-                "executed": executed,
-                "total": total,
-                "passed": passed,
-
-                // `failed` is the one count here the runner never reported: it
-                // is `total` minus `passed`, so a setup error that arrives as
-                // nought of five says five cases failed, when the runner is
-                // saying it never reached them. `total` and `passed` are what
-                // the browser claimed and stay as they are.
-                "failed": if executed { failed } else { 0 },
-                "newlyPassed": if executed { self.tests.newly_passed } else { 0 },
-                "newlyFailed": if executed { self.tests.newly_failed } else { 0 },
-                "regression": executed && self.tests.regression,
-
-                // Every count on this entry describes this run, so a run that
-                // produced no case outcomes carries none of the running state:
-                // a streak printed beside `"executed":false` reads as two
-                // identical failures in a run that never failed anything.
-                "consecutiveIdenticalFailures": if executed {
-                    self.tests.consecutive_identical_failures
-                } else {
-                    0
-                },
-                "failureSignature": signature,
-            }),
-        );
-    }
-
     fn record_diagnostic(
         &mut self,
         source_timestamp_ms: Option<u64>,
@@ -1140,14 +979,6 @@ impl EvidenceLedger {
         }
         self.conversation.recent_sequence.push(event.to_string());
     }
-}
-
-/// Widened, subtracted, then clamped back. The fields are `i32` because a
-/// delta is signed and small; doing the arithmetic in the narrow type is what
-/// wraps.
-fn delta(current: u32, previous: u32) -> i32 {
-    (i64::from(current) - i64::from(previous)).clamp(i64::from(i32::MIN), i64::from(i32::MAX))
-        as i32
 }
 
 /// One editor state: the language and the buffer together. The language is
@@ -1927,209 +1758,4 @@ fn changed_node_facts(
             }
         })
         .collect()
-}
-
-/// Every spelling of a branch or a loop the five grammars use, because a list
-/// that holds only the shapes C happens to name is a list that answers for one
-/// language. `for (const x of items)` is a `for_in_statement` in JavaScript,
-/// `for (int x : a)` is an `enhanced_for_statement` in Java and `for (auto x :
-/// v)` is a `for_range_loop` in C++, and none of them is a `for_statement`: the
-/// most ordinary loop a candidate writes in three of these tabs was reported as
-/// an edit of no particular kind. A `do`/`while` is a `do_statement` in all
-/// four C-family grammars and was missing for the same reason.
-fn control_kind(kind: &str) -> bool {
-    loop_kind(kind)
-        || matches!(
-            kind,
-            "if_statement"
-                | "elif_clause"
-                | "else_clause"
-                | "while_statement"
-                | "do_statement"
-                | "switch_statement"
-                | "switch_expression"
-                | "case_statement"
-                | "match_statement"
-                | "try_statement"
-                | "catch_clause"
-                | "finally_clause"
-                | "with_statement"
-                | "break_statement"
-                | "continue_statement"
-        )
-}
-
-/// Every comment kind the pinned grammars have. Java has no `comment`, only
-/// `line_comment` and `block_comment`, so matching the one word read every
-/// Java comment edit as code and moved the review gate on it; JavaScript adds
-/// `html_comment` for a `<!--` line.
-pub(super) fn comment_kind(kind: &str) -> bool {
-    matches!(
-        kind,
-        "comment" | "line_comment" | "block_comment" | "html_comment"
-    )
-}
-
-/// The loops that bind something, a subset of [`control_kind`]: `while` and
-/// `do` iterate with nothing of their own.
-fn loop_kind(kind: &str) -> bool {
-    matches!(
-        kind,
-        "for_statement" | "for_in_statement" | "for_range_loop" | "enhanced_for_statement"
-    )
-}
-
-/// A node kind with its closure nesting stripped, for the questions that do not
-/// turn on it.
-fn unnest(kind: &str) -> &str {
-    kind.strip_prefix(CLOSURE_PREFIX).unwrap_or(kind)
-}
-
-/// A function the candidate wrote inline to pass somewhere, as opposed to one a
-/// caller can find by name. What is inside one is qualified by
-/// [`syntax_facts`], and the kinds here are what that walk keys off.
-fn closure_kind(kind: &str) -> bool {
-    matches!(
-        kind,
-        "lambda" | "lambda_expression" | "arrow_function" | "function_expression"
-    )
-}
-
-/// A list rather than a chain of alternatives, because the alternatives
-/// overlap: every kind containing "dictionary" contains "dict" too, so one of
-/// the two terms could never change the answer and nothing could be written to
-/// tell whether it was wired up at all.
-///
-/// The exclusions are the price of matching on substrings. Several grammars
-/// spell a syntactic grouping as a list: `argument_list` is what a call puts
-/// its arguments in, so extracting a helper and calling it, which is the most
-/// ordinary refactor an interview contains, was reported as the candidate
-/// changing a data structure. It read as something else again in JavaScript,
-/// where the same node is named `arguments`, so the same edit was described
-/// differently
-/// depending on the tab. A literal that really is a data structure keeps its
-/// own name, C's `initializer_list` included.
-fn data_structure_kind(kind: &str) -> bool {
-    const GROUPING: [&str; 6] = [
-        "argument_list",
-        "parameter_list",
-        "expression_list",
-        "declaration_list",
-        "enumerator_list",
-        "type_list",
-    ];
-
-    // A destructuring target is spelled as a list or an object in several
-    // grammars, `pattern_list` in Python and `array_pattern` in JavaScript, and
-    // unpacking `for i, n in enumerate(nums)` builds no structure at all.
-    if kind.contains("pattern") || GROUPING.iter().any(|grouping| kind.contains(grouping)) {
-        return false;
-    }
-    ["array", "list", "dict", "object", "map", "set"]
-        .iter()
-        .any(|word| kind.contains(word))
-}
-
-/// A change to something a caller can see: the definition itself, or the
-/// parameter list it carries.
-///
-/// Named in full rather than matched on substrings, which is what the words
-/// "function", "method", "class" and "parameter" were. Every call is spelled
-/// with one of them - `method_invocation` in Java, `call_expression` and
-/// `arrow_function` in JavaScript - so calling a method inside a function body,
-/// which is most of what an interview contains, reported the candidate as
-/// having changed the signature of the function they called it from.
-///
-/// Deliberately not "any declaration" either: C spells a local variable
-/// `declaration` and Java spells it `local_variable_declaration`, so matching
-/// that word reported `int count = 0;` inside a body as a changed signature.
-fn interface_kind(kind: &str) -> bool {
-    matches!(
-        kind,
-        // The definitions.
-        "function_definition"
-            | "function_declaration"
-            | "function_declarator"
-            | "method_declaration"
-            | "method_definition"
-            | "constructor_declaration"
-            | "class_definition"
-            | "class_declaration"
-            | "class_specifier"
-            | "struct_specifier"
-            | "interface_declaration"
-            | "enum_declaration"
-            // The parameter lists they carry, and the parameters in them.
-            | "parameters"
-            | "parameter_list"
-            | "parameter_declaration"
-            | "optional_parameter_declaration"
-            | "variadic_parameter_declaration"
-            | "formal_parameters"
-            | "formal_parameter"
-            | "spread_parameter"
-            | "default_parameter"
-            | "typed_parameter"
-            | "typed_default_parameter"
-    )
-}
-
-/// A digest of what failed, used only to tell one failing run from the next.
-///
-/// The separators are what make it a signature rather than a concatenation.
-/// With one delimiter for everything, a run whose label was "a" and error "b"
-/// hashed the same as a run with a single label that happened to contain the
-/// delimiter, and two runs failing for different reasons then read as the same
-/// failure twice. Field name, unit separator between fields, record separator
-/// between failures.
-fn failure_signature(payload: &serde_json::Value) -> Option<String> {
-    let failures = payload.get("failures")?.as_array()?;
-    let mut material = String::new();
-    for failure in failures {
-        for key in ["label", "error", "expected", "got"] {
-            if let Some(value) = failure.get(key).and_then(serde_json::Value::as_str) {
-                material.push_str(key);
-                material.push('\u{1f}');
-                material.push_str(value);
-                material.push('\u{1f}');
-            }
-        }
-        material.push('\u{1e}');
-    }
-    if failures.is_empty() {
-        None
-    } else {
-        Some(sha256_hex(&[material.as_bytes()]))
-    }
-}
-
-/// Whether the runner said it never reached the cases.
-///
-/// The same field `apply_test_results` reads to decide which reaction the
-/// interviewer gets, so the ledger and the spoken half agree on what happened.
-/// The browser publishes a setup error and case outcomes as alternatives: the
-/// paths that fill one return an empty `cases` array, so a run carrying this
-/// graded nothing however many cases the judge spec holds.
-pub(crate) fn run_failed_to_start(payload: &serde_json::Value) -> bool {
-    payload
-        .get("setupError")
-        .and_then(serde_json::Value::as_str)
-        .is_some_and(|text| !text.is_empty())
-}
-
-fn diagnostic(payload: &serde_json::Value) -> Option<(DiagnosticCategory, String)> {
-    let structured_category = payload
-        .get("diagnostic")
-        .and_then(|value| value.get("category"))
-        .and_then(serde_json::Value::as_str)
-        .and_then(DiagnosticCategory::from_wire);
-    let setup_error = payload
-        .get("setupError")
-        .and_then(serde_json::Value::as_str)
-        .filter(|text| !text.is_empty());
-    let category = structured_category.unwrap_or(DiagnosticCategory::Other);
-    let material = setup_error
-        .map(|text| text.chars().take(400).collect())
-        .or_else(|| structured_category.map(|_| format!("structured:{category:?}")))?;
-    Some((category, material))
 }

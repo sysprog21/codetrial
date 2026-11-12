@@ -66,7 +66,7 @@ async fn settle_once(accounts: Arc<Accounts>, now: i64) -> rusqlite::Result<()> 
                 .query_map([], |row| row.get::<_, String>(0))?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             for id in ids {
-                let Some(mut session) = peer::load(connection, &id)? else {
+                let Some(mut session) = load_or_skip(connection, &id, "settlement") else {
                     continue;
                 };
                 let version = session.version;
@@ -92,6 +92,73 @@ struct CleanupRoom {
     provider: String,
 }
 
+/// A session a sweep pass reads, or none when it is gone or cannot be read. One
+/// unreadable row is skipped, not fatal: an error here rolls the whole pass
+/// back, which would stop every other session from being settled or cleaned up
+/// until the row is repaired.
+fn load_or_skip(connection: &rusqlite::Connection, id: &str, pass: &str) -> Option<peer::Session> {
+    match peer::load(connection, id) {
+        Ok(session) => {
+            forget_report(pass, id);
+            session
+        }
+        Err(error) => {
+            if first_report(pass, id) {
+                eprintln!("peer {pass} skipped session {id}: {error}");
+            }
+            None
+        }
+    }
+}
+
+/// How many unreadable sessions are remembered, so a table of bad rows cannot
+/// grow the set without limit.
+const REPORT_BOUND: usize = 1024;
+
+/// The sessions each pass has already said it skipped.
+static REPORTED: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashSet<(String, String)>>,
+> = std::sync::LazyLock::new(Default::default);
+
+/// Whether this pass has not yet said that it skipped this session. A pass runs
+/// every few seconds, and a row that cannot be read stays unreadable, so saying
+/// it every time fills the log with one line. At the bound nothing new is said
+/// and nothing is forgotten: starting over would repeat every bad row on every
+/// pass, so the overflow is said once instead.
+fn first_report(pass: &str, id: &str) -> bool {
+    let mut said = REPORTED.lock().unwrap_or_else(|e| e.into_inner());
+    first_report_in(&mut said, REPORT_BOUND, pass, id)
+}
+
+/// `first_report` over a set of its own, so a test can fill one to a small
+/// bound without touching what the other passes remember.
+fn first_report_in(
+    said: &mut std::collections::HashSet<(String, String)>,
+    bound: usize,
+    pass: &str,
+    id: &str,
+) -> bool {
+    let key = (pass.to_owned(), id.to_owned());
+    if said.contains(&key) {
+        return false;
+    }
+    if said.len() >= bound {
+        if said.insert((pass.to_owned(), String::new())) {
+            eprintln!("peer {pass}: over {bound} sessions are unreadable; saying no more");
+        }
+        return false;
+    }
+    said.insert(key)
+}
+
+/// A session that read cleanly is forgotten, so a later failure of it is said.
+fn forget_report(pass: &str, id: &str) {
+    REPORTED
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&(pass.to_owned(), id.to_owned()));
+}
+
 fn claim_rooms(accounts: &Accounts, now: i64) -> rusqlite::Result<Vec<CleanupRoom>> {
     let mut rooms = accounts.transaction(|connection| {
         let query = "SELECT id FROM peer_sessions
@@ -104,7 +171,15 @@ fn claim_rooms(accounts: &Accounts, now: i64) -> rusqlite::Result<Vec<CleanupRoo
             .collect::<rusqlite::Result<Vec<_>>>()?;
         let mut rooms = Vec::new();
         for id in ids {
-            let Some(mut session) = peer::load(connection, &id)? else {
+            let Some(mut session) = load_or_skip(connection, &id, "cleanup") else {
+                // Left due, it would be read again by every pass, and sixteen
+                // such rows would fill the window and keep every readable
+                // closed room out of it. A row that cannot be read does not
+                // mend itself, so it is tried again only hourly.
+                connection.execute(
+                    "UPDATE peer_sessions SET next_delete_at=?2 WHERE id=?1",
+                    rusqlite::params![id, now + 3600],
+                )?;
                 continue;
             };
             if let (Some(room), Some(provider)) = (&session.room_name, &session.provider_id) {

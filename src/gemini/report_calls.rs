@@ -679,6 +679,7 @@ pub(super) fn report_attempt_failure(
             {
                 ("decode", None)
             }
+            None if error.is::<std::io::Error>() => ("body_limit", None),
             None => ("send_or_timeout", None),
         },
         Ok(value) if gemini_text(value).is_none() => ("no_text", None),

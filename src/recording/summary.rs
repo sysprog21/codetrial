@@ -3,7 +3,7 @@ use rusqlite::OptionalExtension;
 use crate::accounts::Accounts;
 
 use super::store::{SELECT_RECORDING, row_to_recording};
-use super::{Failure, Recording, RecordingState};
+use super::{Failure, RETENTION_SECONDS, Recording, RecordingState};
 
 /// One page of an account's recordings, newest first.
 ///
@@ -110,6 +110,13 @@ pub fn recording_summary(
 /// resumable: the handles the last attempt could not remove are still on the
 /// row, and the ones it did remove are not.
 ///
+/// A delivery that ran out of attempts is due the retention window after its
+/// last failure, which is how long an operator has to retry it: it has no
+/// `expires_at`, and its Drive file, recipient and replay would otherwise stay.
+/// A deletion of it that fails moves it to `cleanup_failed` and replaces the
+/// error that made it due, so that state is due on its own while it has no
+/// `expires_at`.
+///
 /// A recording whose Egress job was never confirmed stopped is not due, however
 /// old it is. Tombstoning gives up the room name, which is the only thing the
 /// orphan sweep has to stop that job with, and a job nobody can stop keeps
@@ -124,6 +131,9 @@ pub fn due_for_deletion(accounts: &Accounts, now: i64) -> rusqlite::Result<Vec<R
           AND (egress_id IS NULL OR stopped_at IS NOT NULL)
           AND ((expires_at IS NOT NULL AND expires_at <= ?1)
                OR error = ?2
+               OR (state = 'failed' AND error = ?3 AND expires_at IS NULL
+                   AND updated_at <= ?1 - ?4)
+               OR (state = 'cleanup_failed' AND expires_at IS NULL)
                OR interview_id IN (
                    SELECT id FROM interviews WHERE consent_withdrawn_at IS NOT NULL
                ))
@@ -131,7 +141,15 @@ pub fn due_for_deletion(accounts: &Accounts, now: i64) -> rusqlite::Result<Vec<R
         "
         ))?;
         let rows = statement
-            .query_map((now, Failure::ConsentWithdrawn.as_str()), row_to_recording)?
+            .query_map(
+                (
+                    now,
+                    Failure::ConsentWithdrawn.as_str(),
+                    Failure::Drive.as_str(),
+                    RETENTION_SECONDS,
+                ),
+                row_to_recording,
+            )?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
     })

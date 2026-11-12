@@ -274,7 +274,8 @@ keeps running. Both share the ceiling of 48 calls per interview, of which a
 coding round at a typed editor leaves 8 for a behavioral round still to come.
 Each reads at most 6 KiB of transcript tail and 6 KiB of editor. A rate limit on
 a judgment does not cool the key, so the judge cannot leave the final report
-without one.
+without one, and neither does a rate limit on a peer transcription, which
+shares the report keys with the interviews running beside it.
 
 ## Candidate absence and room lifetime
 
@@ -504,7 +505,11 @@ gets a fresh room. Strict always
 uses fresh room names. Practice does too without a development pin, which
 production ignores, so a reload can overlap the previous attempt's cleanup.
 Guests never reuse a live room and have a separate limit of two
-within the global cap. Task completion and panic release slots. A report
+within the global cap. A signed-in account may hold four starts that no
+candidate has joined, and a fifth is refused with 429, so one account cannot
+fill the slots with rooms it never enters (the log line reads
+`dispatch_refused ... reason=too_many_waiting`); a start whose candidate joined, or
+that ended, stops counting. Task completion and panic release slots. A report
 recovery window keeps its slot and LiveKit connection until expiry or 30 seconds
 after candidate departure, at most five minutes plus a 125-second regeneration
 and a 30-second rejoin. Provider outages can therefore fill the slots with
@@ -520,9 +525,10 @@ room otherwise gets the refusal it had before the stop. Provider projects are
 rotated and their LiveKit connection-minute quota is refreshed in the
 background, and known-exhausted projects are skipped.
 
-The token endpoint allows 30 starts per 60-second bucket. Signed-in buckets are
-keyed by account and anonymous buckets by client address, so anonymous traffic
-cannot spend an authenticated candidate's allowance.
+The token endpoint allows 30 starts per 60-second bucket. Signed-in and
+anonymous requests are counted in separate buckets, each keyed by client address
+(an IPv6 client by its /64), so anonymous traffic cannot spend an authenticated
+candidate's allowance. Candidates behind one address share the signed-in bucket.
 
 Reciprocal practice shares one `CODETRIAL_PEER_MAX_SESSIONS` cap (8 by default)
 across advertised waiting rooms and bound sessions. Opening availability creates
@@ -661,7 +667,7 @@ may still be.
 ## Operating it
 
 Watch `codetrial dispatch_refused ... reason=at_capacity` and
-`reason=finalizing`, `livekit quota:` transitions, token HTTP 429 with
+`reason=finalizing` and `reason=too_many_waiting`, `livekit quota:` transitions, token HTTP 429 with
 `Retry-After`, `gemini report transport_failed call=... retry=...`, `gemini
 report retry_unavailable` (a key rotation lost during backoff, without another
 HTTP call), `codetrial report_recovery_notice_failed`, `codetrial

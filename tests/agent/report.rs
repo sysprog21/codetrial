@@ -18,6 +18,33 @@ fn rounds(behavioral_opened: bool) -> ReportRounds {
     }
 }
 
+/// The validator and the sanitizer that repairs its refusals read a sentence
+/// at a time. A word that makes a visual reference "the candidate's" must be in
+/// the same sentence as the reference, or the validator refuses text the
+/// sanitizer, finding nothing in any one sentence, cannot repair, and the
+/// report ends incomplete over a sentence that never mentioned a drawing.
+#[test]
+fn a_drawing_reference_is_judged_within_its_own_sentence() {
+    let problem = get_problem(Some("two-sum"));
+    let valid = valid_strict_report();
+    let judge = |report: &serde_json::Value| {
+        validate_report_for_round(report, problem, rounds(true), InterviewMode::Coding, true)
+    };
+
+    let mut spans_sentences = valid.clone();
+    spans_sentences["communicationFeedback"]["strengths"][0] =
+        json!("You provided a solution. The diagram helps.");
+    judge(&spans_sentences).expect("provided and diagram are in different sentences");
+
+    let mut same_sentence = valid;
+    same_sentence["communicationFeedback"]["strengths"][0] =
+        json!("You provided a solution. You provided a diagram.");
+    assert!(
+        judge(&same_sentence).is_err(),
+        "the same sentence is still refused"
+    );
+}
+
 #[test]
 fn coding_reports_exclude_drawings_and_keep_the_original_conversation_rubric() {
     let problem = get_problem(Some("two-sum"));
@@ -1188,6 +1215,62 @@ fn drawing_guard_keeps_the_exercises_own_diagram_vocabulary() {
     );
 }
 
+/// The exercise's own vocabulary is not refused on a loose cue, but "your" or
+/// "you drew" names the candidate's own picture even where the problem also
+/// says the word, so a received drawing cannot be praised through it.
+#[test]
+fn drawing_guard_refuses_a_strong_cue_on_the_exercises_own_word() {
+    let mut problem = *get_problem(Some("two-sum"));
+    problem.summary = "The input diagram contains labeled nodes.";
+    let judge = |text: &str| {
+        let mut report = valid_strict_report();
+        report["codingFeedback"]["strengths"][0] = json!(text);
+        validate_report_for_round(&report, &problem, rounds(true), InterviewMode::Coding, true)
+    };
+    judge("You provided a solution that handles the diagram nodes.")
+        .expect("a loose cue on the exercise's word is not the candidate's picture");
+    for text in ["Your diagram was clear.", "The diagram you drew was clear."] {
+        let errors = judge(text).expect_err(text);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.starts_with("$.codingFeedback.strengths[0]: example drawings")),
+            "{text}: the drawing guard did not refuse it: {errors:?}"
+        );
+    }
+}
+
+/// "Your image" is the candidate's own picture, unless it is the modifier of an
+/// image-processing noun, which is ordinary feedback on the exercise.
+#[test]
+fn your_image_is_a_picture_unless_it_modifies_a_technical_noun() {
+    let problem = get_problem(Some("two-sum"));
+    let judge = |text: &str| {
+        let mut report = valid_strict_report();
+        report["codingFeedback"]["strengths"][0] = json!(text);
+        validate_report_for_round(&report, problem, rounds(true), InterviewMode::Coding, true)
+    };
+    for text in [
+        "Your image rotation handled odd sizes.",
+        "Your image processing loop was correct.",
+    ] {
+        judge(text).expect(text);
+    }
+    // A noun that opens the next sentence does not modify the word before it.
+    for text in [
+        "Your image was clear.",
+        "Nice work on your image. Data flow was clear.",
+    ] {
+        let errors = judge(text).expect_err("a picture");
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.starts_with("$.codingFeedback.strengths[0]: example drawings")),
+            "{text}: the drawing guard did not refuse it: {errors:?}"
+        );
+    }
+}
+
 #[test]
 fn ordinary_visual_idioms_are_valid_with_a_received_drawing() {
     let problem = get_problem(Some("two-sum"));
@@ -1199,6 +1282,8 @@ fn ordinary_visual_idioms_are_valid_with_a_received_drawing() {
         "You provided an explanation by drawing on prior experience.",
         "You provided a big picture overview.",
         "You offered a verbal sketch of the approach.",
+        "You traversed the diagram they gave correctly.",
+        "For example, drawing the recursion tree shows the calls.",
     ] {
         let mut report = valid_strict_report();
         report["communicationFeedback"]["strengths"][0] = json!(text);
@@ -1214,6 +1299,10 @@ fn drawing_references_are_not_mistaken_for_visual_idioms() {
         "You explained your drawing out loud.",
         "Your drawing on the board clarified the approach.",
         "Your sketch shows prior understanding of the problem.",
+        "Their drawing on the board clarified the approach.",
+        "The example drawing was clear.",
+        "The diagram they drew was clear.",
+        "The picture she drew was clear.",
     ] {
         let mut report = valid_strict_report();
         report["communicationFeedback"]["strengths"][0] = json!(text);

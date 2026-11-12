@@ -1330,6 +1330,9 @@ pub(crate) mod lifecycle {
     }
 }
 
+#[path = "recording/after_the_end.rs"]
+mod after_the_end;
+
 /// Every way a recording can fail, driven through an injected provider.
 ///
 /// None of these can be produced against LiveKit or Google Drive on demand, so
@@ -1352,7 +1355,7 @@ mod failure {
     /// Drive, as far as this pipeline is concerned: three calls, each of which
     /// can be told to refuse.
     #[derive(Default)]
-    struct FakeDelivery {
+    pub(crate) struct FakeDelivery {
         /// A database to move the row in while `transfer` is running, standing
         /// in for a withdrawal that lands mid-delivery. It is the only way to
         /// reach that interleaving from a test.
@@ -1364,7 +1367,7 @@ mod failure {
         /// The same, applied during `share` rather than `transfer`, for the
         /// race at the permission boundary.
         preempt_share: Mutex<Option<std::path::PathBuf>>,
-        refuse_transfer: Mutex<bool>,
+        pub(crate) refuse_transfer: Mutex<bool>,
         refuse_share: Mutex<bool>,
         refuse_delete: Mutex<bool>,
         refuse_revoke: Mutex<bool>,
@@ -1373,7 +1376,7 @@ mod failure {
     }
 
     impl FakeDelivery {
-        fn calls(&self) -> Vec<String> {
+        pub(crate) fn calls(&self) -> Vec<String> {
             self.calls.lock().unwrap().clone()
         }
     }
@@ -1509,7 +1512,7 @@ mod failure {
     }
 
     /// A recording that reached `transferring`, which is where delivery starts.
-    async fn transferring(accounts: &Arc<Accounts>, recorder: &Recorder) -> Recording {
+    pub(crate) async fn transferring(accounts: &Arc<Accounts>, recorder: &Recorder) -> Recording {
         let recording = start(accounts, recorder, "int-1", "rec-1").unwrap();
         codetrial::recording::record_egress_id(
             accounts,
@@ -2054,44 +2057,6 @@ mod failure {
             Ok(RecordingState::Ready),
             "retry_delivery has to be a recovery something can perform"
         );
-    }
-
-    /// A recording that already ended reaches no provider at all.
-    ///
-    /// The staged object is written down first and only for a `transferring`
-    /// row, so a delivery called after a withdrawal stops before it can make a
-    /// Drive copy of a recording nobody consented to keep.
-    #[tokio::test]
-    async fn failure_drive_refuses_a_recording_that_already_ended() {
-        let (scratch, accounts, _provider, _clock, recorder) = harness("failure-ended");
-        let recording = transferring(&accounts, &recorder).await;
-        scratch
-            .open()
-            .execute(
-                "UPDATE recordings SET state = 'failed', error = 'consent_withdrawn' WHERE id = 'rec-1'",
-                [],
-            )
-            .unwrap();
-
-        let delivery = FakeDelivery::default();
-        assert_eq!(
-            deliver_recording(
-                &accounts,
-                &recorder,
-                &delivery,
-                &recording,
-                "one@example.test",
-                86_400,
-            )
-            .await,
-            Err(Failure::Drive)
-        );
-        assert_eq!(
-            delivery.calls(),
-            Vec::<String>::new(),
-            "nothing remote happens for a recording that has ended"
-        );
-        assert_eq!(state_of(&accounts, "rec-1"), RecordingState::Failed);
     }
 
     /// A delivery that lost its row mid-flight takes what it made with it.

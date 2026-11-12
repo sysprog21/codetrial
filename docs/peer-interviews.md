@@ -39,6 +39,10 @@ from AI suggestions and never becomes a CodeTrial score.
 
 Private invite links remain available for a prearranged partner. They use the
 same fixed membership, consent, audio readiness and two-round controls.
+An account may have 20 sessions nobody has entered yet, which are its
+invitations, accepted or not, and any pairing that has not reached the lobby. A
+further invitation is refused with `too_many_invitations` until one is entered,
+cancelled or expires. A pairing both people confirmed is never refused for it.
 
 ## Configuration
 

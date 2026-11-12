@@ -51,6 +51,8 @@ const PEER_ERRORS = {
   observer_unavailable: "The silent observer is not available right now.",
   observer_at_capacity: "The silent observer is busy. Try again in a moment.",
   at_capacity: "All practice rooms are in use. Try again in a few minutes.",
+  too_many_invitations:
+    "You have too many invitations waiting. Cancel one to create another.",
   rate_limited: "Too many requests. Wait a moment and try again.",
   request_limit: "Too many requests. Wait a moment and try again.",
   feedback_required: "Submit your feedback before moving on.",
