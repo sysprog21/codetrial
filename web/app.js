@@ -1360,25 +1360,37 @@ function canCompareAttempt(attempt, history = progressNormalized) {
   );
 }
 
-async function attemptCategoryComparison(attempt) {
+async function attemptCategoryComparison(
+  attempt,
+  { useSavedMetrics = false } = {},
+) {
   const history = progressNormalized;
   if (!canCompareAttempt(attempt, history)) return null;
   historyCategories ??= await loadHistoryCategoryMap();
-  return compareCategoryAttempt(history, attempt, historyCategories);
+  if (!useSavedMetrics)
+    return compareCategoryAttempt(history, attempt, historyCategories);
+  const withSavedMetrics = (entry) => ({
+    ...entry,
+    recordedCodingScore: entry.savedMetrics.codingScore ?? null,
+    recordedCommunicationScore: entry.savedMetrics.communicationScore ?? null,
+    recordedHintsUsed: entry.savedMetrics.hintsUsed ?? null,
+  });
+  return compareCategoryAttempt(
+    history.map(withSavedMetrics),
+    withSavedMetrics(attempt),
+    historyCategories,
+  );
 }
 
 async function openAttemptCategoryComparison(report, attempt) {
   if (report.querySelector(".category-comparison")) return;
-  const comparison = await attemptCategoryComparison(attempt);
-  if (!comparison) return;
-  const saved = savedAttemptReport(attempt);
-  const markup = categoryComparisonMarkup(saved, {
-    ...comparison,
-    current: saved,
-    codingScoreDelta: undefined,
-    communicationScoreDelta: undefined,
-    hintsUsedDelta: undefined,
+  const comparison = await attemptCategoryComparison(attempt, {
+    useSavedMetrics: true,
   });
+  const markup = categoryComparisonMarkup(
+    savedAttemptReport(attempt),
+    comparison,
+  );
   if (!markup || report.querySelector(".category-comparison")) return;
   const card = report.querySelector(".report-card");
   const anchor = card?.querySelector(".report-debrief");

@@ -10352,7 +10352,7 @@ lobbyTest(
           language: "python",
           report: {
             codingScore: 60,
-            communicationScore: 70,
+            communicationScore: 120,
             decision: "NO_HIRE",
             hintsUsed: 2,
             summary: "First 1D DP attempt.",
@@ -10397,6 +10397,10 @@ lobbyTest(
     assert.match(
       await newest.locator(".category-comparison").textContent(),
       /Coding:\s*60[^\d]*n\/a\s*\(n\/a\)/,
+    );
+    assert.match(
+      await newest.locator(".category-comparison").textContent(),
+      /Communication:\s*n\/a[^\d]*80\s*\(n\/a\)/,
     );
     assert.equal(requests.includes("/problem-categories.json"), true);
 
