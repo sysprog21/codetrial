@@ -206,8 +206,9 @@ impl EvidenceLedger {
                 source_timestamp_ms,
             };
             self.progress.tested = true;
-            self.progress.test_progress |= self.tests.newly_passed > 0;
-            if self.tests.newly_passed > 0 {
+            // The first run establishes a baseline, including after a switch.
+            if self.tests.follows_executed_run && self.tests.newly_passed > 0 {
+                self.progress.test_progress = true;
                 self.stuck.last_test_progress_ms = Some(receipt_timestamp_ms);
                 self.stuck.test_progress_latency_ms = self
                     .stuck

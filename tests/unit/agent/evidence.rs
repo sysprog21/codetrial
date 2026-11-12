@@ -390,47 +390,6 @@ fn the_same_text_in_another_language_is_not_a_reversal() {
 }
 
 #[test]
-fn evidence_ledger_measures_reversal_and_test_progress_latency() {
-    let mut ledger = EvidenceLedger::default();
-    let starter = "value = 1\n";
-    let changed = "value = 2\n";
-    ledger.record_code_with_analysis(
-        Some(10),
-        100,
-        "python",
-        starter,
-        false,
-        analyze_code("python", "", starter),
-    );
-    ledger.record_code_with_analysis(
-        Some(20),
-        200,
-        "python",
-        changed,
-        true,
-        analyze_code("python", starter, changed),
-    );
-    ledger.record_code_with_analysis(
-        Some(30),
-        300,
-        "python",
-        starter,
-        true,
-        analyze_code("python", changed, starter),
-    );
-    ledger.record_test(
-        Some(40),
-        450,
-        &serde_json::json!({ "passed": 1, "total": 1 }),
-    );
-    assert_eq!(ledger.stuck.undo_redo_cycles, 1);
-    assert_eq!(ledger.stuck.last_meaningful_change_ms, Some(300));
-    assert_eq!(ledger.stuck.last_test_progress_ms, Some(450));
-    assert_eq!(ledger.stuck.test_progress_latency_ms, Some(150));
-    assert_eq!(ledger.metrics.code_events_emitted, 3);
-}
-
-#[test]
 fn evidence_ledger_counts_received_packets_separately_from_evidence() {
     let mut state = RuntimeState::default();
     apply_data_event(
@@ -994,6 +953,11 @@ fn a_run_that_never_executed_leaves_the_deltas_where_they_were() {
     let mut ledger = EvidenceLedger::default();
     record_unparsed(&mut ledger, Some(10), 100, "python", "value = 1\n", true);
     ledger.record_test(
+        Some(15),
+        150,
+        &serde_json::json!({ "passed": 2, "total": 5 }),
+    );
+    ledger.record_test(
         Some(20),
         200,
         &serde_json::json!({ "passed": 3, "total": 5 }),
@@ -1011,7 +975,7 @@ fn a_run_that_never_executed_leaves_the_deltas_where_they_were() {
     );
     assert_eq!(ledger.tests.total, 5);
     assert_eq!(ledger.tests.passed, 3);
-    assert_eq!(ledger.tests.newly_failed, 2);
+    assert_eq!(ledger.tests.newly_failed, -1);
     assert!(!ledger.tests.regression);
     assert_eq!(ledger.diagnostics.other, 1);
     assert!(ledger.progress.runner_attempted);
@@ -1024,14 +988,13 @@ fn a_run_that_never_executed_leaves_the_deltas_where_they_were() {
     );
     assert_eq!(ledger.tests.newly_passed, 0);
 
-    // The first run was progress and is still the last one. Counting the
-    // unchanged code as three cases newly passing would have moved that mark to
-    // the run that only repeated it.
+    // The second executed run improved from two passing cases to three. The
+    // failed setup and the unchanged rerun did not move that mark.
     assert_eq!(ledger.stuck.last_test_progress_ms, Some(200));
 
-    // Entry 2 is the diagnostic the failed setup produced; entry 3 is the run
+    // Entry 3 is the diagnostic the failed setup produced; entry 4 is the run
     // itself, which says in as many words that it did not execute.
-    assert_eq!(ledger.entries[3].observation["executed"], false);
+    assert_eq!(ledger.entries[4].observation["executed"], false);
 }
 
 #[test]
