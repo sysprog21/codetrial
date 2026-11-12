@@ -190,6 +190,20 @@ impl Session {
             "cancelled" | "complete" | "finalizing"
         )
     }
+    /// Ends the session before every round finished. A round already sealed
+    /// keeps its own seal time; one still open is sealed now and marked as
+    /// not having had its final capture.
+    fn close_partial(&mut self, status: &str, now: i64) {
+        self.status = status.into();
+        self.outcome = Some("partial".into());
+        for round in &mut self.rounds {
+            if round.sealed_at.is_none() {
+                round.status = "feedback".into();
+                round.sealed_at = Some(now);
+                round.final_capture_incomplete = true;
+            }
+        }
+    }
     pub(crate) fn view(&self, user: i64, now: i64) -> Value {
         let slot = self
             .slot(user)
@@ -222,15 +236,7 @@ pub(crate) fn settle(connection: &Connection, s: &mut Session, now: i64) -> rusq
         s.start_confirmed = [false; 2];
     }
     if s.hard_deadline.is_some_and(|deadline| now >= deadline) && !s.closed() {
-        s.status = "finalizing".into();
-        s.outcome = Some("partial".into());
-        for r in &mut s.rounds {
-            if r.sealed_at.is_none() {
-                r.status = "feedback".into();
-                r.sealed_at = Some(now);
-                r.final_capture_incomplete = true;
-            }
-        }
+        s.close_partial("finalizing", now);
     }
     if let Some(r) = s.current_round.and_then(|i| s.rounds.get_mut(i)) {
         if r.status == "active" && r.deadline.is_some_and(|d| now >= d) {

@@ -393,7 +393,7 @@ fn open_server(app: &AppHandle) {
 /// not open than the window the person is already looking at, and the starting
 /// page there offers to try again.
 fn open_in_browser(url: &str) {
-    let _ = tauri_plugin_opener::open_url(url, None::<&str>);
+    let _ = open::that_detached(url);
 }
 
 /// The starting page again, with `pairs` as its whole query.

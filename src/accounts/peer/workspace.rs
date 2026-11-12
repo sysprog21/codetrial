@@ -18,6 +18,17 @@ fn active_round(s: &Session, index: usize) -> PeerResult<&super::Round> {
     s.rounds.get(index).ok_or("round_unavailable")
 }
 
+fn active_writer(s: &Session, index: usize, slot: usize) -> PeerResult<&super::Round> {
+    let round = active_round(s, index)?;
+    if round.candidate_slot != slot {
+        return Err("not_writer");
+    }
+    if !round.accepts_writes() {
+        return Err("round_sealed");
+    }
+    Ok(round)
+}
+
 pub(crate) fn writer(
     s: &mut Session,
     slot: usize,
@@ -44,16 +55,10 @@ fn change_writer(
     previous: Option<&str>,
     now: i64,
 ) -> rusqlite::Result<PeerResult<Value>> {
-    let r = match active_round(s, index) {
+    let r = match active_writer(s, index, slot) {
         Ok(r) => r,
         Err(e) => return Ok(Err(e)),
     };
-    if r.candidate_slot != slot {
-        return Ok(Err("not_writer"));
-    }
-    if !r.accepts_writes() {
-        return Ok(Err("round_sealed"));
-    }
     if previous.is_some_and(|lease| r.writer_lease.as_deref() != Some(lease)) {
         return Ok(Err("lease_lost"));
     }
@@ -87,16 +92,10 @@ pub(crate) fn snapshot(
     body: &Value,
     now: i64,
 ) -> rusqlite::Result<PeerResult<Value>> {
-    let r = match active_round(s, index) {
+    let r = match active_writer(s, index, slot) {
         Ok(r) => r,
         Err(e) => return Ok(Err(e)),
     };
-    if r.candidate_slot != slot {
-        return Ok(Err("not_writer"));
-    }
-    if !r.accepts_writes() {
-        return Ok(Err("round_sealed"));
-    }
     if body["lease"].as_str() != r.writer_lease.as_deref()
         || r.writer_lease.is_none()
         || now >= r.writer_lease_until

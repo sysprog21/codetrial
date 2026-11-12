@@ -35,20 +35,14 @@ pub(super) fn action(
     }
     let result = match action {
         "cancel" | "terminate" => {
-            s.status = if action == "cancel" {
-                "cancelled"
-            } else {
-                "finalizing"
-            }
-            .into();
-            s.outcome = Some("partial".into());
-            for r in &mut s.rounds {
-                if r.sealed_at.is_none() {
-                    r.status = "feedback".into();
-                    r.sealed_at = Some(now);
-                    r.final_capture_incomplete = true;
-                }
-            }
+            s.close_partial(
+                if action == "cancel" {
+                    "cancelled"
+                } else {
+                    "finalizing"
+                },
+                now,
+            );
             c.execute("DELETE FROM peer_active_users WHERE session_id=?1", [&s.id])?;
             Ok(())
         }
