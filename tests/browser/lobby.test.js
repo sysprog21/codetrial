@@ -6837,13 +6837,17 @@ for (const account of [true, false]) {
       session = { signedIn: account, user: { login: "candidate" } };
       const cases = [
         [
-          { decision: "HIRE", codingScore: 82, communicationScore: 74 },
+          {
+            decision: "HIRE",
+            codingScore: 82,
+            communicationScore: 74,
+            interviewMode: "whiteboard",
+          },
           "HIRE · Coding 82/100 · Communication 74/100",
         ],
         [
           {
             decision: "NO_HIRE",
-            interviewMode: "whiteboard",
             codingScore: 55,
             communicationScore: 68,
           },
@@ -6907,13 +6911,26 @@ for (const account of [true, false]) {
           },
           "INCOMPLETE",
         ],
+        [
+          {
+            decision: "HIRE",
+            codingScore: -5,
+            communicationScore: 120,
+            hintsUsed: 150,
+          },
+          "HIRE",
+        ],
+        [{ decision: "HIRE", codingScore: 82.5 }, "HIRE"],
       ];
       const saved = cases.map(([report], index) => ({
         id: `scores-${index}`,
         problemId: EASY[0],
         problemTitle: `${index === 1 ? "Whiteboard interview " : ""}Score example ${index}`,
         difficulty: "Easy",
-        ...(index === 1 ? {} : { language: "python" }),
+        ...(index === 0 && { interviewMode: "editor" }),
+        ...(index === 1
+          ? { interviewMode: "whiteboard" }
+          : { language: "python" }),
         date: new Date(Date.UTC(2026, 0, index + 1)).toISOString(),
         report,
       }));
@@ -6947,6 +6964,19 @@ for (const account of [true, false]) {
         assert.ok(await row.locator(":scope > div").isHidden());
       }
       const board = rows.filter({ hasText: "Score example 1 ·" });
+      const incomplete = rows.filter({ hasText: "Score example 4 ·" });
+      await incomplete.getByRole("button", { name: "Open report" }).click();
+      const incompleteCard = incomplete.locator(":scope > div");
+      assert.ok(
+        await incompleteCard
+          .getByText("INCOMPLETE", { exact: true })
+          .isVisible(),
+      );
+      assert.equal(
+        await incompleteCard.getByText("UNSCORED", { exact: true }).count(),
+        0,
+      );
+      await incomplete.getByRole("button", { name: "Collapse report" }).click();
       const unscored = rows.filter({ hasText: "Score example 5 ·" });
       await unscored.getByRole("button", { name: "Open report" }).click();
       assert.ok(
@@ -6960,11 +6990,15 @@ for (const account of [true, false]) {
       );
       await unscored.getByRole("button", { name: "Collapse report" }).click();
       for (const [index, expected] of [
+        [0, ["82 / 100", "74 / 100"]],
+        [1, ["55 / 100", "68 / 100"]],
         [2, ["82 / 100", "Not assessed"]],
         [3, ["0 / 100", "45 / 100"]],
         [9, ["Not recorded", "74 / 100"]],
         [11, ["82 / 100", "Not recorded"]],
         [12, ["Not recorded", "Not recorded"]],
+        [15, ["Not recorded", "Not recorded"]],
+        [16, ["Not recorded", "Not recorded"]],
       ]) {
         const row = rows.filter({ hasText: `Score example ${index} ·` });
         await row.getByRole("button", { name: "Open report" }).click();
@@ -6972,7 +7006,25 @@ for (const account of [true, false]) {
           await row.locator(".score-grid strong").allTextContents(),
           expected,
         );
-        if (index === 12)
+        if (index === 1) {
+          assert.ok(
+            await row
+              .locator(".score-grid")
+              .getByText("Board work")
+              .isVisible(),
+          );
+          assert.equal(await row.locator(".final-code").count(), 0);
+        }
+        if (index === 0) {
+          assert.ok(
+            await row
+              .locator(".score-grid")
+              .getByText("Coding", { exact: true })
+              .isVisible(),
+          );
+          assert.equal(await row.locator(".final-code").count(), 1);
+        }
+        if (index === 12 || index === 15)
           assert.ok(
             await row
               .getByText("Hints used during the session: Not recorded")

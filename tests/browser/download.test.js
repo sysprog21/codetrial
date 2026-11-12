@@ -1,7 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { downloadMarkdown, reportFilename } from "../../web/download.js";
-import { savedAttemptReport } from "../../web/progress.js";
+import {
+  normalizeProgressEntry,
+  savedAttemptReport,
+} from "../../web/progress.js";
+import { reportMarkdown } from "../../web/render.js";
 import { functionBody, read } from "./source.js";
 
 for (const [path, name] of [
@@ -49,7 +53,12 @@ for (const [path, name] of [
     )(scope);
     const guardedDownload = (...args) =>
       name === "exportSavedReport" ? download(...args, null) : download();
-    const attempt = { report: {}, problemId: "two-sum", at: "2026-10-23" };
+    const attempt = {
+      report: {},
+      scored: true,
+      problemId: "two-sum",
+      at: "2026-10-23",
+    };
     const run = () =>
       name === "exportSavedReport"
         ? guardedDownload(attempt, button)
@@ -114,6 +123,41 @@ for (const [path, name] of [
   }
 
   if (name === "exportSavedReport") {
+    test("saved downloads distinguish missing scores from recorded zero and unassessed communication", async () => {
+      const h = harness();
+      h.scope.reportMarkdown = reportMarkdown;
+      const reports = [
+        { decision: "UNKNOWN", codingScore: 82 },
+        { decision: "HIRE" },
+        { decision: "HIRE", codingScore: "82", communicationScore: "74" },
+        {
+          decision: "HIRE",
+          codingScore: 0,
+          communicationScore: null,
+          hintsUsed: 0,
+        },
+      ];
+      for (const [index, report] of reports.entries()) {
+        const attempt = normalizeProgressEntry({ ...h.attempt, report });
+        const pending = h.download(attempt, h.button);
+        h.lookups[index].resolve(null);
+        await pending;
+        const [markdown] = h.downloads[index];
+        if (index === 0) {
+          assert.match(markdown, /## No evaluation/);
+          assert.doesNotMatch(markdown, /\| Coding \|/);
+          continue;
+        }
+        const [coding, communication, hints] =
+          index === 3
+            ? ["0 / 100", "Not assessed", "0"]
+            : ["Not recorded", "Not recorded", "Not recorded"];
+        assert.ok(markdown.includes(`| Coding | ${coding} |`));
+        assert.ok(markdown.includes(`| Communication | ${communication} |`));
+        assert.ok(markdown.includes(`| Hints used | ${hints} |`));
+      }
+    });
+
     test("batch and row downloads share the pending guard for one report", async () => {
       const h = harness();
       h.attempt.id = "saved-report";
