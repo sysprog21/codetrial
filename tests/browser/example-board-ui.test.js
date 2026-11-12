@@ -38,6 +38,484 @@ function exampleMarkup() {
   return html.slice(start, html.indexOf("</details>", start) + 10);
 }
 
+async function openShapeBoard(t) {
+  const page = await browser.newPage();
+  t.after(() => page.close());
+  await page.goto(base);
+  await page.setContent(exampleMarkup());
+  await page.evaluate(async (base) => {
+    const { mountExampleBoard } = await import(`${base}/example-board.js`);
+    const { BOARD_WIDTH, BOARD_HEIGHT, MAX_STROKES, MAX_STROKES_MESSAGE } =
+      await import(`${base}/whiteboard.js`);
+    const root = document.querySelector("#example-board");
+    root.open = true;
+    const canvas = root.querySelector("canvas");
+    canvas.style.width = "640px";
+    canvas.style.height = "400px";
+    // Synthetic pointers have no native capture slot; drawing and journaling
+    // still use the real handlers and canvas, as in the full-board test below.
+    canvas.setPointerCapture = () => {};
+    window.ops = [];
+    window.online = false;
+    window.locked = false;
+    window.uploads = [];
+    window.example = mountExampleBoard(root, {
+      locked: () => window.locked,
+      connected: () => window.online,
+      record: (ops) => window.ops.push(...ops),
+      publish: async (blob, count) => {
+        window.uploads.push({ blob, count });
+        return true;
+      },
+    });
+    window.limits = { MAX_STROKES, MAX_STROKES_MESSAGE };
+    window.pointer = (type, x = 20, y = 20) => {
+      const box = canvas.getBoundingClientRect();
+      canvas.dispatchEvent(
+        new PointerEvent(type, {
+          pointerId: 1,
+          pointerType: "mouse",
+          isPrimary: true,
+          button: 0,
+          buttons: type === "pointerup" ? 0 : 1,
+          clientX: box.x + (x * box.width) / BOARD_WIDTH,
+          clientY: box.y + (y * box.height) / BOARD_HEIGHT,
+        }),
+      );
+    };
+  }, base);
+  return page;
+}
+
+for (const [start, end, bounds] of [
+  [
+    [1400, 500],
+    [2000, 700],
+    [1400, 500, 1600, 700],
+  ],
+  [
+    [200, 500],
+    [-400, 700],
+    [0, 500, 200, 700],
+  ],
+  [
+    [800, 200],
+    [1000, -300],
+    [800, 0, 1000, 200],
+  ],
+  [
+    [800, 800],
+    [1000, 1300],
+    [800, 800, 1000, 1000],
+  ],
+]) {
+  test(`Ellipse released outside the board at (${end}) keeps an elliptical outline`, async (t) => {
+    if (!browser) return t.skip("playwright chromium unavailable");
+    const page = await openShapeBoard(t);
+    await page.locator("canvas").evaluate((canvas) => {
+      delete canvas.setPointerCapture;
+      window.edgeEvents = [];
+      for (const type of [
+        "pointerdown",
+        "gotpointercapture",
+        "pointermove",
+        "pointerup",
+        "lostpointercapture",
+        "pointercancel",
+      ])
+        canvas.addEventListener(type, (event) => {
+          window.edgeEvents.push({
+            type,
+            id: event.pointerId,
+            buttons: event.buttons,
+            x: event.clientX,
+            y: event.clientY,
+            captured: canvas.hasPointerCapture(event.pointerId),
+            ops: window.ops.length,
+          });
+        });
+    });
+    await page.getByRole("button", { name: "Ellipse", exact: true }).click();
+    const box = await page.locator("canvas").boundingBox();
+    const move = ([x, y]) => page.mouse.move(box.x + x * 0.4, box.y + y * 0.4);
+    await move(start);
+    await page.mouse.down();
+    await move(end);
+    await page.mouse.up();
+    const { ops, events } = await page.evaluate(() => ({
+      ops: window.ops,
+      events: window.edgeEvents,
+    }));
+    assert.equal(
+      ops.length,
+      1,
+      `native edge drag events: ${JSON.stringify(events)}`,
+    );
+    const stroke = ops[0];
+    assert.equal(stroke.op, "stroke");
+    assert.equal(stroke.points.length, 258);
+    assert.deepEqual(stroke.points.slice(-2), stroke.points.slice(0, 2));
+    const [left, top, right, bottom] = bounds;
+    const cx = (left + right) / 2;
+    const cy = (top + bottom) / 2;
+    const rx = (right - left) / 2;
+    const ry = (bottom - top) / 2;
+    for (let i = 0; i < stroke.points.length; i += 2) {
+      const [x, y] = stroke.points.slice(i, i + 2);
+      assert.ok(x >= left && x <= right && y >= top && y <= bottom);
+      assert.ok(
+        Math.abs(((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2 - 1) < 0.03,
+        `outline point (${x}, ${y}) must stay on the bounded ellipse`,
+      );
+    }
+  });
+}
+
+for (const tool of ["Line", "Rectangle", "Ellipse"]) {
+  test(`${tool} presses leave existing ink unchanged until the first move`, async (t) => {
+    if (!browser) return t.skip("playwright chromium unavailable");
+    const page = await openShapeBoard(t);
+    const canvas = page.locator("canvas");
+    for (const count of [0, 1]) {
+      if (count) {
+        await page.getByRole("button", { name: "Pen", exact: true }).click();
+        await page.evaluate(() => {
+          window.pointer("pointerdown", 20, 20);
+          window.pointer("pointerup", 20, 20);
+        });
+      }
+      const before = await canvas.evaluate((node) =>
+        node.toDataURL("image/jpeg", 0.72),
+      );
+      await page.getByRole("button", { name: tool, exact: true }).click();
+      await page.evaluate(() => {
+        window.online = true;
+        window.pointer("pointerdown", 200, 100);
+      });
+      assert.equal(
+        await canvas.evaluate((node) => node.toDataURL("image/jpeg", 0.72)),
+        before,
+      );
+      assert.equal(await page.evaluate(() => window.ops.length), count);
+      const uploaded = await page.evaluate(async () => {
+        if ((await window.example.flush()) !== true)
+          throw new Error("flush() did not complete the held-press upload");
+        const { blob, count } = window.uploads.at(-1);
+        const image = await new Promise((resolve) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.readAsDataURL(blob);
+        });
+        return { count, image };
+      });
+      assert.equal(uploaded.count, count);
+      assert.equal(uploaded.image, before);
+      await page.evaluate(() => window.pointer("pointerup", 200, 100));
+      assert.equal(await page.evaluate(() => window.ops.length), count);
+      assert.equal(
+        await canvas.evaluate((node) => node.toDataURL("image/jpeg", 0.72)),
+        before,
+      );
+    }
+  });
+
+  for (const ending of tool === "Line"
+    ? ["zero-size", "pointercancel", "locked", "close"]
+    : ["zero-size"]) {
+    test(`${tool} ${ending} cancels a shared preview by syncing the restored board`, async (t) => {
+      if (!browser) return t.skip("playwright chromium unavailable");
+      const page = await openShapeBoard(t);
+      const canvas = page.locator("canvas");
+      const blank = await canvas.evaluate((node) =>
+        node.toDataURL("image/jpeg", 0.72),
+      );
+      await page.getByRole("button", { name: tool, exact: true }).click();
+      await page.evaluate(async () => {
+        window.online = true;
+        window.pointer("pointerdown", 200, 100);
+        window.pointer("pointermove", 500, 250);
+        if ((await window.example.flush()) !== true)
+          throw new Error("flush() did not complete the drawing upload");
+      });
+      await page.waitForFunction(() => window.uploads.length === 1);
+      assert.equal(await page.evaluate(() => window.uploads.length), 1);
+      assert.equal(await page.evaluate(() => window.uploads[0].count), 1);
+      assert.notEqual(
+        await canvas.evaluate((node) => node.toDataURL("image/jpeg", 0.72)),
+        blank,
+      );
+      await page.evaluate(async (ending) => {
+        if (ending === "close") {
+          const root = document.querySelector("#example-board");
+          await new Promise((resolve) => {
+            root.addEventListener("toggle", resolve, { once: true });
+            root.open = false;
+          });
+        } else {
+          if (ending === "locked") window.locked = true;
+          window.pointer(
+            ending === "pointercancel" ? "pointercancel" : "pointerup",
+            200.2,
+            100.2,
+          );
+        }
+        if ((await window.example.flush()) !== true)
+          throw new Error("flush() did not complete the restored-board upload");
+      }, ending);
+      await page.waitForFunction(() => window.uploads.length === 2);
+      assert.deepEqual(await page.evaluate(() => window.ops), []);
+      assert.equal(await page.evaluate(() => window.uploads.length), 2);
+      assert.equal(await page.evaluate(() => window.uploads[1].count), 0);
+      assert.equal(
+        await page.evaluate(
+          () =>
+            new Promise((resolve) => {
+              const reader = new FileReader();
+              reader.onload = () => resolve(reader.result);
+              reader.readAsDataURL(window.uploads[1].blob);
+            }),
+        ),
+        blank,
+      );
+    });
+  }
+
+  if (tool === "Line")
+    test(`${tool} uses the final stroke slot and refuses the next press`, async (t) => {
+      if (!browser) return t.skip("playwright chromium unavailable");
+      const page = await openShapeBoard(t);
+      const limit = await page.evaluate(() => {
+        for (let i = 0; i < window.limits.MAX_STROKES - 1; i++) {
+          window.pointer("pointerdown");
+          window.pointer("pointerup");
+        }
+        return window.limits.MAX_STROKES;
+      });
+      assert.equal(await page.evaluate(() => window.ops.length), limit - 1);
+      const canvas = page.locator("canvas");
+      const before = await canvas.evaluate((node) => node.toDataURL());
+      await page.getByRole("button", { name: "Text", exact: true }).click();
+      await page.evaluate(() => {
+        window.pointer("pointerdown", 20, 500);
+        window.pointer("pointerup", 20, 500);
+      });
+      await page
+        .getByRole("textbox", { name: "Label text" })
+        .fill("Keep this draft");
+      await page.getByRole("button", { name: tool, exact: true }).click();
+      await page.evaluate(() => window.pointer("pointerdown", 200, 100));
+      await canvas.press("Control+Enter");
+      assert.equal(await page.evaluate(() => window.ops.length), limit - 1);
+      assert.equal(
+        await page.getByRole("textbox", { name: "Label text" }).inputValue(),
+        "Keep this draft",
+      );
+      await page.evaluate(() => {
+        window.pointer("pointermove", 300, 150);
+        window.pointer("pointermove", 500, 200);
+      });
+      assert.equal(await page.evaluate(() => window.ops.length), limit - 1);
+      await page.evaluate(() => window.pointer("pointerup", 600, 250));
+      assert.equal(await page.evaluate(() => window.ops.length), limit);
+      const stroke = await page.evaluate(() => window.ops.at(-1));
+      assert.equal(stroke.op, "stroke");
+      assert.ok(stroke.points.length > 2);
+      const final = await canvas.evaluate((node) => node.toDataURL());
+      assert.notEqual(final, before);
+      await page.evaluate(() => window.pointer("pointerdown", 900, 300));
+      assert.equal(
+        await page.locator(".example-pane > [role=status]").textContent(),
+        await page.evaluate(() => window.limits.MAX_STROKES_MESSAGE),
+      );
+      await page.evaluate(() => {
+        window.pointer("pointermove", 1000, 400);
+        window.pointer("pointerup", 1000, 400);
+      });
+      assert.equal(await page.evaluate(() => window.ops.length), limit);
+      assert.equal(await canvas.evaluate((node) => node.toDataURL()), final);
+      await page.getByRole("button", { name: "Undo", exact: true }).click();
+      await page.getByRole("button", { name: "Confirm", exact: true }).click();
+      assert.equal(await page.evaluate(() => window.ops.at(-1).op), "text");
+    });
+
+  test(`${tool} clicks and rounded zero-size drags leave no edit`, async (t) => {
+    if (!browser) return t.skip("playwright chromium unavailable");
+    const page = await openShapeBoard(t);
+    const canvas = page.locator("canvas");
+    const blank = await canvas.evaluate((node) => node.toDataURL());
+    await page.getByRole("button", { name: tool, exact: true }).click();
+    for (const move of [null, [200.2, 100.2], [500, 250]]) {
+      await page.evaluate((move) => {
+        window.pointer("pointerdown", 200, 100);
+        if (move) window.pointer("pointermove", ...move);
+        window.pointer("pointerup", move ? 200.2 : 200, move ? 100.2 : 100);
+      }, move);
+      assert.deepEqual(await page.evaluate(() => window.ops), []);
+      assert.equal(await canvas.evaluate((node) => node.toDataURL()), blank);
+      assert.equal(await page.locator("[data-action=undo]").isDisabled(), true);
+    }
+    await page.getByRole("button", { name: "Pen", exact: true }).click();
+    await page.evaluate(() => {
+      window.pointer("pointerdown", 200, 100);
+      window.pointer("pointerup", 200, 100);
+    });
+    const ops = await page.evaluate(() => window.ops);
+    assert.equal(ops.length, 1);
+    assert.equal(ops[0].op, "stroke");
+    assert.deepEqual(ops[0].points, [200, 100]);
+    assert.notEqual(await canvas.evaluate((node) => node.toDataURL()), blank);
+  });
+}
+
+for (const tool of ["Line", "Rectangle", "Ellipse"]) {
+  test(`${tool} previews and records one stroke in all four directions`, async (t) => {
+    if (!browser) return t.skip("playwright chromium unavailable");
+    const page = await openShapeBoard(t);
+    const canvas = page.locator("canvas");
+    const image = () => canvas.evaluate((node) => node.toDataURL());
+    const blank = await image();
+    const button = page.getByRole("button", { name: tool, exact: true });
+    assert.equal(await button.count(), 1);
+    await button.click();
+    await page.getByRole("button", { name: "Pen Red", exact: true }).click();
+    assert.equal(await button.getAttribute("aria-pressed"), "true");
+    const box = await canvas.boundingBox();
+    const move = (x, y) => page.mouse.move(box.x + x * 0.4, box.y + y * 0.4);
+    for (const [dx, dy] of [
+      [240, 160],
+      [-240, 160],
+      [240, -160],
+      [-240, -160],
+    ]) {
+      await t.test(`drag (${dx}, ${dy})`, async () => {
+        const opCount = await page.evaluate(() => window.ops.length);
+        await move(400, 300);
+        await page.mouse.down();
+        await move(400 + dx / 2, 300 + dy / 2);
+        const preview = await image();
+        assert.notEqual(preview, blank);
+        assert.equal(await page.evaluate(() => window.ops.length), opCount);
+        await move(400 + dx, 300 + dy);
+        await page.mouse.up();
+        const final = await image();
+        assert.notEqual(final, preview);
+        const pixels = await canvas.evaluate(
+          (node, { tool, dx, dy }) => {
+            const context = node.getContext("2d");
+            const pixel = (x, y) => [...context.getImageData(x, y, 1, 1).data];
+            const cx = 400 + dx / 2;
+            const cy = 300 + dy / 2;
+            const edge =
+              tool === "Line"
+                ? [cx, cy]
+                : tool === "Rectangle"
+                  ? [cx, 300]
+                  : [400 + dx, cy];
+            return { edge: pixel(...edge), center: pixel(cx, cy) };
+          },
+          { tool, dx, dy },
+        );
+        assert.deepEqual(pixels.edge, [194, 38, 27, 255]);
+        if (tool !== "Line")
+          assert.deepEqual(pixels.center, [255, 255, 255, 255]);
+        const ops = await page.evaluate(
+          (opCount) => window.ops.slice(opCount),
+          opCount,
+        );
+        assert.equal(ops.length, 1);
+        const stroke = ops[0];
+        assert.equal(stroke.op, "stroke");
+        assert.equal(stroke.color, "#c2261b");
+        assert.equal(stroke.width, 3);
+        const xs = stroke.points.filter((_, i) => i % 2 === 0);
+        const ys = stroke.points.filter((_, i) => i % 2 === 1);
+        for (const [actual, expected] of [
+          [Math.min(...xs), Math.min(400, 400 + dx)],
+          [Math.max(...xs), Math.max(400, 400 + dx)],
+          [Math.min(...ys), Math.min(300, 300 + dy)],
+          [Math.max(...ys), Math.max(300, 300 + dy)],
+        ])
+          assert.ok(Math.abs(actual - expected) < 1);
+        assert.equal(
+          stroke.points.length,
+          tool === "Line" ? 4 : tool === "Rectangle" ? 10 : 258,
+        );
+        if (tool !== "Line")
+          assert.deepEqual(stroke.points.slice(-2), stroke.points.slice(0, 2));
+        await page.getByRole("button", { name: "Undo", exact: true }).click();
+        assert.equal(await image(), blank);
+      });
+    }
+  });
+  test(`${tool} supports replay, reconnection, history and cancellation`, async (t) => {
+    if (!browser) return t.skip("playwright chromium unavailable");
+    const page = await openShapeBoard(t);
+    const canvas = page.locator("canvas");
+    const image = () => canvas.evaluate((node) => node.toDataURL());
+    const blank = await image();
+    await page.getByRole("button", { name: tool, exact: true }).click();
+    const box = await canvas.boundingBox();
+    const move = (x, y) => page.mouse.move(box.x + x * 0.4, box.y + y * 0.4);
+    const dx = 240;
+    const dy = 160;
+    await move(400, 300);
+    await page.mouse.down();
+    await move(400 + dx, 300 + dy);
+    await page.mouse.up();
+    const final = await image();
+    assert.notEqual(final, blank);
+    assert.equal(
+      await page.evaluate(async (base) => {
+        const { createBoard, applyOp, drawBoard } = await import(
+          `${base}/whiteboard.js`
+        );
+        const replay = createBoard();
+        for (const op of window.ops) if (!applyOp(replay, op)) return false;
+        const copy = document.createElement("canvas");
+        copy.width = 1600;
+        copy.height = 1000;
+        drawBoard(copy.getContext("2d"), replay.strokes());
+        return (
+          copy.toDataURL() === document.querySelector("canvas").toDataURL()
+        );
+      }, base),
+      true,
+    );
+    await page.evaluate(async () => {
+      window.online = true;
+      await window.example.reconnect();
+      await window.example.flush();
+    });
+    assert.equal(await image(), final);
+    assert.equal(await page.evaluate(() => window.uploads.at(-1).count), 1);
+    await page.getByRole("button", { name: "Undo", exact: true }).click();
+    assert.equal(await image(), blank);
+    await move(400, 300);
+    await page.mouse.down();
+    await move(400 + dx, 300 + dy);
+    await page.mouse.up();
+    await page.getByRole("button", { name: "Clear", exact: true }).click();
+    assert.equal(await image(), blank);
+    await page.getByRole("button", { name: "Undo", exact: true }).click();
+    assert.equal(await image(), final);
+    const count = await page.evaluate(() => window.ops.length);
+    await move(700, 500);
+    await page.mouse.down();
+    await move(800, 600);
+    await canvas.evaluate((node) => {
+      node.dispatchEvent(
+        new PointerEvent("pointercancel", {
+          pointerId: 1,
+          pointerType: "mouse",
+        }),
+      );
+    });
+    await page.mouse.up();
+    assert.equal(await image(), final);
+    assert.equal(await page.evaluate(() => window.ops.length), count);
+  });
+}
+
 // The real ending wait, so the board is stacked against the page's own
 // overlay rules rather than a stand-in.
 function endingMarkup() {
@@ -396,7 +874,7 @@ test("the example drawer preserves code, journals pen strokes, and sends the cle
       .evaluateAll((buttons) =>
         buttons.map((button) => button.getAttribute("aria-label")),
       ),
-    ["Pen", "Eraser", "Text"],
+    ["Pen", "Eraser", "Text", "Line", "Rectangle", "Ellipse"],
   );
   assert.equal(await page.locator("[data-action=redo]").count(), 0);
   await page.getByRole("button", { name: "Pen", exact: true }).click();

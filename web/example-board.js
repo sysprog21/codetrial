@@ -12,6 +12,9 @@ import {
 import { mountBoardText } from "./board-text.js";
 
 const TOOL_ICONS = {
+  line: '<path d="m4 20 16-16"/>',
+  rectangle: '<rect x="4" y="5" width="16" height="14"/>',
+  ellipse: '<ellipse cx="12" cy="12" rx="9" ry="7"/>',
   text: '<path d="M4 5h16 M12 5v16 M8 21h8"/>',
   pen: '<path d="m4 16 12-12 4 4-12 12-5 1Z M14 6l4 4"/>',
   eraser: '<path d="m4 14 9-10 7 7-9 10H7Z M8 10l7 7 M11 21h10"/>',
@@ -20,6 +23,28 @@ const TOOL_ICONS = {
   expand: '<path d="M4 9V4h5 M15 4h5v5 M20 15v5h-5 M9 20H4v-5"/>',
   shrink: '<path d="M9 4v5H4 M20 9h-5V4 M15 20v-5h5 M4 15h5v5"/>',
 };
+
+const SHAPE_TOOLS = ["line", "rectangle", "ellipse"];
+
+function shapePoints(tool, start, end) {
+  const { x, y } = start;
+  if (tool === "line") return [x, y, end.x, end.y];
+  if (tool === "rectangle")
+    return [x, y, end.x, y, end.x, end.y, x, end.y, x, y];
+  const cx = (x + end.x) / 2;
+  const cy = (y + end.y) / 2;
+  const rx = Math.abs(end.x - x) / 2;
+  const ry = Math.abs(end.y - y) / 2;
+  const points = [];
+  // 128 segments keep the error below a board pixel even at full size,
+  // with ample room under MAX_POINTS for a single replayable stroke.
+  for (let i = 0; i < 128; i++) {
+    const angle = (i * 2 * Math.PI) / 128;
+    points.push(cx + rx * Math.cos(angle), cy + ry * Math.sin(angle));
+  }
+  points.push(...points.slice(0, 2));
+  return points;
+}
 
 function setToolIcon(
   button,
@@ -170,12 +195,12 @@ export function mountExampleBoard(
       pingActivity();
     },
     commit(label) {
-      if (!model.addText(label)) return false;
+      if (drag || !model.addText(label)) return false;
       changed();
       return true;
     },
   });
-  for (const name of ["pen", "eraser", "text"]) {
+  for (const name of ["pen", "eraser", "text", ...SHAPE_TOOLS]) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "board-tool";
@@ -198,7 +223,7 @@ export function mountExampleBoard(
     button.addEventListener("click", () => {
       if (drag) return;
       color = value;
-      tool = "pen";
+      if (!SHAPE_TOOLS.includes(tool)) tool = "pen";
       paintToolState();
     });
     root.querySelector("[data-colors]").append(button);
@@ -223,7 +248,10 @@ export function mountExampleBoard(
       status.textContent = MAX_STROKES_MESSAGE;
       return;
     }
-    if (!model.begin(tool, color, start.x, start.y)) {
+    if (
+      !SHAPE_TOOLS.includes(tool) &&
+      !model.begin(tool, color, start.x, start.y)
+    ) {
       pointers.up(event);
       return;
     }
@@ -243,40 +271,57 @@ export function mountExampleBoard(
     const next = boardPoint(canvas, event);
     if (next.x === drag.end.x && next.y === drag.end.y) return;
     drag.end = next;
-    const changed = model.extend(drag.end.x, drag.end.y);
+    const changed = extendDrag();
     if (changed) noteActivity();
     paint();
   });
+  function extendDrag() {
+    if (!SHAPE_TOOLS.includes(tool))
+      return model.extend(drag.end.x, drag.end.y);
+    // Replace only the uncommitted preview. cancel restores the undo branch;
+    // end journals the completed outline once, like an ordinary pen stroke.
+    model.cancel();
+    const end = {
+      x: Math.min(Math.max(drag.end.x, 0), BOARD_WIDTH),
+      y: Math.min(Math.max(drag.end.y, 0), BOARD_HEIGHT),
+    };
+    const points = shapePoints(tool, drag.start, end);
+    model.begin("pen", color, points[0], points[1]);
+    for (let i = 2; i < points.length; i += 2)
+      model.extend(points[i], points[i + 1]);
+    return true;
+  }
   function finish() {
     if (!drag) return;
+    // A shape collapsed to one board pixel is an empty gesture, not a pen dot.
+    if (
+      SHAPE_TOOLS.includes(tool) &&
+      (!model.isDrawing() || model.strokes().at(-1).points.length === 2)
+    )
+      return dropDrag();
     model.end();
     drag = null;
     changed();
     paint();
   }
-  function cancel(event) {
-    if (!pointers.up(event)) return;
+  // Dropping a shared preview must also withdraw it from Jim's cached board.
+  function dropDrag() {
     model.cancel();
     drag = null;
-    paint();
     if (previewShared) dirty = true;
     previewShared = false;
+    paint();
     if (dirty) schedule();
+  }
+  function cancel(event) {
+    if (pointers.up(event)) dropDrag();
   }
   canvas.addEventListener("pointerup", (event) => {
     if (!pointers.up(event)) return;
-    if (locked()) {
-      model.cancel();
-      drag = null;
-      if (previewShared) dirty = true;
-      previewShared = false;
-      paint();
-      if (dirty) schedule();
-      return;
-    }
-    if (drag) {
+    if (locked()) return dropDrag();
+    if (drag && model.isDrawing()) {
       drag.end = boardPoint(canvas, event);
-      model.extend(drag.end.x, drag.end.y);
+      extendDrag();
     }
     finish();
   });
@@ -365,12 +410,7 @@ export function mountExampleBoard(
     if (!root.open) {
       shrinkBoard();
       cancelTurn?.();
-      if (drag) {
-        model.cancel();
-        drag = null;
-        if (previewShared) dirty = true;
-        previewShared = false;
-      }
+      if (drag) return dropDrag();
     }
     paint();
     if (dirty && !drag) schedule();

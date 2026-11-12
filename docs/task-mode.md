@@ -786,9 +786,12 @@ turn tables. Turning is the learner's own; nothing the cube does is sent to
 the runtime, Jim or the review.
 
 A whiteboard below the editor is the interview's example drawing: pens, an
-eraser, undo and clear. What is drawn on it leaves the browser only as the
-`board_image` stream described under the wire protocol, and the interviewer
-sees it only when the learner refers to it.
+eraser, text labels, line, rectangle and ellipse tools, undo and clear.
+Shapes preview while dragging and commit on release as one ordinary stroke,
+so they share the pen's color, undo, replay and reconnection paths. What is
+drawn on it leaves the browser only as the `board_image` stream described
+under the wire protocol, and the interviewer sees it only when the learner
+refers to it.
 
 ## Runtime and delivery bounds
 

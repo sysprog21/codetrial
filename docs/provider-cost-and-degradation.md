@@ -145,14 +145,16 @@ Coding example drawings are opt-in in the lobby and disabled by default.
 The choice is carried in signed token metadata and applies to the Live tool
 declarations, instructions, interim and final report policy, and board stream
 acceptance. Disabled coding sessions carry none of that drawing prompt or tool
-overhead and refuse board streams. The first version offers pen, eraser, undo and clear. Shapes and redo are not
-part of this version. The browser syncs JPEGs to the server's bounded board
-cache; these local edits do not enter Gemini Live. Coding camera frames keep
-the presence policy above. Only a `read_board` call sends the latest example
-JPEG through realtime image input before its JSON tool response. The interviewer
-calls it when the candidate refers to the drawing, never for an unreferenced
-sketch. Changes, drawing handovers and reconnects send zero example images to
-Gemini; each tool batch requesting a drawing sends at most one current JPEG.
+overhead and refuse board streams. The drawing offers pen, eraser, text labels,
+line, rectangle and ellipse tools, undo and clear. Each completed shape is one
+ordinary stroke. Redo is not offered. The browser syncs JPEGs to the server's
+bounded board cache; these local edits do not enter Gemini Live. Coding camera
+frames keep the presence policy above. Only a `read_board` call sends the latest
+example JPEG through realtime image input before its JSON tool response. The
+interviewer calls it when the candidate refers to the drawing, never for an
+unreferenced sketch. Changes, drawing handovers and reconnects send zero example
+images to Gemini; each tool batch requesting a drawing sends at most one current
+JPEG.
 A read waits at most 100 ms for pending local streams. Offline browsers retain
 edits without repeated JPEG encoding and sync them on reconnect. After an
 explicit read, the image remains in the live context and is billed on later
