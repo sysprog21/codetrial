@@ -455,5 +455,5 @@ export function mountBoardText(
   canvas.addEventListener("keydown", onDraftKeydown);
   const observer = new ResizeObserver(refresh);
   observer.observe(canvas);
-  return { refresh, cancel: close };
+  return { refresh, cancel: close, busy: () => gesture !== null };
 }

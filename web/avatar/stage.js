@@ -68,7 +68,7 @@ export function initAvatarStage(deps) {
 /// Whether a model is wanted: between the page's `startAvatar` and a stop. A
 /// stage that widens outside that window builds nothing.
 let avatarWanted = false;
-/// The mount's width as last observed. Zero below the CSS breakpoint.
+/// The mount's width as last observed. Zero while the stage is compact.
 let stageWidth = 0;
 
 function onStageWidth(width) {
@@ -209,8 +209,9 @@ export function startAvatar() {
   });
 }
 
-/// Whether a drawn frame would be seen. Below the CSS breakpoint the mount has
-/// no width, and the preflight overlay is opaque over the stage while it is up.
+/// Whether a drawn frame would be seen. While the stage is compact the mount
+/// has no width, and the preflight overlay is opaque over the stage while it
+/// is up.
 function stageVisible() {
   return stageWidth > 0 && !stageCovered;
 }

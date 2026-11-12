@@ -410,6 +410,32 @@ test("the shortcut does nothing while the media preflight is still up", async (t
   }
 });
 
+test("the shortcut shrinks an expanded Example drawing and runs the tests", async (t) => {
+  const ctx = await interviewPage(t, { params: { exampleDrawing: "1" } });
+  if (!ctx) return;
+  const { page, errors } = ctx;
+  try {
+    await runButtonReady(page);
+    await page.locator("#example-board").evaluate((node) => (node.open = true));
+    await page.getByRole("button", { name: "Expand drawing" }).click();
+    await page.keyboard.press("ControlOrMeta+Enter");
+    // The board gives the drawer back, so the run is not hidden.
+    assert.equal(
+      await page.locator("#example-board").getAttribute("data-expanded"),
+      null,
+    );
+    assert.equal(await runs(page), 1);
+    assert.equal(await enterDefaultPrevented(page), true);
+    assert.deepEqual(
+      errors,
+      [],
+      `the shortcut threw in the browser: ${errors[0]}`,
+    );
+  } finally {
+    await page.close();
+  }
+});
+
 test("the shortcut does nothing once the interview has ended", async (t) => {
   const ctx = await interviewPage(t, { clock: true });
   if (!ctx) return;

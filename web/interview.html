@@ -397,38 +397,41 @@
           </details>
           <details id="example-board" class="example-board" hidden>
             <summary>Example drawing</summary>
-            <div
-              class="board-toolbar"
-              role="toolbar"
-              aria-label="Example drawing tools"
-            >
-              <div data-tools role="group" aria-label="Drawing tool"></div>
+            <div class="example-pane">
               <div
-                data-colors
-                class="board-pens"
-                role="group"
-                aria-label="Pen colour"
-              ></div>
-              <button type="button" data-action="undo">Undo</button>
-              <button
-                type="button"
-                data-action="clear"
-                title="Undo restores a cleared drawing"
+                class="board-toolbar"
+                role="toolbar"
+                aria-label="Example drawing tools"
               >
-                Clear
-              </button>
+                <button type="button" data-action="expand">Expand</button>
+                <div data-tools role="group" aria-label="Drawing tool"></div>
+                <div
+                  data-colors
+                  class="board-pens"
+                  role="group"
+                  aria-label="Pen colour"
+                ></div>
+                <button type="button" data-action="undo">Undo</button>
+                <button
+                  type="button"
+                  data-action="clear"
+                  title="Undo restores a cleared drawing"
+                >
+                  Clear
+                </button>
+              </div>
+              <div class="example-surface">
+                <canvas
+                  width="1600"
+                  height="1000"
+                  aria-label="Example drawing"
+                ></canvas>
+              </div>
+              <p class="muted small" role="status">
+                Sketch an example while explaining it. Jim sees it after you
+                pause drawing.
+              </p>
             </div>
-            <div class="example-surface">
-              <canvas
-                width="1600"
-                height="1000"
-                aria-label="Example drawing"
-              ></canvas>
-            </div>
-            <p class="muted small" role="status">
-              Sketch an example while explaining it. Jim sees it after you pause
-              drawing.
-            </p>
           </details>
           <button
             id="results-toggle"

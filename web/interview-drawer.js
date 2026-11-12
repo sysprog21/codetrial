@@ -45,7 +45,9 @@ export function mountInterviewDrawer(panel) {
       "aria-valuenow",
       String(Math.round(sized ? height : drawer.clientHeight)),
     );
-    if (example.open) {
+    // An expanded board sizes itself over the panel; its docked height is
+    // measured again when it shrinks, not from the box it floats in.
+    if (example.open && !example.hasAttribute("data-expanded")) {
       // Reserve room for summaries, tools and results; the drawing scrolls
       // inside its viewport without changing the model's coordinates.
       const contentHeight = [...drawer.children].reduce((total, node) => {
@@ -107,6 +109,12 @@ export function mountInterviewDrawer(panel) {
   });
   for (const details of drawer.querySelectorAll("details"))
     details.addEventListener("toggle", paint);
+  // A shrinking board comes back to a drawer that may have been resized while
+  // it was out, so its docked height is measured again.
+  new MutationObserver(paint).observe(example, {
+    attributes: true,
+    attributeFilter: ["data-expanded"],
+  });
   new MutationObserver(paint).observe(results, {
     attributes: true,
     attributeFilter: ["hidden"],
