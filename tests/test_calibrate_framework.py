@@ -741,8 +741,25 @@ class CalibrationTests(unittest.TestCase):
                     del sample["modelScores"]["Repeat"]
                 else:
                     del sample["humanRatings"][0]["scores"]["Repeat"]
-                with self.assertRaises(ValueError):
+                error = {
+                    "missing reviewer": "need at least two blinded ratings",
+                    "duplicate reviewer": "expected distinct pseudonym",
+                    "model key": r"modelScores: missing=\['Repeat'\]",
+                    "human key": "Repeat: need at least two human ratings",
+                }[defect]
+                with self.assertRaisesRegex(ValueError, error):
                     CAL.analyze(raw)
+                if defect == "human key":
+                    sample["humanRatings"].append(
+                        {"reviewerId": "reviewer-c", "scores": {"Repeat": None}}
+                    )
+                    for ratings in itertools.permutations(sample["humanRatings"]):
+                        with self.subTest(order=[r["reviewerId"] for r in ratings]):
+                            sample["humanRatings"] = list(ratings)
+                            result = CAL.analyze(raw)
+                            self.assertEqual(
+                                result["status"], "PASS", result["failures"]
+                            )
 
     def test_cli_assessability_statuses_and_exit_codes(self):
         zero = self.applicable_scored_fixture()
