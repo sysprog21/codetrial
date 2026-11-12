@@ -10424,6 +10424,126 @@ lobbyTest(
   { acceptDownloads: true },
 );
 
+/// Three 1D DP attempts whose two newest rows each have an earlier attempt to
+/// compare against, so a batch export has to look the category map up once.
+const categoryProgressAttempts = () =>
+  [
+    ["climbing-stairs", "Step Ways", "2026-01-01T10:00:00Z", "dp-1"],
+    ["house-robber", "Vault Sweep", "2026-01-02T10:00:00Z", "dp-2"],
+    ["coin-change", "Coin Ledger", "2026-01-03T10:00:00Z", "dp-3"],
+  ].map(([problemId, problemTitle, date, id]) => {
+    const page = pageOf(problemId);
+    return {
+      id,
+      problemId: page,
+      payload: {
+        id,
+        problemId: page,
+        problemTitle,
+        date,
+        language: "python",
+        report: {
+          codingScore: 60,
+          communicationScore: 80,
+          decision: "HIRE",
+          hintsUsed: 1,
+          summary: `${problemTitle} attempt.`,
+        },
+      },
+    };
+  });
+
+lobbyTest(
+  "a pending category lookup is shared by a batch export and an overlapping row download",
+  async (page) => {
+    reports = categoryProgressAttempts();
+    let categoryRequests = 0;
+    let categoryRequested;
+    const requested = new Promise((resolve) => (categoryRequested = resolve));
+    let releaseCategories;
+    const held = new Promise((resolve) => (releaseCategories = resolve));
+    await page.route("**/problem-categories.json", async (route) => {
+      categoryRequests += 1;
+      categoryRequested();
+      await held;
+      await route.continue();
+    });
+    await recordDownloadNames(page);
+    await lobby(page);
+    const rows = page.locator("#attempt-history > li");
+    assert.equal(await rows.count(), 3);
+    // The oldest row has nothing earlier to compare against, so unticking it
+    // leaves the two comparable rows that both need the category map.
+    await rows.nth(2).getByRole("checkbox").click();
+    const downloadSelected = page.locator("#attempt-download-selected");
+    assert.equal(await downloadSelected.textContent(), "Download selected (2)");
+    const download = rows.nth(0).getByRole("button", {
+      name: /^Download report/,
+    });
+
+    try {
+      await downloadSelected.click();
+      await requested;
+      // The batch has already claimed this report. Its row download must be
+      // refused before the shared lookup is released: no second lookup, no
+      // disabled button, and no second file for the same report.
+      await download.click();
+      assert.equal(await download.isEnabled(), true);
+    } finally {
+      releaseCategories();
+    }
+
+    const names = await takeDownloadNames(page, 2);
+    assert.equal(categoryRequests, 1);
+    assert.equal(names.length, 2);
+    assert.equal(new Set(names).size, 2);
+  },
+  { acceptDownloads: true },
+);
+
+lobbyTest(
+  "a failed batch category lookup is retried by a later row download",
+  async (page) => {
+    reports = categoryProgressAttempts();
+    let categoryRequests = 0;
+    let failCategories = true;
+    await page.route("**/problem-categories.json", (route) => {
+      categoryRequests += 1;
+      return failCategories ? route.abort("failed") : route.continue();
+    });
+    await recordDownloadNames(page);
+    await lobby(page);
+    const rows = page.locator("#attempt-history > li");
+    assert.equal(await rows.count(), 3);
+    await rows.nth(2).getByRole("checkbox").click();
+    const downloadSelected = page.locator("#attempt-download-selected");
+    assert.equal(await downloadSelected.textContent(), "Download selected (2)");
+
+    await downloadSelected.click();
+    assert.equal((await takeDownloadNames(page, 2)).length, 2);
+    const failedLookupRequests = categoryRequests;
+    assert.ok(failedLookupRequests > 0);
+
+    // A null lookup result must stay retryable: the later row download asks
+    // again and this time the category comparison reaches the report.
+    failCategories = false;
+    const downloading = page.waitForEvent("download");
+    await rows
+      .nth(0)
+      .getByRole("button", { name: /^Download report/ })
+      .click();
+    const chunks = [];
+    for await (const chunk of await (await downloading).createReadStream())
+      chunks.push(chunk);
+    assert.match(
+      Buffer.concat(chunks).toString("utf8"),
+      /## Category progress · 1D DP/,
+    );
+    assert.ok(categoryRequests > failedLookupRequests);
+  },
+  { acceptDownloads: true },
+);
+
 /// Loads the lobby and waits until `/api/session` has been applied. The
 /// status starts as "Checking account..." in the markup, so only the text the
 /// answer writes says the notice has been decided; any non-empty text would
