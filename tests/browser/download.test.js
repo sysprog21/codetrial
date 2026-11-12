@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { downloadMarkdown, reportFilename } from "../../web/download.js";
+import { savedAttemptReport } from "../../web/progress.js";
 import { functionBody, read } from "./source.js";
 
 for (const [path, name] of [
@@ -31,6 +32,7 @@ for (const [path, name] of [
           lookups.push({ resolve, reject });
         }),
       reportMarkdown: () => "# Report",
+      savedAttemptReport,
       buildMarkdown: () => "# Report",
       reportFilename,
       problem: { page: "two-sum" },

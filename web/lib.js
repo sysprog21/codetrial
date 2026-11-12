@@ -853,6 +853,22 @@ export function surfaceLabel(value) {
   return modeIsWhiteboard(value) ? "Whiteboard" : "Editor";
 }
 
+export const COMMUNICATION_SCORE_LABEL = "Communication";
+
+export function verdictLabel(decision) {
+  return decision === "HIRE" ? "HIRE" : "NO HIRE";
+}
+
+export function workLabel(atBoard) {
+  return atBoard ? "Board work" : "Coding";
+}
+
+export function scoreText(value, suffix = "") {
+  if (value === null) return "Not assessed";
+  if (value === undefined) return "Not recorded";
+  return `${value}${suffix}`;
+}
+
 export function loopLabel(value) {
   return codingLoop(value) === "coding_only"
     ? "Coding only"

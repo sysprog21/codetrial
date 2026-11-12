@@ -1,12 +1,17 @@
 import { mountProblemGrid } from "./problem-grid.js";
 import { resetAssignments } from "./selection.js";
 import {
+  COMMUNICATION_SCORE_LABEL,
   FRAMEWORKS,
   SHOW_SOURCES_KEY,
   codingLoop,
   interviewMode,
   languageLabel,
+  modeIsWhiteboard,
   surfaceLabel,
+  verdictLabel,
+  workLabel,
+  scoreText,
 } from "./lib.js";
 import {
   clearReportHistory,
@@ -28,6 +33,7 @@ import {
   phaseChartData,
   pickerEntry,
   progressModelFrom,
+  savedAttemptReport,
 } from "./progress.js";
 import {
   categoryComparisonMarkup,
@@ -1340,8 +1346,7 @@ async function renderLocalHistory(generation = historyLoad) {
 
 function canCompareAttempt(attempt, history = progressNormalized) {
   return (
-    !attempt.report.incomplete &&
-    attempt.recordedDecision !== null &&
+    attempt.scored &&
     history.some(
       (entry) =>
         entry !== attempt &&
@@ -1349,8 +1354,7 @@ function canCompareAttempt(attempt, history = progressNormalized) {
         entry.at !== null &&
         attempt.at !== null &&
         entry.at < attempt.at &&
-        !entry.report.incomplete &&
-        entry.recordedDecision !== null &&
+        entry.scored &&
         entry.interviewMode === attempt.interviewMode,
     )
   );
@@ -1366,7 +1370,10 @@ async function attemptCategoryComparison(attempt) {
 async function openAttemptCategoryComparison(report, attempt) {
   if (report.querySelector(".category-comparison")) return;
   const comparison = await attemptCategoryComparison(attempt);
-  const markup = categoryComparisonMarkup(attempt.report, comparison);
+  const markup = categoryComparisonMarkup(
+    savedAttemptReport(attempt),
+    comparison,
+  );
   if (!markup || report.querySelector(".category-comparison")) return;
   const card = report.querySelector(".report-card");
   const anchor = card?.querySelector(".report-debrief");
@@ -2144,14 +2151,30 @@ function renderAttemptHistory(attempts) {
   nodes.attemptHistory.replaceChildren();
   shownAttempts = attempts;
   for (const attempt of [...attempts].reverse()) {
+    const saved = savedAttemptReport(attempt);
     const item = document.createElement("li");
     const when = new Date(attempt.at).toLocaleString(undefined, {
       dateStyle: "medium",
       timeStyle: "short",
     });
-    const verdict = attempt.report.incomplete
-      ? "INCOMPLETE"
-      : (attempt.report.decision ?? "UNSCORED");
+    const verdict = saved.unscored
+      ? "UNSCORED"
+      : saved.incomplete
+        ? "INCOMPLETE"
+        : verdictLabel(saved.decision);
+    const scores = [];
+    if (!saved.incomplete) {
+      if (saved.codingScore !== undefined) {
+        const work = workLabel(modeIsWhiteboard(attempt.interviewMode));
+        scores.push(`${work} ${scoreText(saved.codingScore, "/100")}`);
+      }
+      if (saved.communicationScore !== undefined) {
+        const communication = scoreText(saved.communicationScore, "/100");
+        scores.push(
+          `${COMMUNICATION_SCORE_LABEL} ${communication.toLowerCase()}`,
+        );
+      }
+    }
     const select = document.createElement("input");
     select.type = "checkbox";
     select.dataset.attemptSelect = "";
@@ -2165,8 +2188,14 @@ function renderAttemptHistory(attempts) {
     const label = document.createElement("label");
     label.append(
       select,
-      `${when} · ${attempt.problemTitle} · ${attempt.difficulty ?? "Difficulty not recorded"} · ${languageLabel(attempt.language ?? "not recorded")} · ${verdict}`,
+      `${when} · ${attempt.problemTitle} · ${attempt.difficulty ?? "Difficulty not recorded"} · ${attempt.language ? languageLabel(attempt.language) : "Language not recorded"} · ${verdict}`,
     );
+    for (const score of scores) {
+      const metric = document.createElement("span");
+      metric.className = "attempt-score";
+      metric.textContent = `·\u00a0${score}`;
+      label.append(" ", metric);
+    }
     const line = document.createElement("p");
     line.append(label);
     const open = document.createElement("button");
@@ -2188,9 +2217,9 @@ function renderAttemptHistory(attempts) {
     retry.textContent = "Try again";
     const report = document.createElement("div");
     report.innerHTML = reportMarkup({
-      report: attempt.report,
+      report: saved,
       problemTitle: attempt.problemTitle,
-      language: languageLabel(attempt.language ?? "not recorded"),
+      language: attempt.language,
       code: attempt.code ?? FINAL_CODE_NOT_SAVED,
       unclearLines: attempt.unclearLines,
     });
@@ -2324,11 +2353,7 @@ async function downloadSavedReport(
 ) {
   const problemPages = await loadPageMapWithin(requestTimeoutMs);
   const markdown = reportMarkdown({
-    report: {
-      ...attempt.report,
-      incomplete:
-        attempt.report.incomplete || attempt.recordedDecision === null,
-    },
+    report: savedAttemptReport(attempt),
     problemTitle: attempt.problemTitle,
     problemPage: attempt.problemId,
     problemPages,

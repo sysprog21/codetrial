@@ -4,6 +4,7 @@
 // into. interview.js owns the wiring, this owns the output.
 
 import {
+  COMMUNICATION_SCORE_LABEL,
   FRAMEWORKS,
   escapeHtml,
   formatTime,
@@ -14,6 +15,9 @@ import {
   orPlaceholder,
   surfaceLabel,
   languageLabel,
+  verdictLabel,
+  workLabel,
+  scoreText,
 } from "./lib.js";
 import { atScrollEnd, scrolledByCandidate } from "./scroll-follow.js";
 
@@ -417,9 +421,9 @@ function hasRubricVersionMismatch(categoryComparison) {
 
 function categoryComparisonView(report, categoryComparison, atBoard) {
   if (report.incomplete || !categoryComparison?.previous) return null;
-  const workTitle = atBoard ? "Board work" : "Coding";
+  const workTitle = workLabel(atBoard);
   const { previous, current } = categoryComparison;
-  const previousDecision = previous.decision === "HIRE" ? "HIRE" : "NO HIRE";
+  const previousDecision = verdictLabel(previous.decision);
   const previousDate = comparisonDate(previous.at);
   const scopeNote = categoryComparison.sameProblem
     ? "repeat of this problem"
@@ -541,7 +545,7 @@ export function categoryComparisonMarkup(
         .join("")}</div>`
     : "";
 
-  return `<section class="category-comparison"><h3>Category progress · ${escapeHtml(view.category)}</h3><p class="muted small">Compared with ${escapeHtml(view.previousTitle)}${view.previousDate ? ` · ${escapeHtml(view.previousDate)}` : ""} · ${view.previousDecision} (${view.scopeNote})</p><ul class="category-deltas"><li><strong>${view.workTitle}:</strong> ${escapeHtml(view.prevCoding)} -> ${escapeHtml(view.currCoding)} (${escapeHtml(view.codingDelta)})</li><li><strong>Interviewer communication:</strong> ${escapeHtml(view.prevComm)} -> ${escapeHtml(view.currComm)} (${escapeHtml(view.commDelta)})</li><li><strong>Hints used:</strong> ${escapeHtml(view.prevHints)} -> ${escapeHtml(view.currHints)} (${escapeHtml(view.hintsDelta)})</li></ul>${stepScores}${phaseFeedback}</section>`;
+  return `<section class="category-comparison"><h3>Category progress · ${escapeHtml(view.category)}</h3><p class="muted small">Compared with ${escapeHtml(view.previousTitle)}${view.previousDate ? ` · ${escapeHtml(view.previousDate)}` : ""} · ${view.previousDecision} (${view.scopeNote})</p><ul class="category-deltas"><li><strong>${view.workTitle}:</strong> ${escapeHtml(view.prevCoding)} -> ${escapeHtml(view.currCoding)} (${escapeHtml(view.codingDelta)})</li><li><strong>${COMMUNICATION_SCORE_LABEL}:</strong> ${escapeHtml(view.prevComm)} -> ${escapeHtml(view.currComm)} (${escapeHtml(view.commDelta)})</li><li><strong>Hints used:</strong> ${escapeHtml(view.prevHints)} -> ${escapeHtml(view.currHints)} (${escapeHtml(view.hintsDelta)})</li></ul>${stepScores}${phaseFeedback}</section>`;
 }
 
 function categoryComparisonMarkdown(
@@ -596,7 +600,7 @@ function categoryComparisonMarkdown(
     `Compared with ${mdText(view.previousTitle)}${view.previousDate ? ` · ${mdText(view.previousDate)}` : ""} · ${view.previousDecision} (${view.scopeNote})`,
     "",
     `- **${view.workTitle}:** ${mdText(view.prevCoding)} -> ${mdText(view.currCoding)} (${view.codingDelta})`,
-    `- **Interviewer communication:** ${mdText(view.prevComm)} -> ${mdText(view.currComm)} (${view.commDelta})`,
+    `- **${COMMUNICATION_SCORE_LABEL}:** ${mdText(view.prevComm)} -> ${mdText(view.currComm)} (${view.commDelta})`,
     `- **Hints used:** ${mdText(view.prevHints)} -> ${mdText(view.currHints)} (${view.hintsDelta})`,
     "",
     ...stepScores,
@@ -626,7 +630,7 @@ export function reportMarkup({
   const atBoard = heldAtBoard(report, board);
   // At a board the coding score is for the drawing, the trace and the cases
   // the candidate named against it, so it is not called Coding there.
-  const workTitle = atBoard ? "Board work" : "Coding";
+  const workTitle = workLabel(atBoard);
   const hire = report.decision === "HIRE";
   const heading = report.incomplete
     ? "No evaluation"
@@ -637,20 +641,18 @@ export function reportMarkup({
       ? `Judged against a mid-level bar; practiced for: ${escapeHtml(report.practiceLevel)}`
       : "Judged against a mid-level bar";
   const badge = report.incomplete
-    ? `<strong class="muted">INCOMPLETE</strong>`
-    : `<strong class="${hire ? "good" : "critical"}">${hire ? "HIRE" : "NO HIRE"}</strong>`;
-  const communicationScore =
-    report.communicationScore === null
-      ? "<strong>Not assessed</strong>"
-      : `<strong>${escapeHtml(report.communicationScore)}<span> / 100</span></strong>`;
+    ? `<strong class="muted">${report.unscored ? "UNSCORED" : "INCOMPLETE"}</strong>`
+    : `<strong class="${hire ? "good" : "critical"}">${verdictLabel(report.decision)}</strong>`;
+  const scoreMarkup = (value) =>
+    `<strong>${escapeHtml(scoreText(value))}${value == null ? "" : "<span> / 100</span>"}</strong>`;
   const scores = report.incomplete
     ? ""
     : `
       <div class="score-grid">
-        <div><p>${workTitle}</p><strong>${escapeHtml(report.codingScore)}<span> / 100</span></strong></div>
-        <div><p>Interviewer communication</p>${communicationScore}</div>
+        <div><p>${workTitle}</p>${scoreMarkup(report.codingScore)}</div>
+        <div><p>${COMMUNICATION_SCORE_LABEL}</p>${scoreMarkup(report.communicationScore)}</div>
       </div>
-      <p><strong>${escapeHtml(report.hintsUsed)}</strong> hints used during the session</p>`;
+      <p>${report.hintsUsed === undefined ? `Hints used during the session: <strong>${scoreText(report.hintsUsed)}</strong>` : `<strong>${escapeHtml(report.hintsUsed)}</strong> hints used during the session`}</p>`;
   const feedback = report.incomplete
     ? ""
     : `${feedbackMarkup(workTitle, report.codingFeedback)}${feedbackMarkup("Communication", report.communicationFeedback)}`;
@@ -890,7 +892,7 @@ export function reportMarkdown({
 }) {
   const atBoard = heldAtBoard(report, board);
   const originalProblem = originalProblemForPage(problemPages, problemPage);
-  const workTitle = atBoard ? "Board work" : "Coding";
+  const workTitle = workLabel(atBoard);
   // One rule for every untrusted string in this document, where there used to
   // be three. Evidence rows ran through escapeHtml, feedback bullets and
   // transcript turns ran through nothing. escapeHtml was the wrong escaper for
@@ -1106,7 +1108,7 @@ export function reportMarkdown({
   const head = report.incomplete
     ? ["## No evaluation", "", mdText(report.summary) || "(none)"]
     : [
-        `## Verdict: ${report.decision === "HIRE" ? "HIRE" : "NO HIRE"}`,
+        `## Verdict: ${verdictLabel(report.decision)}`,
         "",
         report.practiceLevel
           ? `Judged against a mid-level bar; practiced for: ${mdText(report.practiceLevel)}`
@@ -1114,9 +1116,9 @@ export function reportMarkdown({
         "",
         "| Metric | Score |",
         "|---|---|",
-        `| ${workTitle} | ${mdText(report.codingScore)} / 100 |`,
-        `| Communication | ${report.communicationScore === null ? "Not assessed" : `${mdText(report.communicationScore)} / 100`} |`,
-        `| Hints used | ${mdText(report.hintsUsed)} |`,
+        `| ${workTitle} | ${mdText(scoreText(report.codingScore, " / 100"))} |`,
+        `| ${COMMUNICATION_SCORE_LABEL} | ${mdText(scoreText(report.communicationScore, " / 100"))} |`,
+        `| Hints used | ${mdText(scoreText(report.hintsUsed))} |`,
         "",
         "## Committee summary",
         mdText(report.summary) || "(none)",
