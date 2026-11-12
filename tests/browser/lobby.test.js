@@ -10411,7 +10411,7 @@ lobbyTest(
       chunks.push(chunk);
     assert.match(
       Buffer.concat(chunks).toString("utf8"),
-      /## Category progress · 1D DP[\s\S]*Compared with Step Ways · 2026-01-01 · NO HIRE/,
+      /## Category progress · 1D DP[\s\S]*Compared with Step Ways · 2026-01-01 · NO HIRE[\s\S]*Coding:\*\* 60 -> n\/a \(n\/a\)/,
     );
 
     const oldest = rows.nth(1);

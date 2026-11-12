@@ -694,11 +694,11 @@ nodes.attemptDownloadSelected.addEventListener("click", async () => {
       historyCategories = await loadHistoryCategoryMap();
     }
     await Promise.all(
-      selected.map((attempt) =>
+      selected.map(async (attempt) =>
         exportSavedReport(
           attempt,
           undefined,
-          compareCategoryAttempt(history, attempt, historyCategories),
+          await attemptCategoryComparison(attempt),
         ),
       ),
     );
@@ -1360,15 +1360,10 @@ function canCompareAttempt(attempt, history = progressNormalized) {
   );
 }
 
-async function attemptCategoryComparison(
-  attempt,
-  { useSavedMetrics = false } = {},
-) {
+async function attemptCategoryComparison(attempt) {
   const history = progressNormalized;
   if (!canCompareAttempt(attempt, history)) return null;
   historyCategories ??= await loadHistoryCategoryMap();
-  if (!useSavedMetrics)
-    return compareCategoryAttempt(history, attempt, historyCategories);
   const withSavedMetrics = (entry) => ({
     ...entry,
     recordedCodingScore: entry.savedMetrics.codingScore ?? null,
@@ -1384,9 +1379,7 @@ async function attemptCategoryComparison(
 
 async function openAttemptCategoryComparison(report, attempt) {
   if (report.querySelector(".category-comparison")) return;
-  const comparison = await attemptCategoryComparison(attempt, {
-    useSavedMetrics: true,
-  });
+  const comparison = await attemptCategoryComparison(attempt);
   const markup = categoryComparisonMarkup(
     savedAttemptReport(attempt),
     comparison,
@@ -2360,14 +2353,7 @@ async function exportSavedReport(attempt, button, categoryComparison) {
   }
 }
 
-async function downloadSavedReport(
-  attempt,
-  categoryComparison = compareCategoryAttempt(
-    progressNormalized,
-    attempt,
-    historyCategories,
-  ),
-) {
+async function downloadSavedReport(attempt, categoryComparison) {
   const problemPages = await loadPageMapWithin(requestTimeoutMs);
   const markdown = reportMarkdown({
     report: savedAttemptReport(attempt),

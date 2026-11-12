@@ -129,7 +129,7 @@ for (const [path, name] of [
       const reports = [
         { decision: "UNKNOWN", codingScore: 82 },
         { decision: "HIRE" },
-        { decision: "HIRE", codingScore: "82", communicationScore: "74" },
+        { decision: "HIRE", codingScore: 120, communicationScore: "74" },
         {
           decision: "HIRE",
           codingScore: 0,
