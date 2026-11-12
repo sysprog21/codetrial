@@ -6830,6 +6830,198 @@ for (const account of [true, false]) {
   );
 }
 
+for (const account of [true, false]) {
+  lobbyTest(
+    `past attempt rows show recorded scores in ${account ? "account" : "device"} history`,
+    async (page) => {
+      session = { signedIn: account, user: { login: "candidate" } };
+      const cases = [
+        [
+          { decision: "HIRE", codingScore: 82, communicationScore: 74 },
+          "HIRE · Coding 82/100 · Communication 74/100",
+        ],
+        [
+          {
+            decision: "NO_HIRE",
+            interviewMode: "whiteboard",
+            codingScore: 55,
+            communicationScore: 68,
+          },
+          "NO HIRE · Board work 55/100 · Communication 68/100",
+        ],
+        [
+          { decision: "HIRE", codingScore: 82, communicationScore: null },
+          "HIRE · Coding 82/100 · Communication not assessed",
+        ],
+        [
+          {
+            decision: "NO_HIRE",
+            codingScore: 0,
+            communicationScore: 45,
+            hintsUsed: 0,
+          },
+          "NO HIRE · Coding 0/100 · Communication 45/100",
+        ],
+        [
+          {
+            decision: "HIRE",
+            incomplete: true,
+            codingScore: 82,
+            communicationScore: 74,
+          },
+          "INCOMPLETE",
+        ],
+        [{ codingScore: 82, communicationScore: 74 }, "UNSCORED"],
+        [
+          { decision: "UNKNOWN", codingScore: 82, communicationScore: 74 },
+          "UNSCORED",
+        ],
+        [
+          { decision: "HIRE", communicationScore: 74 },
+          "HIRE · Communication 74/100",
+        ],
+        [
+          { decision: "HIRE", codingScore: null, communicationScore: 74 },
+          "HIRE · Communication 74/100",
+        ],
+        [
+          { decision: "HIRE", codingScore: "82", communicationScore: 74 },
+          "HIRE · Communication 74/100",
+        ],
+        [{ decision: "HIRE", codingScore: 82 }, "HIRE · Coding 82/100"],
+        [
+          { decision: "HIRE", codingScore: 82, communicationScore: "74" },
+          "HIRE · Coding 82/100",
+        ],
+        [{ decision: "HIRE" }, "HIRE"],
+        [
+          { decision: "HIRE", communicationScore: 0 },
+          "HIRE · Communication 0/100",
+        ],
+        [
+          {
+            decision: "HIRE",
+            codingScore: 82,
+            communicationScore: 74,
+            interviewContract: { ...ACTIVE_CONTRACT, reportSchemaVersion: 999 },
+          },
+          "INCOMPLETE",
+        ],
+      ];
+      const saved = cases.map(([report], index) => ({
+        id: `scores-${index}`,
+        problemId: EASY[0],
+        problemTitle: `${index === 1 ? "Whiteboard interview " : ""}Score example ${index}`,
+        difficulty: "Easy",
+        ...(index === 1 ? {} : { language: "python" }),
+        date: new Date(Date.UTC(2026, 0, index + 1)).toISOString(),
+        report,
+      }));
+      if (account)
+        reports = saved.map((payload) => ({ id: payload.id, payload }));
+      else
+        await page.addInitScript((entries) => {
+          localStorage.setItem("codetrial_history", JSON.stringify(entries));
+        }, saved);
+      await lobby(page);
+      const rows = page.locator("#attempt-history > li");
+      await reaches(
+        page,
+        (count) =>
+          document.querySelectorAll("#attempt-history > li").length === count,
+        cases.length,
+      );
+      for (const [index, [, summary]] of cases.entries()) {
+        const row = rows.filter({ hasText: `Score example ${index} ·` });
+        const line = row.locator(":scope > p");
+        const text = (await line.innerText()).replaceAll("\u00a0", " ");
+        assert.ok(await line.isVisible());
+        assert.equal(
+          text.slice(text.indexOf(" · Easy · ")),
+          ` · Easy · ${index === 1 ? "Language not recorded" : "Python"} · ${summary}`,
+        );
+        for (const score of await row
+          .locator(".attempt-score")
+          .allTextContents())
+          assert.ok(score.startsWith("·\u00a0"), JSON.stringify(score));
+        assert.ok(await row.locator(":scope > div").isHidden());
+      }
+      const board = rows.filter({ hasText: "Score example 1 ·" });
+      const unscored = rows.filter({ hasText: "Score example 5 ·" });
+      await unscored.getByRole("button", { name: "Open report" }).click();
+      assert.ok(
+        await unscored
+          .getByRole("heading", { name: "No evaluation" })
+          .isVisible(),
+      );
+      assert.equal(await unscored.locator(".score-grid").count(), 0);
+      assert.ok(
+        await unscored.getByText("UNSCORED", { exact: true }).isVisible(),
+      );
+      await unscored.getByRole("button", { name: "Collapse report" }).click();
+      for (const [index, expected] of [
+        [2, ["82 / 100", "Not assessed"]],
+        [3, ["0 / 100", "45 / 100"]],
+        [9, ["Not recorded", "74 / 100"]],
+        [11, ["82 / 100", "Not recorded"]],
+        [12, ["Not recorded", "Not recorded"]],
+      ]) {
+        const row = rows.filter({ hasText: `Score example ${index} ·` });
+        await row.getByRole("button", { name: "Open report" }).click();
+        assert.deepEqual(
+          await row.locator(".score-grid strong").allTextContents(),
+          expected,
+        );
+        if (index === 12)
+          assert.ok(
+            await row
+              .getByText("Hints used during the session: Not recorded")
+              .isVisible(),
+          );
+        if (index === 3)
+          assert.ok(
+            await row.getByText("0 hints used during the session").isVisible(),
+          );
+        await row.getByRole("button", { name: "Collapse report" }).click();
+      }
+      assert.deepEqual(
+        await board.locator(".attempt-score").allTextContents(),
+        ["·\u00a0Board work 55/100", "·\u00a0Communication 68/100"],
+      );
+      for (const width of [320, 360, 390, 640]) {
+        await page.setViewportSize({ width, height: 844 });
+        for (const score of await rows.locator(".attempt-score").all()) {
+          const bounds = await score.evaluate((element) => {
+            const range = document.createRange();
+            range.selectNodeContents(element);
+            const rects = [...range.getClientRects()].map(({ x, right }) => ({
+              x,
+              right,
+            }));
+            const text = element.firstChild;
+            range.setStart(text, 0);
+            range.setEnd(text, text.data.indexOf(" "));
+            return { rects, prefixLines: range.getClientRects().length };
+          });
+          assert.equal(bounds.prefixLines, 1);
+          assert.ok(bounds.rects.length > 0);
+          assert.ok(
+            bounds.rects.every(({ x, right }) => x >= 0 && right <= width),
+            `Score ${await score.textContent()} exceeds ${width}px: ${JSON.stringify(bounds.rects)}`,
+          );
+        }
+        const pageWidth = await page.evaluate(
+          () => document.documentElement.scrollWidth,
+        );
+        assert.ok(
+          pageWidth <= width,
+          `Page width ${pageWidth} exceeds ${width}px`,
+        );
+      }
+    },
+  );
+}
+
 lobbyTest(
   "a filtered attempt list deletes the report the row shows",
   async (page) => {
