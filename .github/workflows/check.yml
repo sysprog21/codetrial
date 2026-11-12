@@ -353,6 +353,8 @@ jobs:
         if: matrix.lane != 'portable'
         id: chromium
         uses: ./.github/actions/chromium
+        with:
+          full-browser: ${{ matrix.lane == 'browser' }}
 
       - name: Place the instructor packaging environment
         if: matrix.lane == 'portable'

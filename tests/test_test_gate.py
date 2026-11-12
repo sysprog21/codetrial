@@ -728,9 +728,85 @@ printf 'python:%s\\n' "$*" >> "$CALLS"
                 ],
             )
 
+    def test_full_chromium_is_required_and_installed_only_when_requested(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            install = stubbed(
+                tmp,
+                action_script("chromium"),
+                {
+                    "npx": 'printf "npx %s\\n" "$*" >> "$CALLS"',
+                    "node": 'printf "node\\n" >> "$CALLS"',
+                    "ldd": 'printf "%s\\n" "$LDD"',
+                },
+            )
+            shell = Path(tmp) / ".cache/ms-playwright/chromium_headless_shell-1"
+            shell.mkdir(parents=True)
+            (shell / "chrome-headless-shell").write_text("")
+            with self.assertRaises(subprocess.CalledProcessError):
+                install(HOME=tmp, LDD="", CHROMIUM_FULL_BROWSER="true")
+            full = Path(tmp) / ".cache/ms-playwright/chromium-1/chrome-linux64"
+            full.mkdir(parents=True)
+            (full / "chrome").write_text("")
+            self.assertEqual(
+                install(
+                    HOME=tmp,
+                    LDD="libnss3.so => /usr/lib/libnss3.so",
+                    CHROMIUM_FULL_BROWSER="true",
+                ),
+                ["npx playwright install chromium", "node"],
+            )
+            self.assertEqual(
+                install(
+                    HOME=tmp,
+                    LDD="libnss3.so => not found",
+                    CHROMIUM_FULL_BROWSER="true",
+                ),
+                [
+                    "npx playwright install chromium",
+                    "npx playwright install-deps chromium",
+                    "node",
+                ],
+            )
+            with self.assertRaises(subprocess.CalledProcessError):
+                install(HOME=tmp, LDD="", CHROMIUM_FULL_BROWSER="invalid")
+            self.assertEqual((Path(tmp) / "calls").read_text(), "")
+
+    def test_chromium_restore_modes_reach_a_cache_writer(self):
+        action = (ROOT / ".github/actions/chromium/action.yml").read_text()
+        primary = re.search(r"^        key: (.+)$", action, re.M).group(1)
+        fallbacks = re.findall(r"^        restore-keys: (.+)$", action, re.M)
+
+        def key(template, full):
+            template = template.replace(
+                "${{ inputs.full-browser == 'true' && 'full' || 'shell' }}",
+                "full" if full else "shell",
+            )
+            return template.replace("${{ runner.os }}", "Linux").replace(
+                "${{ hashFiles('node_modules/playwright-core/browsers.json') }}",
+                "pinned-build",
+            )
+
+        gates = gates_job()
+        self.assertIn(
+            "full-browser: ${{ matrix.lane == 'browser' }}",
+            support.step(gates, "Install Chromium"),
+        )
+        save = support.step(gates, "Save Chromium")
+        self.assertIn("matrix.lane == 'browser'", save)
+        self.assertIn("key: ${{ steps.chromium.outputs.key }}", save)
+        # The only writer runs with full-browser=true. Both restore modes
+        # must reach its exact build, directly or through a fallback prefix.
+        saved = key(primary, True)
+        for full in (False, True):
+            with self.subTest(full_browser=full):
+                candidates = [key(primary, full), *(key(f, full) for f in fallbacks)]
+                self.assertTrue(
+                    any(saved.startswith(candidate) for candidate in candidates)
+                )
+
     def test_every_browser_launch_is_headless(self):
-        # The chromium action installs only the headless shell, so a headed or
-        # channel launch would find no browser. Say so here, not in CI.
+        # Only the native-capture fixture needs full Chromium. Its CI lane
+        # must install that binary; all other launchers retain the shell.
         launchers = [
             *(ROOT / "tests/browser").glob("*.js"),
             *(ROOT / "scripts").glob("*.cjs"),
@@ -738,9 +814,13 @@ printf 'python:%s\\n' "$*" >> "$CALLS"
         ]
         for path in launchers:
             with self.subTest(path=path.name):
-                self.assertNotRegex(
-                    path.read_text(), r"\bheadless:(?!\s*true\b)|\bchannel:"
-                )
+                source = path.read_text()
+                self.assertNotRegex(source, r"\bheadless:(?!\s*true\b)")
+                if path.name == "example-board-ui.test.js":
+                    self.assertIn('channel: "chromium"', source)
+                    source = source.replace('channel: "chromium"', "")
+                self.assertNotRegex(source, r"\bchannel:")
+        self.assertIn("full-browser: ${{ matrix.lane == 'browser' }}", gates_job())
 
     def test_avatar_reuses_the_gate_caches_without_saving_them(self):
         avatar = support.job("avatar")

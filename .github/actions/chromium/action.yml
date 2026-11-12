@@ -7,10 +7,11 @@ description: Restore Playwright's Chromium and install the system libraries it l
 # and re-downloaded a browser nothing had changed. Needs `npm ci` first, since
 # it reads that file and runs that playwright.
 #
-# The headless shell only. Every launch here is headless with no `channel`,
-# which is the shell's job, so the full browser beside it was half of every
-# download and of the cache entry restored on every run, for a binary nothing
-# started. A headed launch would fail at once naming the missing executable.
+# Most lanes need only the headless shell. Browser interaction tests can opt
+# into the full browser for native pointer capture in Chromium's new headless
+# mode. Separate cache keys keep a shell-only hit from hiding that binary.
+# Shell lanes can restore the full entry, which includes the shell and is
+# saved by the browser lane, instead of downloading it on every shell run.
 #
 # The system libraries are not in the cached directory, and installing them
 # was most of this step's cost: `--with-deps` runs `apt-get update` and an
@@ -25,6 +26,10 @@ description: Restore Playwright's Chromium and install the system libraries it l
 # one behind a ten-minute install. The launch afterwards is still required:
 # the suites would fail on a browser that cannot start too, but minutes later
 # and inside a test's output, where this fails at the step that caused it.
+inputs:
+  full-browser:
+    description: Install full Chromium for native browser interaction tests.
+    default: "false"
 outputs:
   key:
     description: The exact key, for the step that saves the browser.
@@ -39,10 +44,17 @@ runs:
       uses: actions/cache/restore@v6
       with:
         path: ~/.cache/ms-playwright
-        key: playwright-shell-${{ runner.os }}-${{ hashFiles('node_modules/playwright-core/browsers.json') }}
+        key: playwright-${{ inputs.full-browser == 'true' && 'full' || 'shell' }}-${{ runner.os }}-${{ hashFiles('node_modules/playwright-core/browsers.json') }}
+        restore-keys: playwright-full-${{ runner.os }}-${{ hashFiles('node_modules/playwright-core/browsers.json') }}
     - shell: bash
+      env:
+        CHROMIUM_FULL_BROWSER: ${{ inputs.full-browser }}
       run: |
-        npx playwright install --only-shell chromium
+        case "${CHROMIUM_FULL_BROWSER:-false}" in
+          true) npx playwright install chromium ;;
+          false) npx playwright install --only-shell chromium ;;
+          *) echo "full-browser must be true or false" >&2; exit 1 ;;
+        esac
         # The shell and the libraries it opens at run time, ANGLE and
         # SwiftShader among them, which a launch alone never loads. No shell
         # found is a failure, not a pass: a renamed executable would otherwise
@@ -51,10 +63,25 @@ runs:
         shell=(-name chrome-headless-shell -o -name headless_shell)
         [ -n "$(find "$cache" -type f \( "${shell[@]}" \))" ] \
           || { echo "no headless shell under $cache" >&2; exit 1; }
-        missing=$(find "$cache" -type f \( "${shell[@]}" -o -name '*.so' \) \
+        if [ "${CHROMIUM_FULL_BROWSER:-false}" = true ]; then
+          [ -n "$(find "$cache" -type f -name chrome)" ] \
+            || { echo "no full Chromium under $cache" >&2; exit 1; }
+        fi
+        missing=$(find "$cache" -type f \( "${shell[@]}" -o -name chrome -o -name '*.so' \) \
           -exec ldd {} + 2>/dev/null | grep -F 'not found' | sort -u || true)
         if [ -n "$missing" ]; then
           printf 'Chromium is missing system libraries:\n%s\n' "$missing"
-          timeout 15m npx playwright install-deps chromium-headless-shell
+          if [ "${CHROMIUM_FULL_BROWSER:-false}" = true ]; then
+            timeout 15m npx playwright install-deps chromium
+          else
+            timeout 15m npx playwright install-deps chromium-headless-shell
+          fi
         fi
-        node -e "require('playwright').chromium.launch().then((b) => b.close())"
+        node <<'JS'
+        const { chromium } = require('playwright');
+        (async () => {
+          await (await chromium.launch()).close();
+          if (process.env.CHROMIUM_FULL_BROWSER === 'true')
+            await (await chromium.launch({ channel: 'chromium' })).close();
+        })().catch((error) => { console.error(error); process.exitCode = 1; });
+        JS
