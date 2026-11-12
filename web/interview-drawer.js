@@ -109,12 +109,6 @@ export function mountInterviewDrawer(panel) {
   });
   for (const details of drawer.querySelectorAll("details"))
     details.addEventListener("toggle", paint);
-  // A shrinking board comes back to a drawer that may have been resized while
-  // it was out, so its docked height is measured again.
-  new MutationObserver(paint).observe(example, {
-    attributes: true,
-    attributeFilter: ["data-expanded"],
-  });
   new MutationObserver(paint).observe(results, {
     attributes: true,
     attributeFilter: ["hidden"],
@@ -123,4 +117,5 @@ export function mountInterviewDrawer(panel) {
   });
   new ResizeObserver(paint).observe(panel);
   paint();
+  return paint;
 }
