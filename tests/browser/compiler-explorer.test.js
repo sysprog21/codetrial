@@ -142,6 +142,26 @@ test("C string literals hand the candidate's text over unchanged", () => {
   assert.equal(nativeLiteral("\\u0001", "string", "c"), '"\\\\u0001"');
 });
 
+test("character literals spell control characters in octal", () => {
+  // A raw newline or carriage return between quotes ends the literal in all
+  // three languages; the escapes C, C++ and Java share keep their spelling.
+  for (const language of ["c", "cpp", "java"]) {
+    assert.equal(nativeLiteral("\n", "character", language), "'\\012'");
+    assert.equal(nativeLiteral("\r", "character", language), "'\\015'");
+    assert.equal(nativeLiteral("\u0000", "character", language), "'\\000'");
+    assert.equal(nativeLiteral("'", "character", language), "'\\''");
+    assert.equal(nativeLiteral("\\", "character", language), "'\\\\'");
+    assert.equal(nativeLiteral("7", "character", language), "'7'");
+    assert.equal(nativeLiteral("\t", "character", language), "'\\011'");
+    assert.equal(nativeLiteral("\u0001", "character", language), "'\\001'");
+    assert.equal(nativeLiteral(" ", "character", language), "' '");
+  }
+  assert.equal(
+    nativeLiteral([["X", "\n"]], "character[][]", "c"),
+    "{{'X', '\\012'}}",
+  );
+});
+
 test("C harness refuses a string case holding NUL rather than truncating it", () => {
   // `\000` compiles, but the solution's string ends there, so the case would
   // run on "a" alone. The refusal names the case, as the workspace does.
@@ -161,8 +181,8 @@ test("C harness refuses a string case holding NUL rather than truncating it", ()
     generateHarness("c", { ...spec, cases: [{ input: ["\\u0000"] }] }, ""),
   );
   // Word Search II takes a `character[][]` board and a `string[]` of words.
-  // A NUL item in the words truncates; a NUL cell is a raw byte between
-  // quotes, which compiles and reaches the solution as 0.
+  // A NUL item in the words truncates; a NUL cell is written `'\000'` and
+  // reaches the solution as 0.
   const grid = (board, words) => ({
     ...judges["word-search-ii"],
     cases: [{ input: [board, words], expected: [] }],
@@ -1034,6 +1054,42 @@ bool isRearrangedCode(char* s, char* t) {
       }
     },
   );
+
+  // A newline or carriage return in a cell sat raw between quotes and ended the
+  // character literal, so no compiled language built the harness. Surrounded
+  // Regions hands its board back, so a solution that leaves it alone shows
+  // every cell arrived as typed.
+  const untouchedBoard = {
+    c: "void backfillSealedPockets(char** board, int boardSize, int* boardColSize) {}",
+    cpp: "class Solution {\npublic:\n    void backfillSealedPockets(vector<vector<char>>& board) {}\n};",
+    java: "class Solution {\n    public void backfillSealedPockets(char[][] board) {}\n}",
+  };
+  const controlBoard = [
+    ["X", "\n", "X"],
+    ["\r", "\t", "\u0001"],
+  ];
+  for (const [language, skip] of [
+    ["c", noCc],
+    ["cpp", noGpp],
+    ["java", noJava],
+  ]) {
+    it(
+      `${language} harness hands control characters in a board over as typed`,
+      { skip },
+      async () => {
+        const results = await runJudge(
+          language,
+          "surrounded-regions",
+          untouchedBoard[language],
+          [{ input: [controlBoard], expected: controlBoard }],
+        );
+        assert.deepEqual(
+          results.map((result) => result.actual),
+          [controlBoard],
+        );
+      },
+    );
+  }
 
   // The list<T> spellings reach C through the same pointer-and-returnSize
   // shape as T[], so a correct solution must print what it returned.
@@ -2149,8 +2205,9 @@ public:
   // Compiles a candidate into the named judge's harness and returns its
   // results. The timeout keeps a serializer that walks forever from hanging
   // the lane, and the buffer holds the output of the largest tree the bank
-  // allows.
-  async function runJudge(language, id, candidate) {
+  // allows. `cases` replaces the judge's own when a test needs inputs of its
+  // own.
+  async function runJudge(language, id, candidate, cases = judges[id].cases) {
     const dir = mkdtempSync(join(tmpdir(), `codetrial-${language}-${id}-`));
     try {
       const source = join(
@@ -2158,7 +2215,10 @@ public:
         language === "java" ? "Main.java" : `candidate.${language}`,
       );
       const binary = join(dir, "candidate");
-      writeFileSync(source, generateHarness(language, judges[id], candidate));
+      writeFileSync(
+        source,
+        generateHarness(language, { ...judges[id], cases }, candidate),
+      );
       if (language === "java") await run("javac", [source]);
       else
         await run(language === "c" ? "cc" : "g++", [
