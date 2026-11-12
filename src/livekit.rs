@@ -260,7 +260,7 @@ pub(super) const LOCAL_REPORT_TIMEOUT: Duration = Duration::from_secs(250);
 
 /// The report deadline in force: the local one when the report calls go to a
 /// self-hosted base, the hosted one otherwise.
-pub fn report_timeout() -> Duration {
+pub(crate) fn report_timeout() -> Duration {
     if crate::gemini::report_endpoint_is_local() {
         LOCAL_REPORT_TIMEOUT
     } else {
@@ -273,9 +273,9 @@ pub fn report_timeout() -> Duration {
 /// the frozen report and its first publish, every delivery attempt, and five
 /// seconds for the packet to cross the room. Offered any sooner, a candidate
 /// walks out on a report that is still coming, and leaving never saves it. The
-/// server says this to the page in `/runtime-config.js`, because only the
-/// server knows which of the two deadlines is in force.
-pub fn report_escape_wait(report_timeout: Duration) -> Duration {
+/// agent says this to the page in its attributes, because only the agent knows
+/// which of the two deadlines is in force.
+pub(crate) fn report_escape_wait(report_timeout: Duration) -> Duration {
     report_timeout
         + WRAP_UP_WAIT
         + crate::gemini::CLOSE_TIMEOUT
@@ -287,7 +287,7 @@ pub fn report_escape_wait(report_timeout: Duration) -> Duration {
 /// the deadline the regeneration runs under, one rejoin grace, every delivery
 /// attempt, and five seconds of slack, which is the hosted 175
 /// `web/report-recovery.js` keeps. Sent the same way, for the same reason.
-pub fn report_retry_wait(report_timeout: Duration) -> Duration {
+pub(crate) fn report_retry_wait(report_timeout: Duration) -> Duration {
     report_timeout + report::REJOIN_GRACE + report_delivery() + Duration::from_secs(5)
 }
 

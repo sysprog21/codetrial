@@ -1870,6 +1870,48 @@ fn the_turn_window_rides_beside_the_agent_state() {
 }
 
 #[test]
+fn the_agent_tells_the_page_the_report_waits_of_its_own_deadline() {
+    for deadline in [
+        crate::livekit::REPORT_TIMEOUT,
+        crate::livekit::LOCAL_REPORT_TIMEOUT,
+    ] {
+        let attributes = report_wait_attributes(HashMap::new(), deadline);
+        assert_eq!(
+            attributes[REPORT_ESCAPE_ATTRIBUTE],
+            crate::livekit::report_escape_wait(deadline)
+                .as_millis()
+                .to_string()
+        );
+        assert_eq!(
+            attributes[REPORT_RETRY_ATTRIBUTE],
+            crate::livekit::report_retry_wait(deadline)
+                .as_secs()
+                .to_string()
+        );
+    }
+    let hosted = report_wait_attributes(HashMap::new(), crate::livekit::REPORT_TIMEOUT);
+    assert_eq!(hosted[REPORT_ESCAPE_ATTRIBUTE], "155000");
+    assert_eq!(hosted[REPORT_RETRY_ATTRIBUTE], "175");
+    let local = report_wait_attributes(HashMap::new(), crate::livekit::LOCAL_REPORT_TIMEOUT);
+    assert_eq!(local[REPORT_ESCAPE_ATTRIBUTE], "280000");
+    assert_eq!(local[REPORT_RETRY_ATTRIBUTE], "300");
+}
+
+#[test]
+fn the_page_reads_the_report_waits_under_the_same_keys() {
+    let page = std::fs::read_to_string("web/lib.js").expect("the page is readable");
+    for (name, key) in [
+        ("REPORT_ESCAPE_ATTRIBUTE", REPORT_ESCAPE_ATTRIBUTE),
+        ("REPORT_RETRY_ATTRIBUTE", REPORT_RETRY_ATTRIBUTE),
+    ] {
+        assert!(
+            page.contains(&format!("export const {name} = \"{key}\";")),
+            "web/lib.js must name {key}"
+        );
+    }
+}
+
+#[test]
 fn the_page_reads_the_turn_window_under_the_same_key() {
     let page = std::fs::read_to_string("web/lib.js").expect("the page is readable");
     assert!(
@@ -5154,7 +5196,9 @@ async fn the_room_link_carries_what_the_handlers_send() {
         Some("3000"),
         "the state is merged into the attributes already set: {latest:?}"
     );
-    assert_eq!(latest.len(), 2, "{latest:?}");
+    assert!(latest.contains_key(REPORT_ESCAPE_ATTRIBUTE), "{latest:?}");
+    assert!(latest.contains_key(REPORT_RETRY_ATTRIBUTE), "{latest:?}");
+    assert_eq!(latest.len(), 4, "{latest:?}");
     let attributes = harness
         .sent
         .take()

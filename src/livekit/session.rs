@@ -1699,8 +1699,20 @@ pub(super) fn correct_agent_state(
 /// `web/lib.js` names the same key.
 pub(super) const TURN_WINDOW_ATTRIBUTE: &str = "codetrial.silence_ms";
 
-/// The agent's first attributes, listening and the turn window, in the one
-/// round trip the room pays before it waits for the candidate.
+/// How long the page waits for the report before offering a way out, in
+/// milliseconds, and how long it waits on a regenerated one, in seconds. Said
+/// by the agent because only the agent's process knows which report deadline
+/// it runs under: in a web-only deployment the web process has its own
+/// environment, and a wait it worked out for itself could be the hosted one
+/// while this agent writes the report on a local model.
+/// `REPORT_ESCAPE_ATTRIBUTE` and `REPORT_RETRY_ATTRIBUTE` in `web/lib.js` name
+/// the same keys.
+pub(super) const REPORT_ESCAPE_ATTRIBUTE: &str = "codetrial.report_escape_ms";
+pub(super) const REPORT_RETRY_ATTRIBUTE: &str = "codetrial.report_retry_s";
+
+/// The agent's first attributes, listening, the turn window and the report
+/// waits, in the one round trip the room pays before it waits for the
+/// candidate.
 pub(super) async fn publish_opening_attributes(
     room: &RoomLink,
     current: &mut AgentState,
@@ -1709,7 +1721,10 @@ pub(super) async fn publish_opening_attributes(
     let participant = room.participant();
     let attributes = agent_state_attributes(participant.attributes(), AGENT_STATE_LISTENING);
     participant
-        .set_attributes(turn_window_attributes(attributes, silence_ms))
+        .set_attributes(report_wait_attributes(
+            turn_window_attributes(attributes, silence_ms),
+            crate::livekit::report_timeout(),
+        ))
         .await?;
     current.current = AGENT_STATE_LISTENING;
     Ok(())
@@ -1720,6 +1735,25 @@ fn turn_window_attributes(
     silence_ms: u32,
 ) -> HashMap<String, String> {
     attributes.insert(TURN_WINDOW_ATTRIBUTE.to_string(), silence_ms.to_string());
+    attributes
+}
+
+fn report_wait_attributes(
+    mut attributes: HashMap<String, String>,
+    report_timeout: std::time::Duration,
+) -> HashMap<String, String> {
+    attributes.insert(
+        REPORT_ESCAPE_ATTRIBUTE.to_string(),
+        crate::livekit::report_escape_wait(report_timeout)
+            .as_millis()
+            .to_string(),
+    );
+    attributes.insert(
+        REPORT_RETRY_ATTRIBUTE.to_string(),
+        crate::livekit::report_retry_wait(report_timeout)
+            .as_secs()
+            .to_string(),
+    );
     attributes
 }
 

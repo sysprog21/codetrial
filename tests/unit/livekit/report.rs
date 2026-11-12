@@ -1623,8 +1623,8 @@ fn recovery_offer_matches_browser_limits_and_generation_deadline() {
 
     // Generation can finish while the candidate is away; a return within the
     // grace must still leave every receipt attempt time to land. The page's
-    // floor is the hosted wait, and what the server sends in its place outlasts
-    // whichever deadline is in force.
+    // floor is the hosted wait, and what the agent publishes in its place
+    // outlasts whichever deadline is in force.
     let delivery = DELIVERY_WAIT * DELIVERY_ATTEMPTS as u32;
     assert_eq!(
         limits["retryWaitSeconds"].as_u64().unwrap(),
