@@ -12,6 +12,7 @@ import {
   BOARD_WIDTH,
   ERASER_WIDTH,
   ERASER_WIDTHS,
+  MAX_PAGES,
   MAX_POINTS,
   MAX_STROKE_WIDTH,
   MAX_STROKES,
@@ -19,6 +20,7 @@ import {
   PEN_WIDTH,
   boardPoint,
   createBoard,
+  createBoardPages,
   createBoardPainter,
   createPointerGate,
   drawBoard,
@@ -141,6 +143,71 @@ test("invalid text does not discard redo or add recorded operations", () => {
     assert.deepEqual(board.takeOps(), []);
   }
   assert.equal(board.redo(), true);
+});
+
+test("board pages keep independent editing histories", () => {
+  const pages = createBoardPages();
+  const first = pages.get(0);
+  const secondIndex = pages.add();
+  const second = pages.get(secondIndex);
+
+  assert.equal(pages.count(), 2);
+  assert.equal(pages.get(0), first);
+  assert.equal(pages.get(secondIndex), second);
+  assert.equal(first.strokeCount(), 0);
+  assert.equal(second.strokeCount(), 0);
+
+  stroke(first, 10, 10, 20, 20);
+  stroke(second, 30, 30, 40, 40);
+  assert.equal(first.strokeCount(), 1);
+  assert.equal(second.strokeCount(), 1);
+
+  assert.equal(first.undo(), true);
+  assert.equal(first.strokeCount(), 0);
+  assert.equal(second.strokeCount(), 1);
+  assert.equal(first.canRedo(), true);
+  assert.equal(second.canRedo(), false);
+
+  assert.equal(first.redo(), true);
+  assert.equal(first.strokeCount(), 1);
+  assert.equal(second.strokeCount(), 1);
+
+  assert.equal(first.clear(), true);
+  assert.equal(first.strokeCount(), 0);
+  assert.equal(second.strokeCount(), 1);
+  assert.equal(first.canUndo(), true);
+  assert.equal(second.canUndo(), true);
+
+  assert.equal(first.undo(), true);
+  assert.equal(first.strokeCount(), 1);
+  assert.equal(second.strokeCount(), 1);
+  assert.equal(first.canRedo(), true);
+  assert.equal(second.canRedo(), false);
+  assert.deepEqual(
+    first.takeOps().map((op) => op.op),
+    ["stroke", "undo", "redo", "clear", "undo"],
+  );
+  assert.deepEqual(
+    second.takeOps().map((op) => op.op),
+    ["stroke"],
+  );
+});
+
+test("board pages reject invalid access without creating a page", () => {
+  const pages = createBoardPages();
+
+  assert.equal(pages.get(1), undefined);
+  assert.equal(pages.count(), 1);
+  for (let index = pages.count(); index < MAX_PAGES; index += 1) {
+    assert.equal(pages.add(), index);
+  }
+  assert.equal(pages.count(), MAX_PAGES);
+  assert.equal(pages.add(), -1);
+  assert.equal(pages.get(-1), undefined);
+  assert.equal(pages.get(MAX_PAGES), undefined);
+  assert.equal(pages.get(0.5), undefined);
+  assert.equal(pages.get("0"), undefined);
+  assert.equal(pages.count(), MAX_PAGES);
 });
 
 test("text, ink, erasing and clear replay each history transition", () => {
