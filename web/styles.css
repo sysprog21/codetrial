@@ -2808,10 +2808,18 @@ table.phase-scores {
   box-shadow: none;
 }
 
-.board-note {
+.board-note,
+.board-status {
   margin: 0;
   border-top: 1px solid var(--hairline);
   padding: 0.5rem 0.75rem;
+}
+.board-status {
+  color: var(--critical);
+}
+.board-status:empty {
+  border-top: 0;
+  padding: 0;
 }
 
 /* Pre-flight media gate. Sits above the shell until required local media

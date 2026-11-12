@@ -60,6 +60,8 @@ import {
   BOARD_WIDTH,
   ERASER_WIDTH,
   ERASER_WIDTHS,
+  MAX_STROKES,
+  MAX_STROKES_MESSAGE,
   PEN_COLORS,
   boardPoint,
   createBoard,
@@ -443,6 +445,8 @@ const board = {
   /// board; see `retryHeldCheckpoints`.
   heldCheckpoints: new Map(),
 };
+/// The frame that will show the limit message after a refused stroke, or 0.
+let boardStatusFrame = 0;
 let behavioralMinutes =
   interviewLoop === "coding_behavioral" ? Math.min(8, durationMin) : 0;
 let codingMinutes = durationMin - behavioralMinutes;
@@ -724,6 +728,7 @@ const nodes = {
   boardUndo: document.querySelector("#board-undo"),
   boardRedo: document.querySelector("#board-redo"),
   boardClear: document.querySelector("#board-clear"),
+  boardStatus: document.querySelector("#board-status"),
   jimAvatar: document.querySelector("#jim-avatar"),
   jimAvatarNote: document.querySelector("#jim-avatar-note"),
   jimStage: document.querySelector("#jim-stage"),
@@ -5625,6 +5630,20 @@ function bindBoardPointer() {
       )
     ) {
       board.pointers.up(event);
+      // The ceiling is the only stroke `begin` refuses, and an erasure meets
+      // it too. Without a word the pen just looks broken, and the eraser, the
+      // obvious way to make room, does nothing either.
+      if (board.model.strokeCount() >= MAX_STROKES) {
+        // A live region speaks only when its text changes, so a repeated
+        // refusal empties the line and sets it again a frame later.
+        // `paintBoard` cancels that frame once the reason is gone.
+        nodes.boardStatus.textContent = "";
+        cancelAnimationFrame(boardStatusFrame);
+        boardStatusFrame = requestAnimationFrame(() => {
+          boardStatusFrame = 0;
+          nodes.boardStatus.textContent = MAX_STROKES_MESSAGE;
+        });
+      }
       paintBoard();
       return;
     }
@@ -5749,6 +5768,14 @@ function paintBoard() {
   nodes.boardUndo.disabled = locked || !board.model.canUndo();
   nodes.boardRedo.disabled = locked || !board.model.canRedo();
   nodes.boardClear.disabled = locked || board.model.strokeCount() === 0;
+  // Whatever freed a slot (Undo, Clear board) also takes away the reason the
+  // limit message was shown, and a locked board offers neither way out. A
+  // message still waiting for its frame goes with it.
+  if (locked || board.model.strokeCount() < MAX_STROKES) {
+    cancelAnimationFrame(boardStatusFrame);
+    boardStatusFrame = 0;
+    nodes.boardStatus.textContent = "";
+  }
 }
 
 /// Whether the board takes edits: not until the connect attempt has settled,

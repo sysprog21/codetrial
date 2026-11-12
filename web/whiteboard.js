@@ -32,6 +32,11 @@ export const BOARD_BACKGROUND = "#ffffff";
 /// oldest work would have to start disappearing under the candidate, so the
 /// board stops accepting instead, which is at least visible.
 export const MAX_STROKES = 600;
+/// What a drawing surface says when it refuses a stroke at `MAX_STROKES`.
+/// One sentence for both boards, so rewording one cannot leave the other
+/// saying something else.
+export const MAX_STROKES_MESSAGE =
+  "Drawing limit reached. Undo or clear before adding more.";
 export const TEXT_SIZE = 32;
 export const TEXT_MIN_SIZE = 12;
 export const TEXT_MAX_SIZE = 128;

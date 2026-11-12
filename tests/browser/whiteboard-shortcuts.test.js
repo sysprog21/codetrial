@@ -10,6 +10,7 @@ import {
   read,
   startStaticServer,
 } from "./source.js";
+import { MAX_STROKES, MAX_STROKES_MESSAGE } from "../../web/whiteboard.js";
 
 let browser;
 let server;
@@ -51,6 +52,15 @@ globalThis.boardTest = {
   },
   settling() {
     return Boolean(board.settle);
+  },
+  fill(count) {
+    while (board.model.strokeCount() < count)
+      if (!board.model.push("#101418", 3, [10, 10, 20, 20]))
+        throw new Error("the board refused a stroke below " + count);
+    paintBoard();
+  },
+  strokeCount() {
+    return board.model.strokeCount();
   },
   waitUploads() {
     return board.publishing;
@@ -788,6 +798,145 @@ for (const mac of [false, true]) {
     );
   });
 }
+
+test("a full board says why the pen and the eraser draw nothing", async (t) => {
+  const ctx = await boardPage(t);
+  if (!ctx) return;
+  const { page } = ctx;
+  const status = page
+    .getByRole("status")
+    .filter({ hasText: MAX_STROKES_MESSAGE });
+  const count = () => page.evaluate(() => globalThis.boardTest.strokeCount());
+  assert.equal(await status.count(), 0);
+  // A live region announces a change only if it was in the accessibility
+  // tree before the change, so the empty line may give up its space but not
+  // its place there.
+  assert.notEqual(
+    await page
+      .locator("#board-status")
+      .evaluate((node) => getComputedStyle(node).display),
+    "none",
+    "the empty status stays in the accessibility tree",
+  );
+
+  await page.evaluate((max) => globalThis.boardTest.fill(max), MAX_STROKES);
+  await draw(page);
+  await status.waitFor();
+  assert.equal(await count(), MAX_STROKES, "the refused stroke left no mark");
+
+  // The same text written again is not a change a screen reader announces,
+  // so a repeated refusal empties the line and then sets it, as two updates.
+  await page.evaluate(() => {
+    const node = document.querySelector("#board-status");
+    globalThis.statusUpdates = [];
+    new MutationObserver(() =>
+      globalThis.statusUpdates.push(node.textContent),
+    ).observe(node, { childList: true, characterData: true, subtree: true });
+  });
+  await draw(page, 40);
+  await page.evaluate(
+    () =>
+      new Promise((frame) =>
+        requestAnimationFrame(() => requestAnimationFrame(frame)),
+      ),
+  );
+  assert.deepEqual(await page.evaluate(() => globalThis.statusUpdates), [
+    "",
+    MAX_STROKES_MESSAGE,
+  ]);
+
+  // Keyboard Undo is how most candidates take a stroke back.
+  await page.locator("#board").focus();
+  await page.keyboard.press("Control+z");
+  assert.equal(await count(), MAX_STROKES - 1);
+  assert.equal(await status.count(), 0, "keyboard Undo clears the message");
+
+  // Redo fills the board again without refusing anything, so nothing is said
+  // until the next stroke is refused.
+  await page.keyboard.press("Control+y");
+  assert.equal(await count(), MAX_STROKES);
+  assert.equal(await status.count(), 0, "a Redo to the ceiling says nothing");
+  await draw(page);
+  await status.waitFor();
+
+  // The message set a frame after a refusal must not outlive its reason: an
+  // Undo and a Redo before that frame leave a full board that refused nothing.
+  await page.evaluate(() => {
+    const board = document.querySelector("#board");
+    const { left, top } = board.getBoundingClientRect();
+    board.dispatchEvent(
+      new PointerEvent("pointerdown", {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 1,
+        pointerType: "mouse",
+        isPrimary: true,
+        button: 0,
+        buttons: 1,
+        clientX: left + 60,
+        clientY: top + 60,
+      }),
+    );
+    document.querySelector("#board-undo").click();
+    document.querySelector("#board-redo").click();
+  });
+  await page.evaluate(
+    () =>
+      new Promise((frame) =>
+        requestAnimationFrame(() => requestAnimationFrame(frame)),
+      ),
+  );
+  assert.equal(await count(), MAX_STROKES);
+  assert.equal(await status.count(), 0, "a stale refusal stays silent");
+  await draw(page);
+  await status.waitFor();
+
+  // Undo frees one slot, and the message goes with the reason for it.
+  await page.locator("#board-undo").click();
+  assert.equal(await status.count(), 0, "Undo clears the message");
+  await draw(page);
+  assert.equal(await count(), MAX_STROKES);
+  assert.equal(await status.count(), 0, "an accepted stroke shows nothing");
+
+  // A label refused on a full board reports in the text draft's own line.
+  await page.locator("#board-text").click();
+  const box = await page.locator("#board").boundingBox();
+  await page.mouse.move(box.x + 200, box.y + 200);
+  await page.mouse.down();
+  await page.mouse.move(box.x + 320, box.y + 260);
+  await page.mouse.up();
+  await page.locator(".board-text-input").fill("x");
+  await page.locator(".board-text-confirm").click();
+  assert.match(
+    await page.locator(".board-text-error").textContent(),
+    /cannot accept more text/,
+  );
+  assert.equal(await count(), MAX_STROKES);
+  assert.equal(
+    await page.locator("#board-status").textContent(),
+    "",
+    "a refused label leaves the board status alone",
+  );
+  await page.locator(".board-text-cancel").click();
+
+  // An erasure is a stroke, so it meets the same ceiling and the same answer.
+  await page.locator("#board-eraser").click();
+  await draw(page, 80);
+  await status.waitFor();
+  assert.equal(await count(), MAX_STROKES);
+
+  // A locked board disables Undo and Clear board, so a message naming them
+  // would point at two buttons that cannot work.
+  await page.evaluate(() => globalThis.boardTest.lock("behavioral"));
+  assert.equal(await count(), MAX_STROKES);
+  assert.equal(await status.count(), 0, "a locked board drops the message");
+  await page.evaluate(() => globalThis.boardTest.lock("live"));
+  await draw(page, 160);
+  await status.waitFor();
+  await page.locator("#board-clear").click();
+  assert.equal(await count(), 0);
+  assert.equal(await status.count(), 0, "Clear board clears the message");
+});
 
 test("text targets and focus outside the drawing toolbar keep their own undo and redo", async (t) => {
   const ctx = await boardPage(t);

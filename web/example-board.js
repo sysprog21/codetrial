@@ -3,6 +3,7 @@ import {
   BOARD_HEIGHT,
   PEN_COLORS,
   MAX_STROKES,
+  MAX_STROKES_MESSAGE,
   boardPoint,
   createBoard,
   createPointerGate,
@@ -219,8 +220,7 @@ export function mountExampleBoard(
     const start = boardPoint(canvas, event);
     if (model.strokeCount() >= MAX_STROKES) {
       pointers.up(event);
-      status.textContent =
-        "Drawing limit reached. Undo or clear before adding more.";
+      status.textContent = MAX_STROKES_MESSAGE;
       return;
     }
     if (!model.begin(tool, color, start.x, start.y)) {
