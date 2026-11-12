@@ -126,15 +126,9 @@ pub async fn start_and_record_egress(
     };
     let egress_id = recorder.provider.start(&request).await?;
 
-    let stored = {
-        let accounts = Arc::clone(accounts);
-        let clock = Arc::clone(&recorder.clock);
-        let id = recording.id.clone();
-        let egress_id = egress_id.clone();
-        blocking(move || record_egress_id(&accounts, clock.as_ref(), &id, &egress_id))
-            .await
-            .unwrap_or(false)
-    };
+    let stored = store_egress_id(accounts, recorder, &recording.id, &egress_id)
+        .await
+        .unwrap_or(false);
 
     if stored {
         // A stop can land while the provider is still answering: consent
@@ -150,6 +144,19 @@ pub async fn start_and_record_egress(
         stop_unrecorded_job(recorder, &recording.id, &egress_id, &request.room_name).await;
     }
     Ok(stored)
+}
+
+async fn store_egress_id(
+    accounts: &Arc<Accounts>,
+    recorder: &Recorder,
+    recording_id: &str,
+    egress_id: &str,
+) -> rusqlite::Result<bool> {
+    let accounts = Arc::clone(accounts);
+    let clock = Arc::clone(&recorder.clock);
+    let id = recording_id.to_owned();
+    let egress_id = egress_id.to_owned();
+    blocking(move || record_egress_id(&accounts, clock.as_ref(), &id, &egress_id)).await
 }
 
 /// Stops a job the recording's row does not name, and says so. A failed stop is
@@ -688,13 +695,7 @@ async fn retry_start(accounts: &Arc<Accounts>, recorder: &Recorder, recording: &
                 "recording {} already had an Egress job; adopting it rather than starting a second",
                 recording.id
             );
-            let recorded = {
-                let accounts = Arc::clone(accounts);
-                let clock = Arc::clone(&recorder.clock);
-                let id = recording.id.clone();
-                let egress_id = egress_id.clone();
-                blocking(move || record_egress_id(&accounts, clock.as_ref(), &id, &egress_id)).await
-            };
+            let recorded = store_egress_id(accounts, recorder, &recording.id, &egress_id).await;
             return match recorded {
                 Ok(true) => {
                     settle_new_egress(accounts, recorder, &recording.id, &egress_id).await;
