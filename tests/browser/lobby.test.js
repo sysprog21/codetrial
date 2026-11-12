@@ -309,6 +309,18 @@ function lobbyTest(name, body, options) {
   });
 }
 
+function paginationControls(page) {
+  return {
+    size: page.getByLabel("Attempts per page", { exact: true }),
+    previous: page.getByRole("button", {
+      name: "Previous page",
+      exact: true,
+    }),
+    next: page.getByRole("button", { name: "Next page", exact: true }),
+    status: page.locator("#attempt-page-status"),
+  };
+}
+
 // Wait for the synchronization task, not a guessed network delay.
 const normalPageshow = (page) =>
   page.evaluate(
@@ -4907,6 +4919,9 @@ lobbyTest(
     }, EASY[0]);
 
     await lobby(page);
+    await page
+      .getByLabel("Attempts per page", { exact: true })
+      .selectOption("20");
     assert.equal(
       await page.getByRole("button", { name: "Open report" }).count(),
       20,
@@ -6858,7 +6873,7 @@ for (const account of [true, false]) {
       );
       assert.match(
         await page.locator("#progress-summary").textContent(),
-        /3 of 5 attempts shown/,
+        /3 of 5 attempts match these filters/,
       );
       assert.ok(
         (await rows.allTextContents()).every((text) =>
@@ -7031,7 +7046,7 @@ for (const account of [true, false]) {
       );
       assert.match(
         await page.locator("#progress-summary").textContent(),
-        /1 of 3 attempts shown/,
+        /1 of 3 attempts match these filters/,
       );
       assert.match(
         await page.locator("#progress-topics").textContent(),
@@ -7186,6 +7201,9 @@ for (const account of [true, false]) {
           localStorage.setItem("codetrial_history", JSON.stringify(entries));
         }, saved);
       await lobby(page);
+      await page
+        .getByLabel("Attempts per page", { exact: true })
+        .selectOption("20");
       const rows = page.locator("#attempt-history > li");
       await reaches(
         page,
@@ -7666,7 +7684,7 @@ lobbyTest(
     assert.equal(await page.locator("#history").isHidden(), false);
     assert.match(
       await page.locator("#progress-summary").textContent(),
-      /1 of 1 attempts shown/,
+      /1 of 1 attempts match these filters/,
     );
     assert.equal(
       await page.locator("#report-delete-status").textContent(),
@@ -8422,7 +8440,7 @@ lobbyTest(
     assert.equal(await page.locator("#start").isDisabled(), false);
     assert.match(
       await page.locator("#progress-summary").textContent(),
-      /1 of 1 attempts shown/,
+      /1 of 1 attempts match these filters/,
     );
     assert.equal(
       submitted.length,
@@ -8501,7 +8519,7 @@ lobbyTest(
     await lobby(page);
     assert.match(
       await page.locator("#progress-summary").textContent(),
-      /1 of 1 attempts shown/,
+      /1 of 1 attempts match these filters/,
     );
     const history = page.locator("#attempt-history");
     await history.getByRole("button", { name: "Open report" }).first().click();
@@ -8653,7 +8671,7 @@ lobbyTest(
       );
       assert.match(
         await page.locator("#progress-summary").textContent(),
-        /1 of 1 attempts shown/,
+        /1 of 1 attempts match these filters/,
       );
       assert.equal((await snapshot(page)).card, MEDIUM[0]);
       assert.equal(
@@ -8770,7 +8788,7 @@ lobbyTest(
     );
     assert.match(
       await page.locator("#progress-summary").textContent(),
-      /1 of 1 attempts shown/,
+      /1 of 1 attempts match these filters/,
     );
     assert.match(
       await page.locator("#history").textContent(),
@@ -9046,7 +9064,7 @@ lobbyTest(
     );
     assert.match(
       await page.locator("#progress-summary").textContent(),
-      /1 of 1 attempts shown/,
+      /1 of 1 attempts match these filters/,
     );
     assert.equal(
       await page.evaluate(
@@ -11589,3 +11607,523 @@ lobbyTest(
     assert.equal((await cardInfo(page, MEDIUM[0])).hidden, true);
   },
 );
+
+for (const storage of ["account", "device"]) {
+  lobbyTest(
+    `pagination preserves ${storage} history and cross-page selection`,
+    async (page) => {
+      const entries = Array.from({ length: 21 }, (_, index) => ({
+        id: `paged-${index}`,
+        problemId: EASY[0],
+        problemTitle: `Paged attempt ${index}`,
+        date: new Date(Date.UTC(2026, 0, index + 1)).toISOString(),
+        language: index % 2 ? "javascript" : "python",
+        difficulty: "Easy",
+        report: {
+          ...focusedAttempt(EASY[0], { assessed: true }).payload.report,
+          topics: ["arrays"],
+        },
+      }));
+      if (storage === "account")
+        reports = entries.map((payload) => ({ id: payload.id, payload }));
+      else {
+        session = { signedIn: false };
+        await page.addInitScript((entries) => {
+          localStorage.setItem(
+            "codetrial_review_history",
+            JSON.stringify(entries),
+          );
+        }, entries);
+      }
+      await lobby(page);
+      const rows = page.locator("#attempt-history > li");
+      const { size, previous, next, status } = paginationControls(page);
+      assert.equal(await size.inputValue(), "10");
+      assert.equal(await rows.count(), 10);
+      assert.equal(await previous.isDisabled(), true);
+      assert.equal(await status.textContent(), "Page 1 of 3");
+      const summary = await page.locator("#progress-summary").textContent();
+      assert.match(summary, /21 of 21 attempts match these filters/);
+      assert.doesNotMatch(summary, /attempts shown/);
+      const aggregates = page.locator(
+        "#progress-trends, #progress-topics, #progress-weaknesses",
+      );
+      assert.match(
+        await page.locator("#progress-topics").textContent(),
+        /arrays: 21 attempts, 0 passes/,
+      );
+      assert.match(
+        await page.locator("#progress-weaknesses").textContent(),
+        /flagged in 21 of 21 assessed attempts/,
+      );
+      const chart = page.getByRole("img", {
+        name: "Test assessed score trend by attempt",
+        exact: true,
+      });
+      assert.equal(await chart.locator(".progress-chart-point").count(), 21);
+      const aggregateText = await aggregates.allTextContents();
+      await next.focus();
+      await page.keyboard.press("Enter");
+      assert.match(await status.textContent(), /^Page 2 of 3/);
+      await page.keyboard.press("Shift+Tab");
+      assert.equal(await isFocused(previous), true);
+      await page.keyboard.press("Enter");
+      assert.equal(await isFocused(next), true);
+      const seen = [];
+      for (let index = 0; index < 3; index += 1) {
+        seen.push(...(await rows.locator(":scope > p").allTextContents()));
+        if (index < 2) await next.click();
+      }
+      assert.equal(await rows.count(), 1);
+      assert.equal(await next.isDisabled(), true);
+      assert.equal(await isFocused(previous), true);
+      assert.equal(new Set(seen).size, 21);
+      assert.deepEqual(
+        seen.map((label) => Number(label.match(/Paged attempt (\d+)/)[1])),
+        Array.from({ length: 21 }, (_, index) => 20 - index),
+      );
+      assert.equal(
+        await page.locator("#progress-summary").textContent(),
+        summary,
+      );
+      assert.deepEqual(await aggregates.allTextContents(), aggregateText);
+      await rows.locator("[data-attempt-select]").uncheck();
+      assert.equal(
+        await page.locator("#attempt-select-all").textContent(),
+        "Select all pages",
+      );
+      assert.equal(
+        await page.locator("#attempt-download-selected").textContent(),
+        "Download selected (20, all pages)",
+      );
+      await previous.click();
+      await next.click();
+      assert.equal(
+        await rows.locator("[data-attempt-select]").isChecked(),
+        false,
+      );
+      await size.selectOption("5");
+      assert.equal(await rows.count(), 5);
+      assert.match(await status.textContent(), /^Page 1 of 5/);
+      await next.click();
+      await page.selectOption("#progress-language", "python");
+      assert.match(await status.textContent(), /^Page 1 of 3$/);
+      await page.selectOption("#progress-language", "all");
+      await size.selectOption("20");
+      assert.equal(await rows.count(), 20);
+      await next.focus();
+      await page.keyboard.press("Enter");
+      assert.equal(await next.isDisabled(), true);
+      assert.equal(await isFocused(previous), true);
+      await page.keyboard.press("Enter");
+      assert.equal(await previous.isDisabled(), true);
+      assert.equal(await isFocused(next), true);
+      await page.keyboard.press("Enter");
+      assert.equal(await isFocused(previous), true);
+      await rows
+        .getByRole("button", { name: "Open report", exact: true })
+        .click();
+      assert.equal(await rows.locator(".report-card").isVisible(), true);
+      await rows
+        .getByRole("button", { name: "Collapse report", exact: true })
+        .click();
+      page.once("dialog", (dialog) => dialog.accept());
+      await rows.locator("[data-delete-report]").click();
+      await page.waitForFunction(
+        () =>
+          document.querySelector("#attempt-page-status").textContent ===
+          "Page 1 of 1",
+      );
+      assert.equal(await rows.count(), 20);
+      assert.equal(await previous.isDisabled(), true);
+      assert.equal(await next.isDisabled(), true);
+      assert.equal(await size.isDisabled(), false);
+      assert.equal(
+        await page.locator("#attempt-select-all").textContent(),
+        "Deselect all",
+      );
+      assert.equal(
+        await page.locator("#attempt-download-selected").textContent(),
+        "Download selected (20)",
+      );
+      assert.match(await rows.last().textContent(), /Paged attempt 1\b/);
+      assert.equal(
+        await isFocused(rows.last().locator("[data-delete-report]")),
+        true,
+      );
+      await page.locator("#attempt-select-all").click();
+      assert.equal(
+        await page.locator("#attempt-download-selected").isDisabled(),
+        true,
+      );
+      await rows.first().locator("[data-attempt-select]").check();
+      await size.selectOption("5");
+      await next.click();
+      await rows.first().locator("[data-attempt-select]").check();
+      const downloads = [];
+      const completed = page.waitForEvent("download", {
+        predicate: (download) => {
+          downloads.push(download);
+          return downloads.length === 2;
+        },
+      });
+      await page.locator("#attempt-download-selected").click();
+      await completed;
+      assert.equal(downloads.length, 2);
+      assert.notEqual(
+        downloads[0].suggestedFilename(),
+        downloads[1].suggestedFilename(),
+      );
+      assert.equal(
+        await page.locator("#attempt-download-selected").textContent(),
+        "Download selected (2, all pages)",
+      );
+      const downloadNote = page.locator("#attempt-download-note");
+      const noteText = await downloadNote.textContent();
+      assert.match(noteText, /allow multiple downloads/);
+      await next.click();
+      assert.equal(await downloadNote.textContent(), noteText);
+      page.once("dialog", (dialog) => dialog.accept());
+      await page.locator("#delete-reports").click();
+      await page.waitForFunction(
+        () => document.querySelectorAll("#attempt-history > li").length === 0,
+      );
+      assert.equal(
+        await page.locator("#attempt-pagination").isVisible(),
+        false,
+      );
+      assert.equal(await status.textContent(), "");
+    },
+  );
+}
+
+lobbyTest(
+  "pagination preserves pages on reload and resets when history source changes",
+  async (page) => {
+    const entries = Array.from({ length: 21 }, (_, index) => ({
+      id: `reload-${index}`,
+      problemId: EASY[0],
+      problemTitle: `Reload attempt ${index}`,
+      date: new Date(Date.UTC(2026, 0, index + 1)).toISOString(),
+      language: "python",
+      report: { decision: "HIRE" },
+    }));
+    const accountRows = entries.map((payload) => ({ id: payload.id, payload }));
+    reports = accountRows;
+    await lobby(page);
+    const controls = page.locator("#attempt-pagination");
+    const heading = page.locator("#attempt-history-title");
+    const pageTitle = page.locator("#practice-title");
+    const { size, previous, next, status } = paginationControls(page);
+    await next.click();
+    await restore(page);
+    await awaitReady(page);
+    assert.equal(await status.textContent(), "Page 2 of 3");
+    await next.click();
+    const rows = page.locator("#attempt-history > li");
+    await rows.first().locator("[data-attempt-select]").uncheck();
+    await restore(page);
+    await awaitReady(page);
+    assert.equal(await status.textContent(), "Page 3 of 3");
+    assert.equal(
+      await rows.first().locator("[data-attempt-select]").isChecked(),
+      false,
+    );
+
+    session = { signedIn: true, user: { login: "another-candidate" } };
+    reports = accountRows.map(({ id, payload }) => ({
+      id,
+      payload: {
+        ...payload,
+        problemTitle: `Other account ${payload.problemTitle}`,
+      },
+    }));
+    await restore(page);
+    await awaitReady(page);
+    assert.equal(await status.textContent(), "Page 1 of 3");
+    assert.match(
+      await rows.first().textContent(),
+      /Other account Reload attempt 20/,
+    );
+    assert.equal(
+      await page.locator("#attempt-download-selected").textContent(),
+      "Download selected (21, all pages)",
+    );
+    session = { signedIn: true, user: { login: "candidate" } };
+    reports = accountRows;
+    await restore(page);
+    await awaitReady(page);
+    assert.equal(await status.textContent(), "Page 1 of 3");
+    await next.click();
+    for (const control of [previous, next]) {
+      await control.focus();
+      reports = accountRows.slice(0, 6);
+      await restore(page);
+      await page.waitForFunction(
+        () =>
+          document.querySelector("#attempt-page-status").textContent ===
+          "Page 1 of 1",
+      );
+      assert.equal(await controls.isVisible(), true);
+      assert.equal(await isFocused(size), true);
+
+      reports = accountRows;
+      await restore(page);
+      await page.waitForFunction(
+        () =>
+          document.querySelector("#attempt-page-status").textContent ===
+          "Page 1 of 3",
+      );
+    }
+    await next.focus();
+    reports = accountRows.slice(0, 5);
+    await restore(page);
+    await page.waitForFunction(
+      () => document.querySelector("#attempt-pagination").hidden,
+    );
+    assert.equal(await isFocused(heading), true);
+    reports = accountRows;
+    await restore(page);
+    await page.waitForFunction(
+      () =>
+        document.querySelector("#attempt-page-status").textContent ===
+        "Page 1 of 3",
+    );
+    await next.focus();
+    reports = [];
+    await restore(page);
+    await page.waitForFunction(() => document.querySelector("#history").hidden);
+    assert.equal(await status.textContent(), "");
+    assert.equal(await isFocused(pageTitle), true);
+    reports = accountRows;
+    await restore(page);
+    await page.waitForFunction(
+      () =>
+        document.querySelector("#attempt-page-status").textContent ===
+        "Page 1 of 3",
+    );
+    await next.click();
+    await page
+      .locator("#attempt-history [data-attempt-select]")
+      .first()
+      .uncheck();
+    await page.evaluate(
+      (entries) =>
+        localStorage.setItem(
+          "codetrial_review_history",
+          JSON.stringify(entries),
+        ),
+      entries,
+    );
+    session = { signedIn: false };
+    await restore(page);
+    await page.waitForFunction(() =>
+      document
+        .querySelector("#progress-summary")
+        .textContent.includes("saved on this device"),
+    );
+    assert.equal(await status.textContent(), "Page 1 of 3");
+    assert.equal(
+      await page.locator("#attempt-download-selected").textContent(),
+      "Download selected (21, all pages)",
+    );
+    await next.click();
+    session = { signedIn: true, user: { login: "candidate" } };
+    reports = accountRows;
+    await restore(page);
+    await awaitReady(page);
+    assert.equal(await status.textContent(), "Page 1 of 3");
+    assert.match(
+      await page.locator("#progress-summary").textContent(),
+      /saved to your account/,
+    );
+    await next.focus();
+    failing.add("/api/reports");
+    await restore(page);
+    await page.waitForFunction(() =>
+      document
+        .querySelector("#progress-summary")
+        .textContent.includes("Could not load"),
+    );
+    assert.equal(await page.locator("#attempt-pagination").isVisible(), false);
+    assert.equal(await status.textContent(), "");
+    assert.equal(await isFocused(heading), true);
+  },
+);
+
+for (const storage of ["account", "device"]) {
+  lobbyTest(
+    `pagination retains all 30 ${storage} attempts with 20 per page`,
+    async (page) => {
+      const entries = Array.from({ length: 30 }, (_, index) => ({
+        id: `thirty-${index}`,
+        problemId: EASY[0],
+        problemTitle: `Thirty attempt ${index}`,
+        date: new Date(Date.UTC(2026, 0, index + 1)).toISOString(),
+        language: "python",
+        difficulty: "Easy",
+        report: focusedAttempt(EASY[0], { assessed: true }).payload.report,
+      }));
+      if (storage === "account") {
+        reports = entries.map((payload) => ({ id: payload.id, payload }));
+      } else {
+        session = { signedIn: false };
+        await page.addInitScript((entries) => {
+          localStorage.setItem(
+            "codetrial_review_history",
+            JSON.stringify(entries),
+          );
+        }, entries);
+      }
+      await lobby(page);
+      const rows = page.locator("#attempt-history > li");
+      const { size, next, status } = paginationControls(page);
+      assert.equal(
+        await page.locator("#attempt-selection #attempt-pagination").count(),
+        1,
+      );
+      assert.equal(
+        await size.evaluate((select) => select.nextElementSibling.textContent),
+        "per page",
+      );
+      assert.equal(
+        await next.evaluate((button) =>
+          Boolean(
+            button.compareDocumentPosition(
+              document.querySelector("#attempt-page-size"),
+            ) & Node.DOCUMENT_POSITION_FOLLOWING,
+          ),
+        ),
+        true,
+      );
+      assert.equal(
+        await page.locator("#attempt-select-all").textContent(),
+        "Deselect all pages",
+      );
+      assert.equal(
+        await page.locator("#attempt-download-selected").textContent(),
+        "Download selected (30, all pages)",
+      );
+      await size.selectOption("20");
+      assert.equal(await rows.count(), 20);
+      assert.equal(await status.textContent(), "Page 1 of 2");
+      assert.equal(await next.isDisabled(), false);
+      const seen = await rows.locator(":scope > p").allTextContents();
+      await next.click();
+      assert.equal(await rows.count(), 10);
+      assert.equal(await status.textContent(), "Page 2 of 2");
+      seen.push(...(await rows.locator(":scope > p").allTextContents()));
+      assert.equal(new Set(seen).size, 30);
+      assert.deepEqual(
+        seen.map((label) => Number(label.match(/Thirty attempt (\d+)/)[1])),
+        Array.from({ length: 30 }, (_, index) => 29 - index),
+      );
+    },
+  );
+}
+
+lobbyTest(
+  "pagination resets to the first page for every history filter",
+  async (page) => {
+    reports = Array.from({ length: 21 }, (_, index) => ({
+      id: `filter-${index}`,
+      payload: {
+        id: `filter-${index}`,
+        problemId: index % 2 ? MEDIUM[0] : EASY[0],
+        problemTitle: `Filtered attempt ${index}`,
+        date: new Date(Date.UTC(2026, 0, index + 1)).toISOString(),
+        difficulty: index % 2 ? "Medium" : "Easy",
+        language: index % 2 ? "" : "python",
+        durationMin: index % 2 ? 45 : 30,
+        interviewMode: index % 2 ? "whiteboard" : "coding",
+        report: { decision: "HIRE" },
+      },
+    }));
+    await lobby(page);
+    const { next, status } = paginationControls(page);
+    const rows = page.locator("#attempt-history > li");
+    for (const [selector, value] of [
+      ["#progress-problem", EASY[0]],
+      ["#progress-difficulty", "Easy"],
+      ["#progress-language", "python"],
+      ["#progress-duration", "30"],
+      ["#progress-mode", "coding"],
+    ]) {
+      await next.click();
+      assert.equal(await status.textContent(), "Page 2 of 3");
+      await page.selectOption(selector, value);
+      assert.equal(await status.textContent(), "Page 1 of 2");
+      assert.equal(await rows.count(), 10);
+      await page.selectOption(selector, "all");
+    }
+  },
+);
+
+for (const outcome of ["success", "failure"]) {
+  lobbyTest(
+    `pagination unlocks after a pending deletion ${outcome}`,
+    async (page) => {
+      reports = Array.from({ length: 21 }, (_, index) => ({
+        id: `locked-${index}`,
+        payload: {
+          id: `locked-${index}`,
+          problemId: EASY[0],
+          problemTitle: `Locked attempt ${index}`,
+          date: new Date(Date.UTC(2026, 0, index + 1)).toISOString(),
+          language: "python",
+          report: { decision: "HIRE" },
+        },
+      }));
+      await lobby(page);
+      const { size, previous, next, status } = paginationControls(page);
+      await size.selectOption("5");
+      await next.click();
+      for (const control of [previous, next, size])
+        assert.equal(await control.isDisabled(), false);
+      let releaseDelete;
+      const held = new Promise((resolve) => (releaseDelete = resolve));
+      await page.route("**/api/reports/*", async (route) => {
+        await held;
+        if (outcome === "failure")
+          await route.fulfill({ status: 500, body: "nope" });
+        else await route.continue();
+      });
+      const requested = page.waitForRequest(
+        (request) => request.method() === "DELETE",
+      );
+      page.once("dialog", (dialog) => dialog.accept());
+      await page
+        .locator("#attempt-history [data-delete-report]")
+        .first()
+        .click();
+      await requested;
+      try {
+        for (const control of [previous, next, size])
+          assert.equal(await control.isDisabled(), true);
+        assert.equal(await status.textContent(), "Page 2 of 5");
+      } finally {
+        releaseDelete();
+      }
+      await page.waitForFunction(
+        () => !document.querySelector("#attempt-page-size").disabled,
+      );
+      for (const control of [previous, next, size])
+        assert.equal(await control.isDisabled(), false);
+      assert.equal(
+        await status.textContent(),
+        outcome === "success" ? "Page 2 of 4" : "Page 2 of 5",
+      );
+      assert.match(
+        await page.locator("#report-delete-status").textContent(),
+        outcome === "success"
+          ? /report was deleted/
+          : /Could not delete the report/,
+      );
+      await next.click();
+      assert.equal(
+        await status.textContent(),
+        outcome === "success" ? "Page 3 of 4" : "Page 3 of 5",
+      );
+    },
+  );
+}

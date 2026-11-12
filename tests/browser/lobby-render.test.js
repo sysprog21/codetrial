@@ -28,6 +28,9 @@ import { installDocument } from "./dom.js";
 
 const markup = read("web/index.html");
 const dom = installDocument(markup);
+dom.node("attempt-page-size").options = ["5", "10", "20"].map((value) => ({
+  value,
+}));
 
 // Site data blocked, said here rather than left to the runtime: from Node 25
 // `sessionStorage` is a working store by default and `localStorage` is one
@@ -68,6 +71,7 @@ const UNIDENTIFIED = {
   "login-link": "Retry account check",
   "progress-problem": "all",
   "progress-mode": "all",
+  "attempt-page-size": "10",
   start: "Start interview",
   "progress-summary":
     "Could not load account progress. Retry the account check.",

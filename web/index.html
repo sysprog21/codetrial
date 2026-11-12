@@ -2080,12 +2080,39 @@
         </fieldset>
         <p id="progress-summary" aria-live="polite"></p>
         <section aria-labelledby="attempt-history-title">
-          <h3 id="attempt-history-title">Past attempts</h3>
+          <h3 id="attempt-history-title" tabindex="-1">Past attempts</h3>
           <div id="attempt-selection" class="attempt-selection" hidden>
             <button id="attempt-select-all" type="button">Deselect all</button>
             <button id="attempt-download-selected" type="button">
               Download selected (0)
             </button>
+            <div id="attempt-pagination" class="attempt-pagination" hidden>
+              <div class="attempt-page-navigation">
+                <button
+                  id="attempt-page-previous"
+                  type="button"
+                  aria-label="Previous page"
+                  disabled
+                >
+                  <span aria-hidden="true">&larr;</span>
+                </button>
+                <span id="attempt-page-status" role="status"></span>
+                <button
+                  id="attempt-page-next"
+                  type="button"
+                  aria-label="Next page"
+                  disabled
+                >
+                  <span aria-hidden="true">&rarr;</span>
+                </button>
+              </div>
+              <select id="attempt-page-size" aria-label="Attempts per page">
+                <option value="5">5</option>
+                <option value="10" selected>10</option>
+                <option value="20">20</option>
+              </select>
+              <span aria-hidden="true">per page</span>
+            </div>
           </div>
           <p id="attempt-download-note" class="small" role="status"></p>
           <ol id="attempt-history"></ol>
