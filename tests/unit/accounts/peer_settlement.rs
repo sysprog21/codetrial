@@ -92,6 +92,67 @@ fn settlement_waits_thirty_seconds_for_final_capture_and_preserves_snapshot() {
 }
 
 #[test]
+fn lease_and_snapshot_refuse_in_the_same_order() {
+    for (index, slot, status, expected) in [
+        (1, 0, "feedback", "round_unavailable"),
+        (0, 0, "feedback", "not_writer"),
+        (0, 1, "feedback", "round_sealed"),
+        (0, 0, "active", "not_writer"),
+    ] {
+        let (accounts, mut session) = fixture();
+        activate(&mut session);
+        accounts
+            .with(|connection| {
+                save(connection, &session)?;
+                let lease = writer(&mut session, 1, 0, 300)?.unwrap()["lease"].clone();
+                let body = json!({"lease":lease,"expectedRevision":0,"language":"python","code":"kept","tests":null});
+                snapshot(connection, &mut session, 1, 0, &body, 300)?.unwrap();
+                session.rounds[0].status = status.to_string();
+                let held = (
+                    session.rounds[0].writer_lease.clone(),
+                    session.rounds[0].writer_lease_until,
+                    session.version,
+                );
+                let stored = read_snapshot(connection, &session, 0)?.unwrap();
+                let current = lease.as_str().unwrap();
+                assert_eq!(
+                    writer(&mut session, slot, index, 301)?.unwrap_err(),
+                    expected,
+                    "writer {status} {slot} {index}"
+                );
+                assert_eq!(
+                    resume_writer(&mut session, slot, index, current, 301)?.unwrap_err(),
+                    expected,
+                    "resume {status} {slot} {index}"
+                );
+                assert_eq!(
+                    resume_writer(&mut session, slot, index, "stale", 301)?.unwrap_err(),
+                    expected,
+                    "a stale lease is judged after the round, {status} {slot} {index}"
+                );
+                assert_eq!(
+                    snapshot(connection, &mut session, slot, index, &body, 301)?.unwrap_err(),
+                    expected,
+                    "snapshot {status} {slot} {index}"
+                );
+                let after = (
+                    session.rounds[0].writer_lease.clone(),
+                    session.rounds[0].writer_lease_until,
+                    session.version,
+                );
+                assert_eq!(after, held, "a refusal must not touch the lease");
+                assert_eq!(
+                    read_snapshot(connection, &session, 0)?.unwrap(),
+                    stored,
+                    "a refusal must not touch the stored snapshot"
+                );
+                Ok(())
+            })
+            .unwrap();
+    }
+}
+
+#[test]
 fn final_snapshot_seals_early_and_rejects_old_leases_and_revisions() {
     let (accounts, mut session) = fixture();
     activate(&mut session);
@@ -614,6 +675,40 @@ fn test_summary_text_is_kept_cut_at_its_limit_on_a_character_boundary() {
             Ok(())
         })
         .unwrap();
+}
+
+#[test]
+fn ending_a_session_preserves_sealed_rounds_and_seals_unfinished_ones() {
+    for end in ["deadline", "cancel", "terminate"] {
+        let (accounts, mut session) = fixture();
+        activate(&mut session);
+        let mut unfinished = session.rounds[0].clone();
+        unfinished.index = 1;
+        unfinished.deadline = Some(8000);
+        session.rounds[0].status = "feedback".into();
+        session.rounds[0].sealed_at = Some(200);
+        session.rounds.push(unfinished);
+        session.current_round = Some(1);
+        let now = if end == "deadline" { 5500 } else { 300 };
+        accounts
+            .with(|connection| {
+                save(connection, &session)?;
+                if end == "deadline" {
+                    settle(connection, &mut session, now)?;
+                } else {
+                    let body = json!({"expectedVersion": session.version});
+                    action(connection, &mut session, 0, end, &body, now)?.unwrap();
+                }
+                assert_eq!(session.rounds[0].status, "feedback", "{end}");
+                assert_eq!(session.rounds[0].sealed_at, Some(200), "{end}");
+                assert!(!session.rounds[0].final_capture_incomplete, "{end}");
+                assert_eq!(session.rounds[1].status, "feedback", "{end}");
+                assert_eq!(session.rounds[1].sealed_at, Some(now), "{end}");
+                assert!(session.rounds[1].final_capture_incomplete, "{end}");
+                Ok(())
+            })
+            .unwrap();
+    }
 }
 
 #[test]
