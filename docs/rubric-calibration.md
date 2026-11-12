@@ -58,10 +58,12 @@ Model/human comparisons use the mean of all recorded numeric judgments,
 including partial ratings. Inter-rater QWK uses only ratings whose `scores`
 contain every applicable phase key for that sample. Recorded `null` values count
 toward this completeness check; omitted inapplicable keys do not disqualify a
-rating. A partial rating contributes no QWK pairs, avoiding extra weight for
-phases selected for adjudication. A full applicable-phase rating still enters
-QWK, including one from an adjudicator. Missing QWK coverage is a calibration
-failure (exit 1), not invalid input.
+rating. Partial ratings contribute no QWK pairs. Full applicable-phase ratings
+remain eligible for QWK, including those from adjudicators. This per-row
+completeness rule does not prevent session-selection bias: full ratings obtained
+only for disputed sessions can still add pairs and increase those sessions'
+weight. The review process must control how reviewers are assigned to sessions.
+Missing QWK coverage is a calibration failure (exit 1), not invalid input.
 
 For each phase, calculate QWK separately for each fixed, unordered pair of
 eligible reviewer IDs across their jointly scored sessions. Average these pair

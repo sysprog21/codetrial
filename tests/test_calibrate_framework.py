@@ -413,6 +413,54 @@ class CalibrationTests(unittest.TestCase):
                         baseline["metrics"]["interRaterQwk"],
                     )
 
+    def test_complete_ratings_selected_by_session_still_enter_qwk(self):
+        raw = self.fixture("passing-synthetic.json")
+        for sample in raw["samples"][:6]:
+            sample["modelScores"]["Repeat"] = 60
+            sample["humanRatings"][0]["scores"]["Repeat"] = 40
+            sample["humanRatings"][1]["scores"]["Repeat"] = 80
+        baseline = CAL.analyze(raw)
+        # Repeat AB is 154/199. AC and BC are zero on the six disputed
+        # sessions, or 694/739 and 682/727 on all thirty. Other phases are 1.
+        balanced = (
+            9 + (Fraction(154, 199) + Fraction(694, 739) + Fraction(682, 727)) / 3
+        ) / 10
+        for sessions, expected in (
+            (0, Fraction(389, 398)),
+            (6, Fraction(1901, 1990)),
+            (30, balanced),
+        ):
+            with self.subTest(third_reviewer_sessions=sessions):
+                packet = copy.deepcopy(raw)
+                for sample in packet["samples"][:sessions]:
+                    sample["humanRatings"].append(
+                        {
+                            "reviewerId": "reviewer-c",
+                            "scores": copy.deepcopy(sample["modelScores"]),
+                        }
+                    )
+                result = CAL.analyze(packet)
+                self.assertEqual(result["status"], "PASS", result["failures"])
+                self.assertAlmostEqual(
+                    result["metrics"]["interRaterQwk"], float(expected), places=12
+                )
+                self.assertEqual(result["counts"], baseline["counts"])
+                self.assertEqual(
+                    {
+                        k: v
+                        for k, v in result["metrics"].items()
+                        if k != "interRaterQwk"
+                    },
+                    {
+                        k: v
+                        for k, v in baseline["metrics"].items()
+                        if k != "interRaterQwk"
+                    },
+                )
+                for sample in packet["samples"]:
+                    sample["humanRatings"].reverse()
+                self.assertEqual(CAL.analyze(packet), result)
+
     def test_qwk_pseudonym_renaming_does_not_change_gate(self):
         raw = self.three_reviewer_fixture()
         baseline = CAL.analyze(raw)
