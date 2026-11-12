@@ -1,4 +1,4 @@
-import { describe, it, test } from "node:test";
+import { before, describe, it, test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile, execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -22,6 +22,12 @@ import {
   parseCompilerResults,
   stripAnsi,
 } from "../../web/compiler-explorer.js";
+import { createSyntaxParser } from "../../web/syntax-parser.js";
+
+const cppSyntax = createSyntaxParser({
+  loadBytes: async (url) => new Uint8Array(readFileSync(url)),
+});
+before(() => cppSyntax.prepareLanguage("cpp"));
 
 // The per-problem files the browser fetches, not the bank they are generated
 // from: the generator puts each variant's entry-point name in place of the
@@ -360,6 +366,76 @@ function splitTopLevel(text, separator, opens = "({[", closes = ")}]") {
   return [...parts, text.slice(start)];
 }
 
+// Parse the extracted class: the starter may document it inside a comment.
+// Only list boundaries and defaults come from syntax, not member-set policy.
+// Syntax does not resolve names or overloads; targets are checked by arity.
+function cppConstructorLists(body, name, where, parse = cppSyntax.parseSyntax) {
+  const prefix = `struct ${name} {`;
+  const source = prefix + body + "};";
+  const tree = parse(source, "cpp");
+  assert.ok(
+    tree,
+    `${where}: C++ parser unavailable or exceeded its parse budget for ${name}`,
+  );
+  try {
+    assert.ok(
+      !tree.rootNode.hasError,
+      `${where}: invalid or incomplete C++ constructor syntax for ${name}`,
+    );
+    const lists = new Map();
+    const classBody = tree.rootNode.namedChildren[0].childForFieldName("body");
+    for (const definition of classBody.namedChildren) {
+      if (definition.type !== "function_definition") continue;
+      const declarator = definition.childForFieldName("declarator");
+      if (declarator?.childForFieldName("declarator")?.text !== name) continue;
+      const node = declarator.childForFieldName("parameters");
+      const params = node.namedChildren
+        .filter((param) => param.type !== "comment")
+        .map((param) => {
+          assert.ok(
+            [
+              "parameter_declaration",
+              "optional_parameter_declaration",
+            ].includes(param.type),
+            `${where}: unsupported C++ parameter syntax for ${name}`,
+          );
+          const equal = param.children.find((child) => child.type === "=");
+          return {
+            ...cppDeclaration(
+              source.slice(
+                param.startIndex,
+                equal?.startIndex ?? param.endIndex,
+              ),
+            ),
+            optional: param.childForFieldName("default_value") !== null,
+          };
+        });
+      lists.set(node.startIndex - prefix.length, {
+        end: node.endIndex - prefix.length - 1,
+        params,
+      });
+      const initializers = definition.namedChildren.find(
+        (child) => child.type === "field_initializer_list",
+      );
+      for (const initializer of initializers?.namedChildren ?? []) {
+        if (initializer.namedChildren[0]?.text !== name) continue;
+        const args = initializer.namedChildren.find((child) =>
+          ["argument_list", "initializer_list"].includes(child.type),
+        );
+        assert.ok(args, `${where}: incomplete C++ initializer for ${name}`);
+        lists.set(args.startIndex - prefix.length, {
+          end: args.endIndex - prefix.length - 1,
+          arity: args.namedChildren.filter((child) => child.type !== "comment")
+            .length,
+        });
+      }
+    }
+    return lists;
+  } finally {
+    tree.delete();
+  }
+}
+
 // A declaration's type and name. The last word is the name only when a type
 // precedes it, so `TreeNode(int)` has an unnamed int. Spaces stay only between
 // words: `TreeNode *left` reads as `TreeNode*`, `unsigned int` keeps its space.
@@ -405,6 +481,7 @@ function cppClass(source, name, where) {
     .replace(/\/\*[\s\S]*?\*\//g, " ")
     .replace(/\b(?:public|private|protected)\s*:/g, " ");
   const shape = `${where}: only \`${name}(params) : member(value), ... { member = value; }\` constructors and \`type member;\` members of ${name} can be read`;
+  const lists = cppConstructorLists(body, name, where);
 
   const fields = new Map();
   const defaulted = new Set();
@@ -430,25 +507,13 @@ function cppClass(source, name, where) {
       continue;
     }
     const paramsOpen = at + found[0].length - 1;
-    const paramsClose = closingIndex(body, paramsOpen);
-    assert.ok(paramsClose > 0, shape);
-    const params = splitTopLevel(
-      body.slice(paramsOpen + 1, paramsClose),
-      ",",
-      "(<{[",
-      ")>}]",
-    )
-      .filter((param) => param.trim())
-      .map((param) => {
-        const [declaration, fallback] = param.split("=");
-        return {
-          ...cppDeclaration(declaration),
-          optional: fallback !== undefined,
-        };
-      });
-    at = paramsClose + 1;
+    const signature = lists.get(paramsOpen);
+    assert.ok(signature?.params, shape);
+    const params = signature.params;
+    at = signature.end + 1;
     skip();
     const initialized = [];
+    let delegationArity = null;
     if (body[at] === ":") {
       do {
         at += 1;
@@ -456,7 +521,13 @@ function cppClass(source, name, where) {
         const member = body.slice(at).match(/^\w+/)?.[0] ?? "";
         at += member.length;
         skip();
-        const argsClose = "({".includes(body[at]) ? closingIndex(body, at) : -1;
+        let argsClose = -1;
+        if (member === name) {
+          const args = lists.get(at);
+          assert.ok(args && args.arity !== undefined, shape);
+          argsClose = args.end;
+          delegationArity = args.arity;
+        } else if ("({".includes(body[at])) argsClose = closingIndex(body, at);
         assert.ok(member && argsClose > 0, shape);
         initialized.push(member);
         at = argsClose + 1;
@@ -494,9 +565,24 @@ function cppClass(source, name, where) {
     constructors.push({
       types: params.map((param) => param.type),
       required: params.filter((param) => !param.optional).length,
+      delegationArity: delegates ? delegationArity : null,
       sets: (field) =>
         delegates || initialized.includes(field) || assigned.has(field),
     });
+  }
+  // Targets can appear after their delegates, so check the complete list.
+  for (const constructor of constructors) {
+    const arity = constructor.delegationArity;
+    if (arity === null) continue;
+    assert.ok(
+      constructors.some(
+        (target) =>
+          target !== constructor &&
+          arity >= target.required &&
+          arity <= target.types.length,
+      ),
+      `${where}: ${name}(${constructor.types.join(", ")}) delegates with ${arity} arguments, which no other constructor accepts`,
+    );
   }
   return { fields, defaulted, constructors };
 }
@@ -630,6 +716,316 @@ test("the C++ node class reader catches the drift it compares", () => {
       ),
     /documents ListNode\(\), which no harness/,
   );
+});
+
+describe("C++ delegation target validation", () => {
+  const direct = "TreeNode() : val(0), left(nullptr), right(nullptr) {}";
+  const scalar = "TreeNode(int x) : val(x), left(nullptr), right(nullptr) {}";
+  const pair =
+    "TreeNode(int x, int y) : val(x), left(nullptr), right(nullptr) {}";
+  const defaults =
+    "TreeNode(int x, TreeNode *l = nullptr, TreeNode *r = nullptr) : val(x), left(l), right(r) {}";
+  const source = (constructors) =>
+    `struct TreeNode { int val; TreeNode *left; TreeNode *right; ${constructors} };`;
+  const read = (text) => cppClass(text, "TreeNode", "inline");
+  const check = (constructors) =>
+    assertPointersSet("inline", "TreeNode", read(source(constructors)));
+
+  for (const [label, constructors, signature, arity] of [
+    ["missing target", "TreeNode(int x) : TreeNode() {}", "int", 0],
+    ["too few arguments", `TreeNode() : TreeNode(1) {} ${pair}`, "", 1],
+    [
+      "too many arguments",
+      `${direct} TreeNode(int x) : TreeNode(1, 2) {}`,
+      "int",
+      2,
+    ],
+    ["self-only target", "TreeNode(int x) : TreeNode(x) {}", "int", 1],
+    [
+      "template comma is not two arguments",
+      "TreeNode() : TreeNode(std::pair<int, int>{}) {} TreeNode(int x, int y) : val(x), left(nullptr), right(nullptr) {}",
+      "",
+      1,
+    ],
+    [
+      "comma literal is not two arguments",
+      `TreeNode() : TreeNode(',') {} ${pair}`,
+      "",
+      1,
+    ],
+    [
+      "hex separator does not hide an argument",
+      "TreeNode() : TreeNode(0x1.a'bp0, 'x') {} TreeNode(double x) : val(0), left(nullptr), right(nullptr) {}",
+      "",
+      2,
+    ],
+    [
+      "later invalid delegate",
+      `${direct} TreeNode(int x) : TreeNode() {} TreeNode(int x, int y) : TreeNode(1, 2, 3) {}`,
+      "int, int",
+      3,
+    ],
+    [
+      "too many arguments with a comparison default",
+      "TreeNode() : TreeNode(1, nullptr, nullptr) {} TreeNode(int x = 1 < 2, TreeNode *l = nullptr) : val(x), left(l), right(nullptr) {}",
+      "",
+      3,
+    ],
+  ]) {
+    it(`rejects ${label}`, () => {
+      assert.throws(() => check(constructors), {
+        message: `inline: TreeNode(${signature}) delegates with ${arity} arguments, which no other constructor accepts`,
+      });
+    });
+  }
+
+  for (const [label, constructors] of [
+    ["earlier target", `${direct} TreeNode(int x) : TreeNode() {}`],
+    ["later target", `TreeNode(int x) : TreeNode() {} ${direct}`],
+    [
+      "multiple valid delegates",
+      `${direct} TreeNode(int x) : TreeNode() {} TreeNode(int x, int y) : TreeNode(1) {}`,
+    ],
+    [
+      "template-id argument",
+      "TreeNode() : TreeNode(std::pair<int, int>{}) {} TreeNode(std::pair<int, int> x) : val(0), left(nullptr), right(nullptr) {}",
+    ],
+    [
+      "braced template-id argument",
+      "TreeNode() : TreeNode{std::pair<int, int>{}} {} TreeNode(std::pair<int, int> x) : val(0), left(nullptr), right(nullptr) {}",
+    ],
+    ...["1", "1, nullptr", "1, nullptr, nullptr"].map((args) => [
+      `default arity ${args.split(",").length}`,
+      `TreeNode() : TreeNode(${args}) {} ${defaults}`,
+    ]),
+    [
+      "zero braced arguments",
+      "TreeNode(int x) : TreeNode{} {} TreeNode(TreeNode *l = nullptr, TreeNode *r = nullptr) : val(0), left(l), right(r) {}",
+    ],
+    ["comma literal", `TreeNode() : TreeNode(',') {} ${scalar}`],
+    ...[
+      String.raw`'\'', ','`,
+      String.raw`'\\', ','`,
+      "L',', u','",
+      "1'000, 2'000",
+      "0x1.a'bp0, 'x'",
+      "0xA'B.C'Dp-1, 'x'",
+    ].map((args) => [
+      `quoted or numeric arguments ${args}`,
+      `TreeNode() : TreeNode(${args}) {} TreeNode(double x, int y) : val(y), left(nullptr), right(nullptr) {}`,
+    ]),
+    ...[String.raw`"a\",b"`, String.raw`R"(a",b)"`].map((arg) => [
+      `string argument ${arg}`,
+      `TreeNode() : TreeNode(${arg}) {} TreeNode(const char *s) : val(0), left(nullptr), right(nullptr) {}`,
+    ]),
+    ...["\u2028", "\u2029"].map((separator) => [
+      `Unicode string U+${separator.charCodeAt(0).toString(16)}`,
+      `TreeNode() : TreeNode("a${separator},b") {} TreeNode(const char *s) : val(0), left(nullptr), right(nullptr) {}`,
+    ]),
+    [
+      "nested braces",
+      "TreeNode() : TreeNode(1, new TreeNode{0, nullptr}) {} TreeNode(int x, TreeNode *l) : val(x), left(l), right(nullptr) {}",
+    ],
+    [
+      "nested comma expression",
+      "TreeNode() : TreeNode((1, 2), new TreeNode{0, nullptr}) {} TreeNode(int x, TreeNode *l) : val(x), left(l), right(nullptr) {}",
+    ],
+    ...["<", ">", "<=", ">="].map((operator) => [
+      `grouped default comparison ${operator}`,
+      `TreeNode(int x, TreeNode *l, TreeNode *r) : TreeNode(1, nullptr) {} TreeNode(int x = (1 ${operator} 2), TreeNode *l = nullptr) : val(x), left(l), right(nullptr) {}`,
+    ]),
+    ...["<", ">", "<=", ">="].map((operator) => [
+      `ungrouped default comparison ${operator}`,
+      `TreeNode(int x, TreeNode *l, TreeNode *r) : TreeNode(1, nullptr) {} TreeNode(int x = 1 ${operator} 2, TreeNode *l = nullptr) : val(x), left(l), right(nullptr) {}`,
+    ]),
+    [
+      "ungrouped comparison of sizeof expressions",
+      "TreeNode(int x, TreeNode *l, TreeNode *r) : TreeNode(1, nullptr) {} TreeNode(int x = sizeof(int) < sizeof(long), TreeNode *l = nullptr) : val(x), left(l), right(nullptr) {}",
+    ],
+    [
+      "comparisons across adjacent default parameters",
+      "TreeNode(int x, TreeNode *l, TreeNode *r) : TreeNode(1, 2) {} TreeNode(int x = 1 < 2, int y = 3 > 4) : val(x), left(nullptr), right(nullptr) {}",
+    ],
+    [
+      "nested template parameter types",
+      "TreeNode() : TreeNode({}, nullptr) {} TreeNode(std::pair<int, std::pair<int, int>> x, TreeNode *l) : val(0), left(l), right(nullptr) {}",
+    ],
+  ]) {
+    it(`accepts ${label}`, () =>
+      assert.doesNotThrow(() => check(constructors)));
+  }
+
+  it("preserves template expressions in defaults and their arity limits", () => {
+    const target =
+      "TreeNode(int x = std::pair<int, int>{}.first, TreeNode *l = nullptr) : val(x), left(l), right(nullptr) {}";
+    const tree = read(
+      source(
+        `TreeNode(int x, TreeNode *l, TreeNode *r) : TreeNode(1, nullptr) {} ${target}`,
+      ),
+    );
+    assert.deepEqual(tree.constructors[1].types, ["int", "TreeNode*"]);
+    assertPointersSet("inline", "TreeNode", tree);
+    assert.throws(
+      () => check(`TreeNode() : TreeNode(1, nullptr, nullptr) {} ${target}`),
+      {
+        message:
+          "inline: TreeNode() delegates with 3 arguments, which no other constructor accepts",
+      },
+    );
+  });
+
+  it("rejects malformed or incomplete constructor syntax", () => {
+    for (const constructors of [
+      "TreeNode(int x = ) {}",
+      "TreeNode(int x) : TreeNode(1);",
+      "TreeNode(int x",
+    ]) {
+      assert.throws(() => read(source(constructors)), {
+        message:
+          "inline: invalid or incomplete C++ constructor syntax for TreeNode",
+      });
+    }
+  });
+
+  it("copies parameter defaults and argument counts before deleting the tree", () => {
+    const body =
+      "TreeNode() : TreeNode(1, /* comma, */ nullptr) {} " +
+      "TreeNode(int x = 1 < 2, /* comma, */ TreeNode *l = nullptr) {}";
+    let deleted = 0;
+    const parse = (code, language) => {
+      const tree = cppSyntax.parseSyntax(code, language);
+      const release = tree.delete.bind(tree);
+      tree.delete = () => {
+        deleted += 1;
+        release();
+      };
+      return tree;
+    };
+    const lists = cppConstructorLists(body, "TreeNode", "inline", parse);
+    assert.equal(deleted, 1);
+    assert.equal(lists.get(body.indexOf("(1,")).arity, 2);
+    assert.deepEqual(lists.get(body.lastIndexOf("TreeNode(") + 8).params, [
+      { type: "int", name: "x", optional: true },
+      { type: "TreeNode*", name: "l", optional: true },
+    ]);
+    assert.throws(
+      () =>
+        cppConstructorLists(
+          "TreeNode(int x = ) {}",
+          "TreeNode",
+          "inline",
+          parse,
+        ),
+      /invalid or incomplete C\+\+ constructor syntax/,
+    );
+    assert.equal(deleted, 2);
+  });
+
+  it("fails explicitly when the parser is unavailable or cancelled", async () => {
+    const unavailable = createSyntaxParser();
+    const error = {
+      message:
+        "inline: C++ parser unavailable or exceeded its parse budget for TreeNode",
+    };
+    assert.throws(
+      () =>
+        cppConstructorLists(
+          direct,
+          "TreeNode",
+          "inline",
+          unavailable.parseSyntax,
+        ),
+      error,
+    );
+    let cancel = true;
+    let clockReads = 0;
+    const budgeted = createSyntaxParser({
+      loadBytes: async (url) => new Uint8Array(readFileSync(url)),
+      now: () => (cancel ? (clockReads++ === 0 ? 0 : 26) : 0),
+    });
+    await budgeted.prepareLanguage("cpp");
+    assert.throws(
+      () =>
+        cppConstructorLists(
+          "int field;\n".repeat(5000),
+          "TreeNode",
+          "inline",
+          budgeted.parseSyntax,
+        ),
+      error,
+    );
+    assert.ok(clockReads > 1);
+    cancel = false;
+    assert.deepEqual(
+      cppConstructorLists(
+        direct,
+        "TreeNode",
+        "inline",
+        budgeted.parseSyntax,
+      ).get(8).params,
+      [],
+    );
+  });
+
+  it("retains per-constructor pointer checks and local shadowing", () => {
+    for (const constructors of [
+      "TreeNode(int x) : TreeNode() {} TreeNode() : val(0), left(nullptr) {}",
+      "TreeNode() : val(0), left(nullptr) { TreeNode *right = nullptr; right = nullptr; }",
+      'TreeNode() : val(0), left(nullptr) { const char *s = "/* = right = */"; }',
+    ]) {
+      assert.throws(() => check(constructors), {
+        message: "inline: TreeNode() leaves TreeNode::right uninitialized",
+      });
+    }
+    assert.doesNotThrow(() =>
+      check("TreeNode() : val(0) { left = right = nullptr; }"),
+    );
+    assert.doesNotThrow(() =>
+      check("TreeNode() : val(0), left(nullptr) { this->right = nullptr; }"),
+    );
+  });
+
+  it("preserves class discovery, comment normalization and ordinary strings", () => {
+    const declared = read(source(direct));
+    for (const prefix of [
+      "/* The node's value. */",
+      "// The node's value.\n",
+    ]) {
+      assert.doesNotThrow(() =>
+        assertDocumentedAsDeclared(
+          "inline",
+          "TreeNode",
+          read(prefix + source(direct)),
+          declared,
+        ),
+      );
+    }
+    assert.throws(
+      () =>
+        assertDocumentedAsDeclared(
+          "inline",
+          "TreeNode",
+          read(
+            "/* note */// struct TreeNode { int val; };\n" +
+              source("TreeNode() : val(0), left(nullptr) {}"),
+          ),
+          declared,
+        ),
+      { message: "inline: TreeNode() leaves TreeNode::right uninitialized" },
+    );
+    const documented = read(
+      source(direct).replace("TreeNode *left", "/* pointer */ TreeNode *left"),
+    );
+    assert.equal(documented.fields.get("left"), "TreeNode*");
+    assertDocumentedAsDeclared("inline", "TreeNode", documented, declared);
+    for (const separator of ["\u2028", "\u2029"]) {
+      assert.doesNotThrow(() =>
+        check(
+          `TreeNode() : val("a${separator},b"[0]), left(nullptr), right(nullptr) {}`,
+        ),
+      );
+    }
+  });
 });
 
 test("every C++ starter documents ListNode, TreeNode and Node as the harness declares them", () => {
