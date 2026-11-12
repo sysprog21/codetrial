@@ -129,6 +129,8 @@
   --critical-surface: #3a1d17;
   /* Behind a dialog: dims the page without hiding where the candidate was. */
   --backdrop: rgb(0 0 0 / 65%);
+  /* Dim the setup behind the problem picker while keeping it recognizable. */
+  --dialog-backdrop: rgb(0 0 0 / 60%);
   /* Text on a solid --good fill, and on its pale tint (12.6:1 on the tint
      over the surface). */
   --on-good: #0d1f17;
@@ -270,8 +272,7 @@ body {
     --inset-surface: var(--page);
     --selected-surface: var(--hairline);
     --shadow-card: 0 1px 2px rgb(23 29 45 / 4%), 0 8px 24px rgb(23 29 45 / 6%);
-    --picker-shadow: drop-shadow(0 1px 2px rgb(23 29 45 / 4%))
-      drop-shadow(0 8px 24px rgb(23 29 45 / 6%));
+    --dialog-backdrop: rgb(0 0 0 / 35%);
     --shadow-cta: 0 6px 16px rgb(110 43 240 / 24%);
   }
 }
@@ -287,8 +288,6 @@ body {
     );
     --practice-tint-edge: #473983;
     --shadow-card: 0 1px 2px rgb(0 0 0 / 30%), 0 8px 24px rgb(0 0 0 / 24%);
-    --picker-shadow: drop-shadow(0 1px 2px rgb(0 0 0 / 30%))
-      drop-shadow(0 8px 24px rgb(0 0 0 / 24%));
     --shadow-cta: 0 6px 16px rgb(116 76 230 / 28%);
   }
 }

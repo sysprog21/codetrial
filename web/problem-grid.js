@@ -1,77 +1,59 @@
-/// Only cards leave the first panel; controls retain their reading order.
+/// Open the existing picker in a modal without changing its selection state.
 export function mountProblemGrid() {
-  if (typeof window.matchMedia !== "function") return;
+  if (typeof window.HTMLDialogElement !== "function") return;
   const picker = document.querySelector("details.problem-picker");
   const grid = picker.querySelector(".problem-grid");
   const setup = document.querySelector(".setup-grid");
   const summary = picker.querySelector("summary");
-  const home = document.createComment("problem-grid-home");
-  grid.before(home);
-  grid.id = "problem-cards";
-  summary.setAttribute("aria-controls", grid.id);
-  const columns = window.matchMedia("(min-width: 761px)");
+  const search = picker.querySelector("input[type=search]");
+  const home = document.createComment("problem-picker-home");
+  picker.before(home);
+  const dialog = document.createElement("dialog");
+  dialog.className = "problem-picker-dialog choosing-problem";
+  dialog.setAttribute("aria-labelledby", "problem-picker-heading");
+  setup.append(dialog);
+  summary.setAttribute("aria-haspopup", "dialog");
+  let expanded = false;
+  let scrollTop = 0;
+  let pressedBackdrop = false;
 
-  const lobby = setup.parentElement;
-  const panel = setup.querySelector(".setup-panel");
-  const outline = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  outline.classList.add("problem-picker-outline");
-  outline.setAttribute("aria-hidden", "true");
-  const path = document.createElementNS(outline.namespaceURI, "path");
-  outline.append(path);
-  lobby.append(outline);
-
-  // Measure the live layout, including changes to any setup panel's height.
-  function drawOutline() {
-    const connected = columns.matches && picker.open && !picker.hidden;
-    lobby.classList.toggle("problem-picker-connected", connected);
-    outline.toggleAttribute("hidden", !connected);
-    if (!connected) return;
-    const origin = lobby.getBoundingClientRect();
-    const top = panel.getBoundingClientRect();
-    const bottom = grid.getBoundingClientRect();
-    const x = top.left - origin.left;
-    const y = top.top - origin.top;
-    const padding = parseFloat(getComputedStyle(grid).paddingRight);
-    const entries = [
-      ...grid.querySelectorAll(":scope > .problem-entry:not([hidden])"),
-    ].map((entry) => entry.getBoundingClientRect());
-    const right =
-      Math.max(top.right, ...entries.map((entry) => entry.right + padding)) -
-      origin.left;
-    const edge = top.right - origin.left;
-    const join = bottom.top - origin.top;
-    const end = bottom.bottom - origin.top;
-    const radius = parseFloat(getComputedStyle(panel).borderTopLeftRadius);
-    path.setAttribute(
-      "d",
-      [
-        `M ${x + radius} ${y}`,
-        `H ${edge - radius} Q ${edge} ${y} ${edge} ${y + radius}`,
-        ...(right - edge >= 2 * radius
-          ? [
-              `V ${join - radius} Q ${edge} ${join} ${edge + radius} ${join}`,
-              `H ${right - radius} Q ${right} ${join} ${right} ${join + radius}`,
-            ]
-          : right > edge
-            ? [`V ${join} H ${right}`]
-            : []),
-        `V ${end - radius} Q ${right} ${end} ${right - radius} ${end}`,
-        `H ${x + radius} Q ${x} ${end} ${x} ${end - radius}`,
-        `V ${y + radius} Q ${x} ${y} ${x + radius} ${y} Z`,
-      ].join(" "),
+  function outsideDialog(event) {
+    const rect = dialog.getBoundingClientRect();
+    return (
+      event.clientX < rect.left ||
+      event.clientX > rect.right ||
+      event.clientY < rect.top ||
+      event.clientY > rect.bottom
     );
   }
-  const cardObserver = new MutationObserver(drawOutline);
-  cardObserver.observe(grid, {
-    subtree: true,
-    attributes: true,
-    attributeFilter: ["hidden"],
+  dialog.addEventListener("pointerdown", (event) => {
+    pressedBackdrop = event.button === 0 && outsideDialog(event);
   });
-  const observer = new ResizeObserver(drawOutline);
-  observer.observe(lobby);
-  observer.observe(grid);
-  for (const item of setup.querySelectorAll(".setup-panel"))
-    observer.observe(item);
+  dialog.addEventListener("click", (event) => {
+    if (pressedBackdrop && outsideDialog(event)) picker.open = false;
+    pressedBackdrop = false;
+  });
+
+  dialog.addEventListener("cancel", (event) => {
+    event.preventDefault();
+    picker.open = false;
+  });
+  search.addEventListener("keydown", (event) => {
+    if (
+      event.key !== "Escape" ||
+      event.isComposing ||
+      event.keyCode === 229 ||
+      event.repeat ||
+      event.ctrlKey ||
+      event.metaKey ||
+      event.altKey ||
+      event.shiftKey
+    )
+      return;
+    // Search fields otherwise consume Escape by clearing the saved query.
+    event.preventDefault();
+    picker.open = false;
+  });
 
   grid.addEventListener("beforematch", () => {
     picker.open = true;
@@ -79,32 +61,40 @@ export function mountProblemGrid() {
   });
 
   function update() {
+    const open = picker.open && !picker.hidden;
     const focused = document.activeElement;
-    const hadFocus = grid.contains(focused);
-    if (columns.matches) {
-      if (grid.previousElementSibling !== panel) panel.after(grid);
-      // Detached desktop cards must inherit the picker's hidden state.
-      if (picker.hidden) grid.hidden = true;
-      else if (picker.open) grid.removeAttribute("hidden");
-      else grid.setAttribute("hidden", "until-found");
+    // Keep collapsed cards available to browser find and fragment navigation.
+    if (open) {
+      picker.append(grid);
+      grid.removeAttribute("hidden");
     } else {
-      if (grid.parentElement !== picker) home.after(grid);
-      grid.hidden = picker.hidden;
+      setup.append(grid);
+      grid.setAttribute("hidden", picker.hidden ? "" : "until-found");
     }
-    drawOutline();
-    if (hadFocus && !picker.hidden) {
-      if (!picker.open) summary.focus({ preventScroll: true });
-      else focused.focus({ preventScroll: true });
+    if (open === expanded) return;
+    expanded = open;
+    if (open) {
+      scrollTop = window.scrollY;
+      dialog.append(picker);
+      summary.removeAttribute("aria-haspopup");
+      dialog.showModal();
+      const target =
+        picker.contains(focused) && focused !== summary ? focused : search;
+      target.focus({ preventScroll: true });
+      dialog.scrollTop = 0;
+    } else {
+      dialog.close();
+      home.after(picker);
+      summary.setAttribute("aria-haspopup", "dialog");
+      if (!picker.hidden) summary.focus({ preventScroll: true });
+      window.scrollTo({ top: scrollTop, behavior: "instant" });
     }
   }
 
-  // The toggle event is queued and may run after a paint. Observe open instead
-  // so native controls, detached cards and their outline change before paint.
-  const stateObserver = new MutationObserver(update);
-  stateObserver.observe(picker, {
+  const observer = new MutationObserver(update);
+  observer.observe(picker, {
     attributes: true,
     attributeFilter: ["open", "hidden"],
   });
-  columns.addEventListener("change", update);
   update();
 }

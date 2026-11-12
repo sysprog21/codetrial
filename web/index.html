@@ -176,14 +176,10 @@
 
           <details class="problem-picker">
             <summary>Choose a specific problem instead</summary>
+            <h2 id="problem-picker-heading" class="problem-picker-heading">
+              Choose a problem
+            </h2>
             <div class="problem-picker-controls">
-              <label class="muted small source-toggle"
-                ><input id="show-sources" type="checkbox" />
-                <span
-                  >Show the LeetCode problem on each card, for drilling one by
-                  name. The interview names it in small print either way.</span
-                ></label
-              >
               <div class="problem-filter-group">
                 <fieldset class="practice-filters">
                   <legend>Filter problems</legend>
@@ -239,6 +235,13 @@
                   ></p>
                 </fieldset>
               </div>
+              <label class="muted small source-toggle"
+                ><input id="show-sources" type="checkbox" />
+                <span
+                  >Show the LeetCode problem on each card, for drilling one by
+                  name. The interview names it in small print either way.</span
+                ></label
+              >
             </div>
             <!-- prettier-ignore -->
             <section class="problem-grid" aria-label="Problems">
