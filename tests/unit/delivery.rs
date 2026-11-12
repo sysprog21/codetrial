@@ -699,7 +699,12 @@ async fn a_session_status_says_progress_finished_unwell_or_gone() {
         Ok(SessionState::Finished("file-9".to_string())),
         "the last chunk landed and only its answer was lost"
     );
-    assert!(answer(201, None, "{}").await.is_err(), "no file id to name");
+    assert_eq!(
+        answer(201, None, "{}").await,
+        Err("the upload answer carried no file id".to_string())
+    );
+    let invalid = answer(200, None, "not json").await.unwrap_err();
+    assert!(invalid.starts_with("the upload answer was not JSON: "));
     for status in RETRYABLE_STATUSES {
         assert_eq!(
             answer(status, None, "").await,
@@ -717,6 +722,18 @@ async fn transfer_whose_chunk_fails(
     query: u16,
     query_body: &'static str,
 ) -> (Result<String, String>, usize) {
+    transfer_whose_chunk_is_answered(503, "", query, query_body).await
+}
+
+/// A transfer whose one chunk is answered `chunk` with `chunk_body`, with the
+/// session answering `query` when it is asked what it holds. Returns the result
+/// and how many times the chunk was sent.
+async fn transfer_whose_chunk_is_answered(
+    chunk: u16,
+    chunk_body: &'static str,
+    query: u16,
+    query_body: &'static str,
+) -> (Result<String, String>, usize) {
     use axum::body::Bytes;
     use axum::extract::State;
     use axum::http::{HeaderMap, Method, StatusCode, Uri};
@@ -725,6 +742,8 @@ async fn transfer_whose_chunk_fails(
 
     struct Stub {
         base: String,
+        chunk: u16,
+        chunk_body: &'static str,
         query: u16,
         query_body: &'static str,
         chunks: AtomicUsize,
@@ -750,7 +769,12 @@ async fn transfer_whose_chunk_fails(
                 .into_response(),
             "/session" if method == Method::PUT => {
                 stub.chunks.fetch_add(1, Ordering::SeqCst);
-                StatusCode::SERVICE_UNAVAILABLE.into_response()
+                (
+                    StatusCode::from_u16(stub.chunk).unwrap(),
+                    [(axum::http::header::CONTENT_TYPE, "application/json")],
+                    stub.chunk_body,
+                )
+                    .into_response()
             }
             "/drive/v3/files" => axum::Json(json!({"files": []})).into_response(),
             "/b/staging/o/recording.mp4" if uri.query() == Some("alt=media") => {
@@ -773,6 +797,8 @@ async fn transfer_whose_chunk_fails(
     let base = format!("http://{}", listener.local_addr().unwrap());
     let stub = Arc::new(Stub {
         base: base.clone(),
+        chunk,
+        chunk_body,
         query,
         query_body,
         chunks: AtomicUsize::new(0),
@@ -822,4 +848,23 @@ async fn a_failed_chunk_is_settled_by_what_the_session_says() {
         Err("the upload session is no longer open".to_string())
     );
     assert_eq!(chunks, 1);
+}
+
+/// The answer to the last chunk names the file, so one that does not is a
+/// failed upload and not an empty file id.
+#[tokio::test]
+async fn a_finished_chunk_answer_without_a_file_id_fails_the_transfer() {
+    let (result, chunks) = transfer_whose_chunk_is_answered(201, "{}", 404, "{}").await;
+    assert_eq!(
+        result,
+        Err("the upload answer carried no file id".to_string())
+    );
+    assert_eq!(chunks, 1);
+
+    let (result, _) = transfer_whose_chunk_is_answered(200, "not json", 404, "{}").await;
+    assert!(
+        result
+            .unwrap_err()
+            .starts_with("the upload answer was not JSON: ")
+    );
 }

@@ -482,20 +482,24 @@ impl GoogleDelivery {
             return stored_bytes(&response, total).map(SessionState::Holds);
         }
         if status == 200 || status == 201 {
-            let body: Value = response.json().await.map_err(|error| {
-                format!("the upload answer was not JSON: {}", error.without_url())
-            })?;
-            return body
-                .get("id")
-                .and_then(Value::as_str)
-                .map(|id| SessionState::Finished(id.to_string()))
-                .ok_or_else(|| "the upload answer carried no file id".to_string());
+            return upload_file_id(response).await.map(SessionState::Finished);
         }
         if RETRYABLE_STATUSES.contains(&status) {
             return Ok(SessionState::Unwell);
         }
         Ok(SessionState::Gone)
     }
+}
+
+async fn upload_file_id(response: reqwest::Response) -> Result<String, String> {
+    let body: Value = response
+        .json()
+        .await
+        .map_err(|error| format!("the upload answer was not JSON: {}", error.without_url()))?;
+    body.get("id")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| "the upload answer carried no file id".to_string())
 }
 
 /// The PEM body, decoded and checked.
@@ -649,14 +653,7 @@ impl DeliveryProvider for GoogleDelivery {
                 if let Ok(response) = response {
                     let status = response.status().as_u16();
                     if status == 200 || status == 201 {
-                        let body: Value = response.json().await.map_err(|error| {
-                            format!("the upload answer was not JSON: {}", error.without_url())
-                        })?;
-                        return body
-                            .get("id")
-                            .and_then(Value::as_str)
-                            .map(str::to_string)
-                            .ok_or_else(|| "the upload answer carried no file id".to_string());
+                        return upload_file_id(response).await;
                     }
                     if status == 308 {
                         // What the server says it holds, not what this call
