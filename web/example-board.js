@@ -42,6 +42,7 @@ export function mountExampleBoard(
     turnActivity,
     cancelTurn,
     connected = () => true,
+    onExpandedChange = () => {},
   },
 ) {
   root.hidden = false;
@@ -292,6 +293,7 @@ export function mountExampleBoard(
     setToolIcon(expand, "shrink", "Shrink drawing");
     expand.title = "Shrink drawing (Esc)";
     expand.setAttribute("aria-keyshortcuts", "Escape");
+    onExpandedChange();
     // The panel can scroll a little on a short screen, and the pane would
     // scroll with it; the stylesheet stops it scrolling while expanded. A text
     // box near the bottom keeps its controls below the canvas, so the drawing
@@ -309,13 +311,10 @@ export function mountExampleBoard(
     root.removeAttribute("data-expanded");
     setToolIcon(expand, "expand", "Expand drawing");
     expand.removeAttribute("aria-keyshortcuts");
-    // The panel and the strip go back where the candidate had them, once the
-    // drawer's observer has measured the docked height again after this
-    // returns; restored before it, the strip is clamped against its old
-    // height after a resize while expanded.
-    queueMicrotask(() => {
-      [panel.scrollTop, strip.scrollTop, strip.scrollLeft] = scrollBack;
-    });
+    // Measure the docked height before restoring scroll, so a resize while
+    // expanded cannot clamp the strip's scroll against its old height.
+    onExpandedChange();
+    [panel.scrollTop, strip.scrollTop, strip.scrollLeft] = scrollBack;
   }
   if (expand) {
     setToolIcon(expand, "expand", "Expand drawing");
