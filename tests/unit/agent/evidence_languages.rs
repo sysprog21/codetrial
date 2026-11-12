@@ -87,6 +87,16 @@ fn a_run_in_another_language_is_not_measured_against_the_last() {
     assert!(ledger.progress.all_tests_passed_once);
     assert!(!ledger.progress.test_progress);
 
+    let starter = "class Solution { int value() { return 1; } }\n";
+    let edited = "class Solution { int value() { return 2; } }\n";
+    ledger.record_code_with_analysis(
+        Some(150),
+        250,
+        "java",
+        starter,
+        false,
+        analyze_code("java", "", starter),
+    );
     ledger.record_test(Some(200), 300, &run("java", 1, 5));
 
     assert!(!ledger.tests.regression, "{:?}", ledger.tests);
@@ -96,8 +106,16 @@ fn a_run_in_another_language_is_not_measured_against_the_last() {
     assert!(!ledger.progress.test_progress);
     assert_eq!(ledger.stuck.last_test_progress_ms, None);
 
-    // Back in the same language the next run is compared to the one before it.
-    ledger.stuck.last_meaningful_change_ms = Some(350);
+    ledger.record_code_with_analysis(
+        Some(250),
+        350,
+        "java",
+        edited,
+        true,
+        analyze_code("java", starter, edited),
+    );
+
+    // The next Java run is compared with its baseline.
     ledger.record_test(Some(300), 400, &run("java", 2, 5));
     assert!(ledger.tests.follows_executed_run);
     assert_eq!(ledger.tests.newly_passed, 1);

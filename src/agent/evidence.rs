@@ -181,11 +181,17 @@ pub struct TestState {
 
 /// # Why a zero is not written down
 ///
-/// The browser names `timeout`, `runtime_signal` and `other` from structured
-/// runner state. Compile failures without a specific category count as `other`.
-/// Writing `"syntax":0` made the model claim that a C session with five failed
-/// compilations had no syntax errors. Omit zeros to report only observed
-/// counts.
+/// A category is counted only when a runner named it from structured execution
+/// state, and the browser half names three of these: `timeout`,
+/// `runtime_signal` and `other`. A compile failure carries no structure that
+/// says whether it was a syntax error, a type error or a link error, so it is
+/// counted as `other` rather than guessed at.
+///
+/// That makes a written-out `"syntax":0` a claim nothing measured. A model
+/// reading the projection took it as one, and a C session that failed to
+/// compile five times in a row was described as having made no syntax errors.
+/// Skipping the zeros leaves the model with the counts that were observed and
+/// no sentence about the ones that were not.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DiagnosticState {
@@ -211,17 +217,13 @@ fn is_zero(count: &u32) -> bool {
     *count == 0
 }
 
-/// Interview milestones, each latching once reached. Read the ledger's `tests`
-/// for the current result, which can regress after a passing run.
+/// Latched milestones. Read the ledger's `tests` for the current result.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct InterviewProgress {
     pub first_edit_ms: Option<u64>,
     pub runner_attempted: bool,
     pub tested: bool,
-    /// Latches when an executed run passes more cases than the previous
-    /// executed run in the same language. The first executed run after
-    /// session start or a language switch establishes the baseline, even
-    /// if it sets `all_tests_passed_once`.
+    /// Latches on more passes than the prior executed run in the same language.
     pub test_progress: bool,
     pub all_tests_passed_once: bool,
 }
@@ -233,11 +235,9 @@ pub struct StuckSignals {
     pub edit_test_cycles: u32,
     pub undo_redo_cycles: u32,
     pub last_meaningful_change_ms: Option<u64>,
-    /// Receipt time of the last increase in passing cases between executed
-    /// runs in the same language. `None` until such an increase occurs.
+    /// Receipt time of the latest test progress, or `None` before progress.
     pub last_test_progress_ms: Option<u64>,
-    /// Time from the last meaningful change to that increase in passing
-    /// cases. `None` if either event has no recorded time.
+    /// Delay from the last meaningful edit to that progress, if both exist.
     pub test_progress_latency_ms: Option<u64>,
 }
 

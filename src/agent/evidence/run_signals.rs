@@ -218,6 +218,8 @@ impl EvidenceLedger {
                     .last_meaningful_change_ms
                     .map(|meaningful| receipt_timestamp_ms.saturating_sub(meaningful));
             }
+
+            // An all-pass baseline still counts as an all-pass run.
             self.progress.all_tests_passed_once |= passed == total;
             self.stuck.repeated_failure_count = self.tests.consecutive_identical_failures;
         }
