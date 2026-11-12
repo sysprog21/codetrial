@@ -457,8 +457,9 @@ class CalibrationTests(unittest.TestCase):
                         if k != "interRaterQwk"
                     },
                 )
-                for sample in packet["samples"]:
-                    sample["humanRatings"].reverse()
+                for index, sample in enumerate(packet["samples"]):
+                    if index % 2:
+                        sample["humanRatings"].reverse()
                 self.assertEqual(CAL.analyze(packet), result)
 
     def test_qwk_pseudonym_renaming_does_not_change_gate(self):
@@ -487,8 +488,9 @@ class CalibrationTests(unittest.TestCase):
         )
         reordered = copy.deepcopy(raw)
         reordered["samples"].reverse()
-        for sample in reordered["samples"]:
-            sample["humanRatings"].reverse()
+        for index, sample in enumerate(reordered["samples"]):
+            if index % 2:
+                sample["humanRatings"].reverse()
         self.assertEqual(
             CAL.analyze(reordered)["metrics"]["interRaterQwk"],
             result["metrics"]["interRaterQwk"],

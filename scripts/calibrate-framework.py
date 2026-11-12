@@ -75,7 +75,7 @@ def qwk(left, right):
         for j in range(5)
     )
     if weighted_expected == 0:
-        return Fraction(1 if weighted_observed == 0 else 0)
+        return Fraction(1)
     # The common weight denominator cancels. Keep pair and aggregation values
     # exact so a weighted average at the gate cannot round below the threshold.
     return Fraction(
