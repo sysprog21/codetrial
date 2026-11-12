@@ -10369,7 +10369,7 @@ lobbyTest(
           date: "2026-01-02T10:00:00Z",
           language: "python",
           report: {
-            codingScore: 84,
+            codingScore: 120,
             communicationScore: 80,
             decision: "HIRE",
             hintsUsed: 0,
@@ -10387,9 +10387,16 @@ lobbyTest(
     const rows = page.locator("#attempt-history > li");
     const newest = rows.nth(0);
     await newest.getByRole("button", { name: "Open report" }).click();
+    assert.ok(
+      await newest.locator(".score-grid").getByText("Not recorded").isVisible(),
+    );
     assert.match(
       await newest.locator(".category-comparison").textContent(),
       /Category progress · 1D DP[\s\S]*Compared with Step Ways · 2026-01-01 · NO HIRE/,
+    );
+    assert.match(
+      await newest.locator(".category-comparison").textContent(),
+      /Coding:\s*60[^\d]*n\/a\s*\(n\/a\)/,
     );
     assert.equal(requests.includes("/problem-categories.json"), true);
 
