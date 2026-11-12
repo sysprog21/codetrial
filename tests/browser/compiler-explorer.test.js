@@ -122,6 +122,78 @@ test("literal emitter covers every non-void function type in the bank", () => {
   );
 });
 
+test("C string literals hand the candidate's text over unchanged", () => {
+  // `-std=c17` keeps trigraphs: "??!" would compile to "|". C++ and Java read
+  // the JSON form as typed, so only C is escaped.
+  assert.equal(nativeLiteral("abc??!def", "string", "c"), '"abc\\?\\?!def"');
+  assert.equal(nativeLiteral(["ab??=cd"], "string[]", "c"), '{"ab\\?\\?=cd"}');
+  assert.equal(nativeLiteral("abc??!def", "string", "cpp"), '"abc??!def"');
+  assert.equal(nativeLiteral("abc??!def", "string", "java"), '"abc??!def"');
+  // The escapes C shares with JSON keep their spelling.
+  assert.equal(
+    nativeLiteral('tab\tline\n"q"\\', "string", "c"),
+    '"tab\\tline\\n\\"q\\"\\\\"',
+  );
+  // C17 refuses JSON's `\u0001` as a universal character name; octal stops at
+  // three digits, so the "7" after `\u001f` stays its own character, and a
+  // typed backslash before "u0001" is not read as an escape.
+  assert.equal(nativeLiteral("a\u0001b", "string", "c"), '"a\\001b"');
+  assert.equal(nativeLiteral("\u001f7", "string", "c"), '"\\0377"');
+  assert.equal(nativeLiteral("\\u0001", "string", "c"), '"\\\\u0001"');
+});
+
+test("C harness refuses a string case holding NUL rather than truncating it", () => {
+  // `\000` compiles, but the solution's string ends there, so the case would
+  // run on "a" alone. The refusal names the case, as the workspace does.
+  const spec = {
+    ...judges["longest-substring-without-repeating-characters"],
+    cases: [
+      { input: ["ab"], expected: 2 },
+      { input: ["a\u0000b"], expected: 3, label: "Your case 1" },
+    ],
+  };
+  assert.throws(
+    () => generateHarness("c", spec, ""),
+    /^Error: Your case 1 holds a NUL character/,
+  );
+  // A typed backslash before "u0000" is text, not NUL.
+  assert.doesNotThrow(() =>
+    generateHarness("c", { ...spec, cases: [{ input: ["\\u0000"] }] }, ""),
+  );
+  // Word Search II takes a `character[][]` board and a `string[]` of words.
+  // A NUL item in the words truncates; a NUL cell is a raw byte between
+  // quotes, which compiles and reaches the solution as 0.
+  const grid = (board, words) => ({
+    ...judges["word-search-ii"],
+    cases: [{ input: [board, words], expected: [] }],
+  });
+  assert.throws(
+    () => generateHarness("c", grid([["a"]], ["x", "a\u0000"]), ""),
+    /^Error: Case 1 holds a NUL character/,
+  );
+  assert.doesNotThrow(() =>
+    generateHarness("c", grid([["a", "\u0000"]], ["ab"]), ""),
+  );
+  // Evaluate Division nests its strings two lists deep.
+  assert.throws(
+    () =>
+      generateHarness(
+        "c",
+        {
+          ...judges["evaluate-division"],
+          cases: [
+            {
+              input: [[["a", "b\u0000"]], [2], [["a", "b"]]],
+              expected: [2],
+            },
+          ],
+        },
+        "",
+      ),
+    /^Error: Case 1 holds a NUL character/,
+  );
+});
+
 test("harness generator builds one batched function harness", () => {
   const spec = judges["two-sum"];
   const c = generateHarness(
@@ -884,6 +956,78 @@ bool isRearrangedCode(char* s, char* t) {
             [0, 2],
             [1, 2],
           ],
+        );
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it(
+    "C harness keeps trigraph sequences and control characters in candidate strings",
+    { skip: noCc },
+    async () => {
+      const dir = mkdtempSync(join(tmpdir(), "codetrial-c-"));
+      // Symbols are in this problem's domain. Under -std=c17 "??!" read as
+      // "|" and "??=" as "#", so the run was 7 and 5 rather than 5 and 4, and
+      // a trailing "??/" read as a backslash that escaped the closing quote, so
+      // the harness did not compile. Inside a string "??/" only escapes the
+      // next character, which can leave the count unchanged. clang refuses
+      // JSON's `\u0001` in C17; gcc accepts it.
+      const counted = ["abc??!def", "ab??=cd", "ab??/", "a\u0001b"];
+      // The echo also takes spellings no count would show: octal stopping at
+      // three digits, and a typed backslash before "u0001" or a trigraph.
+      const echoed = [...counted, "\u001f7", "\\u0001", "a\\??/b"];
+      const results = async (name, spec, solution, texts) => {
+        const source = join(dir, `${name}.c`);
+        const binary = join(dir, name);
+        const cases = texts.map((text) => ({ input: [text], expected: 0 }));
+        writeFileSync(
+          source,
+          generateHarness("c", { ...spec, cases }, solution),
+        );
+        await run("cc", ["-std=c17", source, "-o", binary]);
+        return parseCompilerResults(
+          (await run(binary, [], { encoding: "utf8" })).stdout,
+        ).results.map((result) => result.actual);
+      };
+      try {
+        assert.deepEqual(
+          await results(
+            "distinct",
+            judges["longest-substring-without-repeating-characters"],
+            `int longestDistinctRun(char* s) {
+    int last[256], best = 0, start = 0;
+    for (int i = 0; i < 256; i++) last[i] = -1;
+    for (int i = 0; s[i]; i++) {
+        unsigned char c = (unsigned char)s[i];
+        if (last[c] >= start) start = last[c] + 1;
+        last[c] = i;
+        if (i - start + 1 > best) best = i - start + 1;
+    }
+    return best;
+}`,
+            counted,
+          ),
+          [5, 4, 3, 3],
+        );
+        // A count cannot tell "abc??!def" from "abc??@def"; a solution that
+        // returns its input shows every byte arrived as typed.
+        assert.deepEqual(
+          await results(
+            "echo",
+            {
+              kind: "function",
+              entry: "echo",
+              checker: "exact",
+              paramNames: ["s"],
+              paramTypes: ["string"],
+              returnType: "string",
+            },
+            "char* echo(char* s) { return s; }",
+            echoed,
+          ),
+          echoed,
         );
       } finally {
         rmSync(dir, { recursive: true, force: true });
