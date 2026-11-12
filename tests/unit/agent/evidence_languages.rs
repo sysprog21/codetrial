@@ -8,6 +8,29 @@ fn run(language: &str, passed: u32, total: u32) -> serde_json::Value {
 }
 
 #[test]
+fn first_executed_run_after_setup_failure_is_the_baseline() {
+    let mut ledger = EvidenceLedger::default();
+    ledger.record_test(
+        Some(10),
+        100,
+        &serde_json::json!({
+            "passed": 0,
+            "total": 0,
+            "setupError": "Compiler Explorer returned 503",
+        }),
+    );
+    ledger.record_test(
+        Some(20),
+        200,
+        &serde_json::json!({ "passed": 2, "total": 5 }),
+    );
+
+    assert_eq!((ledger.tests.passed, ledger.tests.total), (2, 5));
+    assert!(!ledger.progress.test_progress);
+    assert_eq!(ledger.stuck.last_test_progress_ms, None);
+}
+
+#[test]
 fn evidence_ledger_measures_reversal_and_test_progress_latency() {
     let mut ledger = EvidenceLedger::default();
     let starter = "value = 1\n";

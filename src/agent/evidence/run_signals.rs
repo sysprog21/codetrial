@@ -206,7 +206,10 @@ impl EvidenceLedger {
                 source_timestamp_ms,
             };
             self.progress.tested = true;
-            // The first run establishes a baseline, including after a switch.
+
+            // Progress needs an earlier executed run in the same language: the
+            // first executed run, and the first one after a switch, is the
+            // baseline.
             if self.tests.follows_executed_run && self.tests.newly_passed > 0 {
                 self.progress.test_progress = true;
                 self.stuck.last_test_progress_ms = Some(receipt_timestamp_ms);
