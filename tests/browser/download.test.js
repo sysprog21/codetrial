@@ -37,6 +37,7 @@ for (const [path, name] of [
         }),
       reportMarkdown: () => "# Report",
       savedAttemptReport,
+      attemptCategoryComparison: () => null,
       buildMarkdown: () => "# Report",
       reportFilename,
       problem: { page: "two-sum" },

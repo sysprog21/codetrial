@@ -687,19 +687,16 @@ nodes.attemptDownloadSelected.addEventListener("click", async () => {
   downloadingSelectedAttempts = true;
   nodes.attemptDownloadSelected.disabled = true;
   try {
+    let categories = historyCategories;
     if (
-      !historyCategories &&
+      !categories &&
       selected.some((attempt) => canCompareAttempt(attempt, history))
     ) {
-      historyCategories = await loadHistoryCategoryMap();
+      categories = loadHistoryCategoryMap();
     }
     await Promise.all(
-      selected.map(async (attempt) =>
-        exportSavedReport(
-          attempt,
-          undefined,
-          await attemptCategoryComparison(attempt),
-        ),
+      selected.map((attempt) =>
+        exportSavedReport(attempt, undefined, categories),
       ),
     );
     // Chrome saves the first file of one click and asks before the rest, or
@@ -1360,10 +1357,13 @@ function canCompareAttempt(attempt, history = progressNormalized) {
   );
 }
 
-async function attemptCategoryComparison(attempt) {
+async function attemptCategoryComparison(attempt, categoryMap) {
   const history = progressNormalized;
   if (!canCompareAttempt(attempt, history)) return null;
-  historyCategories ??= await loadHistoryCategoryMap();
+  const categories = await (categoryMap === undefined
+    ? (historyCategories ?? loadHistoryCategoryMap())
+    : categoryMap);
+  historyCategories ??= categories;
   const withSavedMetrics = (entry) => ({
     ...entry,
     recordedCodingScore: entry.savedMetrics.codingScore ?? null,
@@ -1373,7 +1373,7 @@ async function attemptCategoryComparison(attempt) {
   return compareCategoryAttempt(
     history.map(withSavedMetrics),
     withSavedMetrics(attempt),
-    historyCategories,
+    categories,
   );
 }
 
@@ -2338,23 +2338,27 @@ function syncAttemptSelection() {
 
 const pendingReportDownloads = new Set();
 
-async function exportSavedReport(attempt, button, categoryComparison) {
+async function exportSavedReport(attempt, button, categories) {
   const key = selectionKey(attempt);
   if (pendingReportDownloads.has(key) || button?.disabled) return;
   pendingReportDownloads.add(key);
   if (button) button.disabled = true;
   try {
-    if (categoryComparison === undefined)
-      categoryComparison = await attemptCategoryComparison(attempt);
-    await downloadSavedReport(attempt, categoryComparison);
+    await downloadSavedReport(
+      attempt,
+      attemptCategoryComparison(attempt, categories),
+    );
   } finally {
     pendingReportDownloads.delete(key);
     if (button) button.disabled = false;
   }
 }
 
-async function downloadSavedReport(attempt, categoryComparison) {
-  const problemPages = await loadPageMapWithin(requestTimeoutMs);
+async function downloadSavedReport(attempt, comparison) {
+  const [problemPages, categoryComparison] = await Promise.all([
+    loadPageMapWithin(requestTimeoutMs),
+    comparison,
+  ]);
   const markdown = reportMarkdown({
     report: savedAttemptReport(attempt),
     problemTitle: attempt.problemTitle,

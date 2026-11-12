@@ -1518,7 +1518,7 @@ test("post-interview and lobby reports wire same-category comparison into HTML a
   );
   assert.match(
     functionBody(app, "attemptCategoryComparison"),
-    /compareCategoryAttempt\(\s*history,\s*attempt,\s*historyCategories,?\s*\)/,
+    /compareCategoryAttempt\(\s*history\.map\(withSavedMetrics\),\s*withSavedMetrics\(attempt\),\s*categories,?\s*\)/,
   );
   assert.match(
     functionBody(app, "renderAttemptHistory"),
@@ -1530,7 +1530,7 @@ test("post-interview and lobby reports wire same-category comparison into HTML a
   );
   assert.match(
     functionBody(app, "exportSavedReport"),
-    /attemptCategoryComparison\(attempt\)/,
+    /attemptCategoryComparison\(attempt, categories\)/,
   );
   assert.match(
     functionBody(app, "syncAttemptSelection"),
