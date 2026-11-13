@@ -1822,6 +1822,13 @@ p {
   margin: 0 auto;
 }
 
+/* Reserve the card's strip only beside the editor, not on stacked screens. */
+@media (min-width: 1024px) {
+  .example-board[data-expanded] .example-surface {
+    margin-right: calc(260px + 1.5rem);
+  }
+}
+
 /* The expanded pane is laid over the panel, which would scroll it on a short
    screen. */
 .editor-panel:has(.example-board[data-expanded]) {

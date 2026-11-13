@@ -36,8 +36,25 @@ after(async () => {
   await new Promise((closed) => (server ? server.close(closed) : closed()));
 });
 
-async function openInterview(width, height, query = "") {
+async function openInterview(width, height, query = "", drawing = false) {
   const page = await browser.newPage({ viewport: { width, height } });
+  if (drawing)
+    await page.route("**/interview.js", (route) => {
+      const source = read("web/interview.js");
+      const unlocked = source.replace(
+        /locked: \(\) =>\s*!board\.ready \|\|\s*state\.phase !== "live" \|\|\s*frameworkRound !== "coding"/,
+        "locked: () => false",
+      );
+      assert.notEqual(
+        unlocked,
+        source,
+        "the example board's lock moved; update openInterview's pattern",
+      );
+      return route.fulfill({
+        contentType: "text/javascript",
+        body: unlocked,
+      });
+    });
   await page.goto(
     `${base}/interview.html?problem=chargeback-pair-match${query}`,
     { waitUntil: "domcontentloaded" },
@@ -941,6 +958,92 @@ test("local recording controls preserve the original problem reading space", asy
         sizes.recording,
         sizes.original,
         JSON.stringify({ width, fontFamily, ...sizes }),
+      );
+    } finally {
+      await page.close();
+    }
+  }
+});
+
+// Room admission is outside this layout check; the real page and drawing
+// handlers run with an editable board, without joining a provider.
+test("expanded drawing text controls stay reachable beside long captions and self-view", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  for (const [width, height] of [
+    [1280, 800],
+    [1440, 900],
+    [1920, 1080],
+    [1250, 630],
+  ]) {
+    const page = await openInterview(width, height, "&exampleDrawing=1", true);
+    try {
+      await closeSetupCheck(page);
+      await page
+        .locator("#example-board")
+        .evaluate((node) => (node.open = true));
+      await page.locator(".drawer-resizer").focus();
+      await page.keyboard.press("End");
+      await page.getByRole("button", { name: "Expand drawing" }).click();
+      await page.evaluate(() => {
+        document.querySelector("#self-view").hidden = false;
+        document.querySelector("#captions-bar").hidden = false;
+        document.querySelector("#captions-text").textContent =
+          "Explain the boundary cases and how your approach handles each one. ".repeat(
+            30,
+          );
+      });
+      await settled(page);
+      await page.getByRole("button", { name: "Text", exact: true }).click();
+      const canvas = page.locator("#example-board canvas");
+      for (const [x, y] of [
+        [0.05, 0.05],
+        [0.5, 0.5],
+        [0.95, 0.95],
+        [0.05, 0.95],
+        [0.95, 0.05],
+      ]) {
+        for (const action of ["Confirm", "Cancel"]) {
+          await canvas.evaluate((node) => {
+            node.parentElement.scrollTop = 0;
+          });
+          const rect = await canvas.boundingBox();
+          await page.mouse.click(
+            rect.x + rect.width * x,
+            rect.y + rect.height * y,
+          );
+          await page
+            .getByRole("textbox", { name: "Label text" })
+            .fill("boundary label");
+          const button = page.getByRole("button", {
+            name: action,
+            exact: true,
+          });
+          await button.click();
+          await page.locator(".board-text-draft").waitFor({ state: "hidden" });
+        }
+      }
+    } finally {
+      await page.close();
+    }
+  }
+});
+
+test("a stacked expanded drawing keeps the panel's available width", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  for (const width of [481, 900]) {
+    const page = await openInterview(width, 800, "&exampleDrawing=1");
+    try {
+      await closeSetupCheck(page);
+      await page
+        .locator("#example-board")
+        .evaluate((node) => (node.open = true));
+      await page.getByRole("button", { name: "Expand drawing" }).click();
+      await settled(page);
+      const panel = await page.locator(".editor-panel").boundingBox();
+      const surface = await page.locator(".example-surface").boundingBox();
+      assert.ok(
+        surface.width >= panel.width * 0.9,
+        `${width}px: drawing uses the panel width`,
       );
     } finally {
       await page.close();
