@@ -1,3 +1,109 @@
+:root {
+  color-scheme: dark;
+  /* One scale for every page. Type steps, in rem: 0.6875 0.75 0.8125 0.875
+     0.9375 1 1.125 1.25 1.5 2, plus the lobby's fluid headline. Radii: a
+     control or small box, a card or bubble, a page-level panel; 999px for a
+     pill and 50% for a dot. */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 20px;
+  --page: #11110f;
+  --surface: #1b1b18;
+  --ink: #f6f3ea;
+  --sub: #b7b2a5;
+  /* Secondary small text: 5.2:1 on the surface and 4.7 on a raised box,
+     still a step quieter than --sub. */
+  --muted: #928c7e;
+  --hairline: #2d2b26;
+  /* The brand violet, oklch(0.516 0.262 288.8) in the lobby, at the same hue
+     for a dark page: --accent is the violet that reads as text and edges here
+     (6.6:1 on the surface), --accent-fill the solid behind white button text
+     (5.4:1), --accent-deep its hover, one step darker so the hover shows.
+     --accent-ink is violet text; the lobby gives it a darker value. */
+  --accent: #a291ff;
+  --accent-fill: #744ce6;
+  --accent-deep: #6437d2;
+  --accent-ink: var(--accent);
+  /* Text on a solid --accent-fill or --danger: white in every scheme, at least
+     4.9:1 on either fill. */
+  --on-accent: #ffffff;
+  --good: #24b47e;
+  --critical: #ff6b6b;
+  /* A destructive control: its border and fill, and its text on the surface
+     when it is outlined rather than filled (7.6:1). */
+  --danger: #c44545;
+  --danger-ink: #ff8a8a;
+  /* The edge of a form field: 4.6:1 against the surface, past the 3:1 a
+     control boundary needs. */
+  --control-border: #8a8473;
+  /* A card set into the surface, such as a step of the setup check or a
+     code block. */
+  --step-surface: #151512;
+  /* A box raised on the surface: a score, a transcript turn, a board step. */
+  --inset-surface: #24241f;
+  /* What floats over the editor: the avatar, or the compact caption card. */
+  --shadow-float: 0 8px 24px rgba(0, 0, 0, 0.35);
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  /* The chosen tab or language, one step above a raised box. */
+  --selected-surface: #2f2f29;
+  /* The floating avatar stage. Opaque on purpose: this sits over the editor,
+     which repaints on every keystroke, and a backdrop-filter under it re-ran a
+     blur pass per repaint for an effect 82% opaque paint already hid. */
+  --float-surface: #24241f;
+  /* A warning the candidate has to act on: the presence banner, and the
+     blocked-audio notice on Jim's stage. */
+  --alert-tint: rgba(255, 107, 107, 0.12);
+  --alert-ink: #ff9b9b;
+  /* The same banner when the news is not a fault: the avatar was turned off. */
+  --notice-tint: rgba(255, 200, 87, 0.14);
+  --notice-ink: #ffd27a;
+  /* The whiteboard and the example drawings are paper in every scheme. */
+  --paper: #ffffff;
+  /* The toolbar's edge and ink and the grip on a text box, paper's own. */
+  --paper-edge: #d6d9df;
+  --paper-ink: #252a32;
+  --paper-grip: #686868;
+
+  /* General UI and state colors */
+  --ready-ink: #d7f7e5;
+  --good-ink: #0d1f17;
+  --camera-preview-background: #111;
+  --overlay-background: rgba(17, 17, 15, 0.95);
+
+  /* Shadows */
+  --shadow-hint: 0 1.2rem 3rem rgb(0 0 0 / 45%);
+  --shadow-overlay: 0 24px 64px rgba(0, 0, 0, 0.5);
+  --shadow-board-controls: 0 3px 12px #00000018;
+  /* Editor-only colors, independent of the page's fixed dark scheme. Their
+     defaults keep the editor rendering exactly as before; the light values
+     live on .editor-stack[data-theme="light"] below. */
+  --code-bg: #1e1e1e;
+  --code-text: #d4d4d4;
+  --code-gutter: #181816;
+  --code-caret: #f4f4f0;
+  --code-selection: #264f78;
+  --code-active-line: #ffffff0f;
+  /* Selected text needs its own color: --ink is a light page color that would
+     stay light on a light selection background in the light theme. */
+  --code-selection-ink: var(--ink);
+  --code-match-outline: #a6cfff;
+  /* The gutter's own text and divider. Line numbers stay a step under the
+     page's --muted, which was raised for text a candidate reads, so the code
+     beside them keeps the lead; the light theme below overrides both, since
+     neither meets 4.5:1 against a light gutter background. */
+  --code-gutter-ink: #7d776a;
+  --code-gutter-border: var(--hairline);
+  /* Indent guides sit under the code, so they stay fainter than it in both
+     themes. */
+  --code-guide: #404040;
+  --tok-keyword: #569cd6;
+  --tok-string: #ce9178;
+  --tok-comment: #6a9955;
+  --tok-number: #b5cea8;
+  --tok-literal: #569cd6;
+  --editor-panel-bg: #1e1e1e;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -897,7 +1003,7 @@ p {
   overflow: auto;
   border: 1px solid var(--hairline);
   border-radius: var(--radius-sm);
-  background: var(--surface);
+  background: var(--editor-panel-bg);
 }
 
 .interview-sidebar {
@@ -1260,6 +1366,7 @@ p {
   border-color: color-mix(in srgb, var(--good) 65%, transparent);
   background: color-mix(in srgb, var(--good) 12%, transparent);
   color: var(--on-good-tint);
+  color: var(--ready-ink);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--good) 8%, transparent);
 }
 
@@ -1401,6 +1508,7 @@ p {
   border-color: var(--danger);
   background: var(--danger);
   color: var(--on-accent);
+  color: var(--on-accent);
 }
 
 /* Sized as a pill so it sits in the control row beside the Mic button it
@@ -1531,9 +1639,7 @@ p {
   display: flex;
   min-height: 34rem;
   flex-direction: column;
-  /* Read here, outside .editor-stack, this is always the dark editor value:
-     the panel frames the editor whichever theme the editor takes. */
-  background: var(--code-bg);
+  background: var(--editor-panel-bg);
   container-type: inline-size;
 }
 
@@ -1578,6 +1684,7 @@ p {
 .session-dock .turn-button {
   border-color: var(--accent);
   background: var(--accent-fill);
+  color: var(--on-accent);
   color: var(--on-accent);
 }
 
@@ -1998,6 +2105,7 @@ p {
   overflow-y: auto;
   gap: 1rem;
   background: color-mix(in srgb, var(--page) 95%, transparent);
+  background: var(--overlay-background);
   padding: 1rem;
 }
 
@@ -2150,6 +2258,7 @@ table.phase-scores {
   border: 1px solid var(--hairline);
   border-radius: var(--radius-sm);
   background: var(--accent-fill);
+  color: var(--on-accent);
   color: var(--on-accent);
   padding: 0.75rem 1rem;
   cursor: pointer;
@@ -2612,7 +2721,7 @@ table.phase-scores {
   border-radius: var(--radius-sm);
   background: var(--paper);
   color: var(--paper-ink);
-  box-shadow: var(--shadow-raised);
+  box-shadow: 0 3px 12px var(--board-controls-shadow-color);
 }
 .board-text-controls .board-pens {
   margin-right: auto;
@@ -2695,6 +2804,7 @@ table.phase-scores {
   border-radius: var(--radius-lg);
   background: var(--surface);
   box-shadow: var(--shadow-modal);
+  box-shadow: var(--shadow-overlay);
   text-align: left;
 }
 
@@ -2738,6 +2848,7 @@ table.phase-scores {
   border: 1px solid var(--hairline);
   border-radius: var(--radius-sm);
   background: var(--page);
+  background: var(--camera-preview-background);
 }
 
 .camera-preview-container[hidden] {
@@ -2808,6 +2919,7 @@ table.phase-scores {
   border-color: var(--good);
   background: var(--good);
   color: var(--on-good);
+  color: var(--good-ink);
 }
 
 .audio-check-step.done strong {
@@ -3077,6 +3189,7 @@ body:not([data-recording]) .replay-detail > :not(header) {
   border-radius: var(--radius-sm);
   background: var(--float-surface);
   box-shadow: var(--shadow-modal);
+  box-shadow: var(--shadow-hint);
 }
 
 .framework-hint-title {
