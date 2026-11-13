@@ -7,6 +7,12 @@
 
 use super::*;
 
+pub(super) fn reserve_gemini_listener() -> tokio::net::TcpListener {
+    let listener = reserve_listener();
+    listener.set_nonblocking(true).unwrap();
+    tokio::net::TcpListener::from_std(listener).unwrap()
+}
+
 /// Accept, validate, write: the mocks answer as working credentials would,
 /// LiveKit's `ListRooms` with 200, Gemini's handshake with `setupComplete`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -17,7 +23,7 @@ async fn setup_page_accepts_credentials_and_writes_the_primary_config_file() {
 
     let livekit_addr = spawn_livekit_room_service("key", "secret");
 
-    let gemini_mock = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let gemini_mock = reserve_gemini_listener();
     let gemini_addr = gemini_mock.local_addr().unwrap();
     tokio::spawn(async move {
         if let Ok((socket, _)) = gemini_mock.accept().await
@@ -129,7 +135,7 @@ async fn change_keys_rewrites_the_config_the_launch_read() {
     let livekit = spawn_livekit_room_service("new-key", "secret");
 
     // Answers the probe's setup message and hands back the model it named.
-    let gemini_mock = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let gemini_mock = reserve_gemini_listener();
     let gemini_addr = gemini_mock.local_addr().unwrap();
     let gemini = tokio::spawn(async move {
         let (socket, _) = gemini_mock.accept().await.unwrap();
