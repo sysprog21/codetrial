@@ -81,7 +81,7 @@ async fn static_home_markup_matches_frontend_contract() {
         .unwrap();
 
     for text in [
-        "Practice a live technical interview",
+        "Start Interview",
         "30 min",
         "45 min",
         "60 min",

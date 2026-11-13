@@ -1759,20 +1759,20 @@ async function isolateRustAgent(
     if (mode === "home") {
       await page.goto(process.env.BASE_URL, { waitUntil: "domcontentloaded" });
       await page
-        .getByRole("heading", { name: "Practice a live technical interview" })
+        .getByRole("heading", {
+          name: "Start Interview",
+          level: 1,
+          exact: true,
+        })
         .waitFor();
       await page.getByRole("button", { name: "Start interview" }).waitFor();
 
-      // Two things now stand between the page and a generated card, and this
-      // check knew about neither: the cards moved inside a collapsed <details>
-      // when the lobby started recommending a problem instead of listing all
-      // 150, and the picker only offers the difficulties the checkboxes select,
-      // which defaults to Medium alone. Valid Parentheses is Easy, so reach it
-      // the way a candidate does rather than waiting for a card the lobby is
-      // deliberately hiding. The card is named for its scenario; the published
-      // title is on it too, hidden unless the candidate asks.
+      // The picker offers only checked difficulties and defaults to Medium.
+      // Set Easy before opening the modal, while background controls can still
+      // receive input. Cards use scenario titles; published titles stay hidden
+      // unless the candidate asks for them.
+      await page.getByRole("checkbox", { name: "Easy", exact: true }).check();
       await page.getByText("Choose a specific problem instead").click();
-      await page.getByRole("checkbox", { name: "Easy" }).check();
       await page
         .getByText(scenarioTitle(PROBLEM_IDS.validParentheses), { exact: true })
         .waitFor();

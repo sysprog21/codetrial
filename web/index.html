@@ -64,15 +64,32 @@
         </div>
       </aside>
 
-      <section class="practice-hero" aria-labelledby="practice-title">
-        <span class="practice-badge">Voice AI mock interviews</span>
-        <h1 id="practice-title" tabindex="-1">
-          Practice a live technical interview
-        </h1>
-        <p class="practice-lead">
-          Talk through your solution with Jim, your AI interviewer, while you
-          code. Feedback on every phase arrives when the session ends.
-        </p>
+      <section
+        class="practice-hero setup-hero"
+        aria-labelledby="practice-title"
+      >
+        <div class="practice-badge-row">
+          <span class="practice-badge">Voice AI mock interviews</span>
+        </div>
+        <div class="practice-intro">
+          <h1 id="practice-title" tabindex="-1">Start Interview</h1>
+          <p class="practice-lead">
+            Configure your interview and begin practicing with Jim, your AI
+            interviewer.
+          </p>
+        </div>
+        <div class="hero-start">
+          <p id="cost-note" class="cost-note" hidden></p>
+          <button
+            id="start"
+            class="start-button"
+            type="button"
+            disabled
+            aria-describedby="cost-note"
+          >
+            Start interview
+          </button>
+        </div>
       </section>
 
       <div class="setup-grid">
@@ -148,11 +165,16 @@
             <button
               id="practice-list-pick"
               type="button"
-              aria-describedby="practice-list-status"
+              aria-describedby="practice-list-count practice-list-status"
               disabled
             >
               Pick from my list
             </button>
+            <span
+              id="practice-list-count"
+              class="muted small"
+              aria-live="polite"
+            ></span>
             <p
               id="practice-list-status"
               class="muted small"
@@ -162,18 +184,6 @@
               Check problems in the problem picker to add them.
             </p>
           </div>
-          <p
-            id="practice-focus"
-            class="muted small"
-            aria-live="polite"
-            hidden
-          ></p>
-          <label id="practice-focus-share" class="muted small" hidden
-            ><input id="practice-focus-share-input" type="checkbox" /> Share
-            this focus with Jim. It may guide one neutral follow-up; it does not
-            change the problem or score.</label
-          >
-
           <details class="problem-picker">
             <summary>Choose a specific problem instead</summary>
             <div class="problem-picker-header">
@@ -1763,6 +1773,23 @@
               </div>
             </section>
           </details>
+          <details id="carry-forward" class="carry-forward" hidden>
+            <summary>
+              Carry forward
+              <span id="carry-forward-sharing" hidden>Sharing enabled</span>
+            </summary>
+            <p
+              id="practice-focus"
+              class="muted small"
+              aria-live="polite"
+              hidden
+            ></p>
+            <label id="practice-focus-share" class="muted small" hidden
+              ><input id="practice-focus-share-input" type="checkbox" /> Share
+              this focus with Jim. It may guide one neutral follow-up; it does
+              not change the problem or score.</label
+            >
+          </details>
         </section>
         <section
           class="setup-panel session-panel"
@@ -1826,6 +1853,7 @@
                 Coding + behavioral
               </button>
             </div>
+            <h3 class="setting-label">Workspace</h3>
             <div
               class="session-choice-group"
               role="group"
@@ -1848,6 +1876,10 @@
                 Whiteboard
               </button>
             </div>
+          </section>
+          <p class="duration-note" id="mode-note" aria-live="polite" hidden></p>
+          <details class="advanced-settings">
+            <summary>Advanced settings</summary>
             <label class="setting-option"
               ><input id="enable-example-drawing" type="checkbox" /> Enable
               Example drawing</label
@@ -1856,172 +1888,140 @@
               ><input id="enable-candidate-led" type="checkbox" /> Candidate-led
               coding</label
             >
-          </section>
-          <p class="duration-note" id="mode-note" aria-live="polite" hidden></p>
-
-          <fieldset class="editor-options-row">
-            <legend>Editor options</legend>
-            <label
-              ><input
-                type="checkbox"
-                name="editor-option"
-                value="highlight"
-                checked
-              />
-              Syntax highlighting</label
-            >
-            <label
-              ><input
-                type="checkbox"
-                name="editor-option"
-                value="execution"
-                checked
-              />
-              Code execution</label
-            >
-            <label
-              ><input
-                type="checkbox"
-                name="editor-option"
-                value="autoIndent"
-                checked
-              />
-              Auto indentation</label
-            >
-            <label
-              ><input
-                type="checkbox"
-                name="editor-option"
-                value="autoClose"
-                checked
-              />
-              Bracket auto-close</label
-            >
-            <label
-              ><input
-                type="checkbox"
-                name="editor-option"
-                value="monospace"
-                checked
-              />
-              Monospace font</label
-            >
-            <label
-              >Indentation
-              <select id="editor-indent">
-                <option value="2">2 spaces</option>
-                <option value="4" selected>4 spaces</option>
-                <option value="tab">Tab</option>
-              </select></label
-            >
-          </fieldset>
-        </section>
-        <section
-          class="setup-panel start-panel"
-          aria-labelledby="start-heading"
-        >
-          <div class="setup-heading">
-            <span class="step-number" aria-hidden="true">3</span>
-            <div>
-              <h2 id="start-heading">Check in and start</h2>
-              <p>Add optional context, then join the interview.</p>
-            </div>
-          </div>
-          <details class="interview-context">
-            <summary>Optional interview context</summary>
-            <fieldset>
-              <legend>Tailor the behavioral question</legend>
-              <p class="muted small">
-                Skip any or all fields. Coding correctness is unchanged.
-              </p>
+            <fieldset class="editor-options-row">
+              <legend>Editor options</legend>
               <label
-                >Target role
-                <input
-                  id="profile-role"
-                  type="text"
-                  maxlength="80"
-                  autocomplete="organization-title"
-              /></label>
-              <label
-                >Seniority
-                <select id="profile-seniority">
-                  <option value="">Not specified</option>
-                  <option value="intern">Intern</option>
-                  <option value="junior">Junior</option>
-                  <option value="mid">Mid-level</option>
-                  <option value="senior">Senior</option>
-                  <option value="staff">Staff+</option>
-                  <option value="manager">Engineering manager</option>
-                </select>
-              </label>
-              <label
-                >Target company
-                <input
-                  id="profile-company"
-                  type="text"
-                  maxlength="80"
-                  autocomplete="organization"
-              /></label>
-            </fieldset>
-            <fieldset>
-              <legend>Ground questions in selected document snippets</legend>
-              <p class="muted small">
-                Optional. Files stay in this browser. Nothing is selected or
-                sent automatically.
-              </p>
-              <label
-                >Job description (.txt up to 64 KiB, or .pdf up to 4 MiB)
-                <input
-                  id="grounding-jd"
-                  type="file"
-                  accept=".txt,text/plain,.pdf,application/pdf"
-              /></label>
-              <p id="grounding-jd-status" class="muted small" role="status"></p>
-              <label
-                >Resume (.txt up to 64 KiB, or .pdf up to 4 MiB)
-                <input
-                  id="grounding-resume"
-                  type="file"
-                  accept=".txt,text/plain,.pdf,application/pdf"
-              /></label>
-              <p
-                id="grounding-resume-status"
-                class="muted small"
-                role="status"
-              ></p>
-              <div id="grounding-choices"></div>
-              <label
-                ><input id="grounding-consent" type="checkbox" /> Send only my
-                selected snippets to the AI interviewer.</label
+                ><input
+                  type="checkbox"
+                  name="editor-option"
+                  value="highlight"
+                  checked
+                />
+                Syntax highlighting</label
               >
-              <button id="grounding-clear" type="button">
-                Clear document grounding
-              </button>
-              <p id="grounding-error" role="alert"></p>
+              <label
+                ><input
+                  type="checkbox"
+                  name="editor-option"
+                  value="execution"
+                  checked
+                />
+                Code execution</label
+              >
+              <label
+                ><input
+                  type="checkbox"
+                  name="editor-option"
+                  value="autoIndent"
+                  checked
+                />
+                Auto indentation</label
+              >
+              <label
+                ><input
+                  type="checkbox"
+                  name="editor-option"
+                  value="autoClose"
+                  checked
+                />
+                Bracket auto-close</label
+              >
+              <label
+                ><input
+                  type="checkbox"
+                  name="editor-option"
+                  value="monospace"
+                  checked
+                />
+                Monospace font</label
+              >
+              <label
+                >Indentation
+                <select id="editor-indent">
+                  <option value="2">2 spaces</option>
+                  <option value="4" selected>4 spaces</option>
+                  <option value="tab">Tab</option>
+                </select></label
+              >
             </fieldset>
+            <details class="interview-context">
+              <summary>Optional interview context</summary>
+              <fieldset>
+                <legend>Tailor the behavioral question</legend>
+                <p class="muted small">
+                  Skip any or all fields. Coding correctness is unchanged.
+                </p>
+                <label
+                  >Target role
+                  <input
+                    id="profile-role"
+                    type="text"
+                    maxlength="80"
+                    autocomplete="organization-title"
+                /></label>
+                <label
+                  >Seniority
+                  <select id="profile-seniority">
+                    <option value="">Not specified</option>
+                    <option value="intern">Intern</option>
+                    <option value="junior">Junior</option>
+                    <option value="mid">Mid-level</option>
+                    <option value="senior">Senior</option>
+                    <option value="staff">Staff+</option>
+                    <option value="manager">Engineering manager</option>
+                  </select>
+                </label>
+                <label
+                  >Target company
+                  <input
+                    id="profile-company"
+                    type="text"
+                    maxlength="80"
+                    autocomplete="organization"
+                /></label>
+              </fieldset>
+              <fieldset>
+                <legend>Ground questions in selected document snippets</legend>
+                <p class="muted small">
+                  Optional. Files stay in this browser. Nothing is selected or
+                  sent automatically.
+                </p>
+                <label
+                  >Job description (.txt up to 64 KiB, or .pdf up to 4 MiB)
+                  <input
+                    id="grounding-jd"
+                    type="file"
+                    accept=".txt,text/plain,.pdf,application/pdf"
+                /></label>
+                <p
+                  id="grounding-jd-status"
+                  class="muted small"
+                  role="status"
+                ></p>
+                <label
+                  >Resume (.txt up to 64 KiB, or .pdf up to 4 MiB)
+                  <input
+                    id="grounding-resume"
+                    type="file"
+                    accept=".txt,text/plain,.pdf,application/pdf"
+                /></label>
+                <p
+                  id="grounding-resume-status"
+                  class="muted small"
+                  role="status"
+                ></p>
+                <div id="grounding-choices"></div>
+                <label
+                  ><input id="grounding-consent" type="checkbox" /> Send only my
+                  selected snippets to the AI interviewer.</label
+                >
+                <button id="grounding-clear" type="button">
+                  Clear document grounding
+                </button>
+                <p id="grounding-error" role="alert" tabindex="-1"></p>
+              </fieldset>
+            </details>
           </details>
-
-          <section class="start-row">
-            <!-- app.js enables Start once this selection mode is ready. -->
-            <h3 id="next-steps-label" class="setting-label">
-              What happens next
-            </h3>
-            <ol class="next-steps" aria-labelledby="next-steps-label">
-              <li>A quick microphone and camera check</li>
-              <li>A live interview with Jim, by voice</li>
-              <li>A scored report for every phase</li>
-            </ol>
-            <p id="cost-note" class="cost-note" hidden></p>
-            <button
-              id="start"
-              class="start-button"
-              type="button"
-              disabled
-              aria-describedby="cost-note"
-            >
-              Start interview
-            </button>
-          </section>
         </section>
       </div>
 

@@ -82,8 +82,9 @@ const UNIDENTIFIED = {
   start: "Start interview",
   "progress-summary":
     "Could not load account progress. Retry the account check.",
+  "practice-list-count": "0 problems",
   "practice-list-status":
-    "0 problems in your list. Check problems in the problem picker to add them. Kept for this visit only; browser storage is unavailable.",
+    "Check problems in the problem picker to add them. Kept for this visit only; browser storage is unavailable.",
 };
 test("the lobby page loads outside a browser and says what it was given", () => {
   for (const [id, expected] of Object.entries(UNIDENTIFIED)) {

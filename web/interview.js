@@ -1682,7 +1682,7 @@ function paintPreflight(state, hint) {
   nodes.audioStatus.textContent = hint || state.message;
   nodes.audioOutputState.textContent = state.steps.output
     ? "Confirmed"
-    : 'play a test sound to check your audio, or click "I heard it" if it already works.';
+    : "Confirm your audio";
   nodes.cameraState.textContent = state.cameraSkipped
     ? `Not used (${state.cameraSkipReason}).`
     : state.steps.camera

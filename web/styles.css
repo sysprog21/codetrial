@@ -485,10 +485,6 @@ p {
   color: var(--on-accent);
 }
 
-.start-row {
-  margin-top: 1rem;
-}
-
 .recent-performance {
   margin-top: 1.5rem;
   padding: 1rem;
@@ -2731,7 +2727,7 @@ table.phase-scores {
    in pinned below both, so Start is never scrolled away. */
 .audio-check-card {
   display: flex;
-  width: min(60rem, 100%);
+  width: min(76rem, 100%);
   max-height: calc(100dvh - 2rem);
   flex-direction: column;
   overflow: hidden;
@@ -3507,9 +3503,14 @@ body:not([data-recording]) .replay-detail > :not(header) {
   min-height: 2.25rem;
 }
 
+.preflight-content {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
 .preflight-head {
-  padding: 1.5rem 1.75rem 1.25rem;
-  border-bottom: 1px solid var(--hairline);
+  padding: 1.5rem 1.75rem 0;
 }
 
 .preflight-kicker {
@@ -3527,7 +3528,7 @@ body:not([data-recording]) .replay-detail > :not(header) {
 
 .preflight-head h2 {
   margin: 0;
-  font-size: var(--text-3xl);
+  font-size: var(--text-4xl);
   letter-spacing: -0.02em;
 }
 
@@ -3542,22 +3543,25 @@ body:not([data-recording]) .replay-detail > :not(header) {
 
 .preflight-body {
   display: grid;
-  flex: 1 1 auto;
-  min-height: 0;
-  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
-  overflow-y: auto;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1.25rem;
+  padding: 1.25rem 1.75rem 1.5rem;
 }
 
 .preflight-column {
-  padding: 1.25rem 1.75rem;
-}
-
-.preflight-column + .preflight-column {
-  border-left: 1px solid var(--hairline);
+  min-width: 0;
+  padding: 1.25rem;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-lg);
 }
 
 .preflight-section-title {
-  margin: 0 0 0.75rem;
+  margin: 0 0 1rem;
+  color: var(--ink);
+  font-size: var(--text-2xl);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  text-transform: none;
 }
 
 .preflight-column .audio-check-step:not([hidden]) + .preflight-section-title {
@@ -3566,8 +3570,9 @@ body:not([data-recording]) .replay-detail > :not(header) {
 
 /* Each check is its own card, ticked off in place when it passes. */
 .preflight-column .audio-check-step {
+  position: relative;
   margin: 0 0 0.75rem;
-  padding: 0.875rem 1rem;
+  padding: 0.75rem;
   border: 1px solid var(--hairline);
   border-radius: var(--radius-md);
   background: var(--step-surface);
@@ -3603,6 +3608,7 @@ body:not([data-recording]) .replay-detail > :not(header) {
 
 .preflight-footer {
   display: flex;
+  flex-shrink: 0;
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
@@ -3631,16 +3637,217 @@ body:not([data-recording]) .replay-detail > :not(header) {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .preflight-column + .preflight-column {
-    border-top: 1px solid var(--hairline);
-    border-left: 0;
-  }
-
   .preflight-head,
-  .preflight-column,
+  .preflight-body,
   .preflight-footer {
     padding-inline: 1.25rem;
   }
+}
+
+/* Native help stays in the scrolling body, so expanded text cannot cover
+   the persistent footer or escape the modal keyboard order. */
+.preflight-help {
+  margin: 0;
+}
+
+.preflight-help > summary {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  display: grid;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  border: 1px solid var(--control-border);
+  border-radius: 50%;
+  color: var(--sub);
+  font-size: var(--text-md);
+  font-weight: 700;
+  list-style: none;
+  cursor: pointer;
+}
+
+.preflight-help > summary::-webkit-details-marker {
+  display: none;
+}
+
+.preflight-help > summary:hover,
+.preflight-help[open] > summary {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.preflight-help > p {
+  margin: 0.75rem 0 0;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--hairline);
+}
+
+.preflight-option {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 0.75rem;
+}
+
+.preflight-option > p:first-child {
+  grid-column: 1;
+  grid-row: 1;
+  margin-bottom: 0;
+}
+
+.preflight-option > .preflight-help {
+  display: contents;
+}
+
+.preflight-option > .preflight-help > summary {
+  position: static;
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.preflight-option > .preflight-help > p,
+.preflight-option > .preflight-consequence {
+  grid-column: 1 / -1;
+}
+
+#audio-check .meet-mode-output > label {
+  display: flex;
+  align-items: center;
+  min-height: 2rem;
+  padding-right: 2.25rem;
+  overflow-wrap: anywhere;
+}
+
+.preflight-column .presenting-title {
+  padding-top: 1rem;
+  border-top: 1px solid var(--hairline);
+}
+
+.camera-privacy {
+  position: relative;
+  min-height: 2rem;
+  margin-top: 0.5rem;
+}
+
+.camera-privacy > p {
+  margin: 0;
+  padding-right: 2.5rem;
+}
+
+.camera-privacy .preflight-help > summary {
+  top: 0;
+  right: 0;
+}
+
+.preflight-mic-ready,
+.audio-check-step.done .preflight-mic-prompt {
+  display: none;
+}
+
+.audio-check-step.done .preflight-mic-ready {
+  display: inline;
+}
+
+.preflight-column .camera-preview-container {
+  max-width: 24rem;
+}
+
+.preflight-column .meet-mode-output {
+  margin-top: 0;
+}
+
+.preflight-column .audio-check-step > p {
+  margin-top: 0.5rem;
+}
+
+@media (max-height: 850px) {
+  .preflight-head {
+    padding-top: 1rem;
+  }
+
+  .preflight-head h2 {
+    font-size: var(--text-3xl);
+  }
+
+  .preflight-body {
+    gap: 1rem;
+    padding-block: 0.75rem;
+  }
+}
+
+@media (min-width: 861px) and (max-height: 850px) {
+  .preflight-column {
+    padding: 1rem;
+  }
+
+  .preflight-column .audio-check-step {
+    margin-bottom: 0.5rem;
+    padding: 0.625rem;
+  }
+
+  .preflight-column .camera-preview-container {
+    max-width: 16rem;
+    margin-top: 0.5rem;
+  }
+
+  .preflight-column .audio-check-actions {
+    margin-top: 0.5rem;
+  }
+}
+
+@media (max-width: 480px) {
+  .preflight-body {
+    gap: 0.75rem;
+    padding: 0.75rem;
+  }
+
+  .preflight-column {
+    padding: 1rem;
+  }
+
+  .preflight-head {
+    padding-top: 1rem;
+  }
+
+  .preflight-head h2 {
+    font-size: var(--text-3xl);
+  }
+
+  .preflight-footer {
+    gap: 0.5rem;
+    padding: 0.75rem;
+  }
+
+  .preflight-footer .audio-check-actions {
+    width: 100%;
+  }
+
+  .preflight-footer .start-button {
+    flex: 1 1 auto;
+  }
+
+  .preflight-help > summary {
+    width: 2.75rem;
+    height: 2.75rem;
+  }
+
+  .preflight-option {
+    min-height: 3.75rem;
+  }
+
+  #audio-check .meet-mode-output > label {
+    min-height: 2.75rem;
+    padding-right: 3rem;
+  }
+
+  .camera-privacy > p {
+    padding-right: 3rem;
+  }
+}
+
+html:has(body.practice-page) {
+  overflow-y: scroll;
 }
 
 .practice-page :focus-visible {
@@ -3734,12 +3941,10 @@ body:not([data-recording]) .replay-detail > :not(header) {
   font-weight: 700;
 }
 
-/* The three setup cards. The problem card is widest so the selected problem
-   fits beside its button (see .random-picker .recommendation below); the
-   session card next, for the format pairs. */
+/* Two setup panels keep problem selection beside primary session settings. */
 .setup-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.45fr) minmax(0, 1.25fr) minmax(0, 1fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 1.5rem;
   align-items: start;
 }
@@ -3898,12 +4103,6 @@ body:not([data-recording]) .replay-detail > :not(header) {
 .session-panel .format-choices {
   display: grid;
   gap: 0.5rem;
-  --group-step: 0.5rem;
-}
-
-/* Settings, not choices: a step apart from the buttons. */
-.session-panel .format-choices > .session-choice-group + .setting-option {
-  margin-top: var(--group-step);
 }
 
 .session-choice-group {
@@ -3964,15 +4163,6 @@ body:not([data-recording]) .replay-detail > :not(header) {
 .lobby .recommendation {
   font-size: var(--text-lg);
   line-height: 1.5;
-}
-
-/* Narrower than the base 12rem so the line still fits beside the button in
-   the problem card on a 1280px screen, which keeps the lobby on one screen.
-   Tied to the card's share of the .setup-grid columns: narrow that column and
-   the line drops below the button, which "the selected problem drops below
-   the button only when it cannot fit beside it" in lobby.test.js catches. */
-.lobby .random-picker .recommendation {
-  flex-basis: 9rem;
 }
 
 .lobby .problem-picker summary,
@@ -4069,10 +4259,6 @@ body:not([data-recording]) .replay-detail > :not(header) {
   display: none;
 }
 
-.start-panel .start-row {
-  margin-top: 1.25rem;
-}
-
 .lobby .start-button {
   width: 100%;
   min-height: 3rem;
@@ -4088,30 +4274,11 @@ body:not([data-recording]) .replay-detail > :not(header) {
   opacity: 0.55;
 }
 
-.next-steps {
-  display: grid;
-  gap: 0.5rem;
-  margin: 0 0 1.25rem;
-  padding: 0;
-  list-style: none;
-  color: var(--sub);
-  font-size: var(--text-md);
-  line-height: 1.4;
-}
-
 .cost-note {
   margin: -0.5rem 0 1.25rem;
   color: var(--sub);
   font-size: var(--text-md);
   line-height: 1.4;
-}
-
-/* The dot is painted, not a marker or generated content: the stylesheet draws
-   no text, and tests/browser/replay-render.test.js holds it to that. */
-.next-steps li {
-  padding-left: 1.125rem;
-  background: radial-gradient(circle, var(--accent) 60%, transparent 66%) 0
-    0.3125em / 0.5rem 0.5rem no-repeat;
 }
 
 /* Progress below the setup: cards of the same family as the setup's. */
@@ -4166,10 +4333,6 @@ body:not([data-recording]) .replay-detail > :not(header) {
 @media (min-width: 761px) and (max-width: 1100px) {
   .setup-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .start-panel {
-    grid-column: 1 / -1;
   }
 }
 
@@ -4236,7 +4399,7 @@ body:not([data-recording]) .replay-detail > :not(header) {
 
   .session-choice-group {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 7rem), 1fr));
   }
 
   .lobby .difficulty-row {
@@ -4254,10 +4417,7 @@ body:not([data-recording]) .replay-detail > :not(header) {
   }
 }
 
-/* A laptop screen: keep the whole setup on one 1280x800 screen. The session
-   card carries one more settings row than this breakpoint was tuned for; the
-   two margins just below give that row's headroom back without shrinking any
-   row's own touch target or caption spacing. */
+/* A laptop screen: keep the whole setup on one 1280x800 screen. */
 @media (min-width: 1024px) and (max-height: 850px) {
   /* Leave room for taller system-font metrics without clipping the credits. */
   .lobby .site-credits {
@@ -4305,11 +4465,8 @@ body:not([data-recording]) .replay-detail > :not(header) {
     padding: 0.375rem 0.625rem;
   }
 
-  /* The rest of the new row's headroom, on top of the header and hero
-     margins above. */
   .session-panel .format-choices {
     gap: 0.25rem;
-    --group-step: 0;
   }
 
   /* On a short screen the narrow Start column makes the billing notice wrap
@@ -4667,5 +4824,125 @@ html:has(.lobby > .update-notice:not([hidden])) {
   .lobby .update-notice-download {
     display: inline-flex;
     align-items: center;
+  }
+}
+
+/* Setup keeps the primary action above the two configuration panels. */
+.setup-hero {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1rem 2rem;
+}
+.practice-badge-row {
+  flex-basis: 100%;
+}
+.setup-hero .practice-badge {
+  margin-bottom: 0;
+}
+.practice-intro {
+  flex: 1 1 22rem;
+  min-width: 0;
+}
+.hero-start {
+  display: flex;
+  flex: 1 1 14rem;
+  max-width: 20rem;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.hero-start .start-button {
+  order: -1;
+}
+.lobby .random-picker {
+  display: block;
+}
+.random-picker .recommendation {
+  margin-top: 0.75rem;
+}
+.advanced-settings,
+.carry-forward {
+  margin-top: 1.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--hairline);
+}
+.advanced-settings > summary,
+.carry-forward > summary {
+  cursor: pointer;
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+.advanced-settings > label {
+  display: block;
+  margin-top: 0.75rem;
+}
+#carry-forward-sharing {
+  font-size: var(--text-md);
+}
+.lobby .editor-options-row {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+@media (max-width: 760px) {
+  .setup-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .hero-start {
+    flex-basis: 100%;
+    max-width: none;
+  }
+}
+@media (max-width: 480px) {
+  .lobby .editor-options-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.practice-list-picker {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+}
+.practice-list-picker #practice-list-status {
+  flex-basis: 100%;
+}
+
+.session-panel .session-choice-group .duration-button {
+  flex: 1 1 auto;
+  min-height: 3rem;
+}
+.lobby .random-picker .recommendation:not(:empty) {
+  padding: 1rem;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-md);
+  background: var(--practice-tint);
+  overflow-wrap: anywhere;
+}
+
+@media (min-width: 1024px) and (max-height: 850px) {
+  .setup-hero {
+    gap: 0.5rem 2rem;
+    margin-bottom: 0;
+  }
+  .setup-panel {
+    padding-block: 1rem;
+  }
+  .hero-start {
+    gap: 0.25rem;
+  }
+  .hero-start .cost-note {
+    margin: 0;
+  }
+  .lobby .problem-picker {
+    margin-top: 0.5rem;
+  }
+  .practice-list-picker {
+    row-gap: 0.25rem;
+  }
+  .practice-list-picker #practice-list-status {
+    margin: 0;
+  }
+  .lobby .random-picker .recommendation:not(:empty) {
+    padding: 0.5rem;
   }
 }

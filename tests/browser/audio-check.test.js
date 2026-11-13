@@ -131,11 +131,8 @@ test("the Sound step reads the same before and after the preflight paints it", (
     nodes.audioOutputState.textContent,
     markup.replace(/\s+/g, " ").trim(),
   );
-  assert.equal(
-    nodes.audioOutputState.textContent,
-    'play a test sound to check your audio, or click "I heard it" if it already works.',
-  );
-  // With output the remaining step, the status line says the same thing.
+  assert.equal(nodes.audioOutputState.textContent, "Confirm your audio");
+  // With output the remaining step, the status line spells out how.
   assert.equal(
     nodes.audioStatus.textContent,
     'Play the test tone or voice to check your audio, or click "I heard it" if it already works.',
