@@ -11,6 +11,9 @@ use crate::config::load_from_pairs;
 use crate::runtime::bootstrap;
 use std::sync::atomic::AtomicBool;
 
+const SUFFICIENT_SPEECH: &str = "I keep each previously visited value in a map so that I \
+    can find its matching complement without scanning the array again.";
+
 /// The credentials every report test needs and none of them asserts on.
 ///
 /// Seven copies of the same four pairs stood in front of seven tests, so the
@@ -84,28 +87,23 @@ fn execution_choice_reaches_report_evidence_without_ledger_entries() {
 }
 
 #[test]
-fn report_prompt_uses_the_server_candidate_turn_count() {
+fn report_prompt_uses_retained_speech_instead_of_the_turn_count() {
     let config = report_test_config();
     let boot = bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
-    let mut state = RuntimeState::default();
-
-    let silent = report_prompt_text(&boot, &state, 12.0, false);
-    assert!(silent.contains("CANDIDATE TURNS: 0"), "{silent}");
-
-    state
-        .evidence_ledger
-        .record_conversation_turn(1_000, "interviewer");
-    assert!(
-        report_prompt_text(&boot, &state, 12.0, false).contains("CANDIDATE TURNS: 0"),
-        "interviewer speech is not candidate evidence"
-    );
-
-    state
-        .evidence_ledger
-        .record_conversation_turn(2_000, "candidate");
-    let spoken = report_prompt_text(&boot, &state, 12.0, false);
-    assert!(spoken.contains("CANDIDATE TURNS: 1"), "{spoken}");
-    assert!(!spoken.contains("`communicationScore` as `null`"));
+    for (speech, status, assessed) in [
+        ("", "no_speech", false),
+        ("um", "insufficient", false),
+        (SUFFICIENT_SPEECH, "sufficient", true),
+    ] {
+        let mut state = RuntimeState::default();
+        state.evidence_ledger.conversation.candidate_turns = 1;
+        if !speech.is_empty() {
+            state.transcript.push(format!("Candidate: {speech}"));
+        }
+        let brief = report_prompt_text(&boot, &state, 12.0, false);
+        assert!(brief.contains(&format!("COMMUNICATION EVIDENCE: {status}.")));
+        assert_eq!(brief.contains("`communicationScore` as `null`"), !assessed);
+    }
 }
 
 #[test]
@@ -681,8 +679,8 @@ fn report_carries_the_debrief() {
         ..RuntimeState::default()
     };
     state
-        .evidence_ledger
-        .record_conversation_turn(1, "candidate");
+        .transcript
+        .push(format!("Candidate: {SUFFICIENT_SPEECH}"));
 
     let generated = report_value(
         &boot,
@@ -754,8 +752,8 @@ fn report_value_validates_received_drawings_in_every_mode() {
             ..RuntimeState::default()
         };
         state
-            .evidence_ledger
-            .record_conversation_turn(1, "candidate");
+            .transcript
+            .push(format!("Candidate: {SUFFICIENT_SPEECH}"));
 
         let report = report_value(
             &boot,
@@ -1357,8 +1355,8 @@ fn report_metadata_uses_the_frozen_assessment() {
         behavioral_round_started: true,
         ..RuntimeState::default()
     };
-    live.evidence_ledger
-        .record_conversation_turn(1, "candidate");
+    live.transcript
+        .push(format!("Candidate: {SUFFICIENT_SPEECH}"));
     let mut frozen = freeze_assessment(&boot, &mut live, 12.0, Vec::new());
     live.code = "post-interview edits".into();
     live.hints_used = 5;
@@ -1768,8 +1766,8 @@ async fn a_report_lost_to_503s_is_regenerated_from_the_frozen_interview() {
         behavioral_round_started: true,
         ..RuntimeState::default()
     };
-    live.evidence_ledger
-        .record_conversation_turn(1, "candidate");
+    live.transcript
+        .push(format!("Candidate: {SUFFICIENT_SPEECH}"));
     let mut frozen = freeze_assessment(&boot, &mut live, 12.0, Vec::new());
     let keys = GeminiKeys::single("recovery-e2e");
     let (flag, again) = (AtomicBool::default(), AtomicBool::default());
@@ -1877,8 +1875,8 @@ async fn a_report_refused_after_both_repairs_is_regenerated_on_another_seed() {
         behavioral_round_started: true,
         ..RuntimeState::default()
     };
-    live.evidence_ledger
-        .record_conversation_turn(1, "candidate");
+    live.transcript
+        .push(format!("Candidate: {SUFFICIENT_SPEECH}"));
     let mut frozen = freeze_assessment(&boot, &mut live, 12.0, Vec::new());
     let keys = GeminiKeys::single("schema-recovery");
     let (flag, again) = (AtomicBool::default(), AtomicBool::default());

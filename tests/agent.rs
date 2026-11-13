@@ -733,7 +733,7 @@ fn prompt_samples() -> Value {
             evidence: &working_report,
             behavioral_round: BehavioralRound::Opened,
             follow_ups_released: true,
-            candidate_turns: 1,
+            communication_evidence: CommunicationEvidence::Sufficient,
         }),
         "boardReport": report_prompt(ReportPromptInput {
             problem,
@@ -753,7 +753,7 @@ fn prompt_samples() -> Value {
             evidence: "",
             behavioral_round: BehavioralRound::NotConfigured,
             follow_ups_released: false,
-            candidate_turns: 1,
+            communication_evidence: CommunicationEvidence::Sufficient,
         }),
         "boardReportNoBoard": report_prompt(ReportPromptInput {
             problem,
@@ -773,7 +773,7 @@ fn prompt_samples() -> Value {
             evidence: "",
             behavioral_round: BehavioralRound::NotConfigured,
             follow_ups_released: false,
-            candidate_turns: 1,
+            communication_evidence: CommunicationEvidence::Sufficient,
         }),
         "reportEmpty": report_prompt(ReportPromptInput {
             problem,
@@ -793,7 +793,27 @@ fn prompt_samples() -> Value {
             evidence: "",
             behavioral_round: BehavioralRound::NeverOpened,
             follow_ups_released: false,
-            candidate_turns: 0,
+            communication_evidence: CommunicationEvidence::NoSpeech,
+        }),
+        "reportInsufficient": report_prompt(ReportPromptInput {
+            problem,
+            interview_mode: InterviewMode::Coding,
+            board_attached: false,
+            transcript: "Candidate: yes",
+            rolling_assessment: "",
+            final_code: "",
+            language: "python",
+            hints_used: 0,
+            hint_rung: 0,
+            volunteered_hints: 0,
+            duration_min: 45,
+            elapsed_min: 0.0,
+            test_summary: "",
+            practice_level: None,
+            evidence: "",
+            behavioral_round: BehavioralRound::NeverOpened,
+            follow_ups_released: false,
+            communication_evidence: CommunicationEvidence::Insufficient,
         }),
         "reportHalfElapsed": report_prompt(ReportPromptInput {
             problem,
@@ -813,7 +833,7 @@ fn prompt_samples() -> Value {
             evidence: "",
             behavioral_round: BehavioralRound::NotConfigured,
             follow_ups_released: false,
-            candidate_turns: 0,
+            communication_evidence: CommunicationEvidence::NoSpeech,
         }),
 
         // Assembled by the real builder rather than written out here. A
@@ -853,7 +873,7 @@ fn prompt_samples() -> Value {
             evidence: "",
             behavioral_round: BehavioralRound::Opened,
             follow_ups_released: false,
-            candidate_turns: 1,
+            communication_evidence: CommunicationEvidence::Sufficient,
         }),
         "reportMultiline": report_prompt(ReportPromptInput {
             problem,
@@ -873,7 +893,7 @@ fn prompt_samples() -> Value {
             evidence: "",
             behavioral_round: BehavioralRound::Opened,
             follow_ups_released: false,
-            candidate_turns: 1,
+            communication_evidence: CommunicationEvidence::Sufficient,
         }),
     });
 
@@ -1241,7 +1261,8 @@ fn evaluation_reaction(case: &Value, state: &mut RuntimeState) -> String {
         }
         "report" => {
             let transcript = case["transcript"].as_str().expect("transcript is text");
-            let candidate_turns = u32::from(!transcript.trim().is_empty());
+            let communication_evidence =
+                communication_evidence(&transcript.lines().map(str::to_owned).collect::<Vec<_>>());
             model_report_input(report_prompt(ReportPromptInput {
                 problem: get_problem(Some("two-sum")),
                 interview_mode: InterviewMode::Coding,
@@ -1260,7 +1281,7 @@ fn evaluation_reaction(case: &Value, state: &mut RuntimeState) -> String {
                 evidence: "",
                 behavioral_round: BehavioralRound::of(state),
                 follow_ups_released: false,
-                candidate_turns,
+                communication_evidence,
             }))
         }
         other => panic!("unknown reaction kind {other}"),
@@ -1422,6 +1443,9 @@ mod integrity;
 
 #[path = "agent/report.rs"]
 mod report;
+
+#[path = "agent/communication.rs"]
+mod communication;
 
 #[path = "agent/problems.rs"]
 mod problems;

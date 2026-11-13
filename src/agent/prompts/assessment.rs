@@ -38,10 +38,10 @@ const TRANSCRIPTION_REPORT_POLICY: &str = r#"- Uncertain speech and requests to 
   framework assessments, either score, feedback, or the hiring decision, and a
   report never names the language a transcript came out in. Leave framework
   phase scores null when their only support is uncertain speech.
-- When the brief records candidate turns, judge communicationScore and the
+- When the brief marks communication evidence sufficient, judge communicationScore and the
   decision rule's clear-communication half from reliable evidence only:
-  clarified speech, typed code comments, and supported notes. When it records
-  zero candidate turns, typed comments remain coding evidence only and do not
+  clarified speech, typed code comments, and supported notes. When it marks evidence
+  no_speech or insufficient, typed comments remain coding evidence only and do not
   establish a communication assessment. A recognition gap is neither clear nor unclear
   communication, so it cannot by itself turn a verdict the reliable evidence
   supports into NO_HIRE, and it is never the reason given for a verdict. When
@@ -444,9 +444,9 @@ pub struct ReportPromptInput<'a> {
     /// cannot have been raised, so the brief lists none and the debrief says
     /// none was reached without asking the model.
     pub follow_ups_released: bool,
-    /// Trusted server-side candidate transcript turns. This is deliberately
-    /// not inferred from editor activity or browser-owned counters.
-    pub candidate_turns: u32,
+    /// The same retained-speech classification used by the schema and
+    /// validator.
+    pub communication_evidence: crate::agent::CommunicationEvidence,
 }
 
 /// Where the behavioral round stood when the interview ended, in the three
@@ -624,14 +624,15 @@ fn report_brief(input: &ReportPromptInput<'_>) -> String {
             "BEHAVIORAL ROUND: This interview had no behavioral round. {OUT_OF_TURN_BEHAVIORAL}"
         ),
     };
-    let communication_evidence = if input.candidate_turns == 0 {
-        "CANDIDATE TURNS: 0. The server recorded no candidate transcript turns. Return `communicationScore` as `null`, return both `communicationFeedback.strengths` and `communicationFeedback.improvements` as empty arrays, and state that communication was not assessed. Code edits, typed code comments, and test runs are not spoken responses: use them only for coding assessment and never describe them as something the candidate said, explained, answered, or narrated. Missing communication evidence is neither positive nor negative: base `decision` on the evidence that was assessed and do not change it only because communication was unassessed."
-            .to_string()
-    } else {
-        format!(
-            "CANDIDATE TURNS: {}. Communication may be assessed only from reliable candidate communication in the supplied material.",
-            input.candidate_turns
-        )
+    let communication_evidence = match input.communication_evidence {
+        crate::agent::CommunicationEvidence::Sufficient => "COMMUNICATION EVIDENCE: sufficient. The retained transcript meets the uncalibrated minimum for assessment, not a quality or correctness threshold. Assess communication only from reliable evidence in the supplied material.".to_string(),
+        status => {
+            let reason = match status {
+                crate::agent::CommunicationEvidence::NoSpeech => "no_speech. No candidate transcript speech was recorded.",
+                _ => "insufficient. Candidate transcript speech was recorded, but the retained, unmasked material did not meet the minimum evidence requirement.",
+            };
+            format!("COMMUNICATION EVIDENCE: {reason} Return `communicationScore` as `null`, return both `communicationFeedback.strengths` and `communicationFeedback.improvements` as empty arrays, and state that communication was not assessed. Code edits, typed code comments, and test runs are not spoken responses: use them only for coding assessment and never describe them as something the candidate said, explained, answered, or narrated. Missing communication evidence is neither positive nor negative: base `decision` on the evidence that was assessed and do not change it only because communication was unassessed.")
+        }
     };
 
     // The surface, in the three places a brief reads differently for it: what
@@ -827,10 +828,15 @@ Score two independent dimensions from 0 to 100:
    any evidence they did provide, but do not deduct for unsupported STAR parts of
    that abandoned probe.
 
+If excluding out-of-turn behavioral answers leaves insufficient permitted speech,
+leave communication unassessed: return a null communicationScore and empty
+communication feedback lists, even if the brief marks evidence sufficient.
+Apply the unassessed verdict rule in that case.
+
 Decision rule: when communication was assessed, "HIRE" only if the performance
 would clear a real mid-level SWE onsite bar — a working, reasonably optimal
-solution AND clear communication. Otherwise "NO_HIRE". When the brief records
-zero candidate turns, missing communication evidence is neither positive nor
+solution AND clear communication. Otherwise "NO_HIRE". When the brief marks communication evidence
+no_speech or insufficient, missing communication evidence is neither positive nor
 negative: base the decision on the evidence that was assessed, and do not turn
 an otherwise supported verdict into "NO_HIRE" only because communication was
 unassessed.
@@ -864,10 +870,12 @@ Grounding rules — a real debrief cites evidence:
   shows the candidate saying it, a rolling-assessment note records them saying
   or writing it, or they wrote it out {cited_in}; never when it is inferred
   from {material} itself. A complexity they wrote is credited as written,
-  not said, and when the brief records zero candidate turns it stays coding
-  evidence only. When the brief records candidate turns, a part of a technical
-  question they clearly left unanswered, rather than lost to recognition, is a
-  gap, not a strength.
+  not said, and when the brief marks communication evidence no_speech or insufficient it stays coding
+  evidence only. When the brief marks communication evidence other than no_speech,
+  a part of a technical question they clearly left unanswered, rather than
+  lost to recognition, is a gap, not a strength. When evidence is insufficient,
+  put this gap only in coding feedback. Filler, noise, interviewer echo, or
+  missing speech alone does not establish an unanswered technical question.
 - In `summary` and both feedback sections, name observed REACTO/STAR strengths or
   gaps in plain language and identify the supporting transcript statement,
   {observed}. Never invent intent, metrics, actions, employer details,
@@ -877,7 +885,7 @@ Grounding rules — a real debrief cites evidence:
 
 Return ONLY the JSON object the response schema defines, no markdown fences:
 codingScore (integer 0-100) and communicationScore (integer 0-100, or `null`
-when the brief says the server recorded zero candidate turns); decision ("HIRE" or
+when communication is unassessed); decision ("HIRE" or
 "NO_HIRE"); summary (3-4 sentences written to the candidate as "you");
 codingFeedback and communicationFeedback, each with strengths and improvements;
 improvementPlan, one item per improvement (below), each with phase, weakness,
@@ -893,7 +901,7 @@ filler, and no item may repeat another in the same list. A session with little t
 distinct observations: a clarifying question asked, uncertainty admitted instead
 of guessed at, a decision explained, a boundary noticed, effort sustained under
 time pressure. Name two of those rather than saying one thing twice. The sole
-exception is a brief with zero candidate turns: communication strengths and
+exception is unassessed communication: communication strengths and
 improvements must both be empty, because editor and test activity cannot
 establish spoken communication or ground a communication critique.
 

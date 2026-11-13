@@ -23,7 +23,7 @@ async fn g2_bounded_report_observes_only_polled_scoped_invocations() {
             crate::agent::ReportRounds {
                 behavioral_opened: true,
                 follow_ups_released: true,
-                candidate_turns: 1,
+                communication_evidence: crate::agent::CommunicationEvidence::Sufficient,
             },
             false,
         ),
@@ -81,7 +81,7 @@ async fn g2_scoped_report_uses_actual_generator_material_and_wire() {
                 crate::agent::ReportRounds {
                     behavioral_opened: true,
                     follow_ups_released: true,
-                    candidate_turns: 1,
+                    communication_evidence: crate::agent::CommunicationEvidence::Sufficient,
                 },
                 false,
             ),

@@ -1292,7 +1292,7 @@ async fn setup_page_continues_serving_the_full_app_after_a_successful_submission
 
     let livekit_addr = spawn_livekit_room_service("key", "secret");
 
-    let gemini_mock = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let gemini_mock = setup_save::reserve_gemini_listener();
     let gemini_addr = gemini_mock.local_addr().unwrap();
     tokio::spawn(async move {
         if let Ok((socket, _)) = gemini_mock.accept().await
@@ -1799,7 +1799,7 @@ async fn setup_page_refuses_to_write_when_the_gemini_handshake_fails() {
 
     let livekit_addr = spawn_livekit_room_service("key", "secret");
 
-    let gemini_mock = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let gemini_mock = setup_save::reserve_gemini_listener();
     let gemini_addr = gemini_mock.local_addr().unwrap();
     tokio::spawn(async move {
         if let Ok((socket, _)) = gemini_mock.accept().await

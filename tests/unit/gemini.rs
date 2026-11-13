@@ -1211,7 +1211,7 @@ fn rounds(behavioral_opened: bool) -> crate::agent::ReportRounds {
     crate::agent::ReportRounds {
         behavioral_opened,
         follow_ups_released: true,
-        candidate_turns: 1,
+        communication_evidence: crate::agent::CommunicationEvidence::Sufficient,
     }
 }
 
@@ -1388,7 +1388,7 @@ async fn zero_candidate_turns_send_the_unassessed_schema() {
     let rounds = crate::agent::ReportRounds {
         behavioral_opened: true,
         follow_ups_released: false,
-        candidate_turns: 0,
+        communication_evidence: crate::agent::CommunicationEvidence::NoSpeech,
     };
     let calls = ReportCalls {
         keys: &keys,
@@ -2086,7 +2086,7 @@ fn a_lone_unsafe_check_after_both_repairs_still_reaches_the_card() {
         crate::agent::ReportRounds {
             behavioral_opened: true,
             follow_ups_released: true,
-            candidate_turns: 1,
+            communication_evidence: crate::agent::CommunicationEvidence::Sufficient,
         },
         InterviewMode::Coding,
         false,
@@ -2370,7 +2370,7 @@ async fn a_misrecognized_turn_neither_appears_in_nor_decides_the_report() {
         evidence: "",
         behavioral_round: crate::agent::BehavioralRound::NeverOpened,
         follow_ups_released: false,
-        candidate_turns: 6,
+        communication_evidence: crate::agent::CommunicationEvidence::Sufficient,
     });
     let key = std::env::var("CODETRIAL_ENV")
         .ok()
@@ -4840,7 +4840,7 @@ fn a_success_criterion_still_unsafe_after_both_repairs_is_replaced_and_scored() 
         crate::agent::ReportRounds {
             behavioral_opened: true,
             follow_ups_released: true,
-            candidate_turns: 1,
+            communication_evidence: crate::agent::CommunicationEvidence::Sufficient,
         },
         InterviewMode::Coding,
         false,

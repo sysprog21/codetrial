@@ -240,8 +240,8 @@ fn prompt_golden_digest_matches_versions() {
     // its hash is a string nothing checks. The pair is still asserted, because
     // the failure worth catching is a version bumped with the golden left
     // alone, which a digest comparison on its own reads as fine.
-    let recorded_versions = (34, 25);
-    let recorded_digest = "944a971ded3f6851a0dce68f54d71853f90d703a1419c173d8f77c6f9f4f0ebb";
+    let recorded_versions = (34, 26);
+    let recorded_digest = "947d3d5db0f192aa5b4d7e27e20ba8a7da09c55db9c66982246d41ddbe5d91e5";
 
     assert_eq!(
         (LIVE_PROMPT_VERSION, REPORT_PROMPT_VERSION),
@@ -448,7 +448,7 @@ fn report_brief_states_the_hint_rung() {
         evidence: "",
         behavioral_round: BehavioralRound::Opened,
         follow_ups_released: false,
-        candidate_turns: 1,
+        communication_evidence: CommunicationEvidence::Sufficient,
     });
     assert!(prompt.contains("candidate reached hint rung 2 of 3"));
     assert!(prompt.contains("1 hint was volunteered rather than requested"));
@@ -485,7 +485,7 @@ fn report_prompt_names_the_practice_level() {
         evidence: "",
         behavioral_round: BehavioralRound::Opened,
         follow_ups_released: false,
-        candidate_turns: 1,
+        communication_evidence: CommunicationEvidence::Sufficient,
     };
     let selected = report_prompt(base);
     assert!(selected.contains("candidate practiced for intern"));
@@ -533,7 +533,7 @@ fn reference_complexity_is_not_credited_as_candidate_reasoning() {
         evidence: "",
         behavioral_round: BehavioralRound::Opened,
         follow_ups_released: false,
-        candidate_turns: 1,
+        communication_evidence: CommunicationEvidence::Sufficient,
     });
     assert!(prompt.contains("O(log n) time, O(1) space"));
     assert!(prompt.contains("Candidate: It is O(log n) time"));
@@ -563,8 +563,8 @@ fn reference_complexity_is_not_credited_as_candidate_reasoning() {
             ),
             format!("never when it is inferred from {material} itself"),
             "A complexity they wrote is credited as written, not said".to_owned(),
-            "when the brief records zero candidate turns it stays coding evidence only".to_owned(),
-            "When the brief records candidate turns, a part of a technical question they clearly left unanswered, rather than lost to recognition, is a gap, not a strength".to_owned(),
+            "when the brief marks communication evidence no_speech or insufficient it stays coding evidence only".to_owned(),
+            "When the brief marks communication evidence other than no_speech, a part of a technical question they clearly left unanswered, rather than lost to recognition, is a gap, not a strength. When evidence is insufficient, put this gap only in coding feedback. Filler, noise, interviewer echo, or missing speech alone does not establish an unanswered technical question".to_owned(),
         ] {
             assert!(rules.contains(&rule), "{mode:?} rules miss {rule}");
         }
@@ -591,10 +591,10 @@ fn silent_report_brief_makes_communication_unassessed() {
         evidence: "",
         behavioral_round: BehavioralRound::NeverOpened,
         follow_ups_released: false,
-        candidate_turns: 0,
+        communication_evidence: CommunicationEvidence::NoSpeech,
     });
 
-    assert!(prompt.contains("CANDIDATE TURNS: 0"), "{prompt}");
+    assert!(prompt.contains("COMMUNICATION EVIDENCE: no_speech"));
     assert!(
         prompt.contains("`communicationScore` as `null`"),
         "{prompt}"
@@ -712,7 +712,7 @@ fn live_instructions_pose_the_variant_and_hold_no_source_or_walkthrough() {
         evidence: "",
         behavioral_round: BehavioralRound::Opened,
         follow_ups_released: false,
-        candidate_turns: 1,
+        communication_evidence: CommunicationEvidence::Sufficient,
     });
     assert!(report.contains("Reference notes on approaches"));
     assert!(report.contains("never name the published problem, its title, LeetCode"));
@@ -797,14 +797,13 @@ fn report_schema_matches_frozen_fixture() {
 #[test]
 fn report_schema_matches_the_communication_evidence_available() {
     let assessed = report_response_schema(true);
-    assert!(
-        assessed["properties"]["communicationScore"]
-            .get("nullable")
-            .is_none()
+    assert_eq!(
+        assessed["properties"]["communicationScore"]["nullable"],
+        true
     );
     assert_eq!(
         assessed["properties"]["communicationFeedback"]["properties"]["strengths"]["minItems"],
-        2
+        0
     );
 
     let silent = report_response_schema(false);
@@ -1526,17 +1525,17 @@ fn interview_contract_versions_are_one_closed_bundle() {
         "the bundle table has no row for {INTERVIEW_CONTRACT_BUNDLE_VERSION}"
     );
 
-    assert_eq!(INTERVIEW_CONTRACT_BUNDLE_VERSION, 45);
+    assert_eq!(INTERVIEW_CONTRACT_BUNDLE_VERSION, 46);
     assert_eq!(LIVE_PROMPT_VERSION, 34);
-    assert_eq!(REPORT_PROMPT_VERSION, 25);
+    assert_eq!(REPORT_PROMPT_VERSION, 26);
     assert_eq!(RUBRIC_VERSION, 1);
     assert_eq!(REPORT_SCHEMA_VERSION, 4);
     assert_eq!(
         interview_contract_json(),
         json!({
-            "bundleVersion": 45,
+            "bundleVersion": 46,
             "livePromptVersion": 34,
-            "reportPromptVersion": 25,
+            "reportPromptVersion": 26,
             "rubricVersion": 1,
             "reportSchemaVersion": 4,
         })

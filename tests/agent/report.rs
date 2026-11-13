@@ -14,7 +14,7 @@ fn rounds(behavioral_opened: bool) -> ReportRounds {
     ReportRounds {
         behavioral_opened,
         follow_ups_released: true,
-        candidate_turns: 1,
+        communication_evidence: CommunicationEvidence::Sufficient,
     }
 }
 
@@ -190,7 +190,7 @@ fn coding_feedback_cannot_deduct_for_drawings_or_recommend_them_for_points() {
 fn a_silent_candidate_has_no_communication_assessment() {
     let problem = get_problem(Some("two-sum"));
     let silent = ReportRounds {
-        candidate_turns: 0,
+        communication_evidence: CommunicationEvidence::NoSpeech,
         ..rounds(true)
     };
     let mut report = valid_strict_report();
@@ -273,22 +273,43 @@ fn a_silent_candidate_has_no_communication_assessment() {
 }
 
 #[test]
-fn a_candidate_turn_still_requires_a_numeric_communication_assessment() {
+fn eligible_report_can_leave_communication_unassessed_after_excluding_speech() {
     let mut report = valid_strict_report();
     report["communicationScore"] = Value::Null;
     report["communicationFeedback"]["strengths"] = json!([]);
     report["communicationFeedback"]["improvements"] = json!([]);
 
-    let errors = validate_report_for_round(
-        &report,
-        get_problem(Some("two-sum")),
-        rounds(true),
-        InterviewMode::Coding,
-        false,
-    )
-    .unwrap_err()
-    .join("\n");
-    assert!(errors.contains("$.communicationScore"), "{errors}");
+    let state = RuntimeState {
+        transcript: vec![
+            "Candidate: yes".into(),
+            "Interviewer: Tell me about a time you resolved a disagreement at work.".into(),
+            "Candidate: I asked both coworkers to explain their concerns, wrote down the options, and helped the team agree on a plan everyone could support.".into(),
+        ],
+        ..RuntimeState::default()
+    };
+    let rounds = ReportRounds::of(&state);
+    assert!(rounds.communication_assessed());
+    assert!(!rounds.behavioral_opened);
+    let validate = |report: &Value| {
+        validate_report_for_round(
+            report,
+            get_problem(Some("two-sum")),
+            rounds,
+            InterviewMode::Coding,
+            false,
+        )
+    };
+    let coding_improvements = report["codingFeedback"]["improvements"]
+        .as_array()
+        .unwrap()
+        .len();
+    report["improvementPlan"]
+        .as_array_mut()
+        .unwrap()
+        .truncate(coding_improvements);
+    assert!(validate(&report).is_ok(), "{:?}", validate(&report));
+    report["communicationScore"] = json!(80);
+    let errors = validate(&report).unwrap_err().join("\n");
     assert!(
         errors.contains("$.communicationFeedback.strengths"),
         "{errors}"
@@ -1157,7 +1178,7 @@ fn follow_up_judgments_are_mended_but_their_text_is_scanned() {
     let unreleased = ReportRounds {
         behavioral_opened: true,
         follow_ups_released: false,
-        candidate_turns: 1,
+        communication_evidence: CommunicationEvidence::Sufficient,
     };
     let report = validate_report_for_round(&raw, problem, unreleased, InterviewMode::Coding, false)
         .expect("nothing is judged");
@@ -1336,7 +1357,7 @@ fn follow_up_assessment_keeps_round_rules_and_excludes_drawing_credit() {
     let unreleased = ReportRounds {
         behavioral_opened: true,
         follow_ups_released: false,
-        candidate_turns: 1,
+        communication_evidence: CommunicationEvidence::Sufficient,
     };
     let accepted =
         validate_report_for_round(&report, problem, unreleased, InterviewMode::Coding, true)

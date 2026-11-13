@@ -151,14 +151,13 @@ pub fn report_response_schema(communication_assessed: bool) -> serde_json::Value
         "properties": { "strengths": strings(2, 4), "improvements": strings(2, 4) },
         "required": ["strengths", "improvements"]
     });
-    let communication_min = if communication_assessed { 2 } else { 0 };
     let communication_max = if communication_assessed { 4 } else { 0 };
     let communication_feedback = serde_json::json!({
         "type": "OBJECT",
         "propertyOrdering": ["strengths", "improvements"],
         "properties": {
-            "strengths": strings(communication_min, communication_max),
-            "improvements": strings(communication_min, communication_max)
+            "strengths": strings(0, communication_max),
+            "improvements": strings(0, communication_max)
         },
         "required": ["strengths", "improvements"]
     });
@@ -200,11 +199,7 @@ pub fn report_response_schema(communication_assessed: bool) -> serde_json::Value
         "propertyOrdering": ["codingScore", "communicationScore", "decision", "summary", "codingFeedback", "communicationFeedback", "improvementPlan", "frameworkAssessment", "followUps"],
         "properties": {
             "codingScore": { "type": "INTEGER", "minimum": 0, "maximum": 100 },
-            "communicationScore": if communication_assessed {
-                serde_json::json!({ "type": "INTEGER", "minimum": 0, "maximum": 100 })
-            } else {
-                serde_json::json!({ "type": "INTEGER", "minimum": 0, "maximum": 100, "nullable": true })
-            },
+            "communicationScore": { "type": "INTEGER", "minimum": 0, "maximum": 100, "nullable": true },
             "decision": { "type": "STRING", "enum": ["HIRE", "NO_HIRE"] },
             "summary": text(), "codingFeedback": coding_feedback, "communicationFeedback": communication_feedback,
             "improvementPlan": { "type": "ARRAY", "minItems": 0, "maxItems": 8, "items": plan },
@@ -286,7 +281,9 @@ fn validate_report_judging(
         "$.codingScore",
         &mut errors,
     );
-    if communication_assessed {
+    let scored = communication_assessed
+        && object.get("communicationScore") != Some(&serde_json::Value::Null);
+    if scored {
         strict_integer(
             object.get("communicationScore"),
             0,
@@ -296,7 +293,7 @@ fn validate_report_judging(
         );
     } else if object.get("communicationScore") != Some(&serde_json::Value::Null) {
         errors.push(
-            "$.communicationScore: expected null because the transcript has zero candidate turns"
+            "$.communicationScore: expected null because communication evidence is not sufficient"
                 .to_string(),
         );
     }
@@ -322,11 +319,11 @@ fn validate_report_judging(
     validate_feedback(
         object.get("communicationFeedback"),
         "$.communicationFeedback",
-        if communication_assessed { 2 } else { 0 },
-        if communication_assessed { 2 } else { 0 },
+        if scored { 2 } else { 0 },
+        if scored { 2 } else { 0 },
         &mut errors,
     );
-    if !communication_assessed {
+    if !scored {
         for key in ["strengths", "improvements"] {
             if object
                 .get("communicationFeedback")
@@ -335,7 +332,7 @@ fn validate_report_judging(
                 .is_some_and(|items| !items.is_empty())
             {
                 errors.push(format!(
-                    "$.communicationFeedback.{key}: expected an empty array because the transcript has zero candidate turns"
+                    "$.communicationFeedback.{key}: expected an empty array when communication is unassessed"
                 ));
             }
         }
@@ -465,32 +462,23 @@ fn kept_follow_ups(entries: &serde_json::Value, judged: usize) -> Vec<(usize, se
 pub struct ReportRounds {
     pub behavioral_opened: bool,
     pub follow_ups_released: bool,
-    /// Trusted server-side count of candidate transcript turns. Zero means
-    /// there is no communication evidence to score. A nonzero count only
-    /// makes communication assessment eligible; it does not claim that a turn
-    /// was substantial, correct, or sufficient for any particular feedback.
-    pub candidate_turns: u32,
+    /// Derived from the retained report transcript, never editor activity.
+    pub communication_evidence: super::CommunicationEvidence,
 }
 
 impl ReportRounds {
     pub fn communication_assessed(self) -> bool {
-        self.candidate_turns > 0
+        self.communication_evidence == super::CommunicationEvidence::Sufficient
     }
 
     pub fn of(state: &super::RuntimeState) -> Self {
         Self {
             behavioral_opened: super::BehavioralRound::of(state).opened(),
             follow_ups_released: super::coding_round_complete(state),
-
-            // Turns the recognizer returned in another script are hidden from
-            // the report, so they are no evidence of communication.
-            candidate_turns: if super::transcript::only_unrecognized_candidate_turns(
-                &state.transcript,
-            ) {
-                0
-            } else {
-                state.evidence_ledger.conversation.candidate_turns
-            },
+            communication_evidence: super::communication::report_communication_evidence(
+                state,
+                &super::report_transcript_lines(state),
+            ),
         }
     }
 }
@@ -1405,6 +1393,10 @@ const IMPROVEMENT_PHASES: [&str; 10] = [
     "Result",
 ];
 
+fn communication_left_unassessed(rounds: ReportRounds, report: &serde_json::Value) -> bool {
+    rounds.communication_assessed() && report["communicationScore"].is_null()
+}
+
 /// The report, or a stub saying why there is none.
 ///
 /// Every fallback is logged, because the note it carries reaches the candidate
@@ -1428,6 +1420,9 @@ pub fn final_report(
         (Some(raw_report), None) => {
             match validate_report_for_round(raw_report, problem, rounds, mode, drawing_received) {
                 Ok(mut report) => {
+                    if communication_left_unassessed(rounds, &report) {
+                        eprintln!("codetrial report_communication_unassessed evidence=sufficient");
+                    }
                     report
                         .as_object_mut()
                         .expect("validated object")

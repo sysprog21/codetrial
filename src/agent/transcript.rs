@@ -79,14 +79,6 @@ pub(crate) fn has_recognized_candidate_turn(lines: &[String]) -> bool {
         .any(|line| candidate_speech(line).is_some_and(|speech| !mostly_non_latin(speech)))
 }
 
-/// Whether the candidate has spoken, and every turn is one the recognizer
-/// returned in another script. Such a turn is hidden from the report, so a
-/// transcript of nothing else holds no communication evidence.
-pub(crate) fn only_unrecognized_candidate_turns(lines: &[String]) -> bool {
-    lines.iter().any(|line| candidate_speech(line).is_some())
-        && !has_recognized_candidate_turn(lines)
-}
-
 /// Whether a learner's speech, without a speaker prefix, is one
 /// `mark_unrecognized_turns` would hide. Task mode keeps its turns by id rather
 /// than as transcript lines, so it asks of the text alone.

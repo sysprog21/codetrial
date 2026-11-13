@@ -636,13 +636,7 @@ test("the report card this page renders names no finding either", () => {
     );
   }
 
-  // The valid-contract branch has to carry the contract this build calls active,
-  // or `sanitizeReport` marks it unsupported and the branch collapses into the
-  // invalid one below it. `activeContract` is function-local and cannot be read
-  // from here, so the branch is checked by what it renders instead: a card that
-  // names its bundle and does not say it cannot be scored. Stating the
-  // precondition in a comment and not checking it is how the branch list went
-  // wrong the last two times.
+  // Check that the supported-contract branch actually contributes its words.
   assert.ok(
     rendered.some(
       (markup) =>
@@ -678,7 +672,7 @@ test("the report card this page renders names no finding either", () => {
       "37",
       "4",
       "4.",
-      "45",
+      String(ACTIVE_CONTRACT.bundleVersion),
       "5.",
       "6.",
       "60",

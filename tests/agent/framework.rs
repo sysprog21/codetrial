@@ -657,10 +657,9 @@ fn framework_report_cases_are_grounded_and_keep_the_public_contract() {
                 BehavioralRound::NeverOpened
             },
             follow_ups_released: false,
-            candidate_turns: transcript
-                .lines()
-                .filter(|line| line.starts_with("Candidate:"))
-                .count() as u32,
+            communication_evidence: communication_evidence(
+                &transcript.lines().map(str::to_owned).collect::<Vec<_>>(),
+            ),
         }));
 
         assert!(prompt.contains(transcript), "{name}: transcript was lost");
@@ -772,6 +771,7 @@ fn framework_evaluation_scenarios_exercise_reactions_evidence_and_reports() {
         assert!(ids.insert(id), "duplicate framework scenario id {id}");
         assert!(id.len() <= 64);
         let transcript = case["transcript"].as_str().expect("transcript is text");
+        let lines = transcript.lines().map(str::to_owned).collect::<Vec<_>>();
         assert!(transcript.len() <= MAX_TRANSCRIPT_BYTES);
         for tag in case["coverage"].as_array().expect("coverage is an array") {
             coverage.insert(tag.as_str().expect("coverage tag is text"));
@@ -818,12 +818,11 @@ fn framework_evaluation_scenarios_exercise_reactions_evidence_and_reports() {
 
         let reaction = evaluation_reaction(case, &mut state);
         if case["reaction"]["kind"] == "report" {
-            let expected = if transcript.trim().is_empty() {
-                "CANDIDATE TURNS: 0"
-            } else {
-                "CANDIDATE TURNS: 1"
-            };
-            assert!(reaction.contains(expected), "{id}: {reaction}");
+            assert_eq!(
+                reaction.contains("COMMUNICATION EVIDENCE: sufficient."),
+                communication_evidence(&lines) == CommunicationEvidence::Sufficient,
+                "{id}: report brief must match transcript eligibility"
+            );
         }
         if round_gate && case["round"] == "skipped" {
             apply_data_event(
@@ -907,7 +906,7 @@ fn framework_evaluation_scenarios_exercise_reactions_evidence_and_reports() {
         }
         let mut candidate_report = valid_strict_report();
         let report_rounds = ReportRounds {
-            candidate_turns: u32::from(!transcript.trim().is_empty()),
+            communication_evidence: communication_evidence(&lines),
             ..ReportRounds::of(&state)
         };
         if !report_rounds.behavioral_opened {
@@ -918,7 +917,7 @@ fn framework_evaluation_scenarios_exercise_reactions_evidence_and_reports() {
             candidate_report["improvementPlan"][3]["phase"] = json!("Example");
             candidate_report["improvementPlan"][3]["weakness"] = json!("Answer directly");
         }
-        if report_rounds.candidate_turns == 0 {
+        if !report_rounds.communication_assessed() {
             candidate_report["communicationScore"] = Value::Null;
             candidate_report["communicationFeedback"]["strengths"] = json!([]);
             candidate_report["communicationFeedback"]["improvements"] = json!([]);

@@ -25,6 +25,7 @@ pub(crate) use turn_taking::{
     thinking_owes_context, thinking_resume, with_thinking_debt,
 };
 mod code_work;
+pub(crate) mod communication;
 mod evidence;
 mod framework;
 mod integrity;
@@ -112,6 +113,7 @@ pub(crate) use code_work::{
     test_recordable, test_source, tested_code_is_current, tested_code_is_exact, written_in,
 };
 pub use code_work::{code_untouched, code_written};
+pub use communication::{CommunicationEvidence, communication_evidence};
 use framework::record_evidence;
 pub use framework::{
     REACTO_PHASE_IDS, RECEIVED_TEST_SUMMARY, STAR_PHASE_IDS, framework_evidence_json,
@@ -228,9 +230,9 @@ pub const THINKING_CHECK_IN_S: u64 = 120;
 pub(crate) const THINKING_RELEASE_COOLDOWN: std::time::Duration =
     std::time::Duration::from_secs(10);
 
-pub const INTERVIEW_CONTRACT_BUNDLE_VERSION: u32 = 45;
+pub const INTERVIEW_CONTRACT_BUNDLE_VERSION: u32 = 46;
 pub const LIVE_PROMPT_VERSION: u32 = 34;
-pub const REPORT_PROMPT_VERSION: u32 = 25;
+pub const REPORT_PROMPT_VERSION: u32 = 26;
 pub const RUBRIC_VERSION: u32 = 1;
 pub const REPORT_SCHEMA_VERSION: u32 = 4;
 
@@ -1410,14 +1412,11 @@ pub(crate) const INTERIM_OPENING_KEPT: usize = 8;
 // tunes one of them.
 const _: () = assert!(INTERIM_OPENING_KEPT < MAX_INTERIM_NOTES);
 
-/// What `SpeakerTurn::record` is passed for the human in the room, and so the
-/// prefix its lines carry.
+/// The human speaker prefix shared by transcription and report eligibility.
 ///
-/// Both speakers land in one transcript, so "has anything been said since the
-/// last review" has to mean the candidate specifically: four of Jim's own turns
-/// are not a stretch of interview worth reading, and counting them spent a call
-/// on one. Named here and passed at the call site, so a rename cannot leave
-/// `candidate_lines` quietly answering zero forever.
+/// Both speakers share a transcript. Using the same prefix at recording and
+/// lookup keeps interviewer turns out of the candidate count used to schedule
+/// interim reviews.
 pub(crate) const CANDIDATE_SPEAKER: &str = "Candidate";
 
 /// Shared by the transcript writer and the round-boundary lookup so a speaker
