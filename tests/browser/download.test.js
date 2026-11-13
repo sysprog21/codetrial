@@ -17,6 +17,7 @@ for (const [path, name] of [
     const downloads = [];
     const button = { disabled: false };
     const done = { disabled: false };
+    const practice = [{ disabled: false }, { disabled: false }];
     const scope = {
       state: {
         downloadingReport: false,
@@ -25,6 +26,7 @@ for (const [path, name] of [
       },
       nodes: {
         report: {
+          querySelectorAll: () => practice,
           querySelector: (selector) => (selector === "#done" ? done : button),
         },
       },
@@ -47,6 +49,7 @@ for (const [path, name] of [
       "scope",
       `with (scope) {
       ${name === "exportSavedReport" ? `${functionBody(read(path), "downloadSavedReport")}\n}` : ""}
+      ${name === "downloadReport" ? `${functionBody(read(path), "syncPracticeFocusButtons")}\n}` : ""}
       ${functionBody(read(path), name)}
       }
       return ${name};
@@ -68,6 +71,7 @@ for (const [path, name] of [
       run,
       button,
       done,
+      practice,
       lookups,
       downloads,
       scope,
@@ -80,7 +84,11 @@ for (const [path, name] of [
     const h = harness();
     const first = h.run();
     assert.equal(h.button.disabled, true);
-    if (name === "downloadReport") assert.equal(h.done.disabled, true);
+
+    if (name === "downloadReport") {
+      assert.equal(h.done.disabled, true);
+      assert.ok(h.practice.every((button) => button.disabled));
+    }
     await h.run();
     await h.run();
     assert.equal(h.lookups.length, 1);
@@ -89,14 +97,38 @@ for (const [path, name] of [
     await first;
     assert.equal(h.downloads.length, 1);
     assert.equal(h.button.disabled, false);
-    if (name === "downloadReport") assert.equal(h.done.disabled, false);
+    if (name === "downloadReport") {
+      assert.equal(h.done.disabled, false);
+      assert.ok(h.practice.every((button) => !button.disabled));
+    }
     const next = h.run();
     assert.equal(h.button.disabled, true);
+    if (name === "downloadReport") {
+      assert.ok(h.practice.every((button) => button.disabled));
+    }
     h.lookups[1].resolve(null);
     await next;
     assert.equal(h.downloads.length, 2);
     assert.equal(h.button.disabled, false);
+    if (name === "downloadReport") {
+      assert.ok(h.practice.every((button) => !button.disabled));
+    }
   });
+
+  if (name === "downloadReport") {
+    test("Practice this stays disabled when report saving is incomplete", async () => {
+      const h = harness();
+      h.scope.state.reportSaveComplete = false;
+      const pending = h.run();
+      assert.ok(h.practice.every((button) => button.disabled));
+      h.lookups[0].resolve(null);
+      await pending;
+      assert.ok(
+        h.practice.every((button) => button.disabled),
+        "download completion must not bypass the report save gate",
+      );
+    });
+  }
 
   for (const failure of ["lookup", "export"]) {
     test(`${name} restores the button after ${failure} fails`, async () => {

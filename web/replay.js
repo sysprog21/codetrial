@@ -28,7 +28,10 @@ import {
   createBoard,
   drawBoard,
 } from "/whiteboard.js";
+import { storeReportPracticeFocus } from "/problem-picker.js";
+import { storageArea } from "/audio-output.js";
 
+const tabStorage = storageArea("sessionStorage");
 const nodes = {
   list: document.querySelector("#replay-list"),
   more: document.querySelector("#replay-more"),
@@ -516,6 +519,12 @@ async function loadReport(interviewId, recordingId) {
     unclearLines: unclearLinesOf(saved.unclearLines),
     ...final,
   });
+  for (const button of nodes.report.querySelectorAll("[data-practice-focus]")) {
+    button.addEventListener("click", () => {
+      if (!storeReportPracticeFocus(tabStorage, report, button)) return;
+      window.location.href = "/";
+    });
+  }
   mountFinalCodeCopy(nodes.report, final.code);
   void loadOriginalProblem(
     nodes.report,

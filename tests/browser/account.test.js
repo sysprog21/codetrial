@@ -1545,6 +1545,7 @@ test("updateCategoryComparison renders category progress and degrades cleanly wh
     "loadReportHistory",
     "updateCategoryComparison",
     "downloadReport",
+    "syncPracticeFocusButtons",
     "buildMarkdown",
   ]
     .map((name) => `${functionBody(interview, name)}\n}`)
@@ -1629,6 +1630,7 @@ test("updateCategoryComparison renders category progress and degrades cleanly wh
     nodes: {
       report: {
         innerHTML: "existing-report-dom",
+        querySelectorAll: () => [],
         querySelector(selector) {
           if (selector === "#download-report") return downloadButton;
           if (selector === ".category-comparison") {

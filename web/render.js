@@ -38,14 +38,12 @@ function heldAtBoard(report, board) {
   return modeIsWhiteboard(report.interviewMode) || board !== undefined;
 }
 
-/// What a phase is called on this report.
+/// What a canonical phase is called on the candidate-facing surface.
 ///
-/// The report keeps the REACTO vocabulary: the grader scores and plans against
-/// it, and evidence rows carry its ids. At a whiteboard the candidate was shown
-/// other names for four of the six steps, and a report calling step four
-/// Coding names a step they never took. The report spells a phase as an id in
-/// evidence and as a label in scores and plans, so either maps.
-function phaseName(phase, atBoard) {
+/// Reports keep the REACTO vocabulary because grading, plans, and evidence use
+/// it. A whiteboard shows different names for some coding steps, so reports and
+/// the lobby map that canonical phase only when displaying it.
+export function phaseName(phase, atBoard) {
   if (!atBoard) return phase;
   const index = FRAMEWORKS.coding.steps.findIndex(
     (step) => step.id === String(phase).toLowerCase(),
@@ -661,11 +659,13 @@ export function reportMarkup({
       ? ""
       : `<section><h3>Practice next</h3><ol>${report.improvementPlan
           .map(
-            (item) => `
+            (item, index) => `
       <li><strong>${escapeHtml(phaseName(item.phase, atBoard))} · ${escapeHtml(item.durationMin)} min · ${escapeHtml(item.impact)} impact</strong>
         <p>${escapeHtml(item.drill)}</p>
         <p><strong>Success:</strong> ${escapeHtml(item.successCriterion)}</p>
         <ul>${item.selfReview.map((check) => `<li>${escapeHtml(check)}</li>`).join("")}</ul>
+        <button type="button" data-practice-focus="${index}" aria-label="Practice this: ${escapeHtml(item.drill)}">Practice this</button>
+        <span role="status" data-practice-focus-status></span>
       </li>`,
           )
           .join("")}</ol></section>`;
