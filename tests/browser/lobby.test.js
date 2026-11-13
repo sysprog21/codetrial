@@ -10425,7 +10425,7 @@ lobbyTest(
 );
 
 /// Three 1D DP attempts whose two newest rows each have an earlier attempt to
-/// compare against, so a batch export has to look the category map up once.
+/// compare against, so a batch export of both waits on the category lookup.
 const categoryProgressAttempts = () =>
   [
     ["climbing-stairs", "Step Ways", "2026-01-01T10:00:00Z", "dp-1"],
