@@ -260,13 +260,7 @@ class CalibrationTests(unittest.TestCase):
                     for rating in sample["humanRatings"]:
                         del rating["scores"][phase]
                     sample["humanRatings"].append(
-                        {
-                            "reviewerId": "reviewer-c",
-                            "scores": {
-                                "Repeat": sample["modelScores"]["Repeat"],
-                                phase: value,
-                            },
-                        }
+                        {"reviewerId": "reviewer-c", "scores": {phase: value}}
                     )
                 if source in ("model", "both"):
                     error = rf"\$\.samples\[0\]\.modelScores\.{phase}: not applicable to coding_only"
@@ -279,6 +273,26 @@ class CalibrationTests(unittest.TestCase):
                     sample["loop"] = "coding_behavioral"
                     result = CAL.analyze(raw)
                     self.assertEqual(result["status"], "PASS", result["failures"])
+
+    def test_star_only_scores_keep_value_errors(self):
+        for phase, value, with_null in itertools.product(
+            ("Situation", "Task", "Action", "Result"),
+            ("x", False, 1.5, -1, 101, [], {}),
+            (False, True),
+        ):
+            with self.subTest(phase=phase, value=value, with_null=with_null):
+                raw = self.fixture("passing-synthetic.json")
+                scores = {phase: value}
+                if with_null:
+                    scores["Task" if phase == "Situation" else "Situation"] = None
+                raw["samples"][0]["humanRatings"].append(
+                    {"reviewerId": "reviewer-c", "scores": scores}
+                )
+                with self.assertRaisesRegex(
+                    ValueError,
+                    rf"humanRatings\[2\]\.scores\.{phase}: expected integer 0\.\.100 or null$",
+                ):
+                    CAL.analyze(raw)
 
     def test_inapplicable_star_judgments_may_be_omitted(self):
         for raw, status, failures in (
