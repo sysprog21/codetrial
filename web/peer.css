@@ -10,7 +10,7 @@
 }
 .peer-card h2 {
   margin-top: 0;
-  font-size: 1.25rem;
+  font-size: var(--text-2xl);
 }
 .peer-settings {
   display: grid;
@@ -23,7 +23,7 @@
   display: grid;
   gap: 0.5rem;
   color: var(--sub);
-  font-size: 0.875rem;
+  font-size: var(--text-md);
 }
 .peer-settings select,
 .peer-settings input,
@@ -96,7 +96,7 @@
   padding-block: 0.5rem;
 }
 .peer-toolbar h1 {
-  font-size: 1.25rem;
+  font-size: var(--text-2xl);
   margin-right: auto;
 }
 .peer-grid {
@@ -190,7 +190,6 @@
   width: 1.25rem;
   min-height: 1.25rem;
   flex: 0 0 1.25rem;
-  accent-color: var(--accent-fill);
 }
 .peer-roster {
   display: grid;

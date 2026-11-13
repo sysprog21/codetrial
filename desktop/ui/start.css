@@ -1,4 +1,4 @@
-/* The pages' own visual system, from web/styles.css: the lobby's light palette
+/* The pages' own visual system, from web/theme.css: the lobby's light palette
    on a light system and the interview's warm dark otherwise, one violet
    accent, and the same type steps and radii. Copied rather than linked,
    because this page loads from the app before any server exists and so cannot

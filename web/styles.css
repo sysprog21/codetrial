@@ -1,94 +1,3 @@
-:root {
-  color-scheme: dark;
-  /* One scale for every page. Type steps, in rem: 0.6875 0.75 0.8125 0.875
-     0.9375 1 1.125 1.25 1.5 2, plus the lobby's fluid headline. Radii: a
-     control or small box, a card or bubble, a page-level panel; 999px for a
-     pill and 50% for a dot. */
-  --radius-sm: 8px;
-  --radius-md: 12px;
-  --radius-lg: 20px;
-  --page: #11110f;
-  --surface: #1b1b18;
-  --ink: #f6f3ea;
-  --sub: #b7b2a5;
-  /* Secondary small text: 5.2:1 on the surface and 4.7 on a raised box,
-     still a step quieter than --sub. */
-  --muted: #928c7e;
-  --hairline: #2d2b26;
-  /* The brand violet, oklch(0.516 0.262 288.8) in the lobby, at the same hue
-     for a dark page: --accent is the violet that reads as text and edges here
-     (6.6:1 on the surface), --accent-fill the solid behind white button text
-     (5.4:1), --accent-deep its hover, one step darker so the hover shows.
-     --accent-ink is violet text; the lobby gives it a darker value. */
-  --accent: #a291ff;
-  --accent-fill: #744ce6;
-  --accent-deep: #6437d2;
-  --accent-ink: var(--accent);
-  /* Text on a solid --accent-fill or --danger: white in every scheme, at least
-     4.9:1 on either fill. */
-  --on-accent: #ffffff;
-  --good: #24b47e;
-  --critical: #ff6b6b;
-  /* A destructive control: its border and fill, and its text on the surface
-     when it is outlined rather than filled (7.6:1). */
-  --danger: #c44545;
-  --danger-ink: #ff8a8a;
-  /* The edge of a form field: 4.6:1 against the surface, past the 3:1 a
-     control boundary needs. */
-  --control-border: #8a8473;
-  /* A card set into the surface, such as a step of the setup check or a
-     code block. */
-  --step-surface: #151512;
-  /* A box raised on the surface: a score, a transcript turn, a board step. */
-  --inset-surface: #24241f;
-  /* What floats over the editor: the avatar, or the compact caption card. */
-  --shadow-float: 0 8px 24px rgba(0, 0, 0, 0.35);
-  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  /* The chosen tab or language, one step above a raised box. */
-  --selected-surface: #2f2f29;
-  /* The floating avatar stage. Opaque on purpose: this sits over the editor,
-     which repaints on every keystroke, and a backdrop-filter under it re-ran a
-     blur pass per repaint for an effect 82% opaque paint already hid. */
-  --float-surface: #24241f;
-  /* A warning the candidate has to act on: the presence banner, and the
-     blocked-audio notice on Jim's stage. */
-  --alert-tint: rgba(255, 107, 107, 0.12);
-  --alert-ink: #ff9b9b;
-  /* The same banner when the news is not a fault: the avatar was turned off. */
-  --notice-tint: rgba(255, 200, 87, 0.14);
-  --notice-ink: #ffd27a;
-  /* The whiteboard and the example drawings are paper in every scheme. */
-  --paper: #ffffff;
-
-  /* Editor-only colors, independent of the page's fixed dark scheme. Their
-     defaults keep the editor rendering exactly as before; the light values
-     live on .editor-stack[data-theme="light"] below. */
-  --code-bg: #1e1e1e;
-  --code-text: #d4d4d4;
-  --code-gutter: #181816;
-  --code-caret: #f4f4f0;
-  --code-selection: #264f78;
-  --code-active-line: #ffffff0f;
-  /* Selected text needs its own color: --ink is a light page color that would
-     stay light on a light selection background in the light theme. */
-  --code-selection-ink: var(--ink);
-  --code-match-outline: #a6cfff;
-  /* The gutter's own text and divider. Line numbers stay a step under the
-     page's --muted, which was raised for text a candidate reads, so the code
-     beside them keeps the lead; the light theme below overrides both, since
-     neither meets 4.5:1 against a light gutter background. */
-  --code-gutter-ink: #7d776a;
-  --code-gutter-border: var(--hairline);
-  /* Indent guides sit under the code, so they stay fainter than it in both
-     themes. */
-  --code-guide: #404040;
-  --tok-keyword: #569cd6;
-  --tok-string: #ce9178;
-  --tok-comment: #6a9955;
-  --tok-number: #b5cea8;
-  --tok-literal: #569cd6;
-}
-
 * {
   box-sizing: border-box;
 }
@@ -102,7 +11,7 @@
   padding: 0.375rem 0.625rem;
   background: var(--hairline);
   border-radius: var(--radius-sm);
-  font-size: 0.8125rem;
+  font-size: var(--text-sm);
   color: var(--ink);
   line-height: 1.3;
 }
@@ -120,7 +29,7 @@
 }
 
 .caption-unclear {
-  font-size: 0.75rem;
+  font-size: var(--text-xs);
   padding: 0.125rem 0.5rem;
 }
 .caption-unclear[aria-pressed="true"] {
@@ -141,13 +50,12 @@ body {
   margin: 0;
   background: var(--page);
   color: var(--ink);
-  font-family:
-    ui-sans-serif,
-    system-ui,
-    -apple-system,
-    BlinkMacSystemFont,
-    "Segoe UI",
-    sans-serif;
+  font-family: var(--font-sans);
+}
+
+/* Short headings break into even lines instead of leaving one word behind. */
+:where(h1, h2, h3, legend) {
+  text-wrap: balance;
 }
 
 button {
@@ -157,7 +65,7 @@ button {
 /* One keyboard ring on every page, in the page's accent. Zero specificity,
    so a control that draws its own focus keeps it. */
 :where(:focus-visible) {
-  outline: 2px solid var(--accent);
+  outline: var(--focus-width) solid var(--accent);
   outline-offset: 2px;
 }
 
@@ -187,7 +95,7 @@ header {
 .brand {
   margin-bottom: 0.75rem;
   color: var(--accent);
-  font-size: 0.875rem;
+  font-size: var(--text-md);
   font-weight: 700;
 }
 
@@ -198,7 +106,7 @@ header {
   gap: 0.5rem;
   margin-bottom: 1rem;
   color: var(--sub);
-  font-size: 0.875rem;
+  font-size: var(--text-md);
 }
 
 .account-link {
@@ -224,7 +132,7 @@ header {
 h1 {
   max-width: 56rem;
   margin: 0;
-  font-size: 2rem;
+  font-size: var(--text-4xl);
   line-height: 1.15;
 }
 
@@ -340,7 +248,7 @@ p {
   margin: 0;
   padding: 0 0.5rem;
   color: var(--sub);
-  font-size: 0.875rem;
+  font-size: var(--text-md);
   overflow-wrap: anywhere;
 }
 
@@ -351,7 +259,7 @@ p {
   min-height: 2.75rem;
   padding: 0 0.5rem;
   color: var(--sub);
-  font-size: 0.875rem;
+  font-size: var(--text-md);
   cursor: pointer;
 }
 
@@ -371,7 +279,7 @@ p {
   background: var(--surface);
   color: var(--ink);
   text-align: left;
-  transition: border-color 120ms ease;
+  transition: border-color var(--motion-fast) var(--ease-out);
 }
 
 .problem-card:hover,
@@ -385,7 +293,7 @@ p {
 }
 
 .problem-title {
-  font-size: 1.125rem;
+  font-size: var(--text-xl);
   font-weight: 700;
 }
 
@@ -393,7 +301,7 @@ p {
   display: block;
   margin-top: 0.25rem;
   color: var(--sub);
-  font-size: 0.8125rem;
+  font-size: var(--text-sm);
 }
 
 .source-toggle {
@@ -486,13 +394,12 @@ p {
   border: 1px solid var(--control-border);
   border-radius: var(--radius-sm);
   background: var(--surface);
-  font-size: 0.875rem;
+  font-size: var(--text-md);
   cursor: pointer;
 }
 
 .problem-search-modes input {
   margin: 0;
-  accent-color: var(--accent);
 }
 
 .problem-search-modes label:has(input:checked) {
@@ -520,7 +427,7 @@ p {
 .preflight-kicker,
 .preflight-section-title {
   color: var(--sub);
-  font-size: 0.75rem;
+  font-size: var(--text-xs);
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -529,7 +436,7 @@ p {
 .problem-meta {
   margin-top: 1.25rem;
   color: var(--sub);
-  font-size: 0.875rem;
+  font-size: var(--text-md);
 }
 
 .duration-row {
@@ -553,13 +460,13 @@ p {
   cursor: pointer;
   font-weight: 700;
   transition:
-    background 120ms ease,
-    border-color 120ms ease;
+    background var(--motion-fast) var(--ease-out),
+    border-color var(--motion-fast) var(--ease-out);
 }
 
 .duration-button,
 #random-problem {
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   padding: 0.5rem 1rem;
   background: var(--surface);
   color: var(--sub);
@@ -706,7 +613,7 @@ p {
   display: grid;
   gap: 0.25rem;
   color: var(--muted);
-  font-size: 0.875rem;
+  font-size: var(--text-md);
 }
 
 .progress-filters select {
@@ -832,7 +739,7 @@ p {
 .progress-chart-axis-label,
 .progress-chart-axis-title {
   fill: var(--muted);
-  font-size: 0.75rem;
+  font-size: var(--text-xs);
 }
 
 .progress-chart-axis-title {
@@ -850,7 +757,7 @@ p {
   border-radius: var(--radius-sm);
   background: var(--float-surface);
   color: var(--ink);
-  font-size: 0.8125rem;
+  font-size: var(--text-sm);
   line-height: 1.3;
   pointer-events: none;
   white-space: nowrap;
@@ -863,7 +770,7 @@ p {
 .progress-chart-tooltip-version {
   margin-top: 0.15rem;
   color: var(--muted);
-  font-size: 0.6875rem;
+  font-size: var(--text-2xs);
 }
 
 .progress-chart-details-wrap {
@@ -872,7 +779,7 @@ p {
 
 .progress-chart-details {
   color: var(--sub);
-  font-size: 0.875rem;
+  font-size: var(--text-md);
 }
 
 .progress-chart-details summary {
@@ -1004,7 +911,7 @@ p {
 }
 
 .interview-header h1 {
-  font-size: 1.25rem;
+  font-size: var(--text-2xl);
 }
 
 .status-row,
@@ -1079,7 +986,7 @@ p {
   overflow-y: auto;
   background: var(--float-surface);
   border: 1px solid var(--hairline);
-  font-size: 0.75rem;
+  font-size: var(--text-xs);
   pointer-events: auto;
 }
 
@@ -1173,7 +1080,7 @@ p {
   background:
     linear-gradient(var(--alert-tint), var(--alert-tint)), var(--float-surface);
   color: var(--alert-ink);
-  font-size: 0.8125rem;
+  font-size: var(--text-sm);
   font-weight: 600;
   line-height: 1.3;
 }
@@ -1291,7 +1198,7 @@ p {
   place-items: center;
   width: 44px;
   height: 44px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--selected-surface);
   color: var(--sub);
   font-weight: 700;
@@ -1308,7 +1215,7 @@ p {
   margin: 2rem 0 0;
   padding-top: 1rem;
   border-top: 1px solid var(--hairline);
-  font-size: 0.75rem;
+  font-size: var(--text-xs);
 }
 
 .presence-banner {
@@ -1317,7 +1224,7 @@ p {
   border-radius: var(--radius-sm);
   background: var(--alert-tint);
   color: var(--alert-ink);
-  font-size: 0.8125rem;
+  font-size: var(--text-sm);
   font-weight: 600;
   line-height: 1.3;
 }
@@ -1334,7 +1241,7 @@ p {
 .font-size-button,
 .run-button {
   border: 1px solid var(--hairline);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--inset-surface);
   color: var(--sub);
 }
@@ -1344,14 +1251,14 @@ p {
   align-items: center;
   gap: 0.5rem;
   padding: 0.375rem 0.75rem;
-  font-size: 0.75rem;
+  font-size: var(--text-xs);
   font-weight: 600;
 }
 
 .agent-pill.ready {
   border-color: color-mix(in srgb, var(--good) 65%, transparent);
   background: color-mix(in srgb, var(--good) 12%, transparent);
-  color: #d7f7e5;
+  color: var(--on-good-tint);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--good) 8%, transparent);
 }
 
@@ -1394,7 +1301,7 @@ p {
   border: 1px solid var(--hairline);
   border-radius: var(--radius-sm);
   background: var(--inset-surface);
-  font-size: 0.75rem;
+  font-size: var(--text-xs);
 }
 
 .meet-mode > summary {
@@ -1460,12 +1367,12 @@ p {
 .run-button {
   padding: 0.375rem 0.75rem;
   cursor: pointer;
-  font-size: 0.75rem;
+  font-size: var(--text-xs);
   font-weight: 700;
   transition:
-    border-color 140ms ease-out,
-    background-color 140ms ease-out,
-    color 140ms ease-out;
+    border-color var(--motion-fast) var(--ease-out),
+    background-color var(--motion-fast) var(--ease-out),
+    color var(--motion-fast) var(--ease-out);
 }
 
 /* Every pill answers the pointer the same way: its edge and label brighten,
@@ -1492,7 +1399,7 @@ p {
 .pill-button.danger {
   border-color: var(--danger);
   background: var(--danger);
-  color: white;
+  color: var(--on-accent);
 }
 
 /* Sized as a pill so it sits in the control row beside the Mic button it
@@ -1504,11 +1411,11 @@ p {
   min-height: 2rem;
   padding: 0.375rem 0.75rem;
   border: 1px solid var(--control-border);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--inset-surface);
   color: var(--sub);
   font: inherit;
-  font-size: 0.75rem;
+  font-size: var(--text-xs);
   font-weight: 700;
   text-overflow: ellipsis;
   cursor: pointer;
@@ -1544,7 +1451,7 @@ p {
 }
 
 .problem-detail > .problem-brief {
-  font-size: 0.9375rem;
+  font-size: var(--text-lg);
   line-height: 1.6;
 }
 
@@ -1561,7 +1468,7 @@ p {
 .problem-detail h2 {
   margin: 0 0 0.375rem;
   color: var(--ink);
-  font-size: 0.875rem;
+  font-size: var(--text-md);
 }
 
 .problem-detail pre,
@@ -1574,7 +1481,7 @@ p {
   padding: 0.75rem;
   color: var(--sub);
   font-family: var(--font-mono);
-  font-size: 0.8125rem;
+  font-size: var(--text-sm);
   white-space: pre-wrap;
 }
 
@@ -1595,7 +1502,7 @@ p {
 }
 
 .diagnostic-location:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: var(--focus-width) solid var(--accent);
   outline-offset: 2px;
   border-radius: 2px;
 }
@@ -1623,7 +1530,9 @@ p {
   display: flex;
   min-height: 34rem;
   flex-direction: column;
-  background: #1e1e1e;
+  /* Read here, outside .editor-stack, this is always the dark editor value:
+     the panel frames the editor whichever theme the editor takes. */
+  background: var(--code-bg);
   container-type: inline-size;
 }
 
@@ -1639,7 +1548,7 @@ p {
 .sync-state {
   display: none;
   color: var(--muted);
-  font-size: 0.75rem;
+  font-size: var(--text-xs);
 }
 
 /* A footnote under the editor rather than a toolbar item, so the toolbar
@@ -1652,7 +1561,7 @@ p {
   border-top: 1px solid var(--hairline);
   background: var(--surface);
   color: var(--sub);
-  font-size: 0.75rem;
+  font-size: var(--text-xs);
 }
 
 .sync-state span {
@@ -1660,7 +1569,7 @@ p {
   width: 0.4rem;
   height: 0.4rem;
   margin-right: 0.35rem;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--good);
 }
 
@@ -1668,7 +1577,7 @@ p {
 .session-dock .turn-button {
   border-color: var(--accent);
   background: var(--accent-fill);
-  color: white;
+  color: var(--on-accent);
 }
 
 .editor-stack {
@@ -1676,7 +1585,7 @@ p {
      with it, or a three-digit line number overflows it at the largest size,
      but never drops below 3.25rem, or a four-digit one is clipped at the
      smallest. */
-  --editor-font-size: 0.875rem;
+  --editor-font-size: var(--text-md);
   --editor-font-family: var(--font-mono);
   --editor-gutter: max(3.25rem, calc(var(--editor-font-size) * 3.72));
   position: relative;
@@ -1686,56 +1595,6 @@ p {
      reaching its bound and made the panel overflow. */
   min-height: 6rem;
   background: var(--code-bg);
-}
-
-/* VS Code Light+ colors, scoped to the editor stack only: the rest of the
-   page (avatar, captions, overlays) stays on the fixed dark scheme. An
-   explicit choice, stored or just clicked, always wins here regardless of
-   the system theme. */
-.editor-stack[data-theme="light"] {
-  --code-bg: #ffffff;
-  --code-text: #1f1f1f;
-  --code-gutter: #f3f3f3;
-  --code-caret: #000000;
-  --code-selection: #add6ff;
-  --code-selection-ink: #1f1f1f;
-  --code-match-outline: #0000ff;
-  --code-gutter-ink: #595959;
-  --code-gutter-border: #dddddd;
-  --code-guide: #d3d3d3;
-  --code-active-line: #0000000d;
-  --tok-keyword: #0000ff;
-  --tok-string: #a31515;
-  --tok-comment: #008000;
-  --tok-number: #098658;
-  --tok-literal: #0000ff;
-}
-
-/* The same values, for no stored and no clicked choice: applied by the
-   browser from the first paint, before interview.js has run at all, so a
-   candidate on a light system never sees a flash of the dark default. JS
-   only ever sets data-theme for an explicit choice; :not([data-theme="dark"])
-   also matches an explicit data-theme="light", which just repeats the block
-   above rather than conflicting with it. */
-@media (prefers-color-scheme: light) {
-  .editor-stack:not([data-theme="dark"]) {
-    --code-bg: #ffffff;
-    --code-text: #1f1f1f;
-    --code-gutter: #f3f3f3;
-    --code-caret: #000000;
-    --code-selection: #add6ff;
-    --code-selection-ink: #1f1f1f;
-    --code-match-outline: #0000ff;
-    --code-gutter-ink: #595959;
-    --code-gutter-border: #dddddd;
-    --code-guide: #d3d3d3;
-    --code-active-line: #0000000d;
-    --tok-keyword: #0000ff;
-    --tok-string: #a31515;
-    --tok-comment: #008000;
-    --tok-number: #098658;
-    --tok-literal: #0000ff;
-  }
 }
 
 /* The overlay and the textarea must agree on every metric that affects where a
@@ -2015,7 +1874,7 @@ p {
   color: var(--sub);
   cursor: pointer;
   font-family: inherit;
-  font-size: 0.875rem;
+  font-size: var(--text-md);
   font-weight: 700;
 }
 
@@ -2035,7 +1894,7 @@ p {
   border-right: 2px solid currentColor;
   border-bottom: 2px solid currentColor;
   transform: translateY(-25%) rotate(-45deg);
-  transition: transform 140ms ease-out;
+  transition: transform var(--motion-fast) var(--ease-out);
 }
 
 #results-toggle[aria-expanded="true"] #results-chevron,
@@ -2053,7 +1912,7 @@ p {
 }
 
 .small {
-  font-size: 0.75rem;
+  font-size: var(--text-xs);
 }
 
 .muted {
@@ -2113,13 +1972,13 @@ p {
 .transcript-row p:first-child {
   margin: 0 0 0.2rem;
   color: var(--accent);
-  font-size: 0.6875rem;
+  font-size: var(--text-2xs);
   font-weight: 700;
 }
 
 .transcript-row p:last-child {
   margin: 0;
-  font-size: 0.875rem;
+  font-size: var(--text-md);
 }
 
 .overlay {
@@ -2137,7 +1996,7 @@ p {
   justify-content: safe center;
   overflow-y: auto;
   gap: 1rem;
-  background: rgba(17, 17, 15, 0.95);
+  background: color-mix(in srgb, var(--page) 95%, transparent);
   padding: 1rem;
 }
 
@@ -2155,7 +2014,7 @@ p {
   height: 2.5rem;
   border: 2px solid var(--hairline);
   border-top-color: var(--accent);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   animation: spin 900ms linear infinite;
 }
 
@@ -2199,12 +2058,12 @@ p {
 }
 
 .score-grid strong {
-  font-size: 2rem;
+  font-size: var(--text-4xl);
 }
 
 .score-grid span {
   color: var(--muted);
-  font-size: 1rem;
+  font-size: var(--text-base);
 }
 
 /* `table.` and the explicit color, because a saved report also renders inside
@@ -2256,7 +2115,7 @@ table.phase-scores {
 
 .category-phase-compare h4 {
   margin: 0 0 0.25rem;
-  font-size: 0.875rem;
+  font-size: var(--text-md);
   color: var(--muted);
 }
 
@@ -2290,7 +2149,7 @@ table.phase-scores {
   border: 1px solid var(--hairline);
   border-radius: var(--radius-sm);
   background: var(--accent-fill);
-  color: white;
+  color: var(--on-accent);
   padding: 0.75rem 1rem;
   cursor: pointer;
   font-weight: 700;
@@ -2374,7 +2233,7 @@ table.phase-scores {
 #ending-title {
   margin: 0;
   color: var(--ink);
-  font-size: 1.25rem;
+  font-size: var(--text-2xl);
   font-weight: 650;
 }
 
@@ -2490,7 +2349,7 @@ table.phase-scores {
   border-radius: 0.25rem;
   color: var(--sub);
   font: inherit;
-  font-size: 0.7rem;
+  font-size: var(--text-2xs);
   line-height: 1;
 }
 
@@ -2501,7 +2360,7 @@ table.phase-scores {
   display: flex;
   gap: 0.35rem;
   padding: 0.2rem 0.35rem;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--paper);
 }
 
@@ -2554,12 +2413,12 @@ table.phase-scores {
 
 .board-tool {
   border: 1px solid var(--hairline);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--surface);
   color: inherit;
   cursor: pointer;
   font: inherit;
-  font-size: 0.8125rem;
+  font-size: var(--text-sm);
   padding: 0.25rem 0.7rem;
 }
 
@@ -2598,10 +2457,6 @@ table.phase-scores {
 }
 
 .board-text-draft {
-  /* The toolbar's edge and ink and the grip on a text box, paper's own. */
-  --paper-edge: #d6d9df;
-  --paper-ink: #252a32;
-  --paper-grip: #686868;
   position: absolute;
   z-index: 3;
   outline: 1px dotted var(--paper-grip);
@@ -2629,6 +2484,9 @@ table.phase-scores {
   border-radius: 0;
   resize: none;
   background: transparent;
+  /* board-text.js measures the draft and whiteboard.js paints the committed
+     text in this face too, so it is a literal shared with them rather than a
+     theme token a deployment could change for the draft alone. */
   font-family: Arial, sans-serif;
   font-weight: normal;
   font-style: normal;
@@ -2753,7 +2611,7 @@ table.phase-scores {
   border-radius: var(--radius-sm);
   background: var(--paper);
   color: var(--paper-ink);
-  box-shadow: 0 3px 12px #00000018;
+  box-shadow: var(--shadow-raised);
 }
 .board-text-controls .board-pens {
   margin-right: auto;
@@ -2765,7 +2623,7 @@ table.phase-scores {
   border-radius: 4px;
   background: var(--paper);
   color: var(--paper-ink);
-  font-size: 0.75rem;
+  font-size: var(--text-xs);
   font-weight: 500;
 }
 .board-text-controls .board-text-confirm {
@@ -2792,7 +2650,7 @@ table.phase-scores {
 .board-text-error {
   flex-basis: 100%;
   margin: 0;
-  font-size: 0.75rem;
+  font-size: var(--text-xs);
   color: var(--critical);
 }
 .board-text-error:empty {
@@ -2800,7 +2658,7 @@ table.phase-scores {
   margin: 0;
 }
 .board-text-draft :focus-visible {
-  outline: 2px solid var(--accent-fill);
+  outline: var(--focus-width) solid var(--accent-fill);
   outline-offset: 2px;
 }
 .board-text-draft .board-text-input:focus {
@@ -2836,7 +2694,7 @@ table.phase-scores {
   border: 1px solid var(--hairline);
   border-radius: var(--radius-lg);
   background: var(--surface);
-  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--shadow-modal);
   text-align: left;
 }
 
@@ -2850,7 +2708,7 @@ table.phase-scores {
 }
 
 .observer-card h1 {
-  font-size: 1.5rem;
+  font-size: var(--text-3xl);
 }
 
 .observer-card p {
@@ -2879,7 +2737,7 @@ table.phase-scores {
   overflow: hidden;
   border: 1px solid var(--hairline);
   border-radius: var(--radius-sm);
-  background: #111;
+  background: var(--page);
 }
 
 .camera-preview-container[hidden] {
@@ -2904,7 +2762,7 @@ table.phase-scores {
 .audio-meter {
   height: 0.6rem;
   margin-top: 0.5rem;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--hairline);
   overflow: hidden;
 }
@@ -2913,7 +2771,7 @@ table.phase-scores {
   display: block;
   width: 0%;
   height: 100%;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--good);
   transition: width 80ms linear;
 }
@@ -2932,14 +2790,14 @@ table.phase-scores {
   height: 1.15rem;
   margin-right: 0.5rem;
   border: 1px solid var(--hairline);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   color: transparent;
-  font-size: 0.75rem;
+  font-size: var(--text-xs);
   font-weight: 700;
   vertical-align: -0.2rem;
   transition:
-    background 140ms ease,
-    border-color 140ms ease;
+    background var(--motion-fast) var(--ease-out),
+    border-color var(--motion-fast) var(--ease-out);
 }
 
 .step-mark::before {
@@ -2949,7 +2807,7 @@ table.phase-scores {
 .audio-check-step.done .step-mark {
   border-color: var(--good);
   background: var(--good);
-  color: #0d1f17;
+  color: var(--on-good);
 }
 
 .audio-check-step.done strong {
@@ -3065,7 +2923,7 @@ body:not([data-recording]) .replay-detail > :not(header) {
 .replay-line {
   padding: 0.35rem 0;
   border-bottom: 1px solid var(--hairline);
-  font-size: 0.9375rem;
+  font-size: var(--text-lg);
 }
 
 .replay-code {
@@ -3111,7 +2969,7 @@ body:not([data-recording]) .replay-detail > :not(header) {
 
 .board-step p {
   margin: 0.5rem 0 0;
-  font-size: 0.875rem;
+  font-size: var(--text-md);
 }
 
 .board-step .board-step-head {
@@ -3158,7 +3016,7 @@ body:not([data-recording]) .replay-detail > :not(header) {
   margin: 0.35rem 0 0;
   padding: 0;
   list-style: none;
-  font-size: 0.75rem;
+  font-size: var(--text-xs);
   line-height: 1.5;
   color: var(--muted);
 }
@@ -3218,12 +3076,12 @@ body:not([data-recording]) .replay-detail > :not(header) {
   border: 1px solid var(--hairline);
   border-radius: var(--radius-sm);
   background: var(--float-surface);
-  box-shadow: 0 1.2rem 3rem rgb(0 0 0 / 45%);
+  box-shadow: var(--shadow-modal);
 }
 
 .framework-hint-title {
   margin: 0 0 0.6rem;
-  font-size: 0.875rem;
+  font-size: var(--text-md);
   color: var(--ink);
 }
 
@@ -3240,14 +3098,14 @@ body:not([data-recording]) .replay-detail > :not(header) {
 .framework-hint-body table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 0.75rem;
+  font-size: var(--text-xs);
   line-height: 1.45;
 }
 
 .framework-hint-body caption {
   text-align: left;
   padding-bottom: 0.3rem;
-  font-size: 0.8125rem;
+  font-size: var(--text-sm);
   font-weight: 600;
   color: var(--ink);
 }
@@ -3257,7 +3115,7 @@ body:not([data-recording]) .replay-detail > :not(header) {
 .framework-hint-body caption span {
   display: block;
   font-weight: 400;
-  font-size: 0.75rem;
+  font-size: var(--text-xs);
   color: var(--muted);
 }
 
@@ -3293,14 +3151,14 @@ body:not([data-recording]) .replay-detail > :not(header) {
   display: flex;
   flex-direction: column;
   gap: 0.3rem;
-  font-size: 0.875rem;
+  font-size: var(--text-md);
   color: var(--sub);
 }
 
 #star-suggestion label {
   display: block;
   margin-bottom: 0.3rem;
-  font-size: 0.875rem;
+  font-size: var(--text-md);
   color: var(--sub);
 }
 
@@ -3314,7 +3172,7 @@ body:not([data-recording]) .replay-detail > :not(header) {
   background: var(--page);
   color: var(--ink);
   font: inherit;
-  font-size: 0.875rem;
+  font-size: var(--text-md);
   resize: vertical;
 }
 
@@ -3332,7 +3190,7 @@ body:not([data-recording]) .replay-detail > :not(header) {
 .preflight-language {
   display: grid;
   gap: 0.25rem;
-  font-size: 0.875rem;
+  font-size: var(--text-md);
 }
 
 .preflight-language {
@@ -3388,7 +3246,7 @@ body:not([data-recording]) .replay-detail > :not(header) {
 .session-dock .turn-button {
   width: 100%;
   min-height: 2.5rem;
-  font-size: 0.875rem;
+  font-size: var(--text-md);
 }
 
 .session-dock .control-row .pill-button {
@@ -3415,9 +3273,9 @@ body:not([data-recording]) .replay-detail > :not(header) {
 }
 
 .mic-muted-status {
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   padding: 0.375rem 0.75rem;
-  font-size: 0.75rem;
+  font-size: var(--text-xs);
   font-weight: 600;
 }
 
@@ -3566,7 +3424,7 @@ body:not([data-recording]) .replay-detail > :not(header) {
   margin-bottom: 0.5rem;
   vertical-align: top;
   color: var(--sub);
-  font-size: 0.8125rem;
+  font-size: var(--text-sm);
   font-weight: 600;
   line-height: 1.25rem;
 }
@@ -3574,7 +3432,7 @@ body:not([data-recording]) .replay-detail > :not(header) {
 #candidate-case textarea,
 #candidate-case input {
   font-family: var(--font-mono);
-  font-size: 0.8125rem;
+  font-size: var(--text-sm);
   font-weight: 400;
 }
 
@@ -3615,7 +3473,7 @@ body:not([data-recording]) .replay-detail > :not(header) {
 
 .preflight-head h2 {
   margin: 0;
-  font-size: 1.5rem;
+  font-size: var(--text-3xl);
   letter-spacing: -0.02em;
 }
 
@@ -3659,7 +3517,7 @@ body:not([data-recording]) .replay-detail > :not(header) {
   border: 1px solid var(--hairline);
   border-radius: var(--radius-md);
   background: var(--step-surface);
-  transition: border-color 140ms ease;
+  transition: border-color var(--motion-fast) var(--ease-out);
 }
 
 .preflight-column .audio-check-step.done {
@@ -3731,65 +3589,6 @@ body:not([data-recording]) .replay-detail > :not(header) {
   }
 }
 
-/* The practice entrance. On a light system it has its own light palette. On
-   a dark one it takes the interview's warm dark from :root, so moving from
-   the lobby into a session does not flash from one product to another, and
-   only the lobby's own roles below change. The editor keeps its own --code-*
-   theme either way. Every rule here is scoped to .practice-page or .lobby so
-   none of it reaches the other pages. */
-@media not all and (prefers-color-scheme: dark) {
-  .practice-page {
-    color-scheme: light;
-    --page: #f6f6f9;
-    --surface: #ffffff;
-    --ink: #171d2d;
-    --sub: #4f5b73;
-    --muted: #5f6b84;
-    /* Decorative edges: card outlines and dividers. */
-    --hairline: #e3e5ec;
-    /* The edge that identifies a form control, which needs 3:1 against the
-       card where --hairline measures 1.28. */
-    --control-border: #858fa3;
-    --accent: #6e2bf0;
-    --accent-fill: #6e2bf0;
-    --accent-deep: #5520c4;
-    /* Violet text: links, a selected chip, the step numbers. --accent is the
-       fill's violet here, too light for small text. */
-    --accent-ink: #5520c4;
-    --good: #137b56;
-    --critical: #c52d43;
-    --practice-tint: #f3edff;
-    --practice-tint-edge: #ddd0fb;
-    /* The surfaces the dark page sets dark: a saved report opened in the
-       lobby's history, and the progress chart's tooltip, take light ones. */
-    --float-surface: #ffffff;
-    --step-surface: var(--page);
-    --inset-surface: var(--page);
-    --selected-surface: var(--hairline);
-    --shadow-card: 0 1px 2px rgb(23 29 45 / 4%), 0 8px 24px rgb(23 29 45 / 6%);
-    --picker-shadow: drop-shadow(0 1px 2px rgb(23 29 45 / 4%))
-      drop-shadow(0 8px 24px rgb(23 29 45 / 6%));
-    --shadow-cta: 0 6px 16px rgb(110 43 240 / 24%);
-  }
-}
-
-@media (prefers-color-scheme: dark) {
-  .practice-page {
-    /* 7.5:1 on the surface: a selected chip's label sits on the tint. */
-    --accent-ink: #ab9eff;
-    --practice-tint: color-mix(
-      in oklch,
-      var(--accent-fill) 16%,
-      var(--surface)
-    );
-    --practice-tint-edge: #473983;
-    --shadow-card: 0 1px 2px rgb(0 0 0 / 30%), 0 8px 24px rgb(0 0 0 / 24%);
-    --picker-shadow: drop-shadow(0 1px 2px rgb(0 0 0 / 30%))
-      drop-shadow(0 8px 24px rgb(0 0 0 / 24%));
-    --shadow-cta: 0 6px 16px rgb(116 76 230 / 28%);
-  }
-}
-
 .practice-page :focus-visible {
   outline-offset: 3px;
 }
@@ -3806,7 +3605,7 @@ body:not([data-recording]) .replay-detail > :not(header) {
 .lobby > header .brand {
   margin: 0;
   color: var(--ink);
-  font-size: 1.125rem;
+  font-size: var(--text-xl);
   letter-spacing: -0.02em;
 }
 
@@ -3844,10 +3643,10 @@ body:not([data-recording]) .replay-detail > :not(header) {
   margin-bottom: 1rem;
   padding: 0.375rem 0.875rem;
   border: 1px solid var(--practice-tint-edge);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--practice-tint);
   color: var(--accent-ink);
-  font-size: 0.8125rem;
+  font-size: var(--text-sm);
   font-weight: 600;
 }
 
@@ -3862,7 +3661,7 @@ body:not([data-recording]) .replay-detail > :not(header) {
 .practice-lead {
   max-width: 40rem;
   margin-top: 0.875rem;
-  font-size: 1.125rem;
+  font-size: var(--text-xl);
   line-height: 1.55;
 }
 
@@ -3872,10 +3671,10 @@ body:not([data-recording]) .replay-detail > :not(header) {
   place-items: center;
   width: 2rem;
   height: 2rem;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--practice-tint);
   color: var(--accent-ink);
-  font-size: 0.875rem;
+  font-size: var(--text-md);
   font-weight: 700;
 }
 
@@ -3919,13 +3718,13 @@ body:not([data-recording]) .replay-detail > :not(header) {
 
 .setup-heading h2 {
   margin: 0.125rem 0 0;
-  font-size: 1.25rem;
+  font-size: var(--text-2xl);
   letter-spacing: -0.02em;
 }
 
 .setup-heading p {
   margin-top: 0.25rem;
-  font-size: 0.875rem;
+  font-size: var(--text-md);
   line-height: 1.5;
 }
 
@@ -3936,7 +3735,7 @@ body:not([data-recording]) .replay-detail > :not(header) {
   margin: 0;
   padding: 0 0 0.5rem;
   color: var(--ink);
-  font-size: 0.875rem;
+  font-size: var(--text-md);
   font-weight: 600;
 }
 
@@ -3968,7 +3767,7 @@ body:not([data-recording]) .replay-detail > :not(header) {
   border-radius: var(--radius-sm);
   background: var(--surface);
   color: var(--sub);
-  font-size: 0.875rem;
+  font-size: var(--text-md);
   font-weight: 600;
 }
 
@@ -4005,7 +3804,7 @@ body:not([data-recording]) .replay-detail > :not(header) {
   gap: 0.5rem;
   min-height: 2rem;
   color: var(--ink);
-  font-size: 0.875rem;
+  font-size: var(--text-md);
 }
 
 /* The whiteboard has no editor, so app.js disables the whole fieldset. */
@@ -4016,7 +3815,6 @@ body:not([data-recording]) .replay-detail > :not(header) {
 
 .lobby input[type="checkbox"] {
   margin: 0;
-  accent-color: var(--accent);
 }
 
 .lobby .duration-row {
@@ -4069,7 +3867,7 @@ body:not([data-recording]) .replay-detail > :not(header) {
   background: var(--surface);
   color: var(--ink);
   font: inherit;
-  font-size: 0.875rem;
+  font-size: var(--text-md);
   font-weight: 600;
   cursor: pointer;
 }
@@ -4095,7 +3893,7 @@ body:not([data-recording]) .replay-detail > :not(header) {
 }
 
 .lobby .recommendation {
-  font-size: 0.9375rem;
+  font-size: var(--text-lg);
   line-height: 1.5;
 }
 
@@ -4111,7 +3909,7 @@ body:not([data-recording]) .replay-detail > :not(header) {
 .lobby .problem-picker summary,
 .lobby .interview-context summary {
   color: var(--accent-ink);
-  font-size: 0.875rem;
+  font-size: var(--text-md);
   font-weight: 600;
   line-height: 1.5;
   cursor: pointer;
@@ -4126,8 +3924,8 @@ body:not([data-recording]) .replay-detail > :not(header) {
   min-height: 6rem;
   border-radius: var(--radius-md);
   transition:
-    border-color 120ms ease,
-    box-shadow 120ms ease;
+    border-color var(--motion-fast) var(--ease-out),
+    box-shadow var(--motion-fast) var(--ease-out);
 }
 
 .lobby .problem-card:hover,
@@ -4137,7 +3935,7 @@ body:not([data-recording]) .replay-detail > :not(header) {
 }
 
 .lobby .problem-title {
-  font-size: 1rem;
+  font-size: var(--text-base);
 }
 
 .lobby .interview-context {
@@ -4161,7 +3959,7 @@ body:not([data-recording]) .replay-detail > :not(header) {
 .lobby .interview-context label {
   min-width: 0;
   color: var(--sub);
-  font-size: 0.875rem;
+  font-size: var(--text-md);
   line-height: 1.5;
 }
 
@@ -4212,7 +4010,7 @@ body:not([data-recording]) .replay-detail > :not(header) {
   border: 0;
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-cta);
-  font-size: 1rem;
+  font-size: var(--text-base);
 }
 
 .lobby .start-button:disabled {
@@ -4228,14 +4026,14 @@ body:not([data-recording]) .replay-detail > :not(header) {
   padding: 0;
   list-style: none;
   color: var(--sub);
-  font-size: 0.875rem;
+  font-size: var(--text-md);
   line-height: 1.4;
 }
 
 .cost-note {
   margin: -0.5rem 0 1.25rem;
   color: var(--sub);
-  font-size: 0.875rem;
+  font-size: var(--text-md);
   line-height: 1.4;
 }
 
@@ -4320,7 +4118,7 @@ body:not([data-recording]) .replay-detail > :not(header) {
 
   .lobby input:not([type="checkbox"]),
   .lobby select {
-    font-size: 1rem;
+    font-size: var(--text-base);
   }
 
   .practice-hero {
@@ -4328,7 +4126,7 @@ body:not([data-recording]) .replay-detail > :not(header) {
   }
 
   .practice-lead {
-    font-size: 1rem;
+    font-size: var(--text-base);
   }
 
   .setup-grid {
@@ -4390,7 +4188,7 @@ body:not([data-recording]) .replay-detail > :not(header) {
   }
 
   .lobby h1 {
-    font-size: 2.5rem;
+    font-size: var(--text-5xl);
   }
 
   .practice-badge {
@@ -4399,7 +4197,7 @@ body:not([data-recording]) .replay-detail > :not(header) {
 
   .practice-lead {
     margin-top: 0.5rem;
-    font-size: 1rem;
+    font-size: var(--text-base);
   }
 
   .setup-panel {
@@ -4435,7 +4233,7 @@ body:not([data-recording]) .replay-detail > :not(header) {
      tests/browser/lobby.test.js checks. */
   .cost-note {
     margin-bottom: 0.75rem;
-    font-size: 0.8125rem;
+    font-size: var(--text-sm);
     line-height: 1.35;
   }
 }
@@ -4495,7 +4293,7 @@ body:not([data-recording]) .replay-detail > :not(header) {
 }
 
 .lobby .problem-picker > summary {
-  font-size: 1rem;
+  font-size: var(--text-base);
 }
 
 .lobby .problem-picker-controls {
@@ -4531,7 +4329,7 @@ body:not([data-recording]) .replay-detail > :not(header) {
 .lobby .problem-picker-controls .practice-filters > label,
 .lobby .problem-picker-controls .practice-filters > select,
 .lobby .problem-picker-controls #problem-filters-reset {
-  font-size: 0.8125rem;
+  font-size: var(--text-sm);
 }
 
 .lobby .problem-picker-controls select {
@@ -4622,7 +4420,7 @@ body:not([data-recording]) .replay-detail > :not(header) {
 
 @media (max-width: 480px) {
   .lobby .problem-picker-controls .practice-filters > select {
-    font-size: 1rem;
+    font-size: var(--text-base);
   }
 }
 
@@ -4651,7 +4449,7 @@ body:not([data-recording]) .replay-detail > :not(header) {
   border-radius: var(--radius-sm);
   background: var(--float-surface);
   color: var(--ink);
-  font-size: 0.75rem;
+  font-size: var(--text-xs);
   pointer-events: auto;
 }
 
@@ -4666,7 +4464,6 @@ body:not([data-recording]) .replay-detail > :not(header) {
 
 .jim-volume-controls input {
   width: 100%;
-  accent-color: var(--accent);
 }
 
 .jim-volume-actions {
@@ -4733,13 +4530,13 @@ body:not([data-recording]) .replay-detail > :not(header) {
 
 .lobby .update-notice h2 {
   margin: 0 0 0.375rem;
-  font-size: 1rem;
+  font-size: var(--text-base);
 }
 
 .lobby .update-notice p {
   margin: 0 0 0.75rem;
   color: var(--sub);
-  font-size: 0.875rem;
+  font-size: var(--text-md);
 }
 
 .lobby .update-notice-actions {
@@ -4761,7 +4558,7 @@ body:not([data-recording]) .replay-detail > :not(header) {
   border-radius: var(--radius-sm);
   background: var(--surface);
   color: var(--ink);
-  font-size: 0.875rem;
+  font-size: var(--text-md);
   font-weight: 600;
   cursor: pointer;
 }

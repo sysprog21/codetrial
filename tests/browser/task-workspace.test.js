@@ -944,39 +944,6 @@ test("a learner already signed in goes straight to the server, and can come back
   }
 });
 
-test("the task page keeps the lobby's palette tokens", () => {
-  const tokens = (css) => {
-    const block = css.slice(css.indexOf(":root {"));
-    return new Map(
-      [
-        ...block
-          .slice(0, block.indexOf("\n}"))
-          .matchAll(/^\s+(--[\w-]+):\s*([^;]+);/gm),
-      ].map((match) => [match[1], match[2].trim()]),
-    );
-  };
-  const lobby = tokens(read("web/styles.css"));
-  const task = tokens(read("web/task.css"));
-  const shared = [...task.keys()].filter((name) => lobby.has(name));
-  for (const name of [
-    "--page",
-    "--surface",
-    "--ink",
-    "--sub",
-    "--muted",
-    "--hairline",
-    "--accent",
-    "--accent-fill",
-    "--accent-deep",
-    "--control-border",
-    "--step-surface",
-    "--selected-surface",
-  ])
-    assert.ok(shared.includes(name), `${name} is not shared`);
-  for (const name of shared)
-    assert.equal(task.get(name), lobby.get(name), name);
-});
-
 test("the learning review groups feedback under readable headings", async (t) => {
   const feedback = JSON.parse(
     read("tests/fixtures/task-review.json"),

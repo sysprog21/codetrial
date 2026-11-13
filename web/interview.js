@@ -5314,7 +5314,7 @@ function applyEditorFontSize(stored) {
 }
 
 /// Sets data-theme only for an explicit choice; the CSS media query in
-/// styles.css carries the no-choice default so the first paint already
+/// theme.css carries the no-choice default so the first paint already
 /// matches the system theme, before this runs at all (init() waits on
 /// loadProblem first) and however the system theme changes afterward. The
 /// toggle's own label is cosmetic, so it still reads matchMedia once here

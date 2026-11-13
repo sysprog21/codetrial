@@ -5,8 +5,9 @@ explanation and return actionable feedback. The browser renders an existing
 review bundle; it neither calls a model nor edits code or publishes anything.
 One reviewer owns a session. A managed reviewer worker can remain active with
 the server; manual mode requires this chat invocation to remain active.
-The shared stylesheet is served directly from `web/styles.css`; the workspace
-adds layout styles and does not become a route in the interview application.
+The shared stylesheets are served directly from `web/theme.css` and
+`web/styles.css`; the workspace adds layout styles and does not become a
+route in the interview application.
 
 ## Decide whether it applies
 
