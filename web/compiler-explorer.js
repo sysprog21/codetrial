@@ -1097,7 +1097,7 @@ function cStringLiteral(value) {
   return JSON.stringify(value).replace(
     /\\u00([0-9a-f]{2})|\\.|\?/g,
     (match, hex) => {
-      if (hex) return `\\${parseInt(hex, 16).toString(8).padStart(3, "0")}`;
+      if (hex) return octalEscape(parseInt(hex, 16));
       return match === "?" ? "\\?" : match;
     },
   );
@@ -1107,9 +1107,9 @@ function cStringLiteral(value) {
 /// there, so the case would run on less than was typed and fail a correct
 /// solution. Refused, naming the case, until adding a case refuses NUL itself.
 /// Only string parameters truncate on the way in: `charLiteral` writes a
-/// `character` NUL as a raw byte, which clang only warns about, and the
-/// solution receives 0. A `character[][]` that is also the output still loses
-/// that cell on the way out, since `json_char_matrix` prints it as "".
+/// `character` NUL as `'\000'`, and the solution receives 0. A `character[][]`
+/// that is also the output still loses that cell on the way out, since
+/// `json_char_matrix` prints it as "".
 function refuseNulCases(spec) {
   const holdsNul = (value) =>
     typeof value === "string"
@@ -1128,8 +1128,19 @@ function refuseNulCases(spec) {
   }
 }
 
+/// A raw newline or carriage return between quotes ends a character literal in
+/// C, C++ and Java alike, so every character below a space (U+0000 to U+001F)
+/// is written as the octal escape all three read the same way.
 function charLiteral(value) {
-  return `'${String(value).replace(/['\\]/g, "\\$&")}'`;
+  const escaped = String(value).replace(/['\\]/g, "\\$&");
+  const spelled = [...escaped].map((c) =>
+    c < " " ? octalEscape(c.charCodeAt(0)) : c,
+  );
+  return `'${spelled.join("")}'`;
+}
+
+function octalEscape(code) {
+  return `\\${code.toString(8).padStart(3, "0")}`;
 }
 
 function cNeedsSize(type) {
