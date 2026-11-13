@@ -186,6 +186,7 @@ p {
 
 .difficulty-row label,
 .editor-options-row label,
+.setting-option,
 .problem-picker summary {
   cursor: pointer;
 }
@@ -3618,7 +3619,8 @@ body:not([data-recording]) .replay-detail > :not(header) {
 .lobby .practice-filters select,
 .lobby .progress-filters select,
 .lobby .interview-context input:not([type="checkbox"]),
-.lobby .interview-context select {
+.lobby .interview-context select,
+.lobby .editor-options-row select {
   min-width: 0;
   min-height: 2.5rem;
   padding: 0.5rem 0.75rem;
@@ -3798,7 +3800,10 @@ body:not([data-recording]) .replay-detail > :not(header) {
   grid-column: 1 / -1;
 }
 
-.lobby .editor-options-row label {
+/* A setting is a box and its name on one row: the editor options, and the
+   two format settings under the mode buttons. */
+.lobby .editor-options-row label,
+.lobby .setting-option {
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -3807,14 +3812,30 @@ body:not([data-recording]) .replay-detail > :not(header) {
   font-size: var(--text-md);
 }
 
-/* The whiteboard has no editor, so app.js disables the whole fieldset. */
-.lobby .editor-options-row:disabled label {
+/* The whiteboard has no editor, so app.js disables the whole fieldset, and
+   the example drawing setting with it. */
+.lobby .editor-options-row:disabled label,
+.lobby .setting-option:has(:disabled) {
   color: var(--muted);
   cursor: not-allowed;
 }
 
 .lobby input[type="checkbox"] {
   margin: 0;
+}
+
+/* In a narrow card the two columns shrink below this label's width; the
+   select then drops under its name instead of running past the card edge. */
+.lobby .editor-options-row label:has(select) {
+  flex-wrap: wrap;
+  row-gap: 0.25rem;
+}
+
+/* A select in the checklist is sized to its row rather than to the
+   full-height fields above it; the shared field rule gives it the rest. */
+.lobby .editor-options-row select {
+  min-height: 1.75rem;
+  padding: 0.125rem 0;
 }
 
 .lobby .duration-row {
@@ -3827,15 +3848,8 @@ body:not([data-recording]) .replay-detail > :not(header) {
   --group-step: 0.5rem;
 }
 
-/* The grid gap above already spaces these from the mode buttons and from each
-   other; the label's own top margin, meant for a `.duration-note` standing
-   alone, would double it. */
-.session-panel .format-choices > .duration-note {
-  margin-top: 0;
-}
-
 /* Settings, not choices: a step apart from the buttons. */
-.session-panel .format-choices > .session-choice-group + .duration-note {
+.session-panel .format-choices > .session-choice-group + .setting-option {
   margin-top: var(--group-step);
 }
 
@@ -4117,7 +4131,8 @@ body:not([data-recording]) .replay-detail > :not(header) {
   }
 
   .lobby input:not([type="checkbox"]),
-  .lobby select {
+  .lobby select,
+  .lobby .editor-options-row select {
     font-size: var(--text-base);
   }
 
@@ -4135,6 +4150,7 @@ body:not([data-recording]) .replay-detail > :not(header) {
 
   .lobby .difficulty-row label,
   .lobby .editor-options-row label,
+  .lobby .setting-option,
   .lobby .duration-button,
   .lobby #random-problem,
   .lobby #practice-list-pick {
