@@ -4,12 +4,19 @@ import {
   createReportRecovery,
   reportRecoveryLimits,
 } from "../../web/report-recovery.js";
-import { retryReportPayload, sanitizeReport, topics } from "../../web/lib.js";
+import {
+  REPORT_ESCAPE_ATTRIBUTE,
+  REPORT_RETRY_ATTRIBUTE,
+  agentReportWait,
+  retryReportPayload,
+  sanitizeReport,
+  topics,
+} from "../../web/lib.js";
 
 // Counted from the agent's answer, or from the click when no answer comes.
 const retryWaitMs = reportRecoveryLimits.retryWaitSeconds * 1000;
 
-function setup() {
+function setup({ agentRetryWaitSeconds } = {}) {
   let now = 0;
   let next = 0;
   const scheduled = new Map();
@@ -29,6 +36,7 @@ function setup() {
     waiting: () => events.push("waiting"),
     finalize: (report) => events.push(report),
     keep: (report) => events.push({ kept: report }),
+    agentRetryWaitSeconds,
   });
   function advance(ms) {
     now += ms;
@@ -76,6 +84,52 @@ test("report recovery spends one retry after cooldown and times it from acceptan
   assert.deepEqual(events.at(-1), { incomplete: true, summary: "503" });
   recovery.finish();
   assert.equal(finalized(events).length, 1);
+});
+
+test("the agent can lengthen a retry's wait but not shorten it", () => {
+  // A local model's regeneration runs under a longer deadline, which only the
+  // agent knows; a smaller or missing value leaves the floor in place.
+  for (const [said, waited] of [
+    [300, 300_000],
+    [60, 175_000],
+    [0, 175_000],
+  ]) {
+    const { recovery, events, advance } = setup({
+      agentRetryWaitSeconds: () => said,
+    });
+    recovery.start(raw);
+    advance(30_000);
+    recovery.retry();
+    recovery.notice(accepted);
+    advance(waited - 1000);
+    assert.equal(events.filter((e) => e?.summary).length, 0, `${said}`);
+    advance(1000);
+    recovery.finish();
+    assert.equal(events.filter((e) => e?.summary).length, 1, `${said}`);
+  }
+});
+
+test("the report waits are read from the agent's attributes", () => {
+  const attributes = {
+    [REPORT_ESCAPE_ATTRIBUTE]: "280000",
+    [REPORT_RETRY_ATTRIBUTE]: "300",
+  };
+  assert.equal(agentReportWait(attributes, REPORT_ESCAPE_ATTRIBUTE), 280_000);
+  assert.equal(agentReportWait(attributes, REPORT_RETRY_ATTRIBUTE), 300);
+  // An agent that published nothing, or nonsense, leaves the page's floor.
+  assert.equal(agentReportWait({}, REPORT_RETRY_ATTRIBUTE), 0);
+  assert.equal(agentReportWait(undefined, REPORT_RETRY_ATTRIBUTE), 0);
+  assert.equal(
+    agentReportWait(
+      { [REPORT_RETRY_ATTRIBUTE]: "soon" },
+      REPORT_RETRY_ATTRIBUTE,
+    ),
+    0,
+  );
+  assert.equal(
+    agentReportWait({ [REPORT_RETRY_ATTRIBUTE]: "-5" }, REPORT_RETRY_ATTRIBUTE),
+    0,
+  );
 });
 
 test("an accepted retry outlives the offer's own expiry", () => {
@@ -313,6 +367,8 @@ function pageHarness(phase = "live") {
     interviewLoop: "coding_only",
     roomParticipants: () => [],
     roomInterviewer: () => null,
+    agentReportWait,
+    REPORT_RETRY_ATTRIBUTE,
     setAgentStateLabel: () => {},
     releaseStart: () => {},
     window: { location: {}, addEventListener() {} },

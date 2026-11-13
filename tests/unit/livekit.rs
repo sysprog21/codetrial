@@ -1502,6 +1502,16 @@ fn the_browser_escape_hatch_outlasts_the_report_deadline() {
          {close:?} Gemini close cannot land with up to {delivery:?} delivery time before \
          the page offers to leave at {wait:?}"
     );
+
+    // And what the agent publishes in its place covers whichever deadline it
+    // runs under, local included.
+    for deadline in [REPORT_TIMEOUT, LOCAL_REPORT_TIMEOUT] {
+        let wait = report_escape_wait(deadline);
+        assert!(
+            wait >= deadline + WRAP_UP_WAIT,
+            "a report bounded at {deadline:?} cannot land before the page offers to leave at {wait:?}"
+        );
+    }
 }
 
 /// A publish only queues the packet, so leaving right behind it can drop the

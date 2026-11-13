@@ -275,9 +275,17 @@ pub(super) async fn post_generate_content(
     what: &str,
 ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
     let started = std::time::Instant::now();
-    let response = crate::http_client()
+    let mut builder = crate::http_client()
         .post(url)
-        .header("x-goog-api-key", api_key)
+        .header("x-goog-api-key", api_key);
+
+    // The same deadline, said to a local shim so it stops its model at it
+    // rather than generating an answer nobody is waiting for. Google honors the
+    // header too, so a hosted request is left as it was.
+    if report_endpoint_is_local() {
+        builder = builder.header("X-Server-Timeout", timeout.as_secs().to_string());
+    }
+    let response = builder
         .timeout(timeout)
         .json(request)
         .send()

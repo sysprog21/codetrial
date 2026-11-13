@@ -119,6 +119,9 @@ import {
   providerUiState,
   receiveReportDelivery,
   roomInterviewer,
+  agentReportWait,
+  REPORT_ESCAPE_ATTRIBUTE,
+  REPORT_RETRY_ATTRIBUTE,
   sanitizeReport,
   sessionReport,
   LANGUAGE_KEY,
@@ -2605,6 +2608,11 @@ function stopLocalMedia() {
 }
 
 const reportRecovery = createReportRecovery({
+  agentRetryWaitSeconds: () =>
+    agentReportWait(
+      roomInterviewer(roomParticipants(), state.agentIdentity)?.attributes,
+      REPORT_RETRY_ATTRIBUTE,
+    ),
   send: () => {
     void publish(topics.control, retryReportPayload())?.catch(() =>
       reportRecovery.finish(),
@@ -4333,12 +4341,14 @@ function flushPendingLanguagePublish() {
   publishCode(undefined, pending.code, pending.language);
 }
 
-/// When the page stops waiting for the report and offers to leave. Held against
-/// the agent's own deadline by
-/// the_browser_escape_hatch_outlasts_the_report_deadline, which reads this
-/// declaration: the value lives here, and Rust checks that it clears
-/// the generation, wrap-up, Gemini close and delivery bounds rather than
-/// keeping copies.
+/// When the page stops waiting for the report and offers to leave. The agent
+/// says how long in its attributes, because the deadline depends on where it
+/// writes reports: a local model is given longer than Gemini. This is the
+/// hosted wait, held against the agent's own deadline by
+/// the_browser_escape_hatch_outlasts_the_report_deadline, which reads it here
+/// and checks that it clears the generation, wrap-up, Gemini close and
+/// delivery bounds. It is a floor: an agent that says nothing or says less
+/// never shortens it.
 const REPORT_ESCAPE_WAIT_MS = 155000;
 
 /// The two timers that speak for a report nobody has seen yet, held so that a
@@ -4440,6 +4450,13 @@ function endInterview(reason) {
   nodes.skipReport.hidden = !reportComing;
   startEndingClock();
   if (reportComing) {
+    const escapeWaitMs = Math.max(
+      REPORT_ESCAPE_WAIT_MS,
+      agentReportWait(
+        roomInterviewer(roomParticipants(), state.agentIdentity)?.attributes,
+        REPORT_ESCAPE_ATTRIBUTE,
+      ),
+    );
     // The wait clears report generation, the timer-driven wrap-up, the Gemini
     // close, and all delivery retries, summed as if none overlapped. An
     // earlier escape can disconnect a packet still in transit; the Rust
@@ -4463,7 +4480,7 @@ function endInterview(reason) {
           // there was another option.
           nodes.forceReport.hidden = false;
         }
-      }, REPORT_ESCAPE_WAIT_MS),
+      }, escapeWaitMs),
     ];
   }
   const publishEnd = () =>

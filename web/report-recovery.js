@@ -29,6 +29,8 @@ export function createReportRecovery({
   waiting,
   finalize,
   keep = () => {},
+  // The regeneration wait the agent published, in seconds, or 0 for none.
+  agentRetryWaitSeconds = () => 0,
   timers = globalThis,
 }) {
   let report = null;
@@ -61,14 +63,17 @@ export function createReportRecovery({
     report = null;
     ready = false;
   }
-  // The agent gives regeneration its own 125-second deadline. A ready report
-  // can wait through the rejoin grace and still need every delivery attempt.
+  // The agent gives regeneration its own deadline, 125 seconds against Gemini
+  // and longer against a local model, and says which in its attributes. A
+  // ready report can wait through the rejoin grace and still need every
+  // delivery attempt. The limit here is a floor the agent can only raise.
   function waitForReport() {
     if (wait) timers.clearTimeout(wait);
-    wait = timers.setTimeout(
-      finish,
-      reportRecoveryLimits.retryWaitSeconds * 1000,
+    const seconds = Math.max(
+      reportRecoveryLimits.retryWaitSeconds,
+      agentRetryWaitSeconds(),
     );
+    wait = timers.setTimeout(finish, seconds * 1000);
   }
   function offerAfter(seconds) {
     ready = false;

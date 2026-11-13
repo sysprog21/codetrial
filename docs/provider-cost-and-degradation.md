@@ -201,6 +201,8 @@ and so does an accepted request, so keys another interview sent back to quota du
 answer `early` rather than spend the regeneration on a call that cannot start. It
 reuses the frozen assessment, has its own five-call pool and 125-second
 deadline, and therefore bounds final reporting at ten HTTP calls per interview.
+With `CODETRIAL_GEMINI_REST_BASE` set to anything but Google, each call gets 45
+seconds instead of 20 and each deadline 250 seconds instead of 125.
 Report calls are seeded, so with the first seed the frozen prompt answers a
 regeneration exactly as it answered the first time. When the first generation
 had an answer refused, whether it then ran out of repairs, lost its repair call
@@ -225,10 +227,11 @@ answers each request on the control topic, `report_retry` with status
 `accepted` or `early` (with the seconds still to wait, which does not spend the
 regeneration), and announces `closed` at expiry or when no key can ever answer;
 a duplicate request during
-regeneration gets no answer. The browser waits at most 175 seconds from its
-request or the acceptance, whichever came last. This covers the configured
-generation deadline, one final rejoin grace and every delivery attempt. This
-browser bound does not bound arbitrary SDK publish or host scheduling stalls.
+regeneration gets no answer. The browser waits at most 175 seconds, 125 more
+with a non-default base, from its request or the acceptance, whichever came
+last. This covers the configured generation deadline, one final rejoin grace
+and every delivery attempt. This browser bound does not bound arbitrary SDK
+publish or host scheduling stalls.
 The terminal failure determines eligibility, so a transient burst followed by
 a schema failure regenerates as a schema failure. Reloads and process
 restarts cannot recover the inputs.
@@ -512,8 +515,9 @@ fill the slots with rooms it never enters (the log line reads
 that ended, stops counting. Task completion and panic release slots. A report
 recovery window keeps its slot and LiveKit connection until expiry or 30 seconds
 after candidate departure, at most five minutes plus a 125-second regeneration
-and a 30-second rejoin. Provider outages can therefore fill the slots with
-completed interviews awaiting recovery; admission still refuses excess
+(250 seconds with a non-default base) and a 30-second rejoin. Provider outages
+can therefore fill the slots with completed interviews awaiting recovery;
+admission still refuses excess
 starts rather than exceeding this bound. A fixed local room refuses a new
 start while its existing agent is finalizing or awaiting report recovery, as
 `dispatch_refused ... reason=finalizing` rather than `at_capacity`; it cannot

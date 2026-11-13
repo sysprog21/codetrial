@@ -888,9 +888,9 @@ const textEncoder = new TextEncoder();
 /// function-local, moving it left the whole suite green with the supported-card
 /// branch no longer rendering, which is the defect a local constant invites.
 export const ACTIVE_CONTRACT = {
-  bundleVersion: 45,
+  bundleVersion: 46,
   livePromptVersion: 34,
-  reportPromptVersion: 25,
+  reportPromptVersion: 26,
   reportSchemaVersion: 4,
   rubricVersion: 1,
 };
@@ -2161,6 +2161,21 @@ export const TURN_SPEECH_PEAK = 0.06;
 /// usually starts within a second of the window; after this the ring is only
 /// claiming a turn change nobody is making.
 export const TURN_RING_LINGER_MS = 2000;
+
+/// The agent attributes carrying how long the page waits for the report before
+/// offering a way out, in milliseconds, and how long it waits on a regenerated
+/// one, in seconds. `REPORT_ESCAPE_ATTRIBUTE` and `REPORT_RETRY_ATTRIBUTE` in
+/// `src/livekit/session.rs` publish them, because only the agent knows which
+/// report deadline it runs under.
+export const REPORT_ESCAPE_ATTRIBUTE = "codetrial.report_escape_ms";
+export const REPORT_RETRY_ATTRIBUTE = "codetrial.report_retry_s";
+
+/// The wait the agent published under `key`, or 0 when it published none, so a
+/// caller holding its own floor keeps it.
+export function agentReportWait(attributes, key) {
+  const value = Number(attributes?.[key]);
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
 
 /// The window the agent published, or null when it published none. No
 /// fallback: a ring drawn against a guessed window would count down to a
