@@ -79,6 +79,24 @@
         ]
       ],
       "expected": 11
+    },
+    {
+      "label": "best trades span a dip",
+      "input": [
+        [
+          1,
+          2,
+          4,
+          2,
+          5,
+          7,
+          2,
+          4,
+          9,
+          0
+        ]
+      ],
+      "expected": 13
     }
   ],
   "paramNames": [
