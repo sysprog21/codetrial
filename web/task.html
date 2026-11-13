@@ -4,6 +4,8 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>CodeTrial task</title>
+    <link rel="stylesheet" href="/theme.css" />
+    <link rel="stylesheet" href="/theme-override.css" />
     <link rel="stylesheet" href="/task.css" />
     <script src="/vendor/livekit-client.js"></script>
     <script src="/runtime-config.js"></script>
@@ -252,7 +254,7 @@
             <!-- The textarea stays the source of truth and keeps native
                  editing; the two layers behind it only paint the line numbers
                  and the syntax colours. -->
-            <div class="editor-stack">
+            <div class="editor-stack" data-theme="dark">
               <pre class="editor-lines" aria-hidden="true"></pre>
               <pre
                 class="editor-highlight"

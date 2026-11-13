@@ -54,7 +54,7 @@ function drawerMarkup(sidebar = false) {
   const body = sidebar
     ? `<main class="interview-shell"><aside class="interview-sidebar"><select id="sidebar-field"><option>One</option></select><button id="yield-turn" type="button">Your turn is done</button></aside><div class="splitter"></div>${panel}${endingMarkup()}</main>`
     : panel;
-  return `<!doctype html><html><head><link rel="stylesheet" href="/styles.css"></head><body>${body}</body></html>`;
+  return `<!doctype html><html><head><link rel="stylesheet" href="/theme.css"><link rel="stylesheet" href="/styles.css"></head><body>${body}</body></html>`;
 }
 
 test("selecting an example pen color switches from erasing to drawing", async (t) => {

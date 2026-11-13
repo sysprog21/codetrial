@@ -622,6 +622,7 @@ test(
       await page.emulateMedia({ colorScheme });
       await reference.emulateMedia({ colorScheme });
       await reference.setContent('<body class="practice-page"></body>');
+      await reference.addStyleTag({ content: read("web/theme.css") });
       await reference.addStyleTag({ content: read("web/styles.css") });
       const colors = (target) =>
         target.locator("body").evaluate((el) => {
@@ -643,11 +644,10 @@ test(
       ),
       true,
     );
-    const css = await page.request.get(new URL("/styles.css", page.url()).href);
-    assert.equal(
-      await css.text(),
-      readFileSync(join(root, "web/styles.css"), "utf8"),
-    );
+    for (const name of ["theme.css", "styles.css"]) {
+      const css = await page.request.get(new URL(`/${name}`, page.url()).href);
+      assert.equal(await css.text(), read(`web/${name}`));
+    }
   },
 );
 

@@ -1,18 +1,22 @@
 # Styles and layout
 
-`web/styles.css` and page markup. The theme rules
+`web/theme.css`, `web/styles.css` and page markup. The theme rules
 [codetrial-web](../../codetrial-web/SKILL.md#what-review-checks-in-a-ui-change)
 states are not repeated here.
 
 ## Use theme tokens and respect the cascade
 
-Applies to: `web/styles.css`, `src/web/setup.rs`
+Applies to: `web/theme.css`, `web/styles.css`, `web/task.css`, `web/peer.css`,
+`src/web/setup.rs`
 
 The editor has light and dark palettes (`.editor-stack[data-theme="light"]` and
 the `prefers-color-scheme` twin). Flag hard-coded dark colors (`#d4d4d4`,
 `#404040`, the page's `--muted`/`--hairline` used in the gutter), palettes
 written out twice with no test comparing them, and `--hairline` used for a
-control edge (about 1.3:1, while `--control-border` meets 3:1). Cascade traps:
+control edge (about 1.3:1, while `--control-border` meets 3:1). In
+`web/theme.css` literal values are the palette itself and expected; there,
+flag a role defined in one scheme's block and missing from the other, or a
+derived token left on `:root` while its input is overridden. Cascade traps:
 `display: grid !important` beats the global `[hidden] { display:none !important
 }`, an id selector outranks the class-level reduced-motion override, a value
 with `safe` that older browsers drop entirely (declare the plain value first),

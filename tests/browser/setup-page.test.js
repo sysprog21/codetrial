@@ -13,7 +13,8 @@ const htmlStart = start + 'const SETUP_PAGE: &str = r#"'.length;
 const htmlEnd = source.indexOf('"#;', htmlStart);
 assert.notEqual(htmlEnd, -1, "setup page constant ends");
 const html = source.slice(htmlStart, htmlEnd);
-const lobbyCss = read("web/styles.css");
+// The lobby's palette is the theme plus the lobby's own rules, in page order.
+const lobbyCss = read("web/theme.css") + read("web/styles.css");
 const paletteTokens = [
   ...new Set([...html.matchAll(/^\s+(--[a-z-]+):/gm)].map((match) => match[1])),
 ];

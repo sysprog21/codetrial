@@ -31,6 +31,7 @@ FIELDS = ("motivation",)
 INTENT_FIELDS = ("goal", "check")
 INTENT_LIMIT = 2000
 CONFIDENCE = ("sure", "probably", "guessing", "unknown")
+WEB = Path(__file__).resolve().parents[3] / "web"
 ASSETS = {
     "/": ("index.html", "text/html"),
     "/app.js": ("app.js", "text/javascript"),
@@ -38,7 +39,10 @@ ASSETS = {
     "/explainer.js": ("explainer.js", "text/javascript"),
     "/debtlens.js": ("debtlens.js", "text/javascript"),
     "/style.css": ("style.css", "text/css"),
-    "/styles.css": ("shared", "text/css"),
+    # The application's own stylesheets, served from its web/ tree rather
+    # than copied here: an absolute path stays itself when joined below.
+    "/theme.css": (WEB / "theme.css", "text/css"),
+    "/styles.css": (WEB / "styles.css", "text/css"),
 }
 LIMIT = 1024 * 1024
 DEFAULT_PORT = 7777
@@ -935,12 +939,7 @@ def server(workbench, port, *, reviewer="manual", token=None):
             route = urlsplit(self.path).path
             if route in ASSETS:
                 name, kind = ASSETS[route]
-                path = (
-                    Path(__file__).resolve().parents[3] / "web/styles.css"
-                    if name == "shared"
-                    else assets / name
-                )
-                return self.reply(200, path.read_bytes(), kind)
+                return self.reply(200, (assets / name).read_bytes(), kind)
             if route not in ("/api/session", "/api/diff"):
                 return self.reply(404, {"error": "Not found"})
             if not self.authorized(token):

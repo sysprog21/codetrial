@@ -88,15 +88,22 @@ The gate cannot see these, and reviews here keep raising them:
   in both lobby schemes.
 - Theme. The interview page is dark-only; the lobby follows the system scheme,
   with its light values under `.practice-page`; the editor has its own light
-  theme. A color, a corner or a font size elsewhere is one of the role tokens or
-  scale steps on `:root` in `web/styles.css`, each commented with its role and
-  contrast; a role the page lacks is a new token with its lobby light value
-  beside it, never a literal in a rule. A custom property holding a color
-  literal belongs in `:root` or a theme block, not a component selector, and a
-  named color such as `white` is a literal too: use the token for its
-  role (`--on-accent` for text on an accent fill). Match what the lobby renders on `main`,
-  not a screenshot in the issue (#147). A new editor color is a `--code-*`
-  custom property in `web/styles.css`, with its light value in both
+  theme. A color, or a type, corner, depth or motion step, is one of the role
+  tokens or scale steps in `web/theme.css`, each commented with its role and
+  contrast; the component sheets (`styles.css`, `task.css`, `peer.css`) only
+  name them, so a deployment's theme is a set of overrides in
+  `web/theme-override.css`, which ships empty, and
+  `tests/browser/theme.test.js` fails on a literal color in a component sheet.
+  A role the page lacks is a new token with its lobby light value beside it,
+  never a literal in a rule. A named color such as `white` is a literal too:
+  use the token for its role (`--on-accent` for text on an accent fill). A
+  token derived from another (an alias or a `color-mix`) resolves where it is
+  declared, so it sits in the same block as every override of its inputs, as
+  `--practice-tint` does in each `.practice-page` block, or in the rule that
+  uses it; one declared only on `:root` keeps the dark value under the lobby's
+  light override. Match what the lobby renders on `main`, not a screenshot in
+  the issue (#147). A new editor color is a `--code-*` custom property in
+  `web/theme.css`, with its light value in both
   `.editor-stack[data-theme="light"]` and the `prefers-color-scheme: light`
   block, never a hex value inline (#252, #267).
 - Keys. A global `keydown` handler ignores IME composition (`isComposing`, and

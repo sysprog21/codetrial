@@ -807,6 +807,19 @@ win where they exist. That root is `web/` relative to the working directory
 unless `CODETRIAL_WEB_DIR` names another, so running the binary from a checkout
 picks up edits with no environment variable set.
 
+The same fallback is how a deployment restyles the pages. The colors and the
+type, corner, depth and motion scales the pages draw with are custom properties
+in `web/theme.css`, and the component stylesheets (`styles.css`, `task.css`,
+`peer.css`) name those roles instead of writing a color, which
+`tests/browser/theme.test.js` holds them to. Every page loads
+`web/theme-override.css` right after `theme.css`, and it ships empty, so a
+directory holding nothing but a filled-in `theme-override.css`, named by
+`CODETRIAL_WEB_DIR`, restyles every page while the rest, the defaults
+included, is served from the binary; a release that adds a token reaches it
+without a merge. The comments in `theme.css` give each role and the contrast
+a replacement value has to keep. The setup page, the desktop start page and
+the recording template carry their own copies and do not read it.
+
 Static assets use ETags for revalidation. Ordinary files require revalidation
 with `no-cache`; vendored assets may be cached for one day. Conditional GET and
 HEAD accept `If-None-Match: *`, tag lists, repeated header fields, and weak or
