@@ -192,6 +192,8 @@ def analyze(raw):
                 raise ValueError(f"{rating_path}.scores: expected object")
             if unknown := sorted(set(scores) - set(PHASES)):
                 raise ValueError(f"{rating_path}.scores: unknown={unknown}")
+            if not applicable & scores.keys():
+                raise ValueError(f"{rating_path}.scores: no applicable phase recorded")
             if applicable <= scores.keys():
                 qwk_reviewers.add(reviewer)
             for phase, raw_value in scores.items():

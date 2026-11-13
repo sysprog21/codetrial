@@ -46,6 +46,8 @@ An adjudicator who reviews only disputed phases omits the other keys from their
 `null` means the reviewer judged that phase unassessable. Reviewer order does
 not assign roles. Only recorded judgments enter assessability validation and
 numeric metrics; missing judgments are never replaced with scores or `null`.
+Each human rating row must record at least one applicable phase, with a numeric
+score or an explicit `null`; inapplicable keys alone do not satisfy this minimum.
 Unknown phase keys and invalid score values remain invalid input. Each applicable
 phase needs at least two recorded human judgments from different reviewer IDs;
 an adjudicator's recorded judgment also counts. The input carries no reviewer

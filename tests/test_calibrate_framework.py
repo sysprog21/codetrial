@@ -4,7 +4,6 @@ import itertools
 import json
 import subprocess
 import sys
-import tempfile
 import unittest
 from fractions import Fraction
 from pathlib import Path
@@ -261,7 +260,13 @@ class CalibrationTests(unittest.TestCase):
                     for rating in sample["humanRatings"]:
                         del rating["scores"][phase]
                     sample["humanRatings"].append(
-                        {"reviewerId": "reviewer-c", "scores": {phase: value}}
+                        {
+                            "reviewerId": "reviewer-c",
+                            "scores": {
+                                "Repeat": sample["modelScores"]["Repeat"],
+                                phase: value,
+                            },
+                        }
                     )
                 if source in ("model", "both"):
                     error = rf"\$\.samples\[0\]\.modelScores\.{phase}: not applicable to coding_only"
@@ -317,7 +322,10 @@ class CalibrationTests(unittest.TestCase):
             raw = self.fixture("passing-synthetic.json")
             sample = raw["samples"][0]
             original = sample["humanRatings"]
-            third = {"reviewerId": "reviewer-c", "scores": {phase: value}}
+            third = {
+                "reviewerId": "reviewer-c",
+                "scores": {"Repeat": sample["modelScores"]["Repeat"], phase: value},
+            }
             for ratings in itertools.permutations([*original, third]):
                 with self.subTest(
                     phase=phase, value=value, order=[r["reviewerId"] for r in ratings]
@@ -720,6 +728,7 @@ class CalibrationTests(unittest.TestCase):
         for scores in (
             None,
             [],
+            {},
             {"Unknown": 30},
             {"Repeat": True},
             {"Repeat": 1.5},
@@ -733,6 +742,39 @@ class CalibrationTests(unittest.TestCase):
                 )
                 with self.assertRaisesRegex(ValueError, r"humanRatings\[2\]\.scores"):
                     CAL.analyze(raw)
+
+    def test_each_rating_row_needs_an_applicable_judgment(self):
+        cases = (
+            (0, {}),
+            (1, {}),
+            (0, {"Situation": None}),
+            (0, {"Situation": None, "Task": None, "Action": None, "Result": None}),
+        )
+        for (sample_index, scores), position in itertools.product(cases, range(3)):
+            with self.subTest(sample=sample_index, scores=scores, position=position):
+                raw = self.fixture("passing-synthetic.json")
+                raw["samples"][sample_index]["humanRatings"].insert(
+                    position, {"reviewerId": "reviewer-c", "scores": scores}
+                )
+                with self.assertRaisesRegex(
+                    ValueError,
+                    rf"humanRatings\[{position}\]\.scores: no applicable phase recorded$",
+                ):
+                    CAL.analyze(raw)
+
+    def test_one_applicable_judgment_keeps_partial_ratings_valid(self):
+        for sample_index, phase in ((0, "Repeat"), (2, "Algorithm"), (1, "Situation")):
+            with self.subTest(sample=sample_index, phase=phase):
+                raw = self.fixture("passing-synthetic.json")
+                baseline = CAL.analyze(raw)
+                sample = raw["samples"][sample_index]
+                sample["humanRatings"].append(
+                    {
+                        "reviewerId": "reviewer-c",
+                        "scores": {phase: sample["modelScores"][phase]},
+                    }
+                )
+                self.assertEqual(CAL.analyze(raw), baseline)
 
     def test_invalid_unassessable_samples_are_rejected(self):
         for defect in (
@@ -781,44 +823,40 @@ class CalibrationTests(unittest.TestCase):
             ("failing-synthetic.json", 1, "NOT_CALIBRATED"),
             ("malformed-synthetic.json", 2, None),
         )
-        with tempfile.TemporaryDirectory() as directory:
-            for name, code, status in cases:
-                input_path = Path(directory) / name
-                input_path.write_text(json.dumps(self.fixture(name)), encoding="utf-8")
-                for output_format in ("json", "markdown"):
-                    with self.subTest(case=name, format=output_format):
-                        result = subprocess.run(
-                            [
-                                sys.executable,
-                                str(ROOT / "scripts/calibrate-framework.py"),
-                                str(input_path),
-                                "--format",
-                                output_format,
-                            ],
-                            capture_output=True,
-                            text=True,
-                            check=False,
+        for name, code, status in cases:
+            input_path = ROOT / "tests" / "fixtures" / "calibration" / name
+            for output_format in ("json", "markdown"):
+                with self.subTest(case=name, format=output_format):
+                    result = subprocess.run(
+                        [
+                            sys.executable,
+                            str(ROOT / "scripts/calibrate-framework.py"),
+                            str(input_path),
+                            "--format",
+                            output_format,
+                        ],
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                    self.assertEqual(result.returncode, code, result.stderr)
+                    if code == 2:
+                        self.assertEqual(result.stdout, "")
+                        self.assertTrue(
+                            result.stderr.startswith("calibration input invalid: "),
+                            result.stderr,
                         )
-                        self.assertEqual(result.returncode, code, result.stderr)
-                        if code == 2:
-                            self.assertEqual(result.stdout, "")
-                            self.assertTrue(
-                                result.stderr.startswith("calibration input invalid: "),
-                                result.stderr,
-                            )
-                            continue
-                        self.assertEqual(result.stderr, "")
-                        if output_format == "json":
-                            self.assertEqual(
-                                json.loads(result.stdout)["status"], status
-                            )
-                        else:
-                            self.assertTrue(
-                                result.stdout.startswith(
-                                    f"# Framework calibration: {status}\n"
-                                ),
-                                result.stdout,
-                            )
+                        continue
+                    self.assertEqual(result.stderr, "")
+                    if output_format == "json":
+                        self.assertEqual(json.loads(result.stdout)["status"], status)
+                    else:
+                        self.assertTrue(
+                            result.stdout.startswith(
+                                f"# Framework calibration: {status}\n"
+                            ),
+                            result.stdout,
+                        )
 
     def test_representative_synthetic_fixture_passes(self):
         result = CAL.analyze(self.fixture("passing-synthetic.json"))
