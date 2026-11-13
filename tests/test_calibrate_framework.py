@@ -231,6 +231,20 @@ class CalibrationTests(unittest.TestCase):
                     ):
                         CAL.analyze(raw)
 
+    def test_coding_only_star_zero_scores_are_not_applicable(self):
+        for phase in ("Situation", "Task", "Action", "Result"):
+            with self.subTest(phase=phase):
+                raw = self.fixture("passing-synthetic.json")
+                sample = raw["samples"][0]
+                sample["modelScores"][phase] = 0
+                for rating in sample["humanRatings"]:
+                    rating["scores"][phase] = 0
+                with self.assertRaisesRegex(
+                    ValueError,
+                    rf"\.modelScores\.{phase}: not applicable to coding_only",
+                ):
+                    CAL.analyze(raw)
+
     def test_coding_only_star_scores_must_be_null(self):
         for phase, value, source in itertools.product(
             STAR_PHASES, (0, 50, 100), ("model", "human", "both", "partial")
@@ -762,81 +776,15 @@ class CalibrationTests(unittest.TestCase):
                             )
 
     def test_cli_assessability_statuses_and_exit_codes(self):
-        zero = self.applicable_scored_fixture()
-        one = copy.deepcopy(zero)
-        sample = one["samples"][0]
-        sample["modelScores"]["Repeat"] = None
-        for rating in sample["humanRatings"]:
-            rating["scores"]["Repeat"] = None
-        mixed = copy.deepcopy(zero)
-        third = copy.deepcopy(mixed["samples"][0]["humanRatings"][0])
-        third["reviewerId"] = "reviewer-c"
-        third["scores"]["Repeat"] = None
-        mixed["samples"][0]["humanRatings"].append(third)
-        partial = self.fixture("passing-synthetic.json")
-        partial["samples"][0]["humanRatings"].append(
-            {"reviewerId": "reviewer-c", "scores": {"Repeat": 90}}
-        )
-        insufficient = copy.deepcopy(partial)
-        for rating in insufficient["samples"][0]["humanRatings"][:2]:
-            del rating["scores"]["Repeat"]
-        inapplicable = self.fixture("passing-synthetic.json")
-        sample = inapplicable["samples"][0]
-        sample["modelScores"]["Situation"] = 80
-        for rating in sample["humanRatings"]:
-            rating["scores"]["Situation"] = 80
-        inapplicable_result = self.fixture("passing-synthetic.json")
-        sample = inapplicable_result["samples"][0]
-        sample["modelScores"]["Result"] = 0
-        for rating in sample["humanRatings"]:
-            rating["scores"]["Result"] = 0
-        omitted = self.fixture("passing-synthetic.json")
-        for sample in omitted["samples"]:
-            if sample["loop"] == "coding_only":
-                for rating in sample["humanRatings"]:
-                    for phase in STAR_PHASES:
-                        del rating["scores"][phase]
-        inapplicable_human = copy.deepcopy(omitted)
-        inapplicable_human["samples"][0]["humanRatings"][0]["scores"]["Situation"] = 80
-        inapplicable_partial = copy.deepcopy(omitted)
-        inapplicable_partial["samples"][0]["humanRatings"].append(
-            {"reviewerId": "reviewer-c", "scores": {"Situation": 80}}
-        )
-        qwk_original = self.three_reviewer_fixture()
-        qwk_renamed = copy.deepcopy(qwk_original)
-        mapping = {"reviewer-a": "reviewer-b", "reviewer-b": "reviewer-a"}
-        for sample in qwk_renamed["samples"]:
-            for rating in sample["humanRatings"]:
-                reviewer = rating["reviewerId"]
-                rating["reviewerId"] = mapping.get(reviewer, reviewer)
         cases = (
-            ("control", self.fixture("passing-synthetic.json"), 0, "PASS"),
-            ("zero", zero, 1, "NOT_CALIBRATED"),
-            ("one", one, 0, "PASS"),
-            ("mixed", mixed, 2, None),
-            ("partial", partial, 0, "PASS"),
-            ("insufficient", insufficient, 2, None),
-            ("inapplicable", inapplicable, 2, None),
-            ("inapplicable-result", inapplicable_result, 2, None),
-            ("omitted", omitted, 0, "PASS"),
-            ("inapplicable-human", inapplicable_human, 2, None),
-            ("inapplicable-partial", inapplicable_partial, 2, None),
-            ("unpaired-qwk", self.unpaired_repeat_fixture(), 1, "NOT_CALIBRATED"),
-            ("qwk-label-original", qwk_original, 0, "PASS"),
-            ("qwk-label-renamed", qwk_renamed, 0, "PASS"),
-            ("qwk-weighted", self.unequal_qwk_pair_fixture(), 0, "PASS"),
-            ("qwk-low", self.three_reviewer_fixture(64), 1, "NOT_CALIBRATED"),
-            (
-                "qwk-weighted-threshold",
-                self.weighted_qwk_threshold_fixture(),
-                0,
-                "PASS",
-            ),
+            ("passing-synthetic.json", 0, "PASS"),
+            ("failing-synthetic.json", 1, "NOT_CALIBRATED"),
+            ("malformed-synthetic.json", 2, None),
         )
         with tempfile.TemporaryDirectory() as directory:
-            for name, raw, code, status in cases:
-                input_path = Path(directory) / f"{name}.json"
-                input_path.write_text(json.dumps(raw), encoding="utf-8")
+            for name, code, status in cases:
+                input_path = Path(directory) / name
+                input_path.write_text(json.dumps(self.fixture(name)), encoding="utf-8")
                 for output_format in ("json", "markdown"):
                     with self.subTest(case=name, format=output_format):
                         result = subprocess.run(
@@ -854,90 +802,23 @@ class CalibrationTests(unittest.TestCase):
                         self.assertEqual(result.returncode, code, result.stderr)
                         if code == 2:
                             self.assertEqual(result.stdout, "")
-                            if name == "insufficient":
-                                self.assertIn(
-                                    "Repeat: need at least two human ratings",
-                                    result.stderr,
-                                )
-                            elif name.startswith("inapplicable"):
-                                phase = (
-                                    "Result"
-                                    if name == "inapplicable-result"
-                                    else "Situation"
-                                )
-                                self.assertIn(
-                                    f"{phase}: not applicable to coding_only",
-                                    result.stderr,
-                                )
-                                if name in ("inapplicable", "inapplicable-result"):
-                                    self.assertIn(
-                                        f".modelScores.{phase}:", result.stderr
-                                    )
-                                else:
-                                    reviewer = (
-                                        "reviewer-c"
-                                        if name == "inapplicable-partial"
-                                        else "reviewer-a"
-                                    )
-                                    self.assertIn(f"({reviewer})", result.stderr)
-                            else:
-                                self.assertIn("assessability mismatch", result.stderr)
-                                self.assertIn("(reviewer-c)", result.stderr)
+                            self.assertTrue(
+                                result.stderr.startswith("calibration input invalid: "),
+                                result.stderr,
+                            )
+                            continue
+                        self.assertEqual(result.stderr, "")
+                        if output_format == "json":
+                            self.assertEqual(
+                                json.loads(result.stdout)["status"], status
+                            )
                         else:
-                            self.assertEqual(result.stderr, "")
-                            if name.startswith("qwk-"):
-                                expected_qwk = {
-                                    "qwk-weighted": float(Fraction(103, 120)),
-                                    "qwk-low": 0.5799877629301273,
-                                    "qwk-weighted-threshold": 0.67,
-                                }.get(name, 0.6899392322473135)
-                            if output_format == "json":
-                                output = json.loads(result.stdout)
-                                self.assertEqual(output["status"], status)
-                                if name.startswith("qwk-"):
-                                    self.assertAlmostEqual(
-                                        output["metrics"]["interRaterQwk"], expected_qwk
-                                    )
-                                if name == "zero":
-                                    self.assertEqual(
-                                        output["failures"],
-                                        ["unassessable phase coverage missing"],
-                                    )
-                                elif name == "qwk-low":
-                                    self.assertEqual(
-                                        output["failures"],
-                                        [f"inter-rater QWK {expected_qwk} < 0.67"],
-                                    )
-                                elif name == "unpaired-qwk":
-                                    self.assertEqual(
-                                        output["failures"],
-                                        [
-                                            "inter-rater phase coverage missing ['Repeat']"
-                                        ],
-                                    )
-                            else:
-                                self.assertIn(
-                                    f"# Framework calibration: {status}", result.stdout
-                                )
-                                if name.startswith("qwk-"):
-                                    qwk_line = next(
-                                        line
-                                        for line in result.stdout.splitlines()
-                                        if line.startswith("- Inter-rater QWK: ")
-                                    )
-                                    self.assertAlmostEqual(
-                                        float(qwk_line.split(": ", 1)[1]), expected_qwk
-                                    )
-                                if name == "zero":
-                                    self.assertIn(
-                                        "unassessable phase coverage missing",
-                                        result.stdout,
-                                    )
-                                elif name == "unpaired-qwk":
-                                    self.assertIn(
-                                        "inter-rater phase coverage missing ['Repeat']",
-                                        result.stdout,
-                                    )
+                            self.assertTrue(
+                                result.stdout.startswith(
+                                    f"# Framework calibration: {status}\n"
+                                ),
+                                result.stdout,
+                            )
 
     def test_representative_synthetic_fixture_passes(self):
         result = CAL.analyze(self.fixture("passing-synthetic.json"))

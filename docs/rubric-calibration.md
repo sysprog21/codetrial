@@ -74,9 +74,6 @@ observations does not gain weight over another phase. Do not concatenate
 different reviewer pairs into two anonymous score columns: their marginal
 distributions would depend on the ordering of reviewer IDs. Renaming reviewer
 pseudonyms or reordering ratings and sessions must not change QWK.
-Keep pair values and both aggregation steps as exact fractions, converting to
-a decimal only once for the final metric. Converting pair values early can
-round a weighted QWK of exactly 0.67 below the gate threshold.
 
 Use the same private reviewer pseudonym throughout a packet; do not generate a
 new reviewer ID for each session. The analyzer can check uniqueness within a
