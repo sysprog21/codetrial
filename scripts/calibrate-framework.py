@@ -199,7 +199,7 @@ def analyze(raw):
                 human[phase].append((reviewer, value))
         for phase in PHASES:
             values = human[phase]
-            if sample["loop"] == "coding_only" and phase in STAR_PHASES:
+            if phase not in applicable:
                 if model[phase] is not None:
                     raise ValueError(
                         f"{path}.modelScores.{phase}: not applicable to coding_only; expected null"
