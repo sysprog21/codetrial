@@ -3,6 +3,7 @@ import {
   codingLoop,
   interviewMode,
   frameworkPhases,
+  modeIsWhiteboard,
   sanitizeReport,
   unclearLinesOf,
 } from "./lib.js";
@@ -70,11 +71,18 @@ export function normalizeProgressEntry(raw) {
   const wrapper = raw && typeof raw === "object" ? raw : {};
   const entry = unwrapEntry(raw);
   const report = sanitizeReport(entry.report);
+  const recordedDecision = ["HIRE", "NO_HIRE"].includes(entry.report?.decision)
+    ? entry.report.decision
+    : null;
   const recordedMetric = (key) =>
     typeof entry.report?.[key] === "number" &&
     Number.isFinite(entry.report[key])
       ? report[key]
       : null;
+  const savedMetric = (key) => {
+    const value = recordedMetric(key);
+    return value !== null && value === entry.report[key] ? value : undefined;
+  };
   const durationMin =
     Number.isInteger(entry.durationMin) &&
     entry.durationMin >= 10 &&
@@ -106,16 +114,36 @@ export function normalizeProgressEntry(raw) {
     interviewMode: interviewMode(
       entry.interviewMode ?? entry.report?.interviewMode,
     ),
-    recordedDecision: ["HIRE", "NO_HIRE"].includes(entry.report?.decision)
-      ? entry.report.decision
-      : null,
+    recordedDecision,
+    scored: !report.incomplete && recordedDecision !== null,
     recordedCodingScore: recordedMetric("codingScore"),
     recordedCommunicationScore: recordedMetric("communicationScore"),
     recordedHintsUsed: recordedMetric("hintsUsed"),
+    savedMetrics: {
+      codingScore: savedMetric("codingScore"),
+      communicationScore:
+        entry.report?.communicationScore === null
+          ? null
+          : savedMetric("communicationScore"),
+      hintsUsed: savedMetric("hintsUsed"),
+    },
     // Only the short local history keeps it; anything else reopens without.
     code: typeof entry.code === "string" ? entry.code : null,
     report,
     unclearLines: unclearLinesOf(entry.unclearLines),
+  };
+}
+
+export function savedAttemptReport(attempt) {
+  return {
+    ...attempt.report,
+    ...((modeIsWhiteboard(attempt.interviewMode) ||
+      attempt.report.interviewMode !== undefined) && {
+      interviewMode: attempt.interviewMode,
+    }),
+    incomplete: !attempt.scored,
+    unscored: !attempt.scored && !attempt.report.incomplete,
+    ...attempt.savedMetrics,
   };
 }
 

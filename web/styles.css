@@ -4047,6 +4047,13 @@ body:not([data-recording]) .replay-detail > :not(header) {
   gap: 0.5rem;
 }
 
+.lobby .attempt-score {
+  display: inline-block;
+  width: max-content;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
 .lobby #random-problem,
 .lobby #practice-list-pick,
 .lobby #sequel-suggestion-pick,

@@ -158,6 +158,7 @@ function unwrapAttempt(raw) {
         raw.interviewMode ?? raw.report?.interviewMode,
       ),
       recordedDecision: raw.recordedDecision,
+      scored: raw.scored,
       recordedCodingScore: raw.recordedCodingScore,
       recordedCommunicationScore: raw.recordedCommunicationScore,
       recordedHintsUsed: raw.recordedHintsUsed,
@@ -168,6 +169,7 @@ function unwrapAttempt(raw) {
 }
 
 function isAssessedAttempt(entry) {
+  if (typeof entry?.scored === "boolean") return entry.scored;
   return (
     Boolean(entry?.report) &&
     !entry.report.incomplete &&

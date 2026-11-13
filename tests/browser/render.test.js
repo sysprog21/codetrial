@@ -2552,8 +2552,7 @@ test("a silent session renders communication as not assessed", () => {
   };
 
   const card = reportMarkup(session);
-  assert.match(card, /Interviewer communication/);
-  assert.match(card, /Not assessed/);
+  assert.match(card, /<p>Communication<\/p><strong>Not assessed<\/strong>/);
   assert.doesNotMatch(card, />null<span> \/ 100/);
 
   const markdown = reportMarkdown(session);
@@ -2971,10 +2970,7 @@ test("report renders same-category progress, deltas, and side-by-side phase feed
     /Compared with Step Ways · 2026-01-02 · NO HIRE \(previous problem in this category\)/,
   );
   assert.match(html, /<strong>Coding:<\/strong> 60 -> 82 \(\+22\)/);
-  assert.match(
-    html,
-    /<strong>Interviewer communication:<\/strong> 85 -> 78 \(-7\)/,
-  );
+  assert.match(html, /<strong>Communication:<\/strong> 85 -> 78 \(-7\)/);
   assert.match(html, /<strong>Hints used:<\/strong> 2 -> 0 \(-2\)/);
   assert.match(
     html,

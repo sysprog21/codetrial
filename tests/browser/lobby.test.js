@@ -6830,6 +6830,250 @@ for (const account of [true, false]) {
   );
 }
 
+for (const account of [true, false]) {
+  lobbyTest(
+    `past attempt rows show recorded scores in ${account ? "account" : "device"} history`,
+    async (page) => {
+      session = { signedIn: account, user: { login: "candidate" } };
+      const cases = [
+        [
+          {
+            decision: "HIRE",
+            codingScore: 82,
+            communicationScore: 74,
+            interviewMode: "whiteboard",
+          },
+          "HIRE · Coding 82/100 · Communication 74/100",
+        ],
+        [
+          {
+            decision: "NO_HIRE",
+            codingScore: 55,
+            communicationScore: 68,
+          },
+          "NO HIRE · Board work 55/100 · Communication 68/100",
+        ],
+        [
+          { decision: "HIRE", codingScore: 82, communicationScore: null },
+          "HIRE · Coding 82/100 · Communication not assessed",
+        ],
+        [
+          {
+            decision: "NO_HIRE",
+            codingScore: 0,
+            communicationScore: 45,
+            hintsUsed: 0,
+          },
+          "NO HIRE · Coding 0/100 · Communication 45/100",
+        ],
+        [
+          {
+            decision: "HIRE",
+            incomplete: true,
+            codingScore: 82,
+            communicationScore: 74,
+          },
+          "INCOMPLETE",
+        ],
+        [{ codingScore: 82, communicationScore: 74 }, "UNSCORED"],
+        [
+          { decision: "UNKNOWN", codingScore: 82, communicationScore: 74 },
+          "UNSCORED",
+        ],
+        [
+          { decision: "HIRE", communicationScore: 74 },
+          "HIRE · Communication 74/100",
+        ],
+        [
+          { decision: "HIRE", codingScore: null, communicationScore: 74 },
+          "HIRE · Communication 74/100",
+        ],
+        [
+          { decision: "HIRE", codingScore: "82", communicationScore: 74 },
+          "HIRE · Communication 74/100",
+        ],
+        [{ decision: "HIRE", codingScore: 82 }, "HIRE · Coding 82/100"],
+        [
+          { decision: "HIRE", codingScore: 82, communicationScore: "74" },
+          "HIRE · Coding 82/100",
+        ],
+        [{ decision: "HIRE" }, "HIRE"],
+        [
+          { decision: "HIRE", communicationScore: 0 },
+          "HIRE · Communication 0/100",
+        ],
+        [
+          {
+            decision: "HIRE",
+            codingScore: 82,
+            communicationScore: 74,
+            interviewContract: { ...ACTIVE_CONTRACT, reportSchemaVersion: 999 },
+          },
+          "INCOMPLETE",
+        ],
+        [
+          {
+            decision: "HIRE",
+            codingScore: -5,
+            communicationScore: 120,
+            hintsUsed: 150,
+          },
+          "HIRE",
+        ],
+        [{ decision: "HIRE", codingScore: 82.5 }, "HIRE"],
+      ];
+      const saved = cases.map(([report], index) => ({
+        id: `scores-${index}`,
+        problemId: EASY[0],
+        problemTitle: `${index === 1 ? "Whiteboard interview " : ""}Score example ${index}`,
+        difficulty: "Easy",
+        ...(index === 0 && { interviewMode: "editor" }),
+        ...(index === 1
+          ? { interviewMode: "whiteboard" }
+          : { language: "python" }),
+        date: new Date(Date.UTC(2026, 0, index + 1)).toISOString(),
+        report,
+      }));
+      if (account)
+        reports = saved.map((payload) => ({ id: payload.id, payload }));
+      else
+        await page.addInitScript((entries) => {
+          localStorage.setItem("codetrial_history", JSON.stringify(entries));
+        }, saved);
+      await lobby(page);
+      const rows = page.locator("#attempt-history > li");
+      await reaches(
+        page,
+        (count) =>
+          document.querySelectorAll("#attempt-history > li").length === count,
+        cases.length,
+      );
+      for (const [index, [, summary]] of cases.entries()) {
+        const row = rows.filter({ hasText: `Score example ${index} ·` });
+        const line = row.locator(":scope > p");
+        const text = (await line.innerText()).replaceAll("\u00a0", " ");
+        assert.ok(await line.isVisible());
+        assert.equal(
+          text.slice(text.indexOf(" · Easy · ")),
+          ` · Easy · ${index === 1 ? "Language not recorded" : "Python"} · ${summary}`,
+        );
+        for (const score of await row
+          .locator(".attempt-score")
+          .allTextContents())
+          assert.ok(score.startsWith("·\u00a0"), JSON.stringify(score));
+        assert.ok(await row.locator(":scope > div").isHidden());
+      }
+      const board = rows.filter({ hasText: "Score example 1 ·" });
+      const incomplete = rows.filter({ hasText: "Score example 4 ·" });
+      await incomplete.getByRole("button", { name: "Open report" }).click();
+      const incompleteCard = incomplete.locator(":scope > div");
+      assert.ok(
+        await incompleteCard
+          .getByText("INCOMPLETE", { exact: true })
+          .isVisible(),
+      );
+      assert.equal(
+        await incompleteCard.getByText("UNSCORED", { exact: true }).count(),
+        0,
+      );
+      await incomplete.getByRole("button", { name: "Collapse report" }).click();
+      const unscored = rows.filter({ hasText: "Score example 5 ·" });
+      await unscored.getByRole("button", { name: "Open report" }).click();
+      assert.ok(
+        await unscored
+          .getByRole("heading", { name: "No evaluation" })
+          .isVisible(),
+      );
+      assert.equal(await unscored.locator(".score-grid").count(), 0);
+      assert.ok(
+        await unscored.getByText("UNSCORED", { exact: true }).isVisible(),
+      );
+      await unscored.getByRole("button", { name: "Collapse report" }).click();
+      for (const [index, expected] of [
+        [0, ["82 / 100", "74 / 100"]],
+        [1, ["55 / 100", "68 / 100"]],
+        [2, ["82 / 100", "Not assessed"]],
+        [3, ["0 / 100", "45 / 100"]],
+        [9, ["Not recorded", "74 / 100"]],
+        [11, ["82 / 100", "Not recorded"]],
+        [12, ["Not recorded", "Not recorded"]],
+        [15, ["Not recorded", "Not recorded"]],
+        [16, ["Not recorded", "Not recorded"]],
+      ]) {
+        const row = rows.filter({ hasText: `Score example ${index} ·` });
+        await row.getByRole("button", { name: "Open report" }).click();
+        assert.deepEqual(
+          await row.locator(".score-grid strong").allTextContents(),
+          expected,
+        );
+        if (index === 1) {
+          assert.ok(
+            await row
+              .locator(".score-grid")
+              .getByText("Board work")
+              .isVisible(),
+          );
+          assert.equal(await row.locator(".final-code").count(), 0);
+        }
+        if (index === 0) {
+          assert.ok(
+            await row
+              .locator(".score-grid")
+              .getByText("Coding", { exact: true })
+              .isVisible(),
+          );
+          assert.equal(await row.locator(".final-code").count(), 1);
+        }
+        if (index === 12 || index === 15)
+          assert.ok(
+            await row
+              .getByText("Hints used during the session: Not recorded")
+              .isVisible(),
+          );
+        if (index === 3)
+          assert.ok(
+            await row.getByText("0 hints used during the session").isVisible(),
+          );
+        await row.getByRole("button", { name: "Collapse report" }).click();
+      }
+      assert.deepEqual(
+        await board.locator(".attempt-score").allTextContents(),
+        ["·\u00a0Board work 55/100", "·\u00a0Communication 68/100"],
+      );
+      for (const width of [320, 360, 390, 640]) {
+        await page.setViewportSize({ width, height: 844 });
+        for (const score of await rows.locator(".attempt-score").all()) {
+          const bounds = await score.evaluate((element) => {
+            const range = document.createRange();
+            range.selectNodeContents(element);
+            const rects = [...range.getClientRects()].map(({ x, right }) => ({
+              x,
+              right,
+            }));
+            const text = element.firstChild;
+            range.setStart(text, 0);
+            range.setEnd(text, text.data.indexOf(" "));
+            return { rects, prefixLines: range.getClientRects().length };
+          });
+          assert.equal(bounds.prefixLines, 1);
+          assert.ok(bounds.rects.length > 0);
+          assert.ok(
+            bounds.rects.every(({ x, right }) => x >= 0 && right <= width),
+            `Score ${await score.textContent()} exceeds ${width}px: ${JSON.stringify(bounds.rects)}`,
+          );
+        }
+        const pageWidth = await page.evaluate(
+          () => document.documentElement.scrollWidth,
+        );
+        assert.ok(
+          pageWidth <= width,
+          `Page width ${pageWidth} exceeds ${width}px`,
+        );
+      }
+    },
+  );
+}
+
 lobbyTest(
   "a filtered attempt list deletes the report the row shows",
   async (page) => {
@@ -10108,7 +10352,7 @@ lobbyTest(
           language: "python",
           report: {
             codingScore: 60,
-            communicationScore: 70,
+            communicationScore: 120,
             decision: "NO_HIRE",
             hintsUsed: 2,
             summary: "First 1D DP attempt.",
@@ -10125,7 +10369,7 @@ lobbyTest(
           date: "2026-01-02T10:00:00Z",
           language: "python",
           report: {
-            codingScore: 84,
+            codingScore: 120,
             communicationScore: 80,
             decision: "HIRE",
             hintsUsed: 0,
@@ -10143,9 +10387,20 @@ lobbyTest(
     const rows = page.locator("#attempt-history > li");
     const newest = rows.nth(0);
     await newest.getByRole("button", { name: "Open report" }).click();
+    assert.ok(
+      await newest.locator(".score-grid").getByText("Not recorded").isVisible(),
+    );
     assert.match(
       await newest.locator(".category-comparison").textContent(),
       /Category progress · 1D DP[\s\S]*Compared with Step Ways · 2026-01-01 · NO HIRE/,
+    );
+    assert.match(
+      await newest.locator(".category-comparison").textContent(),
+      /Coding:\s*60[^\d]*n\/a\s*\(n\/a\)/,
+    );
+    assert.match(
+      await newest.locator(".category-comparison").textContent(),
+      /Communication:\s*n\/a[^\d]*80\s*\(n\/a\)/,
     );
     assert.equal(requests.includes("/problem-categories.json"), true);
 
@@ -10156,7 +10411,7 @@ lobbyTest(
       chunks.push(chunk);
     assert.match(
       Buffer.concat(chunks).toString("utf8"),
-      /## Category progress · 1D DP[\s\S]*Compared with Step Ways · 2026-01-01 · NO HIRE/,
+      /## Category progress · 1D DP[\s\S]*Compared with Step Ways · 2026-01-01 · NO HIRE[\s\S]*Coding:\*\* 60 -> n\/a \(n\/a\)/,
     );
 
     const oldest = rows.nth(1);
@@ -10165,6 +10420,123 @@ lobbyTest(
       await oldest.locator(".report-card").textContent(),
       /Category progress/,
     );
+  },
+  { acceptDownloads: true },
+);
+
+/// Three 1D DP attempts whose two newest rows each have an earlier attempt to
+/// compare against, so a batch export of both waits on the category lookup.
+const categoryProgressAttempts = () =>
+  [
+    ["climbing-stairs", "Step Ways", "2026-01-01T10:00:00Z", "dp-1"],
+    ["house-robber", "Vault Sweep", "2026-01-02T10:00:00Z", "dp-2"],
+    ["coin-change", "Coin Ledger", "2026-01-03T10:00:00Z", "dp-3"],
+  ].map(([problemId, problemTitle, date, id]) => {
+    const page = pageOf(problemId);
+    return {
+      id,
+      problemId: page,
+      payload: {
+        id,
+        problemId: page,
+        problemTitle,
+        date,
+        language: "python",
+        report: {
+          codingScore: 60,
+          communicationScore: 80,
+          decision: "HIRE",
+          hintsUsed: 1,
+          summary: `${problemTitle} attempt.`,
+        },
+      },
+    };
+  });
+
+lobbyTest(
+  "a batch export refuses an overlapping row download while the category lookup is pending",
+  async (page) => {
+    reports = categoryProgressAttempts();
+    let categoryRequested;
+    const requested = new Promise((resolve) => (categoryRequested = resolve));
+    let releaseCategories;
+    const held = new Promise((resolve) => (releaseCategories = resolve));
+    await page.route("**/problem-categories.json", async (route) => {
+      categoryRequested();
+      await held;
+      await route.continue();
+    });
+    await recordDownloadNames(page);
+    await lobby(page);
+    const rows = page.locator("#attempt-history > li");
+    assert.equal(await rows.count(), 3);
+    // The oldest row has nothing earlier to compare against, so unticking it
+    // leaves the two comparable rows that both need the category map.
+    await rows.nth(2).getByRole("checkbox").click();
+    const downloadSelected = page.locator("#attempt-download-selected");
+    assert.equal(await downloadSelected.textContent(), "Download selected (2)");
+    const download = rows.nth(0).getByRole("button", {
+      name: /^Download report/,
+    });
+
+    try {
+      await downloadSelected.click();
+      await requested;
+      // The batch has already claimed this report. Its row download must be
+      // refused before the category lookup is released: no disabled button
+      // and no second file for the same report.
+      await download.click();
+      assert.equal(await download.isEnabled(), true);
+    } finally {
+      releaseCategories();
+    }
+
+    const names = await takeDownloadNames(page, 2);
+    assert.equal(names.length, 2);
+    assert.equal(new Set(names).size, 2);
+  },
+  { acceptDownloads: true },
+);
+
+lobbyTest(
+  "a failed batch category lookup is retried by a later row download",
+  async (page) => {
+    reports = categoryProgressAttempts();
+    let categoryRequests = 0;
+    let failCategories = true;
+    await page.route("**/problem-categories.json", (route) => {
+      categoryRequests += 1;
+      return failCategories ? route.abort("failed") : route.continue();
+    });
+    await recordDownloadNames(page);
+    await lobby(page);
+    const rows = page.locator("#attempt-history > li");
+    assert.equal(await rows.count(), 3);
+    await rows.nth(2).getByRole("checkbox").click();
+    const downloadSelected = page.locator("#attempt-download-selected");
+    assert.equal(await downloadSelected.textContent(), "Download selected (2)");
+
+    await downloadSelected.click();
+    assert.equal((await takeDownloadNames(page, 2)).length, 2);
+    const failedLookupRequests = categoryRequests;
+    assert.ok(failedLookupRequests > 0);
+
+    // A null lookup result must stay retryable: the later row download asks
+    // again and this time the category comparison reaches the report.
+    failCategories = false;
+    const downloading = page.waitForEvent("download");
+    await rows
+      .nth(0)
+      .getByRole("button", { name: /^Download report/ })
+      .click();
+    const chunks = [];
+    for await (const chunk of await (await downloading).createReadStream())
+      chunks.push(chunk);
+    assert.match(
+      Buffer.concat(chunks).toString("utf8"),
+      /## Category progress · 1D DP/,
+    );
+    assert.ok(categoryRequests > failedLookupRequests);
   },
   { acceptDownloads: true },
 );
