@@ -28,37 +28,53 @@ function node() {
   };
 }
 
-function microphonePage(overrides = {}) {
+function microphonePage(overrides = {}, scope = {}) {
   const tracks = [{ enabled: true, readyState: "live" }];
   const nodes = {
     mic: node(),
     micMutedStatus: node(),
     micControlStatus: node(),
+    mutedSpeechConsent: { checked: true },
+    mutedSpeechReminder: node(),
     agentState: node(),
   };
+  nodes.mutedSpeechReminder.hidden = true;
   nodes.agentState.textContent = "Listening";
   const state = {
     phase: "live",
     micEnabled: true,
     micChanging: false,
     localUserStream: { getAudioTracks: () => tracks },
+    room: {},
     ...overrides,
   };
   const events = [];
   const meters = [];
   const switchCalls = [];
+  const watched = [];
   const api = loadInterview(
     [
       "toggleMicrophone",
       "paintMicrophoneState",
       "setLocalAudioEnabled",
       "setAgentStateLabel",
+      "watchMutedSpeech",
+      "stopLocalMedia",
     ],
     {
       state,
       nodes,
+      localRecording: { finish() {} },
+      stopIntegrityWorker() {},
+      stopPreflight() {},
+      forgetAudioInputs() {},
       publishIntegrityEvent: (event) => events.push(event),
       startTurnRing: (stream) => meters.push(stream),
+      mutedSpeech: {
+        watch: (track) => watched.push(track),
+        stop: () => watched.push("stop"),
+      },
+      publishedMicrophone: () => null,
       microphoneSwitch: () => ({
         setEnabled: (enabled) => switchCalls.push(enabled),
       }),
@@ -67,10 +83,20 @@ function microphonePage(overrides = {}) {
           this.tracks = tracks;
         }
       },
+      ...scope,
     },
   );
   api.paintMicrophoneState();
-  return { ...api, nodes, state, tracks, events, meters, switchCalls };
+  return {
+    ...api,
+    nodes,
+    state,
+    tracks,
+    events,
+    meters,
+    switchCalls,
+    watched,
+  };
 }
 
 test("mute updates the track, visible text and accessible action together", async () => {
@@ -248,3 +274,128 @@ for (const initiallyEnabled of [false, true]) {
     assert.equal(ending.nodes.mic.attributes["aria-disabled"], "false");
   });
 }
+
+test("mute watches the muted input for speech, and only a successful unmute clears the reminder", async () => {
+  const page = microphonePage();
+  await page.toggleMicrophone();
+  assert.deepEqual(page.watched, [page.tracks[0]]);
+
+  page.nodes.mutedSpeechReminder.hidden = false;
+  const enabled = page.tracks[0];
+  page.tracks[0] = {
+    readyState: "live",
+    get enabled() {
+      return false;
+    },
+    set enabled(value) {
+      if (value) throw new Error("device unavailable");
+    },
+  };
+  await page.toggleMicrophone();
+  assert.equal(page.state.micEnabled, false);
+  assert.equal(page.nodes.mutedSpeechReminder.hidden, false);
+
+  page.tracks[0] = enabled;
+  await page.toggleMicrophone();
+  assert.equal(page.state.micEnabled, true);
+  assert.equal(page.nodes.mutedSpeechReminder.hidden, true);
+  assert.equal(page.watched.at(-1), "stop");
+});
+
+test("without consent a mute starts no watch", async () => {
+  const page = microphonePage();
+  page.nodes.mutedSpeechConsent.checked = false;
+  await page.toggleMicrophone();
+  assert.deepEqual(page.watched, ["stop"]);
+});
+
+test("the end of the interview releases the watch", () => {
+  const calls = [];
+  const { stopLocalMedia } = loadInterview(
+    ["stopLocalMedia"],
+    {
+      state: { localUserStream: {}, integrityTrackStates: new Map() },
+      mutedSpeech: { stop: () => calls.push("stop") },
+    },
+    { stubMissing: true },
+  );
+  stopLocalMedia();
+  assert.deepEqual(calls, ["stop"]);
+});
+
+// The switched-in input is a new track: a watch left on the old one would read
+// a device the switch has already stopped.
+test("a completed microphone switch moves the watch to the new input", () => {
+  let options;
+  const watched = [];
+  const { microphoneSwitch } = loadInterview(
+    ["microphoneSwitch"],
+    {
+      microphoneSwitchInstance: null,
+      createMicrophoneSwitch: (given) => {
+        options = given;
+        return {};
+      },
+      watchMutedSpeech: () => watched.push(true),
+    },
+    { stubMissing: true },
+  );
+  microphoneSwitch();
+  options.onSwitched({ kind: "audio" }, "chosen");
+  assert.deepEqual(watched, [true]);
+});
+
+// The interview can end while a mute is still on its way through LiveKit. Its
+// late success must not start a watch that `stopLocalMedia` will never see.
+test("a mute that resolves after the interview ended starts no watch", async () => {
+  let finish;
+  const published = { enabled: true, readyState: "live" };
+  const page = microphonePage(
+    {
+      localUserStream: null,
+      integrityTrackStates: new Map(),
+      room: {
+        localParticipant: {
+          setMicrophoneEnabled: (enabled) =>
+            new Promise((done) => {
+              finish = () => {
+                published.enabled = enabled;
+                done({ track: { mediaStreamTrack: published } });
+              };
+            }),
+        },
+      },
+    },
+    { publishedMicrophone: () => ({ mediaStreamTrack: published }) },
+  );
+  const pending = page.toggleMicrophone();
+  page.state.phase = "ending";
+  page.stopLocalMedia();
+  finish();
+  await pending;
+  assert.equal(page.state.micEnabled, false);
+  assert.deepEqual(
+    page.watched.filter((entry) => entry !== "stop"),
+    [],
+  );
+});
+
+// A dropped room and offline practice both leave the phase live with the
+// microphone still running, and there is no Jim to be muted to.
+test("mute starts no watch without a room", async () => {
+  const page = microphonePage({ room: null });
+  await page.toggleMicrophone();
+  assert.equal(page.state.micEnabled, false);
+  assert.deepEqual(page.watched, ["stop"]);
+});
+
+// Called again while still muted (a switch, a repaint), it starts nothing once
+// the reminder is showing: the reminder stands for the whole muted stretch.
+test("no fresh watch once it has reminded", async () => {
+  const page = microphonePage();
+  await page.toggleMicrophone();
+  assert.deepEqual(page.watched, [page.tracks[0]]);
+  page.nodes.mutedSpeechReminder.hidden = false;
+  page.watchMutedSpeech();
+  assert.deepEqual(page.watched, [page.tracks[0]]);
+});

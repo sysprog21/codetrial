@@ -161,8 +161,24 @@
             class="visually-hidden"
             role="status"
           ></span>
-          <div role="status" aria-live="polite">
-            <p id="mic-control-status" class="muted small" hidden></p>
+          <!-- Two regions in one dock row. The reminder has its own: a status
+               region is read whole, so sharing one would re-read the reminder
+               with every change to the Mic status, and read a stale unmute
+               error with the reminder. -->
+          <div>
+            <div role="status" aria-live="polite">
+              <p id="mic-control-status" class="muted small" hidden></p>
+            </div>
+            <div role="status" aria-live="polite">
+              <p
+                id="muted-speech-reminder"
+                class="muted-speech-reminder small"
+                hidden
+              >
+                You seem to be speaking, but your microphone is muted. Jim
+                cannot hear you until you unmute.
+              </p>
+            </div>
           </div>
           <!-- Recording, apart from ending: withdrawing consent and ending the
                interview are different acts and should not sit side by side. -->
@@ -794,6 +810,26 @@
                 >
                   <span id="audio-meter-fill"></span>
                 </div>
+                <!-- Off unless ticked, and for this interview only: it is the one
+                     thing that reads the microphone while Mic says Muted.
+                     `autocomplete="off"` keeps the browser from restoring the
+                     tick into a later visit to this page. -->
+                <p>
+                  <label for="muted-speech-consent">
+                    <input
+                      type="checkbox"
+                      id="muted-speech-consent"
+                      autocomplete="off"
+                      aria-describedby="muted-speech-consent-note"
+                    />
+                    Remind me if I speak while muted
+                  </label>
+                </p>
+                <p id="muted-speech-consent-note" class="muted small">
+                  While muted, this page checks the microphone level for speech.
+                  The audio is not sent to Jim, recorded or transcribed, and the
+                  check stops at the first reminder or when you unmute.
+                </p>
               </div>
 
               <div class="audio-check-step" id="audio-step-camera">

@@ -261,6 +261,7 @@ function pageHarness(phase = "live") {
       "skipReport",
       "leaveRoom",
       "endingDetail",
+      "mutedSpeechReminder",
     ].map((key) => [key, {}]),
   );
   const spinner = {};
@@ -316,6 +317,7 @@ function pageHarness(phase = "live") {
     setAgentStateLabel: () => {},
     releaseStart: () => {},
     window: { location: {}, addEventListener() {} },
+    mutedSpeech: { stop() {} },
   };
   const recovery = source.slice(
     source.indexOf("const reportRecovery ="),
