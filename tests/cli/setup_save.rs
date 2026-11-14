@@ -220,3 +220,76 @@ async fn change_keys_rewrites_the_config_the_launch_read() {
         contents("new-key", "GOOGLE_API_KEYS=\nGOOGLE_API_KEY=new-google\n")
     );
 }
+
+/// Change keys for a launcher's child, as the desktop app starts it: the code
+/// comes in `CODETRIAL_CHANGE_KEYS_CODE`, a save with it rewrites the config,
+/// and the code never reaches stdout, which the app writes to a log file.
+#[test]
+fn a_child_saves_with_the_code_its_launcher_handed_over_and_never_prints_it() {
+    use std::io::{BufRead, BufReader};
+
+    const CODE: &str = "0123456789abcdef0123456789abcdef";
+    let dir = exe_temp_path("change-keys-child");
+    std::fs::create_dir_all(&dir).unwrap();
+    let exe = binary_beside(&dir);
+    let livekit = spawn_livekit_room_service("new-key", "secret");
+
+    let config = dir.join("codetrial.env.local");
+    let contents = |livekit_key: &str| {
+        format!(
+            "LIVEKIT_URL=http://{livekit}\nLIVEKIT_API_KEY={livekit_key}\n\
+             LIVEKIT_API_SECRET=secret\n"
+        )
+    };
+    std::fs::write(&config, contents("old-key")).unwrap();
+    let (addr, mut server) = spawn_server(|addr| {
+        let mut command = Command::new(&exe);
+        scrubbed(&mut command)
+            .args([
+                "web",
+                "--data-dir",
+                dir.to_str().unwrap(),
+                "--web-addr",
+                addr,
+            ])
+            .current_dir(&dir)
+            .env("CODETRIAL_EXIT_WITH_STDIN", "1")
+            .env("CODETRIAL_CHANGE_KEYS_CODE", CODE)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped());
+        command
+    });
+    let stdout = server.stdout.take().unwrap();
+    let lines = thread::spawn(move || {
+        BufReader::new(stdout)
+            .lines()
+            .map_while(Result::ok)
+            .collect::<Vec<_>>()
+    });
+
+    let save = |code: &str| {
+        let body = format!(r#"{{"code":"{code}","livekitApiKey":"new-key"}}"#);
+        http_request(
+            &addr,
+            &format!(
+                "POST /api/setup HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\n\
+                 Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            ),
+        )
+    };
+    let refused = save("ffffffffffffffffffffffffffffffff");
+    let saved = save(CODE);
+    let written = std::fs::read_to_string(&config).unwrap();
+    drop(server);
+    let printed = lines.join().unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(refused.starts_with("HTTP/1.1 403"), "{refused}");
+    assert!(saved.starts_with("HTTP/1.1 200 OK"), "{saved}");
+    assert_eq!(written, contents("new-key"));
+    assert!(
+        printed.iter().all(|line| !line.contains(CODE)),
+        "{printed:?}"
+    );
+}
