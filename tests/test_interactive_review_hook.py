@@ -75,6 +75,7 @@ class InteractiveHookTests(unittest.TestCase):
             "git-commit-msg.awk",
             "check-commit-log.sh",
             "check-secrets.py",
+            "check-cjk.py",
             "check-interactive-review.py",
             "hashchain.py",
             "indent.sh",

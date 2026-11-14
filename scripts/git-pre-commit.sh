@@ -40,10 +40,11 @@ export GIT_INDEX_FILE
 
 # Inspect the copied index before materializing its blobs in a temporary tree.
 if ! command -v python3 > /dev/null 2>&1; then
-    echo "Commit refused: python3 is required for the secret check." >&2
+    echo "Commit refused: python3 is required for the secret and CJK checks." >&2
     exit 1
 fi
 python3 "$ROOT/scripts/check-secrets.py" || exit 1
+python3 "$ROOT/scripts/check-cjk.py" || exit 1
 
 if [ -f "$ROOT/.claude/skills/codetrial-review/SKILL.md" ]; then
     python3 "$ROOT/scripts/check-interactive-review.py" staged || exit 1
@@ -134,7 +135,7 @@ fi
 # Include deletions: removing a checker or a skill target can break its users.
 changed=$(git -c core.quotePath=false diff --cached --name-only)
 if [ "$(git config --get codetrial.hookSuite)" != true ] && printf '%s\n' "$changed" \
-    | grep -Eq '^scripts/(git-.*[.]sh|git-commit-msg[.]awk|install-git-hooks[.]sh|test-git-hooks[.]sh|check-commit-log[.]sh|check-secrets[.]py|check-interactive-review[.]py|hashchain[.]py|hashchain-base)$'; then
+    | grep -Eq '^scripts/(git-.*[.]sh|git-commit-msg[.]awk|install-git-hooks[.]sh|test-git-hooks[.]sh|check-commit-log[.]sh|check-secrets[.]py|check-cjk[.]py|check-interactive-review[.]py|hashchain[.]py|hashchain-base)$'; then
     # The suite owns scratch repositories; none may inherit this index.
     (
         for variable in $(git rev-parse --local-env-vars); do

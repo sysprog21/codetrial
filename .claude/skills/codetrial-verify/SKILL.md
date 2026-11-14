@@ -250,6 +250,9 @@ It compares selected provider-key formats and literal local credential values
 without printing matches or invoking a provider. Pull-request CI repeats the
 history check. `tests/test_check_secrets.py` exercises the scanner with real Git
 objects; it runs as the `secret-check-tests` gate.
+`scripts/check-cjk.py` refuses CJK outside quotes and ```` ``` ```` blocks at the
+same two points and in CI, `cjk-check` runs it over the whole index, and
+`cjk-check-tests` runs `tests/test_check_cjk.py`.
 
 The hooks have their own suite. `scripts/test-git-hooks.sh` builds a scratch
 repository, installs the hooks into it and drives every case: the messages that

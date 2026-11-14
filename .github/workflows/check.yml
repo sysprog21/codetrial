@@ -213,6 +213,7 @@ jobs:
             exit 1
           fi
           git rev-list "$BASE_SHA..HEAD" | python3 scripts/check-secrets.py --commits
+          git rev-list "$BASE_SHA..HEAD" | python3 scripts/check-cjk.py --commits
           git rev-list --no-merges "$BASE_SHA..HEAD" | ./scripts/check-commit-log.sh
 
       - name: Verify the Change-Id hashchain

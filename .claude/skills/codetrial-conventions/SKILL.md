@@ -68,6 +68,13 @@ character-boundary rule should use characters that read as a fixture rather
 than as prose in any language: Greek letters, accented Latin, an emoji. Say in
 the comment that the byte width is the point.
 
+The hooks enforce this outside Markdown through `scripts/check-cjk.py`. Where
+CJK is the input under test (a CJK word counter, an IME composition), keep it
+in a quoted string on one line, or between two ```` ``` ```` lines in a comment
+for a multi-line sample; anything else is refused, a one-line docstring and a
+string spanning lines included. Rust and the browser's JavaScript, HTML and
+CSS allow none at all, quoted or not, through the rust-style gate.
+
 ## Comments
 
 Every line of a comment says something the code cannot, and this tree carries

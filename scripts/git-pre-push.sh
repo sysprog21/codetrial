@@ -257,13 +257,19 @@ while read -r local_ref local_sha remote_ref remote_sha; do
         continue
     }
     if [ -n "$secret_commits" ] && ! command -v python3 > /dev/null 2>&1; then
-        echo "Push rejected: python3 is required for the secret check." >&2
+        echo "Push rejected: python3 is required for the secret and CJK checks." >&2
         failed=1
         continue
     fi
     if [ -n "$secret_commits" ] && ! printf '%s\n' "$secret_commits" \
         | python3 "$script_dir/check-secrets.py" --commits; then
         echo "Push rejected: outgoing history failed the secret check." >&2
+        failed=1
+        continue
+    fi
+    if [ -n "$secret_commits" ] && ! printf '%s\n' "$secret_commits" \
+        | python3 "$script_dir/check-cjk.py" --commits; then
+        echo "Push rejected: outgoing history failed the CJK check." >&2
         failed=1
         continue
     fi
