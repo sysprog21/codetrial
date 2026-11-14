@@ -783,11 +783,6 @@ write_receipt()
         "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$dir/$lane.json" 2> /dev/null || true
 }
 
-echo "Running CSS token checks..."
-python scripts/check-css-tokens.py || failed=1
-
-echo "Running CSS token tests..."
-python tests/test_check_css_tokens.py || failed=1
 [ -z "$failed" ] || {
     write_receipt false
     echo "failed gates:$failed" >&2

@@ -4,7 +4,6 @@ import importlib.util
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "check-css-tokens.py"
 spec = importlib.util.spec_from_file_location("check_css_tokens", str(SCRIPT))
