@@ -254,6 +254,7 @@ test("the example drawer preserves code, journals pen strokes, and sends the cle
       {
         locked: () => window.locked,
         activity: () => window.activity.push(performance.now()),
+        onExpandedChange: () => paintDrawer(),
         record: (ops) => window.ops.push(...ops),
         publish: async (blob, strokes) => {
           if (window.disconnected) return false;
@@ -262,7 +263,9 @@ test("the example drawer preserves code, journals pen strokes, and sends the cle
         },
       },
     );
-    mountInterviewDrawer(document.querySelector(".editor-panel"));
+    const paintDrawer = mountInterviewDrawer(
+      document.querySelector(".editor-panel"),
+    );
   }, base);
   assert.equal(
     await page.locator("#example-board").evaluate((node) => node.open),
@@ -860,6 +863,7 @@ async function openExpandableBoard(viewport) {
       document.querySelector("#example-board"),
       {
         locked: () => false,
+        onExpandedChange: () => paintDrawer(),
         // Kept as the bytes Jim's read_board is handed, to decode later.
         publish: async (blob, strokes) => {
           const image = await new Promise((resolve) => {
@@ -872,7 +876,9 @@ async function openExpandableBoard(viewport) {
         },
       },
     );
-    mountInterviewDrawer(document.querySelector(".editor-panel"));
+    const paintDrawer = mountInterviewDrawer(
+      document.querySelector(".editor-panel"),
+    );
   }, base);
   await page.locator("#example-board summary").click();
   await page.waitForFunction(() =>

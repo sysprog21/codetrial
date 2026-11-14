@@ -405,12 +405,16 @@ test("a resize while expanded keeps the docked strip's scroll on shrink", async 
     await page.getByRole("button", { name: "Expand drawing" }).click();
     await page.setViewportSize({ width: 1280, height: 700 });
     await settled(page);
-    await page.getByRole("button", { name: "Shrink drawing" }).click();
-    await settled(page);
-    const back = await strip.evaluate((node) => ({
-      top: node.scrollTop,
-      max: node.scrollHeight - node.clientHeight,
-    }));
+    const back = await page
+      .getByRole("button", { name: "Shrink drawing" })
+      .evaluate((button) => {
+        button.click();
+        const node = document.querySelector(".example-surface");
+        return {
+          top: node.scrollTop,
+          max: node.scrollHeight - node.clientHeight,
+        };
+      });
     assert.ok(back.max >= scrolled, "the new strip can hold the old scroll");
     assert.equal(back.top, scrolled);
   } finally {
@@ -495,10 +499,17 @@ test("an expanded Example drawing turns Jim's stage into the compact card over t
             .display !== "none",
         ]);
       assert.deepEqual(await avatar(), [!docked, !docked], size);
-      await page.getByRole("button", { name: "Expand drawing" }).click();
-      // The class follows on the observer's microtask.
-      await page.waitForFunction(() =>
-        document.querySelector("#jim-stage").classList.contains("compact"),
+      assert.equal(
+        await page
+          .getByRole("button", { name: "Expand drawing" })
+          .evaluate((button) => {
+            button.click();
+            return document
+              .querySelector("#jim-stage")
+              .classList.contains("compact");
+          }),
+        true,
+        "the stage becomes compact before the expand handler returns",
       );
       assert.ok(await onTop("#captions-bar"), size);
       assert.deepEqual(await avatar(), [false, false], size);

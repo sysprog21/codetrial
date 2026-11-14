@@ -950,6 +950,10 @@ async function init() {
           connected: () => Boolean(state.room && state.connected),
           turnActivity: () => drawingTurn.activity(),
           cancelTurn: () => drawingTurn.reset(),
+          onExpandedChange: () => {
+            paintDrawer();
+            fitJimStage();
+          },
           activity: () => {
             if (state.room && state.connected)
               void sendData(topics.control, drawingActivityPayload()).catch(
@@ -973,7 +977,7 @@ async function init() {
         "aria-label",
         "Resize drawing and test panel",
       );
-      mountInterviewDrawer(nodes.editorPanel);
+      const paintDrawer = mountInterviewDrawer(nodes.editorPanel);
     }
   }
   placeJimStageBelowToolbar(
@@ -1006,7 +1010,7 @@ async function init() {
       ],
     });
   }
-  compactJimStageBesideNarrowPanel(
+  const fitJimStage = compactJimStageBesideNarrowPanel(
     whiteboard ? nodes.boardPanel : nodes.editorPanel,
   );
   // No enumeration here. Before the preflight grant the browser reports only a
@@ -5457,14 +5461,8 @@ function compactJimStageBesideNarrowPanel(panel) {
   if (window.ResizeObserver) new window.ResizeObserver(fit).observe(panel);
   else window.addEventListener("resize", fit);
   narrowWindow.addEventListener("change", fit);
-  // A whiteboard interview has removed the editor panel by now, and the board
-  // inside it, so there is no board to watch.
-  if (example)
-    new MutationObserver(fit).observe(example, {
-      attributes: true,
-      attributeFilter: ["data-expanded"],
-    });
   fit();
+  return fit;
 }
 
 /// Keeps Jim's stage under the toolbar the page shows: the editor's, or the
