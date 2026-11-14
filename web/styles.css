@@ -3622,6 +3622,7 @@ body:not([data-recording]) .replay-detail > :not(header) {
 }
 
 .lobby .account-input,
+.lobby #attempt-page-size,
 .lobby #selection-mode,
 .lobby .practice-filters select,
 .lobby .progress-filters select,
@@ -3879,6 +3880,7 @@ body:not([data-recording]) .replay-detail > :not(header) {
 .lobby .interview-context button,
 .lobby #problem-filters-reset,
 .lobby .weak-topic button,
+.lobby .attempt-page-navigation > button,
 .lobby .attempt-selection > button,
 .lobby #attempt-history > li > button {
   min-height: 2.5rem;
@@ -3899,6 +3901,7 @@ body:not([data-recording]) .replay-detail > :not(header) {
 .lobby .interview-context button:hover,
 .lobby #problem-filters-reset:hover,
 .lobby .weak-topic button:hover,
+.lobby .attempt-page-navigation > button:not(:disabled):hover,
 .lobby .attempt-selection > button:not(:disabled):hover,
 .lobby #attempt-history > li > button:not(:disabled):hover {
   border-color: var(--accent);
@@ -4081,14 +4084,17 @@ body:not([data-recording]) .replay-detail > :not(header) {
   color: var(--critical);
 }
 
+.lobby .attempt-page-navigation > button:disabled,
 .lobby .attempt-selection > button:disabled,
 .lobby #attempt-history > li > button:disabled {
   cursor: not-allowed;
   opacity: 0.55;
 }
 
+.lobby .attempt-pagination,
 .lobby .attempt-selection {
   display: flex;
+  align-items: center;
   flex-wrap: wrap;
   gap: 0.5rem;
 }
@@ -4160,6 +4166,8 @@ body:not([data-recording]) .replay-detail > :not(header) {
   .lobby .setting-option,
   .lobby .duration-button,
   .lobby #random-problem,
+  .lobby #attempt-page-size,
+  .lobby .attempt-page-navigation > button,
   .lobby #practice-list-pick {
     min-height: 2.75rem;
   }
@@ -4625,4 +4633,15 @@ html:has(.lobby > .update-notice:not([hidden])) {
     display: inline-flex;
     align-items: center;
   }
+}
+
+.lobby .attempt-page-navigation {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  max-width: 100%;
+}
+
+.lobby .attempt-page-navigation > button {
+  flex-shrink: 0;
 }
