@@ -1784,7 +1784,7 @@ function runAudioCheck() {
     // never awaits. Awaiting first is what left the confirm button disabled
     // while the tone was already audible.
     const unblockOutput = async () => {
-      context ||= new (window.AudioContext || window.webkitAudioContext)();
+      context ||= new AudioContext();
       if (!outputUsable(context.state)) {
         await context.resume().catch(() => {});
       }
