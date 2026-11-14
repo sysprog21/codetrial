@@ -728,6 +728,10 @@ fn static_problem_bank_and_judges_cover_each_problem() {
         ("valid-parentheses", "interleaved"),
         ("triangle", "cheapest values not connected"),
         ("triangle", "cheaper step misses the deep saving"),
+        (
+            "best-time-to-buy-and-sell-stock-iii",
+            "best trades span a dip",
+        ),
     ] {
         let labels = judges[id]["cases"]
             .as_array()
