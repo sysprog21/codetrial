@@ -230,20 +230,6 @@ class CalibrationTests(unittest.TestCase):
                     ):
                         CAL.analyze(raw)
 
-    def test_coding_only_star_zero_scores_are_not_applicable(self):
-        for phase in ("Situation", "Task", "Action", "Result"):
-            with self.subTest(phase=phase):
-                raw = self.fixture("passing-synthetic.json")
-                sample = raw["samples"][0]
-                sample["modelScores"][phase] = 0
-                for rating in sample["humanRatings"]:
-                    rating["scores"][phase] = 0
-                with self.assertRaisesRegex(
-                    ValueError,
-                    rf"\.modelScores\.{phase}: not applicable to coding_only",
-                ):
-                    CAL.analyze(raw)
-
     def test_coding_only_star_scores_must_be_null(self):
         for phase, value, source in itertools.product(
             STAR_PHASES, (0, 50, 100), ("model", "human", "both", "partial")
@@ -276,7 +262,7 @@ class CalibrationTests(unittest.TestCase):
 
     def test_star_only_scores_keep_value_errors(self):
         for phase, value, with_null in itertools.product(
-            ("Situation", "Task", "Action", "Result"),
+            STAR_PHASES,
             ("x", False, 1.5, -1, 101, [], {}),
             (False, True),
         ):
