@@ -2,54 +2,14 @@
   /* The workspace is dark only: a light scheme would draw the browser's own
      form controls light on this page. Its palette is theme.css's. */
   color-scheme: dark;
-  font-family:
-    ui-sans-serif,
-    system-ui,
-    -apple-system,
-    BlinkMacSystemFont,
-    "Segoe UI",
-    sans-serif;
-  --page: #11110f;
-  --surface: #1b1b18;
-  --ink: #f6f3ea;
-  --sub: #b7b2a5;
-  --muted: #928c7e;
-  --hairline: #2d2b26;
-  --accent: #a291ff;
-  --accent-fill: #744ce6;
-  --accent-deep: #6437d2;
-  --control-border: #8a8473;
-  --step-surface: #151512;
-  --selected-surface: #2f2f29;
-  --warning: #f1bf6c;
-  --critical: #ff6b6b;
-  --critical-surface: #3a1d17;
-  --radius-sm: 8px;
-  --radius-md: 12px;
-  --radius-lg: 20px;
-  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  --shadow-float: 0 8px 24px rgba(0, 0, 0, 0.35);
-  --backdrop: rgba(0, 0, 0, 0.65);
-  --paper: #ffffff;
-  /* The editor's colours, the interview editor's. */
-  --code-bg: #1e1e1e;
-  --code-text: #d4d4d4;
-  --code-gutter: #181816;
-  --code-caret: #f4f4f0;
-  --code-selection: #264f78;
-  --code-active-line: #ffffff0f;
-  --code-selection-ink: var(--ink);
-  --code-match-outline: #a6cfff;
-  --code-gutter-ink: #7d776a;
-  --code-gutter-border: var(--hairline);
-  --code-guide: #404040;
-  --tok-keyword: #569cd6;
-  --tok-string: #ce9178;
-  --tok-comment: #6a9955;
-  --tok-number: #b5cea8;
-  --tok-literal: #569cd6;
-  --cube-ink: #11110f;
-  --editor-panel-bg: #1e1e1e;
+  --font-family: var(--font-sans);
+  --ready-ink: #00ff00;
+  --overlay-background: rgba(0, 0, 0, 0.5);
+  --board-controls-shadow-color: rgba(0, 0, 0, 0.1);
+  --shadow-overlay: rgba(0, 0, 0, 0.2);
+  --camera-preview-background: #000000;
+  --good-ink: #0000ff;
+  --shadow-hint: rgba(255, 255, 255, 0.1);
 }
 * {
   box-sizing: border-box;
@@ -686,16 +646,16 @@ nav {
   backface-visibility: hidden;
 }
 .cube-body {
-  background: #11110f;
+  background: var(--cube-body);
 }
 .cube-sticker {
   display: grid;
   place-items: center;
   box-sizing: border-box;
-  border: 4px solid #11110f;
+  border: 4px solid var(--cube-body);
   border-radius: 10px;
-  color: #11110f;
-  font: 700 1.5rem var(--font-mono);
+  color: var(--cube-body);
+  font: 700 var(--text-3xl) var(--font-mono);
 }
 .cube-net {
   width: min(100%, 360px);
