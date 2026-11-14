@@ -231,6 +231,57 @@ test("a candidate case is typed by paramTypes", () => {
   );
 });
 
+// C and C++ take a `character` as one `char`, so a code point past ASCII
+// either fails to compile or reaches the solution as a different value; javac
+// refuses one past the Basic Multilingual Plane. Every `character` judge takes
+// ASCII, so the case is refused when it is added and the refusal names it.
+test("a candidate character outside ASCII is refused and named", () => {
+  // A character reaches the harness alone, nested in an array, or in a list,
+  // and each shape is checked on its own path, so each one is pinned here.
+  for (const [type, place] of [
+    ["character", (chars) => chars.at(-1)],
+    ["character[][]", (chars) => [chars]],
+    ["list<character>", (chars) => chars],
+  ]) {
+    const spec = {
+      kind: "function",
+      paramNames: ["chars", "word"],
+      paramTypes: [type, "string"],
+    };
+    // Letters, digits, punctuation, the space and DEL (U+007F), the last
+    // ASCII code point, which pins the cutoff from below.
+    for (const ascii of ["a", "0", ".", "~", " ", "\u007f"]) {
+      const input = [place([ascii]), "edge"];
+      assert.deepEqual(parseCandidateCase(spec, JSON.stringify(input)), input);
+    }
+    for (const [wide, code] of [
+      // A Latin-1 letter: two bytes in UTF-8, which g++ reads as a
+      // multi-character constant and clang refuses.
+      ["\u00e9", "U\\+00E9"],
+      // The first code point past ASCII, which pins the cutoff from above.
+      ["\u0080", "U\\+0080"],
+      // Past the Basic Multilingual Plane: two UTF-16 code units, which javac
+      // refuses as a char literal.
+      ["\u{1F600}", "U\\+1F600"],
+    ]) {
+      assert.throws(
+        () =>
+          parseCandidateCase(
+            spec,
+            JSON.stringify([place(["a", wide]), "edge"]),
+          ),
+        new RegExp(
+          `Parameter 1 \\(chars\\) holds "${wide}" \\(${code}\\), which is outside ASCII`,
+        ),
+        type,
+      );
+    }
+    // A string parameter is not a char: non-ASCII text stays accepted there.
+    const text = [place(["a"]), "caf\u00e9"];
+    assert.deepEqual(parseCandidateCase(spec, JSON.stringify(text)), text);
+  }
+});
+
 // Every arm here is the last thing between a candidate case and a harness that
 // does not bound-check it: C indexes `nodes[adjacency[i][j] - 1]` and C++
 // `nodes[*items[i].second]` with no guard of their own. An arm that goes
