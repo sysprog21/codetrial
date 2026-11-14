@@ -737,8 +737,8 @@ fn report_follow_ups(input: &ReportPromptInput<'_>) -> String {
 /// prose in line too.
 const OUT_OF_TURN_BEHAVIORAL: &str = "Any behavioral question in the transcript was asked out of turn, and the answer to it is not evidence: do not score, praise, criticize, summarize or cite it in any field. Every STAR score is `null`, no strength, improvement or plan item may address Situation, Task, Action or Result, `communicationScore` and `decision` rest on the coding round alone, and `summary` says behavioral communication was not assessed.";
 
-/// How the two scores are defined at an editor, word for word what every
-/// report was always told.
+/// How the two scores are defined at an editor. Since report prompt 27 the
+/// restatement it weighs must be accurate, not merely present.
 const EDITOR_SCORING: &str = r#"1. codingScore — correctness of the final code against the problem, edge-case
    coverage, the candidate's stated algorithm and correctness reasoning,
    implementation quality, test reasoning, optimization discussion, and
@@ -746,8 +746,8 @@ const EDITOR_SCORING: &str = r#"1. codingScore — correctness of the final code
    caps this below 30. Judge correctness by reading the code, never by the reported
    pass count; clear narration cannot make incorrect code correct.
 2. communicationScore — how clearly they narrated their thinking while coding,
-   including whether they restated the problem, worked a concrete example,
-   explained their algorithm and complexity, predicted tests, discussed
+   including whether they accurately restated the problem, worked a concrete
+   example, explained their algorithm and complexity, predicted tests, discussed
    optimization, and accurately answered follow-ups."#;
 
 /// The same two scores at a whiteboard, where there was no editor to cap and
@@ -761,11 +761,11 @@ const WHITEBOARD_SCORING: &str = r#"1. codingScore — the solution the candidat
    an approach cannot make it correct. There was no editor and no test run, so
    their absence is never a deduction.
 2. communicationScore — how clearly they narrated their thinking while drawing,
-   including whether they restated the problem, drew a concrete example,
-   explained their approach and complexity, traced it out loud, named the cases
-   that would break it, and accurately answered follow-ups. The board is itself
-   an explanation, so weigh whether it is organized enough to follow; never judge
-   handwriting, neatness, or drawing skill."#;
+   including whether they accurately restated the problem, drew a concrete
+   example, explained their approach and complexity, traced it out loud, named
+   the cases that would break it, and accurately answered follow-ups. The board
+   is itself an explanation, so weigh whether it is organized enough to follow;
+   never judge handwriting, neatness, or drawing skill."#;
 
 /// The reviewer's role, the scoring, the schema and the rules for filling it
 /// in: the same document for every interview held at one surface, sent as the
@@ -876,6 +876,13 @@ Grounding rules — a real debrief cites evidence:
   lost to recognition, is a gap, not a strength. When evidence is insufficient,
   put this gap only in coding feedback. Filler, noise, interviewer echo, or
   missing speech alone does not establish an unanswered technical question.
+- The contract in the brief states the inputs, output and rules of the
+  exercise; it is not what the candidate restated. Credit a restatement only
+  for the relevant inputs, output and rules the candidate stated in their own
+  words. A misstated output, or a relevant contract rule the restatement
+  leaves out, is a gap, not a strength, and Repeat is not scored as an
+  accurate restatement. The interviewer's confirmation or rephrasing of a
+  restatement earns it no credit.
 - In `summary` and both feedback sections, name observed REACTO/STAR strengths or
   gaps in plain language and identify the supporting transcript statement,
   {observed}. Never invent intent, metrics, actions, employer details,
