@@ -7,7 +7,7 @@ use super::super::readiness::{
     CandidatePresenceChange, RoomEventReader, STARTUP_READY_EVENT_LIMIT,
     STARTUP_READY_PUBLICATION_LIMIT, StartupContext, StartupDeliveryError, StartupInput,
     StartupInputs, account_startup, candidate_departed, candidate_returned,
-    handle_candidate_packet, next_timed_room_event, publish_startup_failure,
+    handle_candidate_packet, is_startup_receipt, next_timed_room_event, publish_startup_failure,
     ready_runtime_activity, resend_startup_readiness, startup_output_limit, startup_ready_notice,
     startup_state,
 };
@@ -286,6 +286,210 @@ async fn reconnect_socket(
     (gemini, requested, release, StartupPeer(server))
 }
 
+#[tokio::test]
+async fn startup_reconnect_synchronizes_the_paid_opening_without_regeneration() {
+    use futures_util::FutureExt;
+    for (query_first, candidate_led) in [(false, false), (true, false), (false, true), (true, true)]
+    {
+        let config = startup_config("60");
+        let keys = Arc::new(GeminiKeys::from_config(&config));
+        let metadata = serde_json::json!({"candidateLed": candidate_led}).to_string();
+        let boot = candidate_bootstrap(&config, "interview-fixed", Some(&metadata));
+        assert_eq!(boot.candidate_led_enabled, candidate_led);
+        let (mut gemini, requested, release, server) = reconnect_socket(&boot).await;
+        let mut turn = hold_turn(initial_runtime_state(&boot, Instant::now()));
+        assert_eq!(turn.state.candidate_led_enabled, candidate_led);
+        let mut presence = CandidatePresence::default();
+        let greeting = with_timer(&turn.state, "opening".to_string());
+        let requested_at = Instant::now();
+        let started_at = {
+            let probe = probe_live_output(
+                &mut gemini,
+                &mut turn.state,
+                &greeting,
+                Duration::from_secs(5),
+            );
+            tokio::pin!(probe);
+            tokio::select! {
+                result = &mut probe => panic!("setup is not readiness: {result:?}"),
+                _ = requested => {}
+            }
+            // The candidate leaves while generation is pending, before output.
+            presence.left(Instant::now());
+            release.send(true).unwrap();
+            probe.await.unwrap()
+        };
+        turn.state.started_at = started_at;
+        turn.activity = ready_runtime_activity(
+            &config,
+            boot.room_name,
+            started_at,
+            requested_at,
+            7,
+            &greeting,
+        );
+        let original_clock = turn.activity.startup_ready_at.unwrap();
+        let original_prompt = turn.activity.prompt_sequence;
+        let (room, sent) = RoomLink::recording(boot.room_name);
+        let ready = startup_ready_notice(started_at, Some(original_clock));
+        let (release_notice, notice_ready) = tokio::sync::oneshot::channel();
+        let (return_candidate, returned) = tokio::sync::oneshot::channel();
+        {
+            let mut usage = Default::default();
+            let publishing = publish_startup_readiness(&mut gemini, &mut usage, async {
+                notice_ready.await.unwrap();
+                publish_interviewer_state(&room, &ready).await
+            });
+            tokio::pin!(publishing);
+            assert!(publishing.as_mut().now_or_never().is_none());
+
+            // Return arrives while publication is pending. Like the room loop,
+            // apply queued presence/control events only after startup returns.
+            return_candidate.send("candidate").unwrap();
+            release_notice.send(()).unwrap();
+            publishing.await.unwrap();
+        }
+        // Nothing in reliable data retains this packet for the absent browser.
+        assert_eq!(
+            sent.take(),
+            vec![room_link::Sent::Data {
+                topic: Some(TOPIC_CONTROL.into()),
+                message: ready.clone()
+            }]
+        );
+        assert_eq!(sent.take_data_destinations(), vec![Vec::<String>::new()]);
+        let (_tx, events) = mpsc::unbounded_channel();
+        let events = tokio::sync::Mutex::new(RoomEventReader::from(events));
+        let interview = InterviewContext {
+            config: &config,
+            keys: &keys,
+            boot: &boot,
+            live_endpoint: None,
+            started_at,
+            candidate_identity: "candidate",
+            events: &events,
+            slot: None,
+        };
+        let (mut audio, _frames) = test_output_audio();
+        let mut board = Board::new();
+        let mut media = CandidateMedia::new();
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../../fixtures/control.json")).unwrap();
+        let query = fixture["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|case| case["name"] == "startup sync")
+            .unwrap()["payload"]
+            .clone();
+        assert!(
+            interview_packet(
+                Some(TOPIC_CONTROL),
+                Some("bystander"),
+                "candidate",
+                &serde_json::to_vec(&query).unwrap()
+            )
+            .is_none()
+        );
+        let (topic, query) = interview_packet(
+            Some(TOPIC_CONTROL),
+            Some("candidate"),
+            "candidate",
+            &serde_json::to_vec(&query).unwrap(),
+        )
+        .unwrap();
+        {
+            let mut context = turn.context(&mut audio, &mut gemini, &mut board, &mut media);
+
+            // Query versus return can land in either order. Both use the same
+            // state; neither needs the buffered opening to be replayed first.
+            if query_first {
+                assert!(
+                    handle_candidate_packet(
+                        &room,
+                        &mut context,
+                        &presence,
+                        interview,
+                        topic,
+                        &query
+                    )
+                    .await
+                    .unwrap()
+                    .is_continue()
+                );
+            }
+            candidate_returned(
+                &room,
+                &mut context,
+                &mut presence,
+                returned.await.unwrap(),
+                Instant::now(),
+            )
+            .await;
+            assert!(
+                handle_candidate_packet(&room, &mut context, &presence, interview, topic, &query)
+                    .await
+                    .unwrap()
+                    .is_continue()
+            );
+        }
+        let notices = sent.take();
+        assert_eq!(notices.len(), if query_first { 3 } else { 2 });
+        for notice in notices {
+            let room_link::Sent::Data { topic, mut message } = notice else {
+                panic!("readiness must use the control topic");
+            };
+            assert_eq!(topic.as_deref(), Some(TOPIC_CONTROL));
+            assert!(message["elapsedMs"].as_u64().unwrap() >= ready["elapsedMs"].as_u64().unwrap());
+            message["elapsedMs"] = ready["elapsedMs"].clone();
+            assert_eq!(message, ready);
+        }
+        let destinations = sent.take_data_destinations();
+        assert_eq!(destinations.len(), if query_first { 3 } else { 2 });
+        for destinations in destinations {
+            assert_eq!(destinations, vec!["candidate"]);
+        }
+        assert_eq!(presence.left_at, None);
+        assert_eq!(turn.state.started_at, started_at);
+        assert_eq!(turn.activity.startup_ready_at, Some(original_clock));
+        assert_eq!(turn.activity.buffered_startup_output_at, Some(started_at));
+        assert_eq!(turn.activity.prompt_sequence, original_prompt);
+        assert_eq!(turn.activity.live_socket, 1);
+        assert_eq!(turn.state.candidate_led_enabled, candidate_led);
+        assert_eq!(
+            gemini.next_event().await,
+            Some(GeminiEvent::Text("Hello".into()))
+        );
+        assert_eq!(gemini.event_received_at(), Some(started_at));
+        assert_eq!(gemini.next_event().await, Some(GeminiEvent::TurnComplete));
+        hand_over(&mut turn.state, &mut turn.activity, &mut audio);
+        assert_eq!(turn.state.candidate_led_enabled, candidate_led);
+        assert_eq!(turn.activity.startup_ready_at, Some(original_clock));
+        let mut context = turn.context(&mut audio, &mut gemini, &mut board, &mut media);
+        assert!(
+            handle_candidate_packet(&room, &mut context, &presence, interview, topic, &query)
+                .await
+                .unwrap()
+                .is_continue()
+        );
+        let notices = sent.take();
+        assert_eq!(notices.len(), 1);
+        let room_link::Sent::Data { topic, mut message } = notices.into_iter().next().unwrap()
+        else {
+            panic!("readiness must use the control topic");
+        };
+        assert_eq!(topic.as_deref(), Some(TOPIC_CONTROL));
+        assert!(message["elapsedMs"].as_u64().unwrap() >= ready["elapsedMs"].as_u64().unwrap());
+        let age_after = u64::try_from(started_at.elapsed().as_millis()).unwrap();
+        assert!(message["elapsedMs"].as_u64().unwrap() <= age_after);
+        message["elapsedMs"] = ready["elapsedMs"].clone();
+        assert_eq!(message, ready);
+        gemini.shutdown().await.unwrap();
+        drop(gemini);
+        assert_eq!(server.await.unwrap(), 1);
+    }
+}
+
 #[test]
 fn startup_readiness_age_is_independent_of_the_server_wall_clock() {
     let started_at = Instant::now() - Duration::from_secs(10);
@@ -401,6 +605,35 @@ async fn startup_reconnect_does_not_revive_failed_ended_or_expired_interviews() 
         drop(gemini);
         assert_eq!(server.await.unwrap(), 1);
     }
+}
+
+#[test]
+fn startup_ready_publication_budget_leaves_browser_cleanup_headroom() {
+    let browser = include_str!("../../../web/lib.js");
+    let timeout_ms: u64 = browser
+        .split("export function createInterviewerReadiness({")
+        .nth(1)
+        .unwrap()
+        .split("timeoutMs = ")
+        .nth(1)
+        .unwrap()
+        .split(',')
+        .next()
+        .unwrap()
+        .replace('_', "")
+        .parse()
+        .unwrap();
+    let mut config = startup_config("120");
+    config.gemini_reply_timeout_s = crate::config::MAX_GEMINI_REPLY_TIMEOUT_S;
+    config.gemini_first_output_s = crate::config::MAX_GEMINI_REPLY_TIMEOUT_S;
+    let bounded_startup = crate::gemini::FIRST_OPEN_LIMIT
+        + startup_output_limit(&config)
+        + STARTUP_READY_PUBLICATION_LIMIT
+        + crate::gemini::CLOSE_TIMEOUT
+        + RECONNECT_NOTICE_LIMIT;
+    assert_eq!(startup_output_limit(&config), Duration::from_secs(120));
+    assert!(bounded_startup + Duration::from_secs(10) < Duration::from_millis(timeout_ms));
+    assert!(STARTUP_READY_PUBLICATION_LIMIT > RECONNECT_NOTICE_LIMIT);
 }
 
 #[test]
@@ -670,6 +903,99 @@ fn startup_delivery_error_exposes_its_typed_source() {
     assert_eq!(source.kind(), std::io::ErrorKind::BrokenPipe);
     assert_eq!(source.to_string(), "ready data channel closed");
     assert_eq!(startup_state(Some(&error))["reason"], "delivery");
+}
+
+#[tokio::test]
+async fn startup_sync_routing_leaves_thinking_and_end_to_the_runtime() {
+    use futures_util::FutureExt;
+    let config = startup_config("60");
+    let keys = Arc::new(GeminiKeys::single(""));
+    let boot = crate::runtime::bootstrap(&config, "packet-routing", Some("two-sum"), 45);
+    let (mut gemini, server, _) = startup_socket(None).await;
+    let mut turn = hold_turn(initial_runtime_state(&boot, Instant::now()));
+    let (room, sent) = RoomLink::recording(boot.room_name);
+    let (_events, events) = mpsc::unbounded_channel();
+    let events = tokio::sync::Mutex::new(RoomEventReader::from(events));
+    let interview = InterviewContext {
+        config: &config,
+        keys: &keys,
+        boot: &boot,
+        live_endpoint: None,
+        started_at: turn.state.started_at,
+        candidate_identity: "candidate",
+        events: &events,
+        slot: None,
+    };
+    let (mut audio, _frames) = test_output_audio();
+    let mut board = Board::new();
+    let mut media = CandidateMedia::new();
+    let presence = CandidatePresence::default();
+    let fixture: serde_json::Value =
+        serde_json::from_str(include_str!("../../fixtures/control.json")).unwrap();
+    let command = |name| {
+        fixture["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|case| case["name"] == name)
+            .unwrap()["payload"]
+            .clone()
+    };
+    assert!(!turn.state.interviewer_silenced());
+    {
+        let mut context = turn.context(&mut audio, &mut gemini, &mut board, &mut media);
+        assert!(
+            startup_fixture_io(
+                "thinking handler",
+                handle_candidate_packet(
+                    &room,
+                    &mut context,
+                    &presence,
+                    interview,
+                    TOPIC_CONTROL,
+                    &command("thinking start"),
+                )
+            )
+            .await
+            .unwrap()
+            .is_continue()
+        );
+    }
+    assert!(
+        turn.state.interviewer_silenced(),
+        "Thinking reached the runtime reducer"
+    );
+    assert!(!turn.state.ended);
+    {
+        let mut context = turn.context(&mut audio, &mut gemini, &mut board, &mut media);
+        let end = command("end interview");
+
+        // Hold the report-recovery receiver so this routing check stops after
+        // reduction/freeze and before farewell or report delivery starts. A
+        // recorded room does not implement the latter's live receipt path.
+        let _receiver = events.lock().await;
+        let ending = handle_candidate_packet(
+            &room,
+            &mut context,
+            &presence,
+            interview,
+            TOPIC_CONTROL,
+            &end,
+        );
+        tokio::pin!(ending);
+        assert!(ending.as_mut().now_or_never().is_none());
+    }
+    assert!(turn.state.ended, "End reached the runtime reducer");
+    assert!(
+        sent.take().iter().all(|event| !matches!(event,
+            room_link::Sent::Data { message, .. } if message["startup"] == "ready"
+        )),
+        "ordinary controls are not startup sync requests"
+    );
+    gemini.shutdown().await.unwrap();
+    startup_fixture_io("routing peer close", server)
+        .await
+        .unwrap();
 }
 
 #[tokio::test]

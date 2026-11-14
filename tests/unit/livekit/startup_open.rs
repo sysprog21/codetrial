@@ -828,6 +828,63 @@ async fn startup_failure_missing_receipt_shares_the_publication_deadline() {
     assert_eq!(began.elapsed(), RECONNECT_NOTICE_LIMIT);
 }
 
+#[test]
+fn startup_receipt_matches_browser_bytes_and_only_the_candidate() {
+    let wire: serde_json::Value =
+        serde_json::from_str(include_str!("../../fixtures/startup-receipt.json")).unwrap();
+    assert_eq!(wire["cases"].as_array().unwrap().len(), 1);
+    let payload = serde_json::to_vec(&wire["cases"][0]["payload"]).unwrap();
+    let packet = br#"{"type":"interviewer_state","reconnecting":false,"startup":"failed","reason":"billing"}"#;
+    let id = crate::sha256_hex(&[packet]);
+    let topic = wire["topic"].as_str();
+    assert!(is_startup_receipt(
+        topic,
+        Some("candidate"),
+        "candidate",
+        &payload,
+        &id
+    ));
+    assert!(!is_startup_receipt(
+        topic,
+        Some("other"),
+        "candidate",
+        &payload,
+        &id
+    ));
+    assert!(!is_startup_receipt(topic, None, "candidate", &payload, &id));
+    assert!(!is_startup_receipt(
+        None,
+        Some("candidate"),
+        "candidate",
+        &payload,
+        &id
+    ));
+    assert!(!is_startup_receipt(
+        topic,
+        Some("candidate"),
+        "candidate",
+        &payload,
+        "different-notice"
+    ));
+    assert!(!is_startup_receipt(
+        topic,
+        Some("candidate"),
+        "candidate",
+        b"invalid json",
+        &id
+    ));
+    let report =
+        serde_json::to_vec(&serde_json::json!({"type":"report_received", "deliveryId":id}))
+            .unwrap();
+    assert!(!is_startup_receipt(
+        topic,
+        Some("candidate"),
+        "candidate",
+        &report,
+        &id
+    ));
+}
+
 #[tokio::test(start_paused = true)]
 async fn startup_failure_rejected_or_stalled_publication_does_not_wait_for_receipt() {
     for stalled in [false, true] {

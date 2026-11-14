@@ -5,8 +5,8 @@ import assert from "node:assert/strict";
 
 import {
   closeSetupCheck,
-  FAKE_LIVEKIT,
   FAKE_SPEECH_CAPTURE,
+  fakeLiveKit,
   launchChromium,
   startStaticServer,
 } from "./source.js";
@@ -100,7 +100,7 @@ async function interviewPage(
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
   if (connected) {
-    await page.addInitScript(FAKE_LIVEKIT);
+    await page.addInitScript(fakeLiveKit({ startupReady: true }));
     await page.route("**/vendor/livekit-client.js", (route) =>
       route.fulfill({ contentType: "text/javascript", body: "" }),
     );
