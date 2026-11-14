@@ -428,7 +428,7 @@ const SETUP_PAGE: &str = r#"<!doctype html>
     <div id="code-row" class="field" hidden>
       <label for="code">Change keys code</label>
       <input id="code" name="code" type="password" autocomplete="off" disabled>
-      <small>Printed in the terminal this server was started from, and new every time it starts.</small>
+      <small>Printed in the terminal this server was started from, or shown by the desktop app that started it, and new every time it starts.</small>
     </div>
     <div class="action-row">
       <button id="submit" type="submit">Save and continue</button>

@@ -3,6 +3,8 @@ use std::sync::mpsc;
 
 use super::*;
 
+const CODE: &str = "0123456789abcdef0123456789abcdef";
+
 fn temp_dir(label: &str) -> PathBuf {
     static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let dir = std::env::temp_dir().join(format!(
@@ -22,6 +24,7 @@ fn the_server_is_started_on_the_data_dir_and_told_the_rest() {
         data_dir: PathBuf::from("/data"),
         addr: "127.0.0.1:3101".to_string(),
         import_config: None,
+        change_keys_code: CODE.to_string(),
     };
     let command = command(&launch);
     let args = command
@@ -43,8 +46,8 @@ fn the_server_is_started_on_the_data_dir_and_told_the_rest() {
     );
     assert_eq!(command.get_current_dir(), Some(Path::new("/data")));
 
-    // The pipe is the one thing it is told through the environment, which a
-    // `--data-dir` launch reads no configuration from.
+    // The pipe and the Change keys code are the two things it is told through
+    // the environment, which a `--data-dir` launch reads no configuration from.
     let env = |key: &str| {
         command
             .get_envs()
@@ -52,8 +55,9 @@ fn the_server_is_started_on_the_data_dir_and_told_the_rest() {
             .and_then(|(_, value)| value)
             .map(|value| value.to_string_lossy().into_owned())
     };
-    assert_eq!(command.get_envs().count(), 1);
+    assert_eq!(command.get_envs().count(), 2);
     assert_eq!(env("CODETRIAL_EXIT_WITH_STDIN").as_deref(), Some("1"));
+    assert_eq!(env("CODETRIAL_CHANGE_KEYS_CODE").as_deref(), Some(CODE));
 }
 
 #[test]
@@ -63,6 +67,7 @@ fn a_cli_config_found_is_offered_to_the_server_to_import() {
         data_dir: PathBuf::from("/data"),
         addr: "127.0.0.1:3101".to_string(),
         import_config: Some(PathBuf::from("/checkout/config/codetrial.env.local")),
+        change_keys_code: CODE.to_string(),
     };
     let args = command(&launch)
         .get_args()
@@ -144,6 +149,7 @@ fn launch_of(dir: &Path, program: PathBuf, addr: String) -> Launch {
         data_dir: dir.to_path_buf(),
         addr,
         import_config: None,
+        change_keys_code: CODE.to_string(),
     }
 }
 
@@ -217,4 +223,14 @@ fn a_server_is_ready_once_bound_and_stops_when_its_stdin_closes() {
     // An exit the app asked for is not news to report.
     assert!(received.recv_timeout(Duration::from_millis(500)).is_err());
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Strong enough for the server to take: it ignores a code shorter than 24
+/// letters and digits.
+#[test]
+fn a_change_keys_code_is_new_hex_on_every_launch() {
+    let first = change_keys_code().unwrap();
+    assert_eq!(first.len(), 32);
+    assert!(first.bytes().all(|byte| byte.is_ascii_hexdigit()));
+    assert_ne!(first, change_keys_code().unwrap());
 }
