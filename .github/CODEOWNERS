@@ -9,9 +9,9 @@
 /.claude/skills/codetrial-review/ @jserv
 
 # The product code, Rust and JavaScript, and its tests are shared.
-/src/                             @jserv @ColtenOuO
-/web/                             @jserv @ColtenOuO
-/tests/                           @jserv @ColtenOuO
+/src/                             @jserv @ColtenOuO @alanhc
+/web/                             @jserv @ColtenOuO @alanhc
+/tests/                           @jserv @ColtenOuO @alanhc
 /build.rs                         @jserv @ColtenOuO
 /Cargo.toml                       @jserv @ColtenOuO
 /Cargo.lock                       @jserv @ColtenOuO
