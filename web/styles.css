@@ -1531,9 +1531,7 @@ p {
   display: flex;
   min-height: 34rem;
   flex-direction: column;
-  /* Read here, outside .editor-stack, this is always the dark editor value:
-     the panel frames the editor whichever theme the editor takes. */
-  background: var(--code-bg);
+  background: var(--editor-panel-bg);
   container-type: inline-size;
 }
 
@@ -1595,7 +1593,7 @@ p {
      the two panes. The old 25rem flex minimum prevented the drawer from
      reaching its bound and made the panel overflow. */
   min-height: 6rem;
-  background: var(--code-bg);
+  background: var(--editor-panel-bg);
 }
 
 /* The overlay and the textarea must agree on every metric that affects where a
@@ -1998,6 +1996,7 @@ p {
   overflow-y: auto;
   gap: 1rem;
   background: color-mix(in srgb, var(--page) 95%, transparent);
+  background: var(--overlay-background);
   padding: 1rem;
 }
 
@@ -2612,7 +2611,7 @@ table.phase-scores {
   border-radius: var(--radius-sm);
   background: var(--paper);
   color: var(--paper-ink);
-  box-shadow: var(--shadow-raised);
+  box-shadow: 0 3px 12px var(--board-controls-shadow-color);
 }
 .board-text-controls .board-pens {
   margin-right: auto;
@@ -2695,6 +2694,7 @@ table.phase-scores {
   border-radius: var(--radius-lg);
   background: var(--surface);
   box-shadow: var(--shadow-modal);
+  box-shadow: var(--shadow-overlay);
   text-align: left;
 }
 
@@ -2738,6 +2738,7 @@ table.phase-scores {
   border: 1px solid var(--hairline);
   border-radius: var(--radius-sm);
   background: var(--page);
+  background: var(--camera-preview-background);
 }
 
 .camera-preview-container[hidden] {
@@ -2808,6 +2809,7 @@ table.phase-scores {
   border-color: var(--good);
   background: var(--good);
   color: var(--on-good);
+  color: var(--good-ink);
 }
 
 .audio-check-step.done strong {
@@ -3077,6 +3079,7 @@ body:not([data-recording]) .replay-detail > :not(header) {
   border-radius: var(--radius-sm);
   background: var(--float-surface);
   box-shadow: var(--shadow-modal);
+  box-shadow: var(--shadow-hint);
 }
 
 .framework-hint-title {

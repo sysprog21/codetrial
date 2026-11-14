@@ -2,7 +2,14 @@
   /* The workspace is dark only: a light scheme would draw the browser's own
      form controls light on this page. Its palette is theme.css's. */
   color-scheme: dark;
-  font-family: var(--font-sans);
+  --font-family: var(--font-sans);
+  --ready-ink: #00ff00;
+  --overlay-background: rgba(0, 0, 0, 0.5);
+  --board-controls-shadow-color: rgba(0, 0, 0, 0.1);
+  --shadow-overlay: rgba(0, 0, 0, 0.2);
+  --camera-preview-background: #000000;
+  --good-ink: #0000ff;
+  --shadow-hint: rgba(255, 255, 255, 0.1);
 }
 * {
   box-sizing: border-box;
