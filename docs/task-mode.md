@@ -62,6 +62,9 @@ it as invalid, with any available recording saved for download.
 
 End recording or browser Stop sharing saves a WebM. Completion, a rule ending,
 or room loss also finalizes it, with a download link retained beside the result.
+Every ending stops the recording before the learning review appears, so the
+downloaded video never shows the review. When a submission needs it on video,
+record the review page with another screen recorder after the attempt ends.
 If preparation has to replace the microphone and camera, it first finalizes
 any current recording; start a fresh recording after retrying device setup.
 When the connection is lost before Start is acknowledged and the server
