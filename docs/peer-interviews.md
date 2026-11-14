@@ -85,6 +85,38 @@ sessions retain their configured invitation expiry.
 The waiting-room participant limit is three: the two humans and silent observer.
 A background worker settles idle/expired sessions and deletes rooms with retries.
 
+### The GitHub OAuth App
+
+`GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` come from a GitHub OAuth App you
+register for the server:
+
+1. On GitHub, open Settings, Developer settings, OAuth Apps, and choose
+   New OAuth App.
+2. Set Homepage URL to the origin people open, such as
+   `http://127.0.0.1:3000` or `https://codetrial.example.org`.
+3. Set Authorization callback URL to that origin followed by `/api/callback`,
+   such as `http://127.0.0.1:3000/api/callback`. The origin alone is not
+   enough: GitHub then returns to `/?code=...`, which nothing reads, and the
+   person lands back on the server still signed out.
+4. Register the app, then set its Client ID as `GITHUB_CLIENT_ID=` in the
+   same config file that holds `LIVEKIT_URL`.
+   Generate a client secret and set it as `GITHUB_CLIENT_SECRET=` there too.
+   GitHub shows the secret only once.
+5. Restart the server, which reads its config only at startup.
+
+Give the app exactly one callback URL. The server does not name one when it
+sends people to GitHub, so GitHub returns every sign-in to the first URL
+registered. The state cookie belongs to the host the sign-in started at, not
+to its port, so a sign-in started at another host, such as `localhost` against
+a registered `127.0.0.1`, or a tunnel against loopback, comes back without it
+and fails with `Login state is missing or expired.`, or with
+`Login state did not match.` when an earlier attempt left a cookie at the
+registered host. A server reached at two hosts signs people in only at the one
+its app names. Sign-in at both takes one OAuth App per host and a server for
+each, with that app's client ID and secret in its own config. With
+`NODE_ENV=production` the server marks its cookies `Secure`, so the origin
+and the callback URL have to be `https://`.
+
 ## Saving choices and AI processing
 
 Both members must confirm the same choices before capture starts. No choice
