@@ -343,6 +343,12 @@ pub(crate) fn exhausted_until(error: &(dyn std::error::Error + 'static)) -> Opti
     as_exhausted(error)?.retry_at
 }
 
+/// A rotation that ran dry with no cooldown and no billing cause: every key
+/// was rejected, and the rejection itself is the reason worth reporting.
+pub(crate) fn rotation_ran_dry(error: &(dyn std::error::Error + 'static)) -> bool {
+    as_exhausted(error).is_some_and(|exhausted| exhausted.retry_at.is_none() && !exhausted.billing)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum CredentialFailure {
     Quota,

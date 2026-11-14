@@ -6,10 +6,9 @@ use tokio_tungstenite::tungstenite::Message;
 use super::super::readiness::{
     CandidatePresenceChange, RoomEventReader, STARTUP_READY_EVENT_LIMIT,
     STARTUP_READY_PUBLICATION_LIMIT, StartupContext, StartupDeliveryError, StartupInput,
-    StartupInputs, account_startup, candidate_departed, candidate_returned,
-    handle_candidate_packet, is_startup_receipt, next_timed_room_event, publish_startup_failure,
-    ready_runtime_activity, resend_startup_readiness, startup_output_limit, startup_ready_notice,
-    startup_state,
+    StartupInputs, account_startup, candidate_returned, handle_candidate_packet,
+    is_startup_receipt, next_timed_room_event, publish_startup_failure, ready_runtime_activity,
+    resend_startup_readiness, startup_output_limit, startup_ready_notice, startup_state,
 };
 
 #[path = "startup_publication.rs"]
@@ -640,13 +639,13 @@ fn startup_ready_publication_budget_leaves_browser_cleanup_headroom() {
 fn startup_deferred_departure_keeps_its_original_grace_deadline() {
     let observed = Instant::now() - Duration::from_secs(80);
     let mut presence = CandidatePresence::default();
-    candidate_departed(&mut presence, observed);
+    presence.left(observed);
     assert_eq!(
         presence.deadline(CANDIDATE_ABSENCE_LIMIT),
         Some(observed + CANDIDATE_ABSENCE_LIMIT)
     );
     assert!(!presence.gave_up(observed + CANDIDATE_ABSENCE_LIMIT - Duration::from_nanos(1)));
-    candidate_departed(&mut presence, observed + Duration::from_secs(20));
+    presence.left(observed + Duration::from_secs(20));
     assert!(
         presence.gave_up(observed + CANDIDATE_ABSENCE_LIMIT),
         "a duplicate deferred departure cannot buy more grace"
@@ -719,7 +718,7 @@ async fn startup_deferred_return_is_judged_when_observed_not_when_replayed() {
         );
         if elapsed < 90 {
             let second_departure = Instant::now() - Duration::from_secs(5);
-            candidate_departed(&mut presence, second_departure);
+            presence.left(second_departure);
             assert_eq!(
                 presence.left_at,
                 Some(second_departure),

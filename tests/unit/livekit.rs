@@ -234,7 +234,7 @@ fn a_published_packet_carries_its_topic_and_arrives_reliably() {
 /// tested against its format, but neither notices if a call site stops
 /// calling: deleting both recordings leaves the whole suite green, because a
 /// room that really connected is the only other witness. Read as source for
-/// the reason the interview clock is, one test below.
+/// the reason `the_interview_clock_starts_at_the_probed_first_output` is.
 #[test]
 fn both_ways_a_live_socket_opens_count_its_instruction() {
     for (source, opener) in [
@@ -244,7 +244,7 @@ fn both_ways_a_live_socket_opens_count_its_instruction() {
         ),
         (
             include_str!("../../src/livekit/recovery.rs"),
-            "async fn replace(",
+            "async fn replace_once(",
         ),
     ] {
         let body = source
@@ -289,7 +289,7 @@ fn only_a_replacement_publishes_its_reconnect_wait() {
         ),
         (
             include_str!("../../src/livekit/recovery.rs"),
-            "async fn replace(",
+            "async fn replace_once(",
             "Some(room)",
         ),
     ] {

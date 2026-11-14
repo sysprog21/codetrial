@@ -144,8 +144,8 @@ use candidate::{
 };
 use open::{OpenSession, OpenSessionOutcome, open_cold_session_into, open_session};
 use readiness::{
-    RoomEventReader, TimedRoomEvent, candidate_departed, candidate_returned,
-    handle_candidate_packet, next_timed_room_event,
+    RoomEventReader, TimedRoomEvent, candidate_returned, handle_candidate_packet,
+    next_timed_room_event,
 };
 use replacement::{
     Fallback, Replacement, Trigger, earlier_references, end_without_interviewer, fallback_reason,
@@ -170,6 +170,7 @@ pub(crate) use candidate::arriving_candidate;
 #[cfg(test)]
 use {
     open::{retry_cold_open, retry_cold_open_into},
+    readiness::startup_failure_line,
     replacement::{
         Handover, brief_replacement, clear_abandoned_socket_work, keep_recovery_debt,
         replacement_notice, send_recovery_brief,
@@ -1296,26 +1297,6 @@ pub(crate) enum RoomRunOutcome {
     FailedBeforeCandidate(Box<dyn std::error::Error + Send + Sync>),
 }
 
-fn startup_failure_line(
-    model: &str,
-    room_name: &str,
-    session_id: u64,
-    error: &(dyn std::error::Error + Send + Sync + 'static),
-) -> String {
-    // A socket may have opened before the failure, so no count is claimed; no
-    // generation was asked for, so there is no usage.
-    let outcome = LiveOutcome::from_error(error, LiveOutcome::Error);
-    live_usage_line(
-        room_name,
-        session_id,
-        model,
-        0,
-        outcome,
-        None,
-        &crate::gemini::TokenUsage::default(),
-    )
-}
-
 pub(crate) async fn run_room_with_slot(
     config: &AgentConfig,
     room_name: &str,
@@ -1360,12 +1341,7 @@ pub(crate) async fn run_room_with_slot(
         mut turn,
         started_at,
         restarts,
-        deferred_events,
     } = *session;
-
-    // The report handler takes exclusive ownership of this same queue after
-    // End, including packets received while startup publication was pending.
-    events.lock().await.deferred = deferred_events;
 
     #[cfg(test)]
     let reader_probe = take_live_reader_probe(room_name);
@@ -1749,7 +1725,7 @@ async fn handle_room_event(
             if participant.identity().0 == candidate_identity =>
         {
             eprintln!("candidate left room={room_name}; waiting for a return");
-            candidate_departed(presence, received_at);
+            presence.left(received_at);
         }
         RoomEvent::ParticipantConnected(participant)
             if participant.identity().0 == candidate_identity =>

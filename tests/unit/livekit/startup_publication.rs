@@ -235,6 +235,7 @@ async fn startup_candidate_discovery_preserves_identity_metadata_and_deferred_ev
             let observed_at = deferred[0].0;
             let events = tokio::sync::Mutex::new(RoomEventReader {
                 events: discovery_events,
+                startup_sync_pending: false,
                 deferred: deferred.into(),
             });
             let (at, event) = next_timed_room_event(&events).await.unwrap();
@@ -637,10 +638,15 @@ async fn startup_publication_collection_keeps_failure_bounds_and_ownership() {
         tokio::time::pause();
         let began = tokio::time::Instant::now();
         if matches!(outcome, "capacity" | "overflow") {
+            // What the probe deferred over the opening does not count against
+            // the publish: only the events queued behind it here do.
             deferred.extend(
                 (0..STARTUP_READY_EVENT_LIMIT - 1)
                     .map(|_| (began.into_std(), RoomEvent::Reconnecting)),
             );
+            for _ in 0..STARTUP_READY_EVENT_LIMIT - 1 {
+                tx.send(RoomEvent::Reconnecting).unwrap();
+            }
         }
         let result = {
             let publishing = crate::livekit::readiness::publish_startup_readiness(
@@ -660,7 +666,13 @@ async fn startup_publication_collection_keeps_failure_bounds_and_ownership() {
                 },
             );
             tokio::pin!(publishing);
-            assert!(publishing.as_mut().now_or_never().is_none());
+
+            // One poll runs out of cooperative budget before a long queue is
+            // drained; each yield gives the collection a fresh one.
+            for _ in 0..8 {
+                assert!(publishing.as_mut().now_or_never().is_none());
+                tokio::task::yield_now().await;
+            }
             tx.send(RoomEvent::Reconnecting).unwrap();
             assert!(publishing.as_mut().now_or_never().is_none());
             match outcome {
@@ -706,7 +718,7 @@ async fn startup_publication_collection_keeps_failure_bounds_and_ownership() {
         assert!(matches!(deferred[0].1, RoomEvent::Reconnecting));
         assert_eq!(deferred[0].0, began.into_std());
         if matches!(outcome, "capacity" | "overflow") {
-            assert_eq!(deferred.len(), STARTUP_READY_EVENT_LIMIT);
+            assert_eq!(deferred.len(), 2 * STARTUP_READY_EVENT_LIMIT - 1);
         } else {
             assert_eq!(deferred.len(), if outcome == "timeout" { 2 } else { 1 });
         }

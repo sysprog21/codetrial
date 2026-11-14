@@ -1,5 +1,40 @@
 use super::*;
 
+/// The interview starts once, at the opening's first output: the instant the
+/// browser places on its own clock from the ready notice's elapsed time.
+/// Stamping setup's or a later instant instead puts this process off the
+/// tab's clock for the whole interview, and the round boundary is announced
+/// off the browser's. Read as source because the stamps are only
+/// distinguishable in a room that really connected.
+#[test]
+fn the_interview_clock_starts_at_the_probed_first_output() {
+    let source = include_str!("../../../src/livekit/open.rs");
+    let function = |name: &str| {
+        source
+            .split(name)
+            .nth(1)
+            .unwrap_or_else(|| panic!("{name} is still defined here"))
+            .split("\n}\n")
+            .next()
+            .unwrap_or_default()
+    };
+    let body = function("async fn open_interview(");
+    let probed = body
+        .find("let started_at = match probed")
+        .expect("the clock is bound from the probe's result");
+    let stamped = body
+        .find("turn.state.started_at = started_at;")
+        .expect("the probed instant is the interview clock");
+    assert!(probed < stamped);
+    for consumer in [
+        "ready_runtime_activity(\n        config,\n        room_name,\n        started_at,",
+        "startup_ready_notice(started_at,",
+        "Ok(started_at)",
+    ] {
+        assert!(body.contains(consumer), "{consumer} reads the same clock");
+    }
+}
+
 #[test]
 fn startup_results_use_the_existing_control_path() {
     assert_eq!(
@@ -741,8 +776,11 @@ async fn startup_room_join_failure_is_accounted_exactly_once() {
     config.livekit_url = "not-a-livekit-url".to_string();
     let keys = Arc::new(GeminiKeys::from_config(&config));
     let mut summaries = Vec::new();
+
+    // A hang guard, not a timing claim: the URL cannot even be parsed, so
+    // nothing waits on a network, but a loaded test host can still be slow.
     let result = tokio::time::timeout(
-        Duration::from_secs(5),
+        Duration::from_secs(30),
         open_session(
             &config,
             &keys,
@@ -756,7 +794,7 @@ async fn startup_room_join_failure_is_accounted_exactly_once() {
         ),
     )
     .await
-    .expect("an invalid URL must fail before any network wait");
+    .expect("an invalid URL must fail without waiting on a network");
     assert!(
         matches!(result, Ok(OpenSessionOutcome::FailedBeforeCandidate(_))),
         "a failed room join must preserve the pre-candidate release outcome"
@@ -1093,4 +1131,67 @@ async fn startup_open_preserves_quota_when_cooldown_outlasts_its_budget() {
     assert_eq!(attempts, 1);
     assert_eq!(restarts, 0);
     assert!(notices.is_empty());
+}
+
+/// Every configured key refused: the rotation runs dry with no cooldown, and
+/// the reason the candidate is given is the provider's refusal, not a bare
+/// empty rotation that reads as an unanswered startup check.
+#[tokio::test]
+#[expect(
+    clippy::result_large_err,
+    reason = "the handshake callback's error type is a full HTTP response"
+)]
+async fn a_first_open_refused_on_every_key_reports_the_refusal() {
+    use tokio_tungstenite::tungstenite::handshake::server;
+    for (status, prefix, expected) in [
+        (
+            axum::http::StatusCode::UNAUTHORIZED,
+            "dry-invalid",
+            "credentials",
+        ),
+        (axum::http::StatusCode::FORBIDDEN, "dry-refused", "refused"),
+    ] {
+        let configured = format!("{prefix}-first,{prefix}-second");
+        let config = load_from_pairs([
+            ("LIVEKIT_URL", "wss://example.livekit.cloud"),
+            ("LIVEKIT_API_KEY", "devkey"),
+            ("LIVEKIT_API_SECRET", "devsecret"),
+            ("GOOGLE_API_KEYS", configured.as_str()),
+        ])
+        .unwrap();
+        let keys = GeminiKeys::from_config(&config);
+        let boot = crate::runtime::bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}/", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            loop {
+                let (socket, _) = listener.accept().await.unwrap();
+                let _ = tokio_tungstenite::accept_hdr_async(socket, |_: &server::Request, _| {
+                    let mut refusal = server::ErrorResponse::new(None);
+                    *refusal.status_mut() = status;
+                    Err(refusal)
+                })
+                .await;
+            }
+        });
+        let error = crate::gemini::first_open_within(
+            Duration::from_secs(10),
+            retry_cold_open(
+                &keys,
+                &mut 0,
+                None,
+                || fixture_session_at(&url, &keys, &boot, None),
+                |_| async {},
+            ),
+        )
+        .await
+        .err()
+        .unwrap();
+        server.abort();
+        assert_eq!(
+            crate::gemini::startup_failure_reason(error.as_ref()),
+            expected,
+            "{prefix}: {error}"
+        );
+    }
 }

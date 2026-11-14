@@ -49,7 +49,11 @@ Before the interview timer starts, one bounded Live generation verifies that
 the configured model can answer, not merely accept setup. The opening greeting
 is that request on the interview's own socket; there is no separate paid probe
 turn. The initial socket open retains its bounded cold-open retry and key
-failover policy; those attempts send setup, not a readiness generation. Once
+failover policy; those attempts send setup, not a readiness generation. One
+difference: a quota cooldown that cannot end inside the first open's 30-second
+budget fails the start at once with its quota cause, rather than waiting out a
+timeout that would report the provider as unavailable. A rotation in which
+every key was rejected reports that rejection, not an empty rotation. Once
 setup succeeds, the greeting is sent once and a failed or silent generation
 is not retried. Connect and setup retain their existing limits, and
 `CODETRIAL_GEMINI_FIRST_OUTPUT_S` bounds the greeting send and wait for the
@@ -70,9 +74,11 @@ transcription, voice activity, usage, empty output and turn completion alone
 do not. The private clock travels as non-generating context before the opening
 turn; it does not add another generation request.
 
-Events observed by the probe retain their original receive timestamps and are
-preserved, in order, for the normal room loop, with the event queue's bound
-also applied to the startup buffer. Only observed usage is logged on failure;
+Gemini events observed by the probe retain their original receive timestamps
+and are preserved, in order, for the normal room loop, with the event queue's
+bound also applied to that startup buffer. Room events received meanwhile are
+kept in receive order too; the opening's time limit bounds them, and the ready
+publication that follows bounds what it collects by count. Only observed usage is logged on failure;
 no observation does not mean the request was free.
 If End overtakes that replay, buffered candidate speech enters the assessment
 before it is frozen, retaining its turn boundaries. Those input events are

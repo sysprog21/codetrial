@@ -201,6 +201,11 @@ async fn startup_go_away_is_replayed_before_output_with_original_timestamps() {
         assert_eq!(session.next_event().await, Some(event));
         assert_eq!(session.event_received_at(), Some(received_at));
     }
+
+    // Events the probe buffered were consumed once, when it took them off the
+    // channel: a replayed prefix is no backlog in the pressure record.
+    let pressure = session.pressure_for_test();
+    assert_eq!(pressure.consumed, pressure.received);
     session.shutdown().await.unwrap();
     tokio::time::timeout(Duration::from_secs(5), forwarding)
         .await

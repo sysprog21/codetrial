@@ -260,6 +260,17 @@ impl<'r, 'c, 'i> Driver<'r, 'c, 'i> {
         else {
             return;
         };
+
+        // Answered once the replacement ends; the ready notice it asks for is
+        // the same whichever socket the interview is on.
+        if control_type(topic, &payload) == Some("startup_sync") {
+            // Outside a wait the receiver is free; inside one, its holder is
+            // this driver's own select, which has already let go.
+            if let Ok(mut events) = self.interview.events.try_lock() {
+                events.startup_sync_pending = true;
+            }
+            return;
+        }
         if control_type(topic, &payload) == Some("end_interview") {
             self.terminal = Some(Terminal::End {
                 topic: topic.into(),
@@ -371,7 +382,7 @@ impl<'r, 'c, 'i> Driver<'r, 'c, 'i> {
         }
     }
 
-    fn event(&mut self, event: RoomEvent) {
+    fn event(&mut self, (received_at, event): TimedRoomEvent) {
         if handle_board_event(
             self.context.state.interview_mode,
             self.context.state.example_drawing_enabled,
@@ -394,11 +405,18 @@ impl<'r, 'c, 'i> Driver<'r, 'c, 'i> {
             RoomEvent::ParticipantDisconnected(p)
                 if p.identity().0 == self.interview.candidate_identity =>
             {
-                self.loops.presence.left(Instant::now());
+                // A departure replayed from startup keeps its receive time, so
+                // the replay does not restart the absence grace.
+                self.loops.presence.left(received_at);
             }
             RoomEvent::ParticipantConnected(p)
                 if p.identity().0 == self.interview.candidate_identity =>
             {
+                // As the room loop judges it: a return after the grace ran out
+                // does not revive the interview.
+                if self.loops.presence.gave_up(received_at) {
+                    return;
+                }
                 self.loops.presence.returned();
                 self.context.state.announce_thinking();
                 self.context.state.framework_published.clear();
@@ -522,7 +540,7 @@ impl<'r, 'c, 'i> Driver<'r, 'c, 'i> {
                 () = tokio::time::sleep_until(self.loops.deadline_at), if !self.context.state.ended => {
                     self.terminal = Some(Terminal::Deadline);
                 }
-                event = async { self.interview.events.lock().await.recv().await } => {
+                event = next_timed_room_event(self.interview.events) => {
                     match event { Some(event) => self.event(event), None => self.terminal = Some(Terminal::RoomClosed) }
                 }
                 packet = async {
@@ -990,6 +1008,43 @@ pub(super) async fn replace(
     interview: InterviewContext<'_>,
     loops: &mut RoomLoop,
     trigger: Trigger,
+    handoff: Option<session::SpeechHandoff>,
+    finalize_prefix: bool,
+) -> Result<ControlFlow<()>, Error> {
+    // Boxed so this layer adds no copy of the replacement's state to the room
+    // task's stack.
+    let flow = Box::pin(replace_once(
+        room,
+        context,
+        interview,
+        loops,
+        trigger,
+        handoff,
+        finalize_prefix,
+    ))
+    .await;
+
+    // A page that resumed while the socket was being replaced asked for the
+    // ready notice it may have missed, whichever path asked for the
+    // replacement.
+    if std::mem::take(&mut interview.events.lock().await.startup_sync_pending) {
+        super::readiness::resend_startup_readiness(
+            room,
+            context,
+            &loops.presence,
+            interview.candidate_identity,
+        )
+        .await;
+    }
+    flow
+}
+
+async fn replace_once(
+    room: &RoomLink,
+    context: &mut GeminiEventContext<'_>,
+    interview: InterviewContext<'_>,
+    loops: &mut RoomLoop,
+    trigger: Trigger,
     mut handoff: Option<session::SpeechHandoff>,
     finalize_prefix: bool,
 ) -> Result<ControlFlow<()>, Error> {
@@ -1133,10 +1188,7 @@ pub(super) async fn replace(
         } else {
             let mut restarts = driver.loops.restarts;
 
-            // Boxed: the cold-open state is the largest thing this wait holds,
-            // and a debug build polls it on the room task's stack.
-            let opening = Box::pin(open_cold_session_into(interview, &mut restarts, Some(room), None, &mut fresh));
-            let opened = driver.wait(opening).await;
+            let opened = driver.wait(open_cold_session_into(interview, &mut restarts, Some(room), None, &mut fresh)).await;
             driver.loops.restarts = restarts;
             opened
         };

@@ -12,9 +12,9 @@
 )]
 use super::*;
 use readiness::{
-    StartupContext, account_startup, probe_live_output, publish_startup_failure,
-    publish_startup_readiness, ready_runtime_activity, startup_failure_receipt,
-    startup_output_limit, startup_ready_notice, startup_state,
+    StartupContext, account_startup, close_and_account, probe_live_output, publish_startup_failure,
+    publish_startup_readiness, ready_runtime_activity, startup_failure_line,
+    startup_failure_receipt, startup_output_limit, startup_ready_notice, startup_state,
 };
 
 /// Opens a session that remembers nothing, retrying while the budget allows.
@@ -41,7 +41,9 @@ pub(super) async fn open_cold_session_into(
     deadline: Option<tokio::time::Instant>,
     ready: &mut Option<GeminiLiveSession>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    retry_cold_open_into(
+    // Boxed: the retry loop is the largest state any caller's wait holds, and a
+    // debug build polls it on the room task's stack.
+    Box::pin(retry_cold_open_into(
         interview.keys,
         restarts,
         deadline,
@@ -73,7 +75,7 @@ pub(super) async fn open_cold_session_into(
             let sleep = room_link::observe_retry_backoff(room, until, sleep);
             sleep
         },
-    )
+    ))
     .await
 }
 
@@ -129,6 +131,10 @@ where
     // a slow room does not delay the retry; still finished before the loop
     // returns, so it cannot land after the notice that clears the banner.
     let mut attempt_notice = None;
+
+    // The last failure a retry moved past. When the rotation then runs dry, it
+    // is what the keys were refused with, and the dry rotation says nothing.
+    let mut moved_past = None;
     loop {
         let announce = attempt_notice.take().map(&mut notify);
         let opening = async {
@@ -186,11 +192,15 @@ where
                 } else {
                     RECONNECT_RETRYING
                 };
+                moved_past = Some(error);
                 (reason, tokio::time::Instant::now() + COLD_OPEN_BACKOFF)
             }
             Err(error) => {
                 eprintln!("Gemini could not be reached ({error}); stopping cold session attempts");
-                return Err(error);
+                return Err(match moved_past {
+                    Some(rejected) if crate::gemini::rotation_ran_dry(error.as_ref()) => rejected,
+                    _ => error,
+                });
             }
         };
 
@@ -229,7 +239,6 @@ pub(super) struct OpenSession<'a> {
     pub(super) turn: TurnState,
     pub(super) started_at: Instant,
     pub(super) restarts: usize,
-    pub(super) deferred_events: std::collections::VecDeque<TimedRoomEvent>,
 }
 
 pub(super) enum OpenSessionOutcome<'a> {
@@ -375,7 +384,6 @@ pub(super) async fn open_session<'a>(
         turn,
         started_at,
         restarts,
-        deferred_events: deferred_events.into(),
     })))
 }
 
@@ -539,15 +547,50 @@ async fn start_interview(
         }
     }
 
+    let started_at = open_interview(
+        startup,
+        &mut gemini,
+        &mut turn,
+        &mut media,
+        deferred_events,
+        room_closed,
+        startup_usage,
+    )
+    .await?;
+    Ok((output_audio, gemini, media, turn, started_at, restarts))
+}
+
+/// Asks for the opening and starts the interview at its first output: the
+/// probe, the clock it sets, and the ready notice that tells the page so.
+async fn open_interview(
+    startup: Startup<'_, '_>,
+    gemini: &mut GeminiLiveSession,
+    turn: &mut TurnState,
+    media: &mut CandidateMedia,
+    deferred_events: &mut Vec<TimedRoomEvent>,
+    room_closed: &mut bool,
+    startup_usage: &mut crate::gemini::TokenUsage,
+) -> Result<Instant, Box<dyn std::error::Error + Send + Sync>> {
+    let Startup {
+        config,
+        keys,
+        room_name,
+        session_id,
+        room,
+        events,
+        candidate_identity,
+        boot,
+        ..
+    } = startup;
     let greeting = with_timer(&turn.state, boot.greeting.clone());
     let opening_requested_at = Instant::now();
     let probed = probe_live_output(
-        &mut gemini,
+        gemini,
         &mut turn.state,
         &greeting,
         startup_output_limit(config),
         &mut StartupContext {
-            media: &mut media,
+            media,
             candidate_identity,
             candidate_video: boot.candidate_video,
             deferred_events,
@@ -562,14 +605,7 @@ async fn start_interview(
             if !*room_closed {
                 gemini.record_failure(keys);
             }
-            let _ = gemini.shutdown().await;
-
-            // A failed generation can still be billed. Only observed counters
-            // are reported; absence of observations is not a claim of zero
-            // cost.
-            for usage in gemini.drain_usage() {
-                startup_usage.add(usage);
-            }
+            close_and_account(gemini, startup_usage).await;
             return Err(error);
         }
     };
@@ -590,7 +626,7 @@ async fn start_interview(
     eprintln!("{}", turn.activity.latency.anchor(started_at));
     let ready = startup_ready_notice(started_at, turn.activity.startup_ready_at);
     publish_startup_readiness(
-        &mut gemini,
+        gemini,
         startup_usage,
         events,
         deferred_events,
@@ -598,5 +634,10 @@ async fn start_interview(
         publish_interviewer_state(room, &ready),
     )
     .await?;
-    Ok((output_audio, gemini, media, turn, started_at, restarts))
+
+    // Replayed by the room loop ahead of anything newer, and taken over with
+    // the reader by the report handler after End, so a packet received while
+    // ready was publishing is answered in order either way.
+    events.lock().await.deferred = std::mem::take(deferred_events).into();
+    Ok(started_at)
 }

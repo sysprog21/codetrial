@@ -1126,6 +1126,23 @@ async fn reference_debt_survives_noop_packets_and_action_supersession() {
         let noop = serde_json::to_vec(&serde_json::json!({"type":"unknown"})).unwrap();
         driver.packet(Some(TOPIC_CONTROL), Some("candidate"), &noop);
         assert_eq!(driver.context.state.earlier_steps_pending, ["design"]);
+
+        // A resumed page's ready query is owed to the replacement's caller,
+        // neither answered here nor dropped; a bystander's is ignored.
+        driver.packet(
+            Some(TOPIC_CONTROL),
+            Some("bystander"),
+            br#"{"type":"startup_sync"}"#,
+        );
+        assert!(!rig.events.try_lock().unwrap().startup_sync_pending);
+        driver.packet(
+            Some(TOPIC_CONTROL),
+            Some("candidate"),
+            br#"{"type":"startup_sync"}"#,
+        );
+        assert!(std::mem::take(
+            &mut rig.events.try_lock().unwrap().startup_sync_pending
+        ));
         for sender in [None, Some("bystander")] {
             driver.packet(Some(TOPIC_CONTROL), sender, br#"{"type":"end_interview"}"#);
             assert!(driver.terminal.is_none());

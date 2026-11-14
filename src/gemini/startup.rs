@@ -62,11 +62,16 @@ pub(crate) async fn check_live_session_at(
 }
 
 impl GeminiLiveSession {
-    pub(crate) fn record_failure(&self, keys: &GeminiKeys) {
-        if let Some(failure) = *self
+    /// What Gemini said about this socket's credential, if it said anything.
+    fn reported_failure(&self) -> Option<CredentialFailure> {
+        *self
             .failure
             .lock()
             .unwrap_or_else(|error| error.into_inner())
+    }
+
+    pub(crate) fn record_failure(&self, keys: &GeminiKeys) {
+        if let Some(failure) = self.reported_failure()
             && let Some(key) = &self.credential
         {
             keys.failed(key, failure, ApiSurface::Live);
@@ -77,11 +82,7 @@ impl GeminiLiveSession {
         &self,
         error: Box<dyn std::error::Error + Send + Sync>,
     ) -> Box<dyn std::error::Error + Send + Sync> {
-        match *self
-            .failure
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-        {
+        match self.reported_failure() {
             Some(failure) => ApiFailure {
                 status: 0,
                 credential: Some(failure),
@@ -159,6 +160,10 @@ impl GeminiLiveSession {
             return Err(io::Error::other("Gemini startup event limit reached").into());
         }
         self.pending_events.push_back((received_at, event));
+
+        // Taken off the channel here, so the room loop's later replay from
+        // pending_events is not counted a second time.
+        self.pressure.consumed();
         Ok(ready.then_some(received_at))
     }
 
@@ -188,10 +193,7 @@ impl GeminiLiveSession {
         }
         Err(ApiFailure {
             status: 0,
-            credential: *self
-                .failure
-                .lock()
-                .unwrap_or_else(|error| error.into_inner()),
+            credential: self.reported_failure(),
             detail: Some("Gemini ended before producing startup output".to_string()),
         }
         .into())

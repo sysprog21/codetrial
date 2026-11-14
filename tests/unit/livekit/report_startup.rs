@@ -398,6 +398,7 @@ async fn deferred_report_reader_keeps_skip_authorization_and_recovery_order() {
     let at = std::time::Instant::now();
     let mut events = RoomEventReader {
         events: rx,
+        startup_sync_pending: false,
         deferred: [
             (at, packet("skip_report", "control", None)),
             (
@@ -452,6 +453,7 @@ async fn deferred_report_receipt_precedes_new_events_even_after_departure() {
         let at = std::time::Instant::now();
         let mut events = RoomEventReader {
             events: rx,
+            startup_sync_pending: false,
             deferred: [(at, receipt("peer")), (at, receipt("candidate"))].into(),
         };
         tx.send(receipt("newer-event")).unwrap();

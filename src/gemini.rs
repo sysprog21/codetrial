@@ -57,7 +57,7 @@ pub const GEMINI_IMAGE_MIME_TYPE: &str = "image/jpeg";
 use credentials::{
     ApiFailure, ApiSurface, CredentialFailure, credential_failure, failure_from_reason,
 };
-pub(crate) use credentials::{QUOTA_COOLDOWN, exhausted_until};
+pub(crate) use credentials::{QUOTA_COOLDOWN, exhausted_until, rotation_ran_dry};
 pub(crate) use http_calls::{
     GENERATION_SEED, REGENERATION_SEED, generate_interim_review_with_keys,
     generate_phase_judgment_with_keys,

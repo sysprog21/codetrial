@@ -75,6 +75,9 @@ pub(super) type TimedRoomEvent = (Instant, RoomEvent);
 pub(super) struct RoomEventReader<Event = RoomEvent> {
     pub(super) events: tokio::sync::mpsc::UnboundedReceiver<Event>,
     pub(super) deferred: std::collections::VecDeque<(Instant, Event)>,
+    /// The page asked for the ready notice while a socket replacement held
+    /// the room and could not answer; the replacement's caller does.
+    pub(super) startup_sync_pending: bool,
 }
 
 impl<Event> From<tokio::sync::mpsc::UnboundedReceiver<Event>> for RoomEventReader<Event> {
@@ -82,6 +85,7 @@ impl<Event> From<tokio::sync::mpsc::UnboundedReceiver<Event>> for RoomEventReade
         Self {
             events,
             deferred: Default::default(),
+            startup_sync_pending: false,
         }
     }
 }
@@ -139,7 +143,7 @@ pub(super) fn ready_runtime_activity(
     activity.buffered_startup_output_at = Some(started_at);
     activity.startup_ready_at = Some(
         crate::current_epoch_millis()
-            .saturating_sub(u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX)),
+            .saturating_sub(crate::agent::saturating_ms(started_at.elapsed())),
     );
     activity
 }
@@ -169,9 +173,7 @@ pub(super) fn startup_ready_notice(
 
     // Only elapsed time crosses clock domains. The wall-clock stamp identifies
     // the original opening but cannot be subtracted from a browser's clock.
-    notice["elapsedMs"] = u64::try_from(started_at.elapsed().as_millis())
-        .unwrap_or(u64::MAX)
-        .into();
+    notice["elapsedMs"] = crate::agent::saturating_ms(started_at.elapsed()).into();
     notice
 }
 
@@ -217,7 +219,9 @@ pub(super) async fn probe_live_output(
                     }
                     let forwarded = forward_startup_input(gemini, startup, input, received_at).await;
                     if let Err(error) = forwarded {
-                        if let Some(received_at) = gemini.buffered_startup_output(deadline.into_std())? {
+                        // A full queue while looking must not replace the
+                        // write's own failure as the reason.
+                        if let Ok(Some(received_at)) = gemini.buffered_startup_output(deadline.into_std()) {
                             return Ok(received_at);
                         }
                         return Err(error);
@@ -320,21 +324,15 @@ pub(super) trait StartupInputs: Send {
 
 impl StartupInputs for &tokio::sync::Mutex<RoomEventReader> {
     async fn next(&mut self, media: &mut CandidateMedia) -> StartupInput {
-        next_startup_input(media, self).await
-    }
-}
-
-async fn next_startup_input(
-    media: &mut CandidateMedia,
-    events: &tokio::sync::Mutex<RoomEventReader>,
-) -> StartupInput {
-    tokio::select! {
-        event = async { events.lock().await.recv().await } => match event {
-            Some(event @ RoomEvent::ParticipantDisconnected(_)) => StartupInput::ParticipantLeft(event),
-            event => StartupInput::Room(event),
-        },
-        frame = next_audio_frame(&mut media.audio), if media.audio.is_some() => StartupInput::Audio(frame),
-        frame = next_video_frame(&mut media.video), if media.video.is_some() => StartupInput::Video(frame),
+        let events = *self;
+        tokio::select! {
+            event = async { events.lock().await.recv().await } => match event {
+                Some(event @ RoomEvent::ParticipantDisconnected(_)) => StartupInput::ParticipantLeft(event),
+                event => StartupInput::Room(event),
+            },
+            frame = next_audio_frame(&mut media.audio), if media.audio.is_some() => StartupInput::Audio(frame),
+            frame = next_video_frame(&mut media.video), if media.video.is_some() => StartupInput::Video(frame),
+        }
     }
 }
 
@@ -375,6 +373,9 @@ pub(super) async fn publish_startup_readiness(
     // Keep observation separate from replay: a timely return must survive a
     // slow publish, and the first runtime watch may run before its event arm.
     // No handlers, media writes or reconnect notices run inside this budget.
+    // The bound is on what this publish collects: events the probe already
+    // deferred were received over the opening and say nothing about it.
+    let collected_before = deferred.len();
     let collecting = async {
         tokio::pin!(publication);
         loop {
@@ -396,7 +397,7 @@ pub(super) async fn publish_startup_readiness(
                             format!("room disconnected during startup readiness publication: {reason:?}"),
                         ).into());
                     }
-                    if deferred.len() >= STARTUP_READY_EVENT_LIMIT {
+                    if deferred.len() - collected_before >= STARTUP_READY_EVENT_LIMIT {
                         return Err(std::io::Error::other(
                             "startup readiness room event limit reached",
                         ).into());
@@ -416,12 +417,23 @@ pub(super) async fn publish_startup_readiness(
             .into())
         });
     if result.is_err() {
-        let _ = gemini.shutdown().await;
-        for observed in gemini.drain_usage() {
-            usage.add(observed);
-        }
+        close_and_account(gemini, usage).await;
     }
     result.map_err(|error| StartupDeliveryError(error).into())
+}
+
+/// A failed start can still have been billed. Only observed counters are
+/// reported; absence of observations is not a claim of zero cost.
+pub(super) async fn close_and_account(
+    gemini: &mut GeminiLiveSession,
+    usage: &mut crate::gemini::TokenUsage,
+) {
+    if let Err(error) = gemini.shutdown().await {
+        eprintln!("Gemini close failed during startup ({error}); recording usage anyway");
+    }
+    for observed in gemini.drain_usage() {
+        usage.add(observed);
+    }
 }
 
 /// Publication only queues the notice. Keep its sender in the roster until
@@ -431,12 +443,15 @@ pub(super) async fn publish_startup_failure(
     publication: impl Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>>,
     receipt: impl Future<Output = ()>,
 ) {
-    let _ = tokio::time::timeout(RECONNECT_NOTICE_LIMIT, async {
+    let delivered = tokio::time::timeout(RECONNECT_NOTICE_LIMIT, async {
         if publication.await.is_ok() {
             receipt.await;
         }
     })
     .await;
+    if delivered.is_err() {
+        eprintln!("startup failure notice unacknowledged within its limit; leaving anyway");
+    }
 }
 
 /// Waits for the candidate to acknowledge failure notice `id`, or for the room
@@ -481,10 +496,41 @@ pub(super) fn is_startup_receipt(
     payload: &[u8],
     id: &str,
 ) -> bool {
+    // The topic first: an editor packet waiting in the same queue is not parsed
+    // just to be thrown away.
     topic == Some(TOPIC_CONTROL)
-        && is_interview_participant(sender, candidate)
-        && serde_json::from_slice::<serde_json::Value>(payload)
-            .is_ok_and(|value| value["type"] == "startup_received" && value["deliveryId"] == id)
+        && interview_packet(topic, sender, candidate, payload).is_some_and(|(_, value)| {
+            value["type"] == "startup_received" && value["deliveryId"] == id
+        })
+}
+
+pub(super) fn startup_failure_line(
+    model: &str,
+    room_name: &str,
+    session_id: u64,
+    error: &(dyn std::error::Error + Send + Sync + 'static),
+) -> String {
+    // No generation was asked for, so there is no usage.
+    startup_usage_line(
+        model,
+        room_name,
+        session_id,
+        error,
+        &crate::gemini::TokenUsage::default(),
+    )
+}
+
+/// A failed start's summary with whatever usage it observed. A socket may have
+/// opened before the failure, so no count is claimed.
+fn startup_usage_line(
+    model: &str,
+    room_name: &str,
+    session_id: u64,
+    error: &(dyn std::error::Error + Send + Sync + 'static),
+    usage: &crate::gemini::TokenUsage,
+) -> String {
+    let outcome = LiveOutcome::from_error(error, LiveOutcome::Error);
+    live_usage_line(room_name, session_id, model, 0, outcome, None, usage)
 }
 
 pub(super) async fn account_startup<T>(
@@ -502,13 +548,11 @@ pub(super) async fn account_startup<T>(
     // Room setup can fail before a Gemini socket exists. Both that path and a
     // paid opening failure must reach exactly one summary with observed usage.
     if let Err(error) = &opened {
-        log_startup_failure(live_usage_line(
+        log_startup_failure(startup_usage_line(
+            &config.gemini_live_model,
             room_name,
             session_id,
-            &config.gemini_live_model,
-            0,
-            LiveOutcome::from_error(error.as_ref(), LiveOutcome::Error),
-            None,
+            error.as_ref(),
             &startup_usage,
         ));
     }
@@ -528,10 +572,6 @@ pub(super) async fn handle_candidate_packet(
         return Ok(ControlFlow::Continue(()));
     }
     handle_data_packet(room, context, interview, topic, payload, true).await
-}
-
-pub(super) fn candidate_departed(presence: &mut CandidatePresence, received_at: Instant) {
-    presence.left(received_at);
 }
 
 pub(super) async fn candidate_returned(
@@ -569,15 +609,14 @@ pub(super) async fn resend_startup_readiness(
         return;
     };
     let notice = startup_ready_notice(context.state.started_at, Some(started_at));
-    let sent = async {
-        let mut packet = browser_packet(TOPIC_CONTROL, &notice)?;
-        packet.destination_identities = vec![candidate.into()];
-        room.publish_data(packet).await
+    let sent = match browser_packet(TOPIC_CONTROL, &notice) {
+        Ok(mut packet) => {
+            packet.destination_identities = vec![candidate.into()];
+            room.publish_data_within_notice_limit(packet).await.is_ok()
+        }
+        Err(_) => false,
     };
-    if !matches!(
-        tokio::time::timeout(RECONNECT_NOTICE_LIMIT, sent).await,
-        Ok(Ok(()))
-    ) {
+    if !sent {
         eprintln!("startup state resync failed; room={}", room.name());
     }
 }

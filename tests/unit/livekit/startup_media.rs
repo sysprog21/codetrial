@@ -668,6 +668,13 @@ async fn startup_microphone_write_failure_preserves_already_received_output() {
         let (finish, finished) = tokio::sync::oneshot::channel();
         let server = tokio::spawn(async move {
             let (socket, _) = listener.accept().await.unwrap();
+
+            // Small at both ends, so a modest frame fills them: a frame that
+            // has to outgrow default loopback buffers takes seconds to encode
+            // on the one test thread, which starves the fixture's wall clock.
+            socket2::SockRef::from(&socket)
+                .set_recv_buffer_size(4096)
+                .unwrap();
             let mut socket = tokio_tungstenite::accept_async(socket).await.unwrap();
             socket.next().await.unwrap().unwrap();
             socket
@@ -712,6 +719,7 @@ async fn startup_microphone_write_failure_preserves_already_received_output() {
             );
         });
         let server = StartupPeer(server);
+        GeminiLiveSession::constrain_next_startup_test_socket();
         let mut gemini = crate::gemini::live_session_with_keys_at(&url, &keys, &boot, None)
             .await
             .unwrap();
@@ -722,13 +730,13 @@ async fn startup_microphone_write_failure_preserves_already_received_output() {
         let mut room_closed = false;
         let (tx, mut input) = mpsc::unbounded_channel();
 
-        // Larger than the loopback socket buffers, with bounded memory, so the
-        // write cannot finish merely because the kernel accepted one frame.
+        // Larger than both constrained socket buffers, so the write cannot
+        // finish merely because the kernel accepted one frame.
         tx.send(StartupInput::Audio(Some(AudioFrame {
-            data: vec![1; 16 * 1024 * 1024].into(),
+            data: vec![1; 1024 * 1024].into(),
             sample_rate: 16_000,
             num_channels: 1,
-            samples_per_channel: 16 * 1024 * 1024,
+            samples_per_channel: 1024 * 1024,
         })))
         .unwrap();
         let result = crate::livekit::readiness::probe_live_output(
@@ -885,7 +893,7 @@ pub(super) async fn startup_with_audio_until_output(
     assert!(observed_after <= deferred[0].0 && deferred[0].0 <= deferred[1].0);
     assert!(deferred[1].0 <= Instant::now());
     let mut presence = CandidatePresence::default();
-    candidate_departed(&mut presence, deferred[0].0);
+    presence.left(deferred[0].0);
     assert_eq!(
         presence.deadline(CANDIDATE_ABSENCE_LIMIT),
         Some(deferred[0].0 + CANDIDATE_ABSENCE_LIMIT)
