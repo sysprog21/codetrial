@@ -1663,6 +1663,7 @@ test("saving edits preserves Practice storage and Strict non-persistence", async
       testHistory: history,
     };
     const writes = [];
+    const copyAvailability = [];
     const storage = {
       setItem(key, value) {
         writes.push({ key, value });
@@ -1694,6 +1695,7 @@ test("saving edits preserves Practice storage and Strict non-persistence", async
         loadJudge: async () => spec,
         parseCandidateCase,
         codingClosed: () => false,
+        updateResultsCopy: (available) => copyAvailability.push(available),
         writeStored,
         cancelCandidateCaseEdit: () => {
           state.candidateCaseEdit = null;
@@ -1703,6 +1705,7 @@ test("saving edits preserves Practice storage and Strict non-persistence", async
     await saveCandidateCaseEdit();
     assert.deepEqual(state.candidateCases, [{ input: [[[7]]], expected: 8 }]);
     assert.equal(state.latestSummary, null);
+    assert.deepEqual(copyAvailability, [false]);
     assert.strictEqual(state.testHistory, history);
     assert.deepEqual(history, [{ runNumber: 1, cases: [{ got: "2" }] }]);
     assert.equal(writes.length, strict ? 0 : 1);

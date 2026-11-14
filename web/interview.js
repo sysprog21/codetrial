@@ -91,6 +91,7 @@ import {
   reportMarkdown,
   reportMarkup,
   mountFinalCodeCopy,
+  mountResultsCopy,
   reportSaveStatus,
 } from "./render.js";
 import { loadOriginalProblem } from "./report-original-problem.js";
@@ -742,6 +743,11 @@ const nodes = {
   hideAvatar: document.querySelector("#hide-avatar"),
   jimAvatarStatus: document.querySelector("#jim-avatar-status"),
 };
+
+const updateResultsCopy = mountResultsCopy(
+  nodes.resultsBody,
+  nodes.resultsContent,
+);
 
 // Jim's audio element. Named because setSinkId needs a stable target and the
 // avatar analyser will need the same one; an anonymous appendChild left neither
@@ -4005,6 +4011,7 @@ async function addCandidateCaseNow() {
 }
 
 function invalidateCandidateCaseResults() {
+  updateResultsCopy(false);
   state.latestSummary = null;
   state.latestRunSnapshot = null;
   state.testStatus = "done";
@@ -4242,6 +4249,7 @@ function firstRunnerStatus(language) {
 }
 
 function setTestStatus(status) {
+  updateResultsCopy(false);
   state.testStatus = status;
   renderWorkspaceStatus(nodes, status);
 }
@@ -4253,6 +4261,9 @@ function renderResults(summary, contentOnly = false) {
     diagnostics: diagnosticContext(summary, state.latestRunSnapshot),
     contentOnly,
   });
+  updateResultsCopy(
+    Boolean(summary.setupError) || Boolean(summary.cases?.length),
+  );
 }
 
 function diagnosticContext(summary, snapshot) {
