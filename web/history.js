@@ -6,8 +6,8 @@ export const reviewHistoryKey = "codetrial_review_history";
 // Full reports are what lets an older attempt reopen after the short history
 // rolls over. Keep as many as fit in this budget, up to 500, rather than
 // pretending every report has the same small serialized size.
-const REVIEW_HISTORY_CAP = 500;
-const REVIEW_HISTORY_BYTES = 164 * 1024;
+export const REVIEW_HISTORY_CAP = 500;
+export const REVIEW_HISTORY_BYTES = 164 * 1024;
 
 /// Every request here is a small same-origin call, and every one of them is
 /// awaited by something the candidate is looking at: a stalled save leaves the
@@ -485,7 +485,8 @@ function boundedReviews(reviews) {
   const texts = [];
   // The brackets the array itself serializes to, before any element.
   let bytes = 2;
-  for (const row of reviews.slice(0, REVIEW_HISTORY_CAP)) {
+  for (const row of reviews) {
+    if (retained.length === REVIEW_HISTORY_CAP) break;
     const review = withoutCode(row);
     const text = JSON.stringify(review);
     // A separator for every element after the first.
