@@ -83,11 +83,17 @@ export function parseCandidateCase(spec, input) {
     // signature. Name whichever one was checked: "must match Node" tells a
     // candidate nothing when the requirement is a random-pointer list.
     const required = spec.argTypes?.[index] ?? type;
+    const name = names[index] ? ` (${names[index]})` : "";
     if (!candidateTypeMatches(args[index], required)) {
-      const name = names[index] ? ` (${names[index]})` : "";
       if (candidateTypeMatches(args[index], required, Number.isInteger))
         throw new Error(`Parameter ${index + 1}${name} holds ${OUT_OF_INT32}.`);
       throw new Error(`Parameter ${index + 1}${name} must match ${required}.`);
+    }
+    const wide = nonAsciiCharacter(args[index], required);
+    if (wide !== undefined) {
+      throw new Error(
+        `Parameter ${index + 1}${name} holds ${describeCharacter(wide)}, ${NON_ASCII_CHARACTER}.`,
+      );
     }
   }
   // A node reference is checked against the argument the runner will resolve it
@@ -139,8 +145,48 @@ function reachableTreeValues(values) {
 /// refuses the whole run.
 const OUT_OF_INT32 = "an integer outside -2147483648 to 2147483647";
 
+/// A `character` reaches C and C++ as one `char` and Java as one `char`
+/// literal. Outside ASCII, gcc reads the UTF-8 bytes between the quotes as a
+/// multi-character constant, clang refuses them, and javac refuses anything
+/// past one UTF-16 code unit. Every judge with a `character` parameter takes
+/// ASCII, so the case is refused when it is added rather than encoded.
+const NON_ASCII_CHARACTER =
+  "which is outside ASCII and cannot be passed as one char";
+
+/// The first character in `value` that sits outside ASCII. Called only after
+/// the shape matched, so every `character` position already holds one code
+/// point, and containers are unwrapped by `elementType`, as the shape check
+/// unwraps them.
+function nonAsciiCharacter(value, type) {
+  if (type === "character")
+    return value.codePointAt(0) > 0x7f ? value : undefined;
+  const item = elementType(type);
+  if (item === undefined || !Array.isArray(value)) return undefined;
+  for (const entry of value) {
+    const found = nonAsciiCharacter(entry, item);
+    if (found !== undefined) return found;
+  }
+  return undefined;
+}
+
+/// The character in quotes, then its code point, such as `(U+00E9)`: the
+/// glyph alone can be invisible or look like an ASCII letter.
+function describeCharacter(character) {
+  const code = character.codePointAt(0).toString(16).toUpperCase();
+  return `${JSON.stringify(character)} (U+${code.padStart(4, "0")})`;
+}
+
 function isInt32(value) {
   return Number.isInteger(value) && value >= -(2 ** 31) && value < 2 ** 31;
+}
+
+/// The element type of a container spelling, `T[]` or `list<T>`, or
+/// undefined for any other type. The one place a container is unwrapped, so
+/// the shape check and the character check agree on what a container is.
+function elementType(type) {
+  return type.endsWith("[]")
+    ? type.slice(0, -2)
+    : /^list<(.*)>$/.exec(type)?.[1];
 }
 
 /// A caller that refuses a case asks again with `Number.isInteger` as
@@ -154,18 +200,11 @@ function candidateTypeMatches(value, type, isInteger = isInt32) {
   if (type === "null") return value === null;
   if (type === "object")
     return value !== null && typeof value === "object" && !Array.isArray(value);
-  if (type.endsWith("[]"))
+  const element = elementType(type);
+  if (element !== undefined)
     return (
       Array.isArray(value) &&
-      value.every((item) =>
-        candidateTypeMatches(item, type.slice(0, -2), isInteger),
-      )
-    );
-  const list = /^list<(.*)>$/.exec(type);
-  if (list)
-    return (
-      Array.isArray(value) &&
-      value.every((item) => candidateTypeMatches(item, list[1], isInteger))
+      value.every((item) => candidateTypeMatches(item, element, isInteger))
     );
   if (type === "integer") return isInteger(value);
   if (type === "double" || type === "number") return Number.isFinite(value);
