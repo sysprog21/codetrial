@@ -475,6 +475,23 @@ pub fn framework_evidence_json(evidence: &FrameworkEvidence) -> serde_json::Valu
     })
 }
 
+/// What a hint request can tell about the candidate's work since the last rung.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HintAttempt {
+    /// Boards that differed from the one before, counted by
+    /// `livekit::board::record`. It only grows, so a board resent unchanged
+    /// after a reconnect or a phase checkpoint cannot undo an edit.
+    pub board_revisions: u32,
+    /// Runs that executed cases. `test_runs` also counts a setup error and a
+    /// missing runner, which a Run click produces with nothing executed.
+    pub real_test_runs: u32,
+    /// The latest line a candidate turn starts on that the phase judge found a
+    /// spoken step in, each quote read from the first turn that said it, so
+    /// words repeated later are not new work. Only grows, unlike a count of
+    /// the evidence rows, which the cap evicts.
+    pub quoted_turn_start: Option<usize>,
+}
+
 /// Count a hint and, when the candidate asked for it, hand out the next rung.
 ///
 /// The last rung names the key step, so it waits until the candidate has an

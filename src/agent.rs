@@ -116,7 +116,7 @@ pub use code_work::{code_untouched, code_written};
 pub use communication::{CommunicationEvidence, communication_evidence};
 use framework::record_evidence;
 pub use framework::{
-    REACTO_PHASE_IDS, RECEIVED_TEST_SUMMARY, STAR_PHASE_IDS, framework_evidence_json,
+    HintAttempt, REACTO_PHASE_IDS, RECEIVED_TEST_SUMMARY, STAR_PHASE_IDS, framework_evidence_json,
     framework_progress, record_framework_evidence, record_hint,
 };
 pub(crate) use framework::{
@@ -1146,12 +1146,11 @@ pub struct RuntimeState {
     pub runner_unavailable: Option<String>,
     pub hints_used: u32,
     pub volunteered_hints: u32,
-    /// The authored rungs for this problem, handed out one at a time by
-    /// `record_hint` rather than held in the live prompt. A model holding all
-    /// three answers the first request with the third, and nothing downstream
-    /// can tell.
+    /// Served one rung per request by `record_hint`, never held in the live
+    /// prompt: a model holding all three leads with the third, undetected.
     pub hint_ladder: &'static [&'static str],
     pub hint_rungs_given: usize,
+    pub hint_attempt: HintAttempt,
     /// The variant's follow-ups, released by the evidence call that completes
     /// the coding round; see `released_follow_ups`.
     pub follow_ups: &'static [&'static str],
@@ -1348,6 +1347,7 @@ impl Default for RuntimeState {
             volunteered_hints: 0,
             hint_ladder: &[],
             hint_rungs_given: 0,
+            hint_attempt: HintAttempt::default(),
             follow_ups: &[],
             integrity_events: Vec::new(),
             integrity_chain: None,

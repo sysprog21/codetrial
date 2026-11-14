@@ -258,6 +258,8 @@ pub(super) struct Turn {
     /// Its normalized words, padded with a space at each end so a quote is
     /// found as whole words with one `contains`.
     pub(super) words: String,
+    /// The transcript line it opens on.
+    pub(super) start: usize,
 }
 
 /// The first transcript line the judge reads and may quote: the opening of
@@ -277,7 +279,8 @@ fn judged_from(state: &RuntimeState) -> usize {
 pub(super) fn speaker_turns(state: &RuntimeState) -> Vec<Turn> {
     let mut turns: Vec<Turn> = Vec::new();
     let mut joinable = false;
-    for line in &state.transcript[judged_from(state)..] {
+    let from = judged_from(state);
+    for (index, line) in state.transcript[from..].iter().enumerate() {
         let spoken = [CANDIDATE_SPEAKER, INTERVIEWER_SPEAKER]
             .into_iter()
             .find_map(|speaker| speaker_speech(line, speaker).map(|text| (speaker, text)));
@@ -294,6 +297,7 @@ pub(super) fn speaker_turns(state: &RuntimeState) -> Vec<Turn> {
             _ => turns.push(Turn {
                 speaker,
                 words: format!(" {words} "),
+                start: from + index,
             }),
         }
         joinable = true;
@@ -311,12 +315,13 @@ pub(super) fn speaker_turns(state: &RuntimeState) -> Vec<Turn> {
 /// interviewer said before the candidate did is the candidate agreeing, not
 /// explaining. The interviewer saying it back afterwards, which is how an
 /// interviewer confirms they followed, leaves the candidate's words theirs.
+/// Speech also gives the line the first candidate turn that said it opens on.
 fn quote_is_grounded(
     state: &RuntimeState,
     turns: &[Turn],
     phase: FrameworkPhase,
     quote: &str,
-) -> Option<EvidenceSource> {
+) -> Option<(EvidenceSource, Option<usize>)> {
     let words = quote_words(quote);
 
     // A spoken trace is a sentence like any other answer, though Test is about
@@ -334,7 +339,7 @@ fn quote_is_grounded(
     }
     let needle = format!(" {words} ");
     let typed = |text: &str| format!(" {} ", quote_words(text)).contains(&needle);
-    let editor = Some(EvidenceSource::EditorSnapshot);
+    let editor = Some((EvidenceSource::EditorSnapshot, None));
     if phase == FrameworkPhase::Coding {
         return editor.filter(|_| typed(&state.code) && !typed(starter(state, &state.language)));
     }
@@ -355,9 +360,7 @@ fn quote_is_grounded(
     }
     let mut said = turns.iter().filter(|turn| turn.words.contains(&needle));
     let first = said.clone().next()?;
-    if !said.any(|turn| turn.speaker == CANDIDATE_SPEAKER) {
-        return None;
-    }
+    let spoken = said.find(|turn| turn.speaker == CANDIDATE_SPEAKER)?;
 
     // A trace the interviewer walked first, or a story they told back before
     // the candidate did, is the candidate agreeing too.
@@ -367,7 +370,7 @@ fn quote_is_grounded(
             FrameworkPhase::Algorithm | FrameworkPhase::Optimizations | FrameworkPhase::Test
         ))
         && first.speaker == INTERVIEWER_SPEAKER;
-    (!echo).then_some(EvidenceSource::CandidateSpeech)
+    (!echo).then_some((EvidenceSource::CandidateSpeech, Some(spoken.start)))
 }
 
 /// Records what the judge found, through the same gate the interviewer's calls
@@ -447,7 +450,7 @@ pub fn apply_phase_judgment(state: &mut RuntimeState, text: &str) -> Vec<Framewo
             continue;
         }
         let turns = turns.get_or_insert_with(|| speaker_turns(state));
-        let Some(source) = quote_is_grounded(state, turns, phase, quote) else {
+        let Some((source, spoken_at)) = quote_is_grounded(state, turns, phase, quote) else {
             continue;
         };
         let summary = step
@@ -477,6 +480,8 @@ pub fn apply_phase_judgment(state: &mut RuntimeState, text: &str) -> Vec<Framewo
             }),
             true,
         ) {
+            let latest = &mut state.hint_attempt.quoted_turn_start;
+            *latest = (*latest).max(spoken_at);
             recorded.push(evidence);
         }
     }

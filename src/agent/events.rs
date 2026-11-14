@@ -646,6 +646,8 @@ fn apply_test_results(
     });
     state.last_test_run = Some(payload.clone());
     state.test_runs += 1;
+    let real_runs = &mut state.hint_attempt.real_test_runs;
+    *real_runs = real_runs.saturating_add(u32::from(super::real_test_run(payload)));
     state
         .evidence_ledger
         .record_test(source_timestamp_ms, receipt_timestamp_ms, payload);

@@ -1450,3 +1450,6 @@ mod runtime;
 
 #[path = "agent/whiteboard.rs"]
 mod whiteboard;
+
+#[path = "agent/hints.rs"]
+mod hints;
