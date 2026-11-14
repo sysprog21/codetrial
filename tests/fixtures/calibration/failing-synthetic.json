@@ -125,7 +125,7 @@
       "modelScores": {
         "Repeat": 98,
         "Example": 98,
-        "Algorithm": 98,
+        "Algorithm": null,
         "Coding": 98,
         "Test": 98,
         "Optimizations": 98,
@@ -140,7 +140,7 @@
           "scores": {
             "Repeat": 67,
             "Example": 67,
-            "Algorithm": 67,
+            "Algorithm": null,
             "Coding": 67,
             "Test": 67,
             "Optimizations": 67,
@@ -155,7 +155,7 @@
           "scores": {
             "Repeat": 69,
             "Example": 69,
-            "Algorithm": 69,
+            "Algorithm": null,
             "Coding": 69,
             "Test": 69,
             "Optimizations": 69,
