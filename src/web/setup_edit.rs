@@ -37,10 +37,12 @@ impl SetupContext {
     /// The loopback bind keeps the network out and the `Host` check keeps out
     /// a page that rebinds a name to 127.0.0.1, but any account on this machine
     /// reaches the port and chooses every header itself. What such an account
-    /// lacks is the code: it is printed only to the terminal of whoever started
-    /// the server, and is new on every start. A launcher's child, the desktop
-    /// app's server, has no terminal anyone reads, and behind a proxy the
-    /// requests are not only this machine's, so neither gets Change keys.
+    /// lacks is the code, new on every start: `run_web` makes it and prints it
+    /// to the terminal of whoever started the server, or takes it from the
+    /// desktop app that launched this one as its child, which has no terminal
+    /// anyone reads and shows the code in its own window instead. `code` is
+    /// `None` for a launch that has neither. Behind a proxy the requests are
+    /// not only this machine's, so that launch gets no Change keys either.
     ///
     /// A config that is a symlink is not offered either: renaming the new file
     /// over it would replace the link and leave its target unchanged.
@@ -48,25 +50,19 @@ impl SetupContext {
         path: PathBuf,
         values: BTreeMap<String, String>,
         bound: SocketAddr,
-        standalone: bool,
+        code: Option<String>,
         trusted_proxy_hops: u32,
-    ) -> Result<Option<Self>, String> {
-        if !standalone || !bound.ip().is_loopback() || trusted_proxy_hops != 0 {
-            return Ok(None);
-        }
-        let Some(contents) = regular_file(&path) else {
-            return Ok(None);
-        };
-        let code = crate::accounts::random_token(18)
-            .map_err(|error| format!("could not make a Change keys code: {error}"))?;
-        Ok(Some(Self {
+    ) -> Option<Self> {
+        let code = code.filter(|_| bound.ip().is_loopback() && trusted_proxy_hops == 0)?;
+        let contents = regular_file(&path)?;
+        Some(Self {
             path,
             contents,
             values,
             port: bound.port(),
             code,
             saving: tokio::sync::Mutex::new(()),
-        }))
+        })
     }
 
     /// For `run_web` to print, and for nothing else.
@@ -93,7 +89,7 @@ impl SetupContext {
         if digest(given).as_ref() != digest(&self.code).as_ref() {
             return json_response(
                 StatusCode::FORBIDDEN,
-                json!({ "error": "Enter the Change keys code this server printed when it started." }),
+                json!({ "error": "Enter the Change keys code this server printed when it started, or the one the desktop app that started it shows." }),
             );
         }
         let _saving = self.saving.lock().await;

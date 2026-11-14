@@ -997,24 +997,32 @@ fn finish_refuses_the_published_secret_on_a_public_address() {
 }
 
 #[test]
-fn finish_offers_a_launchers_child_no_setup_page_and_no_task_mode() {
+fn finish_offers_a_launchers_child_change_keys_only_on_the_code_it_was_handed() {
     let (dir, options) = launch_fixture("finish-child");
     let mut values = livekit_values(&dir);
     values.insert(
         "SESSION_SECRET".into(),
         "a-real-secret-for-this-test-only-0123".into(),
     );
-    let prepared = super::prepare(&values, &options).unwrap();
-    let (config, setup) = super::finish(
-        prepared.config,
-        &values,
-        &options,
-        addr("127.0.0.1:3000"),
-        super::LaunchedBy::Parent,
-    )
-    .unwrap();
+    let finish = |launched_by| {
+        let prepared = super::prepare(&values, &options).unwrap();
+        super::finish(
+            prepared.config,
+            &values,
+            &options,
+            addr("127.0.0.1:3000"),
+            launched_by,
+        )
+        .unwrap()
+    };
+
+    let (config, setup) = finish(super::LaunchedBy::Parent(None));
     assert!(setup.is_none(), "a child has no terminal anyone reads");
     assert!(config.tasks.is_none(), "task mode was not asked for");
+
+    let code = "0123456789abcdef0123456789abcdef";
+    let (_, setup) = finish(super::LaunchedBy::Parent(Some(code.to_string())));
+    assert_eq!(setup.as_ref().map(|setup| setup.code()), Some(code));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1076,7 +1084,7 @@ fn run_stopped(
         &values,
         &options,
         bound,
-        super::LaunchedBy::Parent,
+        super::LaunchedBy::Parent(None),
     )
     .unwrap();
     let dispatcher = std::sync::Arc::new(Busy {

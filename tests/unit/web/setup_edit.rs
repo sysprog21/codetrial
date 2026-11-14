@@ -111,18 +111,17 @@ fn a_tab_after_export_names_the_same_key() {
 }
 
 #[test]
-fn only_a_standalone_loopback_launch_without_a_proxy_may_change_keys() {
+fn only_a_loopback_launch_with_a_code_and_without_a_proxy_may_change_keys() {
     let scratch = Scratch::new();
     let path = scratch.config("LIVEKIT_API_KEY=old\n");
-    let context = |path: &Path, bound: &str, standalone, hops| {
+    let context = |path: &Path, bound: &str, standalone: bool, hops| {
         SetupContext::new(
             path.to_path_buf(),
             BTreeMap::new(),
             bound.parse().unwrap(),
-            standalone,
+            standalone.then(|| "code".to_string()),
             hops,
         )
-        .unwrap()
     };
     assert!(context(&path, "127.0.0.1:3000", true, 0).is_some());
     assert!(context(&path, "[::1]:3000", true, 0).is_some());
@@ -237,9 +236,8 @@ impl Server {
             .unwrap()
             .into_iter()
             .collect();
-        let context = SetupContext::new(path.clone(), values, bound, true, 0)
-            .unwrap()
-            .unwrap();
+        let context =
+            SetupContext::new(path.clone(), values, bound, Some("code".to_string()), 0).unwrap();
         let code = context.code().to_string();
         let config = super::super::WebServerConfig {
             web_dir: PathBuf::new(),

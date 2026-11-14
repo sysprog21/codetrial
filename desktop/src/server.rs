@@ -39,6 +39,19 @@ pub struct Launch {
     /// A CLI config whose keys Setup offers to use on a first launch. The
     /// server decides what is offered and what using it writes.
     pub import_config: Option<PathBuf>,
+    /// What Change keys asks for, new on every launch. The server has no
+    /// terminal to print one to, so the app makes it, hands it over in the
+    /// environment, and shows or fills it in its own window.
+    pub change_keys_code: String,
+}
+
+/// A code for `Launch::change_keys_code`: 32 hex digits from the operating
+/// system's generator.
+pub fn change_keys_code() -> Result<String, String> {
+    let mut bytes = [0u8; 16];
+    getrandom::fill(&mut bytes)
+        .map_err(|error| format!("cannot make a Change keys code: {error}"))?;
+    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
 /// The CLI config in `start`: the CLI's own two places there and nowhere else.
@@ -116,6 +129,7 @@ fn command(launch: &Launch) -> Command {
         // data folder is the one place it can sensibly mean.
         .current_dir(&launch.data_dir)
         .env("CODETRIAL_EXIT_WITH_STDIN", "1")
+        .env("CODETRIAL_CHANGE_KEYS_CODE", &launch.change_keys_code)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
