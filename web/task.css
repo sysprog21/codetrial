@@ -788,7 +788,18 @@ dialog {
   color: var(--ink);
   box-shadow: var(--shadow-float);
 }
+/* A modal dialog holds scroll: a wheel or swipe over it or its backdrop does
+   not chain to the page behind. The backdrop is no scroll container by
+   default, so it ignores overscroll-behavior until it is made one. Holding
+   scroll over a container with nothing to scroll is newer than the property
+   and cannot be detected; an engine without it still holds scroll once the
+   dialog's own content overflows, and showModal() keeps the page inert. */
+dialog:modal {
+  overscroll-behavior: contain;
+}
 dialog::backdrop {
+  overflow: hidden;
+  overscroll-behavior: contain;
   background: var(--backdrop);
 }
 dialog button {
