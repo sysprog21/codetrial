@@ -231,6 +231,37 @@ test("a candidate case is typed by paramTypes", () => {
   );
 });
 
+// C and C++ take a `character` as one `char`, so a code point past ASCII
+// either fails to compile or reaches the solution as a different value; javac
+// refuses one past the Basic Multilingual Plane. Every `character` judge takes
+// ASCII, so the case is refused when it is added and the refusal names it.
+test("a candidate character outside ASCII is refused and named", () => {
+  const spec = {
+    kind: "function",
+    paramNames: ["grid", "word"],
+    paramTypes: ["character[][]", "string"],
+  };
+  for (const ascii of ["a", "0", ".", "~", " "]) {
+    const input = [[[ascii]], "edge"];
+    assert.deepEqual(parseCandidateCase(spec, JSON.stringify(input)), input);
+  }
+  for (const [wide, code] of [
+    ["\u00e9", "U\\+00E9"],
+    ["\u0080", "U\\+0080"],
+    ["\u{1F600}", "U\\+1F600"],
+  ]) {
+    assert.throws(
+      () => parseCandidateCase(spec, JSON.stringify([[["a", wide]], "edge"])),
+      new RegExp(
+        `Parameter 1 \\(grid\\) holds "${wide}" \\(${code}\\), which is outside ASCII`,
+      ),
+    );
+  }
+  // A string parameter is not a char: non-ASCII text stays accepted there.
+  const text = [[["a"]], "caf\u00e9"];
+  assert.deepEqual(parseCandidateCase(spec, JSON.stringify(text)), text);
+});
+
 // Every arm here is the last thing between a candidate case and a harness that
 // does not bound-check it: C indexes `nodes[adjacency[i][j] - 1]` and C++
 // `nodes[*items[i].second]` with no guard of their own. An arm that goes
