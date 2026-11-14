@@ -28,11 +28,26 @@ case "$*" in
         printf 'true\ttrue\tweb/a.js\t3\tmaint\tFixed.\tPRRT_2\thttps://x/discussion_r2\n'
         ;;
     # gh applies --jq itself: the status, then how many merges the run holds.
-    "api repos/sysprog21/codetrial/compare/c0ffee1...h1 --jq "*)
+    "api repos/sysprog21/codetrial/compare/${FAKE_SINCE:-c0ffee1}...${FAKE_HEAD:-h1} --jq "*)
+        [ "${FAKE_COMPARE:-}" != fail ] || exit 1
         echo "${FAKE_COMPARE:-ahead 0}"
         ;;
-    "api repos/sysprog21/codetrial/compare/c0ffee1...h1 -H Accept: application/vnd.github.diff")
-        cat "$FAKE_DIFF"
+    "api repos/sysprog21/codetrial/compare/${FAKE_SINCE:-c0ffee1}...${FAKE_HEAD:-h1} -H Accept: application/vnd.github.diff")
+        cat "${FAKE_COMPARE_DIFF:-$FAKE_DIFF}"
+        ;;
+
+    # GitHub expands a short SHA the clone lacks; FAKE_EXPAND lists short=full.
+    "api repos/sysprog21/codetrial/commits/"*" --jq .sha")
+        want=$*
+        want=${want#api repos/sysprog21/codetrial/commits/}
+        want=${want%% --jq .sha}
+        for pair in ${FAKE_EXPAND:-}; do
+            if [ "${pair%%=*}" = "$want" ]; then
+                echo "${pair#*=}"
+                exit 0
+            fi
+        done
+        exit 1
         ;;
     *)
         echo "unexpected gh call: $*" >&2
