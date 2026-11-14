@@ -1782,24 +1782,26 @@ test("the lobby defaults to Practice and starts Strict without a selected proble
   assert.equal(await page.locator(".problem-picker").isVisible(), true);
   assert.equal(await page.locator(".difficulty-row").isVisible(), true);
   await page.locator(".problem-picker > summary").click();
-  await page.locator(".setup-grid > .problem-grid").waitFor();
+  const dialog = page.locator(".problem-picker-dialog");
+  await dialog.locator(".problem-grid").waitFor();
+  assert.equal(await dialog.evaluate((node) => node.matches(":modal")), true);
+  await page.mouse.click(2, 2);
+  await dialog.waitFor({ state: "hidden" });
   await page.locator("#selection-mode").selectOption("strict");
   assert.equal(await page.locator(".random-picker").isVisible(), false);
   assert.equal(await page.locator(".practice-list-picker").isVisible(), false);
   assert.equal(await page.locator(".problem-picker").isVisible(), false);
   await page.locator(".problem-grid").waitFor({ state: "hidden" });
-  assert.equal(
-    await page.locator(".problem-picker-outline").isVisible(),
-    false,
-  );
+  assert.equal(await dialog.evaluate((node) => node.matches(":modal")), false);
   await page.locator(".problem-grid").dispatchEvent("beforematch");
   assert.equal(await page.locator(".problem-grid").isVisible(), false);
+  assert.equal(await dialog.isVisible(), false);
   assert.equal(await page.locator(".difficulty-row").isVisible(), true);
   for (const width of [320, 1280]) {
     await page.setViewportSize({ width, height: 800 });
     await page.locator(".problem-grid").waitFor({ state: "hidden" });
     assert.equal(
-      await page.locator(".problem-picker-outline").isVisible(),
+      await dialog.evaluate((node) => node.matches(":modal")),
       false,
     );
     const bounds = await page.locator("#selection-mode").boundingBox();
@@ -1820,10 +1822,12 @@ test("the lobby defaults to Practice and starts Strict without a selected proble
   await page.locator('[name="difficulty"][value="Hard"]').check();
   await page.locator('[name="difficulty"][value="Medium"]').uncheck();
   await page.locator("#selection-mode").selectOption("practice");
-  await page.locator(".problem-grid").waitFor({ state: "visible" });
+  await dialog.locator(".problem-grid").waitFor({ state: "visible" });
   assert.equal(await page.locator(".random-picker").isVisible(), true);
   assert.equal(await page.locator(".practice-list-picker").isVisible(), true);
   assert.equal(await page.locator(".problem-picker").isVisible(), true);
+  await page.mouse.click(2, 2);
+  await dialog.waitFor({ state: "hidden" });
   await page.locator("#selection-mode").selectOption("strict");
   await page.evaluate(
     (key) => sessionStorage.setItem(key, "previous"),

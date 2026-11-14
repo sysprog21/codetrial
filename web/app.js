@@ -397,7 +397,7 @@ for (const card of cards) {
         setProblem(null);
         nodes.recommendation.textContent = "";
       }
-      if (card.button.hidden) focusPickerSummary();
+      if (card.button.hidden) focusProblemPicker();
       else if (hadFocus) card.button.focus();
       return;
     }
@@ -413,7 +413,7 @@ for (const card of cards) {
     nodes.problemPicker.open = false;
 
     // Keep keyboard focus on a visible control.
-    focusPickerSummary();
+    focusProblemPicker();
 
     // Scroll to the selected problem after the picker collapses.
     requestAnimationFrame(() => {
@@ -1150,8 +1150,8 @@ function settle() {
   // still stands, so the button the account refresh held down needs releasing
   // here rather than there.
   syncLobbyControls();
-  // If the card that held focus got hidden, recover focus to the picker summary
-  if (focusedCard?.button.hidden) focusPickerSummary();
+  // If the focused card got hidden, recover focus to a visible picker control.
+  if (focusedCard?.button.hidden) focusProblemPicker();
 }
 
 async function loadAccount(generation) {
@@ -2054,8 +2054,10 @@ function showProgress(entries, suffix) {
   renderProgress();
 }
 
-function focusPickerSummary() {
-  nodes.problemPicker.querySelector("summary").focus();
+function focusProblemPicker() {
+  nodes.problemPicker
+    .querySelector(nodes.problemPicker.open ? "input[type=search]" : "summary")
+    .focus();
 }
 
 function weakTopicFocused() {
@@ -2066,7 +2068,7 @@ function weakTopicFocused() {
 }
 
 function hideRecentPerformance() {
-  if (weakTopicFocused()) focusPickerSummary();
+  if (weakTopicFocused()) focusProblemPicker();
   nodes.recentPerformance.hidden = true;
   nodes.recentPerformanceSummary.textContent = "";
   nodes.recentWeakTopics.textContent = "";
@@ -2160,7 +2162,7 @@ function renderRecentPerformance() {
   nodes.recentPerformance.hidden = false;
   if (focusedTopic !== undefined) {
     if (restoredFocus) restoredFocus.focus();
-    else focusPickerSummary();
+    else focusProblemPicker();
   }
 }
 
