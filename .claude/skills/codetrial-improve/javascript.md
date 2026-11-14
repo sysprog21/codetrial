@@ -5,7 +5,9 @@ bundler. This page is what changes about the method in
 [SKILL.md](SKILL.md) when the code is JavaScript. How a file reaches the
 browser, the vendored bytes and the wire contract belong to
 [codetrial-web](../codetrial-web/SKILL.md); this page links them and does not
-restate them.
+restate them. Before writing a helper for something the browser may already
+do, or reaching for a newer API, read
+[platform.md](../codetrial-web/platform.md).
 
 ## What the build checks
 

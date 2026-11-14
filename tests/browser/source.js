@@ -120,12 +120,33 @@ export function initialisedModules() {
     });
 }
 
-/// Every first-party browser script, `web/vendor/` excluded by path. Recursive,
-/// so a bridge added under `web/avatar/` or `web/recording/` is covered too.
-export function firstPartyScripts() {
-  return readdirSync(join(root, "web"), { recursive: true })
+/// Every file under the repository directory `dir` with this extension, as a
+/// path relative to `dir` with forward slashes. Recursive.
+export function filesUnder(dir, extension) {
+  return readdirSync(join(root, dir), { recursive: true })
     .map((name) => String(name).replace(/\\/g, "/"))
-    .filter((name) => name.endsWith(".js") && !name.startsWith("vendor/"));
+    .filter((name) => name.endsWith(extension));
+}
+
+/// Every first-party browser file with this extension, `web/vendor/` excluded
+/// by path. Recursive, so a bridge added under `web/avatar/` or
+/// `web/recording/` is covered too.
+export function firstPartyFiles(extension) {
+  return filesUnder("web", extension).filter(
+    (name) => !name.startsWith("vendor/"),
+  );
+}
+
+export function firstPartyScripts() {
+  return firstPartyFiles(".js");
+}
+
+/// Drops CSS comments, keeping their line breaks so a line number read from
+/// the result is still the line in the file.
+export function stripCssComments(css) {
+  return css.replace(/\/\*[\s\S]*?\*\//g, (comment) =>
+    comment.replace(/[^\n]/g, ""),
+  );
 }
 
 /// The agent runtime as one text: `src/livekit.rs` and the modules under
@@ -147,10 +168,9 @@ export function firstPartyScripts() {
 export function livekitSource() {
   return [
     read("src/livekit.rs"),
-    ...readdirSync(join(root, "src/livekit"), { recursive: true })
-      .map((name) => String(name).replace(/\\/g, "/"))
-      .filter((name) => name.endsWith(".rs"))
-      .map((name) => read(join("src/livekit", name))),
+    ...filesUnder("src/livekit", ".rs").map((name) =>
+      read(join("src/livekit", name)),
+    ),
   ].join("\n");
 }
 

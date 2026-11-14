@@ -21,15 +21,15 @@ import {
   read,
   root,
   startStaticServer,
+  stripCssComments,
 } from "./source.js";
 
-const stripComments = (css) => css.replace(/\/\*[\s\S]*?\*\//g, "");
 const declared = (css) => new Set(captures(css, /(--[\w-]+)\s*:/g));
 const components = ["styles.css", "task.css", "peer.css"];
 const sheets = Object.fromEntries(
-  components.map((name) => [name, stripComments(read(`web/${name}`))]),
+  components.map((name) => [name, stripCssComments(read(`web/${name}`))]),
 );
-const theme = stripComments(read("web/theme.css"));
+const theme = stripCssComments(read("web/theme.css"));
 
 /// Every CSS named color (CSS Color 4, 148 names). A system color such as
 /// Highlight is left out: it is the platform's, and forced-colors rules need it.
@@ -94,7 +94,7 @@ test("every styled page loads the theme, then its overrides, first", () => {
 
 test("the shipped override file declares nothing", () => {
   assert.deepEqual(
-    [...declared(stripComments(read("web/theme-override.css")))],
+    [...declared(stripCssComments(read("web/theme-override.css")))],
     [],
   );
 });
