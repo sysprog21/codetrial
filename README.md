@@ -201,6 +201,10 @@ limits; actual size and memory use vary with the browser and captured content.
 The recording stays in tab memory until saved, so shorter recordings reduce
 memory use.
 
+The saved WebM has no duration and no seek index, so browsers cannot seek in
+it. [Local recordings](docs/task-mode.md#local-recordings) gives the one-line
+remux that makes it seekable.
+
 For an external screen recorder, tick "I am recording this interview with a
 screen recorder" in the media preflight, then capture the
 screen and system audio with any screen recorder, such as OBS or Clipchamp, and

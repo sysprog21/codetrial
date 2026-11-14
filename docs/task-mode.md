@@ -78,6 +78,25 @@ still counts as saved, so the status text points to the link), except during the
 leaving fullscreen would already end it. Result recovery cannot restore local
 media. Recording failure does not end the task.
 
+The downloaded WebM has no duration in its header and no seek index:
+MediaRecorder writes it as a live stream, so the header goes out before the
+length is known and no index is added at the end. Browsers cannot seek in it;
+some web players also refuse, while players that scan it seek slowly, and
+`ffprobe` reports `N/A`.
+
+After downloading a recording, from an interview or a task, remux it locally
+before playing or sharing it. This requires a separate installation of FFmpeg;
+CodeTrial does not run the command or upload the recording. Run the following
+command in the directory containing the downloaded file, replacing both
+instances of `TIMESTAMP` with the timestamp in its name:
+
+```bash
+ffmpeg -i codetrial-TIMESTAMP.webm -c copy codetrial-TIMESTAMP-remux.webm
+```
+
+`-c copy` copies the audio and video streams without re-encoding: the media
+is untouched, and the rewritten container gains the duration and a seek index.
+
 ## Versions and ownership
 
 The sidecar `promptVersion` is the platform composition version, not an
