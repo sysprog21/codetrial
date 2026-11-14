@@ -340,7 +340,7 @@ The common ones:
 | Variable | Default | Purpose |
 |---|---|---|
 | `CODETRIAL_WEB_ADDR` | `127.0.0.1:3000` | Listen address |
-| `CODETRIAL_DURATION_MIN` | `45` | Interview length preselected in the lobby (10–90); see [interview length](docs/interview-length.md) |
+| `CODETRIAL_DURATION_MIN` | `45` | Interview length preselected in the lobby, snapped to the nearest enabled button, and granted unsnapped (75 stays 75) by `/api/token` to any request that names none, such as a link that skips the lobby; a number outside 10–90 is clamped and named at startup, and text that is no number refuses startup; where recording is on, startup refuses a `CODETRIAL_RECORDING_MAX_MINUTES` below the clamped value, see [interview length](docs/interview-length.md) |
 | `GEMINI_LIVE_MODEL` | `gemini-3.1-flash-live-preview` | Realtime interviewer model |
 | `GEMINI_REPORT_MODEL` | `gemini-3.1-flash-lite` | Report model |
 | `CODETRIAL_MAX_INTERIM_REVIEWS` | `6` | Quiet-pause report-model reviews per interview; `0` disables them and `72` is the maximum |

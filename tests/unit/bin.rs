@@ -493,6 +493,59 @@ bm90IGEga2V5
     assert!(super::recording_can_deliver(Some(&recording)).is_err());
 }
 
+fn recording_values(pairs: &[(&str, &str)]) -> super::BTreeMap<String, String> {
+    let mut values: std::collections::BTreeMap<String, String> = [
+        ("CODETRIAL_RECORDING_ENABLED", "true"),
+        ("CODETRIAL_RECORDING_GCS_BUCKET", "codetrial-staging"),
+        ("CODETRIAL_RECORDING_DRIVE_ID", "0AKfixtureDriveId"),
+        (
+            "CODETRIAL_RECORDING_SERVICE_ACCOUNT_JSON",
+            r#"{"type":"service_account","client_email":"a@b.iam.gserviceaccount.com","private_key":"KEYMATERIAL-4bd2"}"#,
+        ),
+        (
+            "CODETRIAL_RECORDING_TEMPLATE_BASE_URL",
+            "https://recording.codetrial.example",
+        ),
+        ("SESSION_SECRET", "a-real-secret"),
+    ]
+    .into_iter()
+    .map(|(key, value)| (key.to_string(), value.to_string()))
+    .collect();
+    for (key, value) in pairs {
+        values.insert(key.to_string(), value.to_string());
+    }
+    values
+}
+
+/// The recording check sees the length the endpoints grant, not the raw text:
+/// `120` is served as 90 so a cap of 90 holds it, and a length left empty is
+/// served as 45 so a cap below that is refused.
+#[test]
+fn the_recording_cap_is_checked_against_the_clamped_length() {
+    let pool = codetrial::config::ProviderPool {
+        providers: vec![provider(codetrial::config::PRIMARY_PROVIDER_ID)],
+    };
+    let refusal = |duration: &str, cap: &str| {
+        let values = recording_values(&[
+            ("CODETRIAL_DURATION_MIN", duration),
+            ("CODETRIAL_RECORDING_MAX_MINUTES", cap),
+        ]);
+        super::web_server_config(&values, pool.clone(), false, &super::CliOptions::default()).err()
+    };
+
+    // Past the cap check the fixture still lacks an OAuth app, so what matters
+    // is only whether the refusal is about the cap.
+    let about_the_cap = |error: &Option<String>| {
+        error
+            .as_deref()
+            .is_some_and(|text| text.contains("CODETRIAL_RECORDING_MAX_MINUTES"))
+    };
+    assert!(!about_the_cap(&refusal("120", "90")));
+    assert!(refusal("120", "89").unwrap().contains("89, below the 90"));
+    assert!(refusal("", "44").unwrap().contains("44, below the 45"));
+    assert!(!about_the_cap(&refusal("", "45")));
+}
+
 /// Half an OAuth app is not an OAuth app.
 ///
 /// The rule below is tested on its own; this is the wiring that feeds it,
@@ -503,29 +556,6 @@ bm90IGEga2V5
 /// half alone has to be refused, and so does neither.
 #[test]
 fn recording_starts_only_with_both_halves_of_the_oauth_app() {
-    let recording_values = |pairs: &[(&str, &str)]| {
-        let mut values: std::collections::BTreeMap<String, String> = [
-            ("CODETRIAL_RECORDING_ENABLED", "true"),
-            ("CODETRIAL_RECORDING_GCS_BUCKET", "codetrial-staging"),
-            ("CODETRIAL_RECORDING_DRIVE_ID", "0AKfixtureDriveId"),
-            (
-                "CODETRIAL_RECORDING_SERVICE_ACCOUNT_JSON",
-                r#"{"type":"service_account","client_email":"a@b.iam.gserviceaccount.com","private_key":"KEYMATERIAL-4bd2"}"#,
-            ),
-            (
-                "CODETRIAL_RECORDING_TEMPLATE_BASE_URL",
-                "https://recording.codetrial.example",
-            ),
-            ("SESSION_SECRET", "a-real-secret"),
-        ]
-        .into_iter()
-        .map(|(key, value)| (key.to_string(), value.to_string()))
-        .collect();
-        for (key, value) in pairs {
-            values.insert(key.to_string(), value.to_string());
-        }
-        values
-    };
     let pool = codetrial::config::ProviderPool {
         providers: vec![provider(codetrial::config::PRIMARY_PROVIDER_ID)],
     };
@@ -673,6 +703,39 @@ fn a_data_dir_decides_every_path_a_launch_reads_or_writes() {
         served(&values(&[("CODETRIAL_WEB_DIR", "/elsewhere")])),
         std::path::Path::new("/elsewhere")
     );
+}
+
+/// The operator's `CODETRIAL_DURATION_MIN` is what the lobby and `/api/token`
+/// default to, so it has to reach the web config.
+#[test]
+fn web_server_config_carries_the_configured_default_length() {
+    let options = super::CliOptions::default();
+    let pool = codetrial::config::ProviderPool {
+        providers: vec![provider(codetrial::config::PRIMARY_PROVIDER_ID)],
+    };
+    let configured = |values: &super::BTreeMap<String, String>| {
+        super::web_server_config(values, pool.clone(), false, &options)
+            .expect("a plain local config should be accepted")
+            .default_duration_min
+    };
+    assert_eq!(
+        configured(&values(&[])),
+        codetrial::config::DEFAULT_DURATION_MIN
+    );
+    assert_eq!(configured(&values(&[("CODETRIAL_DURATION_MIN", "30")])), 30);
+    assert_eq!(
+        configured(&values(&[("CODETRIAL_DURATION_MIN", " 30 ")])),
+        30
+    );
+    // A length typed as text is refused, not read as the built-in one.
+    let error = super::web_server_config(
+        &values(&[("CODETRIAL_DURATION_MIN", "3O")]),
+        pool.clone(),
+        false,
+        &options,
+    )
+    .expect_err("a length that is no number must not start the server");
+    assert!(error.contains("CODETRIAL_DURATION_MIN"), "{error}");
 }
 
 /// Made once and kept, so a relaunch keeps everyone signed in, and owner-only

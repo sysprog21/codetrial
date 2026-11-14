@@ -14,7 +14,7 @@ use axum::response::{IntoResponse, Response};
 use ring::rand::SecureRandom;
 use serde_json::{Value, json};
 
-use crate::config::{DEFAULT_DURATION_MIN, MAX_DURATION_MIN, MIN_DURATION_MIN};
+use crate::config::{MAX_DURATION_MIN, MIN_DURATION_MIN};
 use crate::current_epoch_seconds;
 use crate::token::{LivekitTokenInput, TOKEN_TTL_SECONDS, livekit_observer_token, livekit_token};
 
@@ -39,6 +39,8 @@ pub struct TokenConfig<'a> {
     /// recording/sweeper.rs reaps one still running past this many minutes, so
     /// a longer interview loses exactly the stretch it was recorded for.
     pub recording_max_min: Option<u32>,
+    /// `CODETRIAL_DURATION_MIN`: the length of a request that names none.
+    pub default_duration_min: u32,
 }
 
 /// Same reason, and the sharpest case of it: `token` is a minted LiveKit
@@ -337,7 +339,11 @@ pub fn token_response(
         .get("problemId")
         .and_then(Value::as_str)
         .unwrap_or(crate::agent::DEFAULT_PROBLEM_ID);
-    let duration_min = token_duration_min(request.get("durationMin"), config.recording_max_min);
+    let duration_min = token_duration_min(
+        request.get("durationMin"),
+        config.default_duration_min,
+        config.recording_max_min,
+    );
     let interview_loop =
         crate::agent::InterviewLoop::parse(request.get("interviewLoop").and_then(Value::as_str));
     let interview_mode =
@@ -459,14 +465,28 @@ pub(crate) fn duration_ceiling(recording_max_min: Option<u32>) -> u32 {
     })
 }
 
-pub(crate) fn token_duration_min(value: Option<&Value>, recording_max_min: Option<u32>) -> Value {
+/// The operator's `CODETRIAL_DURATION_MIN` as the lobby and `/api/token` both
+/// use it: inside the range the endpoint offers and no longer than the
+/// deployment can record. One function for the same reason as
+/// [`duration_ceiling`].
+pub(crate) fn default_duration(configured_min: u32, recording_max_min: Option<u32>) -> u32 {
+    configured_min
+        .clamp(MIN_DURATION_MIN, MAX_DURATION_MIN)
+        .min(duration_ceiling(recording_max_min))
+}
+
+pub(crate) fn token_duration_min(
+    value: Option<&Value>,
+    default_duration_min: u32,
+    recording_max_min: Option<u32>,
+) -> Value {
     let ceiling = duration_ceiling(recording_max_min);
     let duration = value.and_then(crate::agent::json_number).unwrap_or(0.0);
     if duration == 0.0 || duration.is_nan() {
         // The default is a request like any other where the cap is shorter than
         // it. Handing back a length this server cannot record, for a caller who
         // named no length at all, is the same lost stretch of interview.
-        json!(DEFAULT_DURATION_MIN.min(ceiling))
+        json!(default_duration(default_duration_min, recording_max_min))
     } else {
         // Fractional minutes stay fractional: the metadata is echoed back to
         // the frontend, which renders whatever the lobby asked for.
@@ -766,6 +786,7 @@ fn minted_token(
             api_secret: &provider.api_secret,
             server_url: &provider.url,
             recording_max_min: state.config.recording.as_ref().map(|it| it.max_minutes),
+            default_duration_min: state.config.default_duration_min,
         },
         body,
         room_name,

@@ -113,6 +113,11 @@ let searchVisibilityException = null;
 /// drawn from changes.
 let keptDraw = null;
 let manualDuration = false;
+/// Whether `/api/session` has answered, so the lobby knows the operator's
+/// default. Until then, and after it fails, a length still on the markup's 45
+/// is not the candidate's to send: Start leaves it out and the server's default
+/// applies, while any other length showing was picked here and goes.
+let durationSettled = false;
 // Preserve the explicit preference independently of the effective server limit.
 let chosenDuration;
 let manualDifficulty = false;
@@ -150,6 +155,9 @@ let deletingReports = false;
 /// file is still in its temporal dead zone, and reading one there throws
 /// before the lobby has rendered anything at all.
 let durationCeiling = Infinity;
+/// The length a Medium or Hard problem suggests: the preselected button until
+/// `/api/session` reports the operator's own `CODETRIAL_DURATION_MIN`.
+let defaultDuration;
 /// Whether the interviewer sends candidate video, from `/api/session`. Null
 /// until it answers, when it fails, and when this server does not host the
 /// interviewer itself; the billing notice above Start stays hidden while null.
@@ -718,6 +726,10 @@ nodes.attemptDownloadSelected.addEventListener("click", async () => {
 });
 
 const durations = [...document.querySelectorAll("[data-duration]")];
+defaultDuration = Number(
+  document.querySelector("[data-duration].selected")?.dataset.duration,
+);
+const markupDuration = defaultDuration;
 for (const button of durations) {
   button.addEventListener("click", () => {
     if (starting) return;
@@ -812,7 +824,8 @@ start.addEventListener("click", async () => {
     for (const difficulty of selectedDifficulties())
       destination.searchParams.append("difficulty", difficulty);
   } else destination.searchParams.set("problem", problem.id);
-  destination.searchParams.set("duration", String(duration));
+  if (manualDuration || durationSettled || duration !== markupDuration)
+    destination.searchParams.set("duration", String(duration));
   destination.searchParams.set("loop", interviewLoop);
   destination.searchParams.set("mode", mode);
   if (mode === "coding" && nodes.exampleDrawing.checked)
@@ -1166,7 +1179,20 @@ async function loadAccount(generation) {
     ) {
       throw new Error("Invalid account response");
     }
+    durationSettled = true;
     accountHistory = false;
+    // Re-suggest only when the operator's length differs from the markup's, so
+    // a lobby on the built-in default keeps a problem the candidate picked, or
+    // when a restored lobby learns a ceiling other than the one it settled
+    // under (a suggestion made by hand-ticking a level is not a choice).
+    const operatorDuration =
+      Number.isFinite(session.defaultDurationMin) &&
+      session.defaultDurationMin !== defaultDuration;
+    const ceilingMoved =
+      Number.isFinite(durationCeiling) &&
+      Number.isFinite(session.maxDurationMin) &&
+      session.maxDurationMin !== durationCeiling;
+    if (operatorDuration) defaultDuration = session.defaultDurationMin;
     const peerLink = document.getElementById("peer-practice");
     if (peerLink)
       peerLink.hidden = !(
@@ -1175,6 +1201,17 @@ async function loadAccount(generation) {
         (session.identityVerified ?? session.user?.identityVerified)
       );
     applyDurationCeiling(session.maxDurationMin);
+    if (operatorDuration || ceilingMoved) {
+      // A problem picked by hand before the session answered suggested its own
+      // length from its own difficulty; the checkboxes would overrule it.
+      setDuration(
+        suggestedDuration(
+          manualProblem && problem
+            ? new Set([problem.difficulty])
+            : selectedDifficulties(),
+        ),
+      );
+    }
     candidateVideo =
       typeof session.candidateVideo === "boolean"
         ? session.candidateVideo
@@ -1802,13 +1839,16 @@ function mark(button, on) {
   button.setAttribute("aria-pressed", String(on));
 }
 
-/// Capped at the server's own default length, which src/config.rs holds at or
-/// under the recording cap, so nothing the lobby picks on its own outlives its
-/// recording. Only the suggestion is capped: the sixty minute button is one
-/// click away and a deployment can set the two environment variables apart, so
-/// this narrows the default rather than guaranteeing anything.
+/// The operator's default length for Medium and Hard, and no more than thirty
+/// for Easy. Snapped to a button the row offers, so a default of 20 or 75 still
+/// leaves one selected; the ceiling is applied afterwards by `setDuration`.
 function suggestedDuration(difficulties) {
-  return difficulties.has("Medium") || difficulties.has("Hard") ? 45 : 30;
+  const hard = difficulties.has("Medium") || difficulties.has("Hard");
+  const wanted = hard ? defaultDuration : Math.min(30, defaultDuration);
+  const offered = durations.map((button) => Number(button.dataset.duration));
+  return offered.reduce((best, value) =>
+    Math.abs(value - wanted) < Math.abs(best - wanted) ? value : best,
+  );
 }
 
 function setInterviewLoop(value) {

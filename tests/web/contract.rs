@@ -59,6 +59,7 @@ async fn static_home_markup_matches_frontend_contract() {
         production: false,
         compiler_explorer_enabled: true,
         guest_mode_enabled: false,
+        default_duration_min: DEFAULT_DURATION_MIN,
         trusted_proxy_hops: 0,
         allowed_hosts: Vec::new(),
         recording: None,
@@ -121,6 +122,7 @@ async fn static_interview_markup_exposes_offline_surface() {
         production: false,
         compiler_explorer_enabled: true,
         guest_mode_enabled: false,
+        default_duration_min: DEFAULT_DURATION_MIN,
         trusted_proxy_hops: 0,
         allowed_hosts: Vec::new(),
         recording: None,
@@ -299,7 +301,7 @@ fn static_interview_script_leaves_candidate_identity_to_the_server() {
     // The shared request fields follow the mode-specific problem selection.
     // Strict assignment must retain the optional execution restriction too.
     assert!(compact(&source).contains(
-        "durationMin,interviewId,interviewLoop,interviewMode:mode,...(!whiteboard?{language:state.language}:{}),interviewProfile,...(interviewGrounding?{interviewGrounding}:{}),...(nodes.interviewerAccent.value?{interviewerAccent:nodes.interviewerAccent.value}:{}),...(nodes.interviewerVoice.value?{interviewerVoice:nodes.interviewerVoice.value}:{}),...(nodes.hideExamples.checked?{hideExamples:true}:{}),...(exampleDrawingEnabled?{exampleDrawing:true}:{}),...(candidateLedEnabled?{candidateLed:true}:{}),...(!editorOptions.execution?{codeExecution:false}:{})})"
+        "...(namedDuration?{durationMin}:{}),interviewId,interviewLoop,interviewMode:mode,...(!whiteboard?{language:state.language}:{}),interviewProfile,...(interviewGrounding?{interviewGrounding}:{}),...(nodes.interviewerAccent.value?{interviewerAccent:nodes.interviewerAccent.value}:{}),...(nodes.interviewerVoice.value?{interviewerVoice:nodes.interviewerVoice.value}:{}),...(nodes.hideExamples.checked?{hideExamples:true}:{}),...(exampleDrawingEnabled?{exampleDrawing:true}:{}),...(candidateLedEnabled?{candidateLed:true}:{}),...(!editorOptions.execution?{codeExecution:false}:{})})"
     ));
     assert!(!source.contains("candidateIdentity"));
 }
@@ -1198,11 +1200,13 @@ fn browser_interview_duration_matches_the_server_clamp() {
         "web/interview.js clamps above the server maximum"
     );
 
-    // The fallback the query string gets when it carries no duration.
-    let fallback = clamp[0]
-        .rsplit("||")
+    // The fallback the query string gets when it names no usable duration: the
+    // literal after the colon of `namedDuration ? clamp(...) : <fallback>`.
+    let declaration = &interview[interview.find("let durationMin = ").unwrap()..];
+    let fallback = declaration[..declaration.find(';').unwrap()]
+        .rsplit(':')
         .next()
-        .expect("the clamped value falls back to a literal")
+        .expect("the declaration falls back to a literal")
         .trim();
     assert_eq!(
         parsed(fallback),

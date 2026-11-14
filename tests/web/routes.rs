@@ -259,6 +259,44 @@ async fn the_oauth_callback_requires_the_state_it_minted() {
     remove_database(path).await;
 }
 
+/// The lobby preselects the operator's length, so the server has to say what
+/// it is; the page cannot read `CODETRIAL_DURATION_MIN` itself. What it says is
+/// the length `/api/token` would grant: inside the range, and no longer than
+/// the recording cap.
+#[tokio::test]
+async fn the_session_reports_the_default_length_it_would_grant() {
+    for (configured, recording, expected) in [
+        (30, None, 30),
+        (5, None, MIN_DURATION_MIN),
+        (120, None, MAX_DURATION_MIN),
+        (
+            120,
+            Some(recording_config()),
+            recording_config().max_minutes,
+        ),
+    ] {
+        let mut config = web_config();
+        config.default_duration_min = configured;
+        config.recording = recording;
+        let (base, server) = spawn_web_server(config).await;
+
+        let session = http_client()
+            .get(format!("{base}/api/session"))
+            .send()
+            .await
+            .unwrap()
+            .json::<Value>()
+            .await
+            .unwrap();
+
+        assert_eq!(
+            session["defaultDurationMin"], expected,
+            "configured {configured}"
+        );
+        server.shutdown().await;
+    }
+}
+
 /// The same endpoint on a server that records nothing, so the cap is the range
 /// the endpoint has always offered rather than a number the lobby invents.
 #[tokio::test]

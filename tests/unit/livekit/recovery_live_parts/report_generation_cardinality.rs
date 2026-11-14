@@ -245,6 +245,7 @@ impl G2NativeRun {
                 api_key: &self.config.livekit_api_key,
                 api_secret: &self.config.livekit_api_secret,
                 server_url: &self.config.livekit_url,
+                default_duration_min: crate::config::DEFAULT_DURATION_MIN,
                 recording_max_min: None,
             },
             br#"{"problemId":"two-sum","durationMin":10}"#,
