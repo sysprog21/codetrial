@@ -123,6 +123,8 @@ After successful output, the ready notice has its own 15-second publication
 limit, separate from the best-effort reconnect notice. The bounded cold open,
 maximum opening generation, ready publication and failure cleanup fit within
 the browser's 180-second readiness wait with headroom for other startup work.
+That wait is counted from the room join, where the agent's own startup budget
+starts too, so consent, the token request and the join itself do not spend it.
 A rejected or timed-out ready publication closes the session and accounts for
 observed usage once, without repeating the greeting. It reports `delivery`,
 not provider silence: the interviewer answered but its confirmation could not

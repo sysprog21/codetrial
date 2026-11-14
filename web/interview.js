@@ -1062,6 +1062,12 @@ async function init() {
   if (!startup) return;
   publishCode();
   state.endsAt = startup.startedAt + durationMin * 60 * 1000;
+  // Strict editing waits for readiness: work done while Gemini stays silent
+  // would be untimed. The deadline arms the leave warning.
+  if (strict) {
+    updateRunAvailability();
+    if (!whiteboard) nodes.editor.disabled = false;
+  }
   updateBeforeUnloadGuard();
   tickTimer();
   setInterval(tickTimer, 1000);
@@ -2114,10 +2120,6 @@ async function connect(preflight, presenting = false) {
     // startup must not reclaim it or start recording behind that report.
     if (joined === "reporting" || state.phase !== "live") return false;
     state.connected = true;
-    if (strict) updateRunAvailability();
-    if (strict && !whiteboard) nodes.editor.disabled = false;
-    state.workStarted = true;
-    updateBeforeUnloadGuard();
     // After the room, not before it. The server refuses to record an interview
     // that has not claimed a room, so starting here rather than alongside the
     // consent request is the difference between a recording and a failure
@@ -2262,8 +2264,6 @@ async function connect(preflight, presenting = false) {
     if (!error?.startup && !state.joinedRoom) {
       offlineStartup = { startedAt: Date.now() };
     }
-    state.workStarted = true;
-    updateBeforeUnloadGuard();
     setAgentStateLabel(degraded.label);
     // A degraded start without a reason reads as the product working. The server
     // says why it refused, in words written for a candidate, and a busy server
@@ -2401,14 +2401,7 @@ async function connectLiveKit(connection, preflight, presenting = false) {
     if (strict) updateRunAvailability();
     setBanner("connection", "");
     if (state.phase === "live" && state.interviewerReadiness?.pending) {
-      void room.localParticipant
-        .publishData(
-          new TextEncoder().encode(JSON.stringify(startupSyncPayload())),
-          { reliable: true, topic: topics.control },
-        )
-        .catch((error) =>
-          console.warn("codetrial startup_resync_failed", error),
-        );
+      void sendData(topics.control, startupSyncPayload()).catch(() => {});
     }
     // Everything held during the gap, in order, then the current buffer on top
     // so Jim is reading what the candidate is actually looking at rather than
@@ -2498,6 +2491,7 @@ async function connectLiveKit(connection, preflight, presenting = false) {
   };
   try {
     await room.connect(connection.serverUrl, connection.token);
+    state.interviewerReadiness?.arm();
     if (state.phase !== "live" || state.reportReceiving)
       return settleEndedJoin(room, preflight);
     if (state.room !== room) throw new Error("Interview ended before startup");
@@ -2517,7 +2511,9 @@ async function connectLiveKit(connection, preflight, presenting = false) {
   state.connected = true;
   state.offlinePractice = false;
   state.localUserStream = preflight.userStream;
-  nodes.mic.textContent = "Mic on";
+  // A mute made while the room was joining carries over: the label comes from
+  // the state the published track was left in.
+  paintMicrophoneState();
   updateAgentState();
   monitorIntegrityTracks();
   followMicrophoneLoss(state.localUserStream?.getAudioTracks?.()[0]);
@@ -2683,8 +2679,10 @@ function abandonStart(preflight, { preserveMicrophone = false, flushed } = {}) {
   if (joined) audioPlayback.release(joined);
   releaseStart();
   stopPreflight(preflight, { preserveMicrophone });
-  if (preserveMicrophone) state.localUserStream = preflight.userStream;
-  else stopLocalMedia({ endRecording: false });
+  if (preserveMicrophone) {
+    state.localUserStream = preflight.userStream;
+    stopIntegrityMonitoring();
+  } else stopLocalMedia({ endRecording: false });
   state.interviewerReadiness?.fail();
   if (!joined) return;
   const leave = () =>
@@ -2737,10 +2735,17 @@ function setLocalAudioEnabled(enabled) {
 function stopLocalMedia({ endRecording = true } = {}) {
   mutedSpeech.stop();
   if (endRecording) localRecording.finish(nodes.ending);
-  stopIntegrityWorker();
+  stopIntegrityMonitoring();
   stopPreflight({ userStream: state.localUserStream });
   state.localUserStream = null;
   forgetAudioInputs();
+}
+
+/// The interview's integrity watch, apart from the stream it reads: a failed
+/// start that keeps the microphone for a local recording has no interview left
+/// to watch.
+function stopIntegrityMonitoring() {
+  stopIntegrityWorker();
   clearInterval(state.integrityHeartbeatTimer);
   state.integrityHeartbeatTimer = null;
   clearInterval(state.integrityTrackStateTimer);
@@ -2851,7 +2856,7 @@ function finalizeRecoveryOnPageHide(event) {
   if (state.phase === "report_recovery") reportRecovery.finish();
   // A start holds its room from before the join. A page the cache keeps
   // finishes that join on restore, so only a joined room is left here.
-  if (!event?.persisted || state.connected)
+  if (!event?.persisted || state.initialMediaPublished)
     void state.room?.disconnect?.().catch?.(() => {});
   // Closing the tab mid-start is the usual way a start is given up, and the
   // interviewer is held for it until someone joins. A page the back-forward
@@ -4389,7 +4394,7 @@ function updateRunAvailability() {
   nodes.run.disabled =
     state.candidateCaseEdit !== null ||
     !editorOptions.execution ||
-    (strict && !state.connected) ||
+    (strict && !(state.connected && state.endsAt > 0)) ||
     state.runningTests ||
     codingClosed() ||
     !languages.includes(state.language);
@@ -4861,6 +4866,7 @@ async function showReport() {
   state.report = {
     ...sessionReport({
       joinedRoom: state.joinedRoom,
+      interviewStarted: state.endsAt > 0,
       passed,
       total,
       candidateTurns,

@@ -1018,8 +1018,13 @@ for (const strict of [false, true]) {
         assert.equal(await page.locator("#timer").textContent(), "00:00");
         assert.equal(await page.locator("#end").isDisabled(), strict);
         assert.equal(await page.evaluate(() => window.testInterviewClocks), 0);
-        const work = "// Candidate-led work survives startup";
-        await page.locator("#editor").fill(work);
+        // Strict editing waits for the clock; Practice work is editable now.
+        const work = strict
+          ? await page.locator("#editor").inputValue()
+          : "// Candidate-led work survives startup";
+        if (strict)
+          assert.equal(await page.locator("#editor").isDisabled(), true);
+        else await page.locator("#editor").fill(work);
         const ready = {
           type: "interviewer_state",
           reconnecting: false,
@@ -1046,6 +1051,7 @@ for (const strict of [false, true]) {
           reconnect ? "44:53" : "45:00",
         );
         assert.equal(await page.locator("#editor").inputValue(), work);
+        assert.equal(await page.locator("#editor").isDisabled(), false);
         assert.equal(
           await page.evaluate(() => window.testRoom.syncRequests.length),
           reconnect ? 1 : 0,
@@ -1163,8 +1169,15 @@ for (const strict of [false, true]) {
           await page.waitForFunction(() => window.testInterviewClocks === 1);
         }
         await fullSdkRestart(page);
-        await page.locator("#editor").fill("// Work retained during reconnect");
-        assert.equal(await warnsOnLeave(page), true);
+        // Before readiness a Strict editor is still closed, so there is no
+        // work to retain or to warn about until the clock starts.
+        const editable = !strict || order === "before departure";
+        const work = editable
+          ? "// Work retained during reconnect"
+          : await page.locator("#editor").inputValue();
+        if (editable) await page.locator("#editor").fill(work);
+        else assert.equal(await page.locator("#editor").isDisabled(), true);
+        assert.equal(await warnsOnLeave(page), editable);
         await page.clock.fastForward(5_000);
         if (order === "absent")
           ready.startedAt = await page.evaluate(() => Date.now());
@@ -1199,10 +1212,7 @@ for (const strict of [false, true]) {
               ? "45:00"
               : "44:45";
         assert.equal(await page.locator("#timer").textContent(), expected);
-        assert.equal(
-          await page.locator("#editor").inputValue(),
-          "// Work retained during reconnect",
-        );
+        assert.equal(await page.locator("#editor").inputValue(), work);
         // A return event and its query may both deliver the same authoritative
         // state. Even a conflicting late timestamp cannot establish a new clock.
         await page.evaluate(
@@ -1357,7 +1367,7 @@ for (const strict of [false, true]) {
       assert.equal(await page.locator("#timer").textContent(), "00:00");
       assert.doesNotMatch(
         await page.locator("#presence-banner").textContent(),
-        /startup check failed|did not answer/,
+        /startup check failed|did not become ready/,
       );
       await page.evaluate(async () => {
         window.testRoom.remoteParticipants = new Map(
@@ -1418,7 +1428,7 @@ for (const terminal of ["deadline", "disconnect"]) {
       assert.equal(await page.locator("#ending-overlay").isVisible(), false);
       assert.match(
         await page.locator("#presence-banner").textContent(),
-        /did not answer the startup check/,
+        /did not become ready, and no cause was reported/,
       );
     },
   );
@@ -1457,8 +1467,11 @@ test(
       expectEndDisabled: true,
     });
     const timer = await page.locator("#timer").textContent();
-    await page.locator("#editor").fill("// Work while waiting for readiness");
-    assert.equal(await warnsOnLeave(page), true);
+    // Nothing is editable while Gemini has not answered, so nothing is lost
+    // by leaving, and the page's own Retry and Leave raise no native prompt.
+    assert.equal(await page.locator("#editor").isDisabled(), true);
+    assert.equal(await page.locator("#run-tests").isDisabled(), true);
+    assert.equal(await warnsOnLeave(page), false);
     await page.evaluate(
       (topic) =>
         window.testRoom.startup(
@@ -1485,7 +1498,7 @@ test(
     assert.equal(await page.locator("#end").isDisabled(), true);
     assert.equal(await page.locator("#pause").count(), 0);
     assert.equal(await page.locator("#timer").textContent(), timer);
-    assert.equal(await warnsOnLeave(page), true);
+    assert.equal(await warnsOnLeave(page), false);
   },
 );
 
@@ -1912,13 +1925,14 @@ for (const strict of [false, true]) {
               { timeout: 3000 },
             );
             const message = strict ? "#audio-check-status" : "#presence-banner";
-            const expected = cause === "billing" ? /billing/ : /did not answer/;
+            const expected =
+              cause === "billing" ? /billing/ : /did not become ready/;
             await page.waitForFunction(
               ({ message, word }) =>
                 document.querySelector(message).textContent.includes(word),
               {
                 message,
-                word: cause === "billing" ? "billing" : "did not answer",
+                word: cause === "billing" ? "billing" : "did not become ready",
               },
             );
             const banner = await page.locator(message).textContent();
@@ -2253,7 +2267,7 @@ for (const reason of ["billing", "quota", "unavailable", "delivery"]) {
           banner,
           /interviewer answered.*confirmation could not be delivered/,
         );
-        assert.doesNotMatch(banner, /Gemini did not answer/);
+        assert.doesNotMatch(banner, /did not become ready/);
       }
 
       assert.equal(await page.locator("#pause").count(), 0);
@@ -2666,7 +2680,7 @@ for (const late of ["ready", "failed", "departure", "missing"]) {
       );
       assert.match(
         await page.locator("#report-modal").textContent(),
-        /did not produce an evaluation/,
+        /did not produce an evaluation: it ended before the interviewer was ready to start/,
       );
       assert.equal(await page.locator("#ending-overlay").isVisible(), false);
       assert.equal(await page.locator("#editor").inputValue(), code);

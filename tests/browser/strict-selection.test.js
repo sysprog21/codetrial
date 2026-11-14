@@ -506,6 +506,41 @@ test("a join that outlasts the offline summary still leaves its room and release
   );
 });
 
+// The microphone is the candidate's from preflight, so a mute pressed while
+// the room is still joining holds; the join must not paint it back as on.
+test("a mute pressed while the room joins is still shown once joined", async (t) => {
+  const page = await interview(t, "problem=chargeback-pair-match", (route) =>
+    route.fulfill({ json: grant("chargeback-pair-match", "mute-during-join") }),
+  );
+  if (!page) return;
+  await page.evaluate(() => {
+    window.roomJoinHeld = new Promise((resolve) => {
+      window.releaseJoin = resolve;
+    });
+  });
+  await preflight(page);
+  await page.waitForFunction(() => window.roomJoins.length === 1);
+  await page.locator("#mic").click();
+  await page.locator("#mic-muted-status").waitFor({ state: "visible" });
+  await page.evaluate(() => window.releaseJoin());
+  await page.waitForFunction(() =>
+    (window.roomPublishes ?? []).includes("integrity"),
+  );
+  assert.match(await page.locator("#mic").textContent(), /Muted/);
+  assert.equal(
+    await page.locator("#mic").getAttribute("aria-label"),
+    "Muted: unmute microphone",
+  );
+  assert.equal(
+    await page.evaluate(() =>
+      window.acquiredTracks
+        .filter((track) => track.kind === "audio")
+        .every((track) => !track.enabled),
+    ),
+    true,
+  );
+});
+
 /// Hands `report` to the room's report handlers as the interviewer would.
 /// Not awaited: delivery waits on timers a paused clock may hold back.
 async function deliverReport(page, report) {
@@ -2291,11 +2326,15 @@ for (const outcome of ["success", "failure"]) {
       window.LivekitClient.Room = class extends Room {
         constructor(...args) {
           super(...args);
+          // Still the fixture's publish underneath, whose agent answers the
+          // first integrity packet with readiness, as a live agent would.
+          const publish = this.localParticipant.publishData;
           this.localParticipant.publishData = async (payload, options) => {
             window.testPackets.push({
               topic: options.topic,
               payload: JSON.parse(new TextDecoder().decode(payload)),
             });
+            return publish(payload, options);
           };
         }
         async connect(...args) {

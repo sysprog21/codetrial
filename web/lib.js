@@ -1630,6 +1630,7 @@ export function countdown(endsAt, now) {
 /// and only the first one decides this.
 export function sessionReport({
   joinedRoom,
+  interviewStarted = true,
   passed,
   total,
   candidateTurns,
@@ -1645,6 +1646,17 @@ export function sessionReport({
       incomplete: true,
       summary:
         "The interviewer returned a report and this page could not display it. What follows is only what this page recorded, so the interviewer's scores and verdict are not part of it.",
+      hintsUsed: 0,
+    };
+  }
+
+  // An interview that ended before its clock started never asked for a
+  // report, so its absence is not the interviewer's to answer for.
+  if (joinedRoom && !interviewStarted) {
+    return {
+      incomplete: true,
+      summary:
+        "This interview did not produce an evaluation: it ended before the interviewer was ready to start. Nothing you did was assessed, and no result was recorded.",
       hintsUsed: 0,
     };
   }
@@ -1748,7 +1760,7 @@ export function interviewerReconnectMessage(message, { strict = false } = {}) {
     };
     const cause = Object.hasOwn(causes, message.reason)
       ? causes[message.reason]
-      : "Gemini did not answer the startup check. Try starting again when the provider is available.";
+      : "The interviewer did not become ready, and no cause was reported. Try starting again later.";
     const next = strict
       ? "Return to the lobby or retry media preflight."
       : "You can still work the problem offline.";
@@ -1768,7 +1780,9 @@ export function interviewerReconnectMessage(message, { strict = false } = {}) {
 
 /// Installed before joining: a fast agent may publish readiness before the
 /// caller finishes publishing media or starts recording. Replacement notices
-/// never settle this one-shot gate, and a missing notice has a finite wait.
+/// never settle this one-shot gate, and a missing notice has a finite wait,
+/// counted from `arm()` once the room is joined: the agent's own startup
+/// budget starts there too, so consent and the token request do not eat it.
 export function createInterviewerReadiness({
   timeoutMs = 180_000,
   now = Date.now,
@@ -1808,11 +1822,13 @@ export function createInterviewerReadiness({
     );
   };
   const fail = () => receive({ type: "interviewer_state", startup: "failed" });
-  timer = schedule(fail, timeoutMs);
   return {
     wait,
     receive,
     fail,
+    arm() {
+      if (!settled && timer === undefined) timer = schedule(fail, timeoutMs);
+    },
     get pending() {
       return !settled;
     },

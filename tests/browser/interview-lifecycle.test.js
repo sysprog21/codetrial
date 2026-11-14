@@ -152,6 +152,7 @@ test("startup notices settle once and replacement notices cannot start a timer",
       cancelled += 1;
     },
   });
+  gate.arm();
   let settled = false;
   gate.wait.then(() => {
     settled = true;
@@ -168,6 +169,7 @@ test("startup notices settle once and replacement notices cannot start a timer",
   assert.deepEqual(await gate.wait, { startup: "ready", startedAt: 30 });
   assert.equal(cancelled, 1);
 
+  timeout = undefined;
   const missing = createInterviewerReadiness({
     schedule: (fn) => {
       timeout = fn;
@@ -175,8 +177,39 @@ test("startup notices settle once and replacement notices cannot start a timer",
     },
     cancel: () => {},
   });
+  // The wait is counted from the join, not from before consent and the token.
+  assert.equal(timeout, undefined);
+  missing.arm();
+  missing.arm();
   timeout();
   assert.equal((await missing.wait).startup, "failed");
+});
+
+// The agent's age for the opening is the only clock that crosses domains, so a
+// malformed one must start the timer now rather than in the past or future.
+test("a ready notice with a malformed age starts the timer at receipt", async () => {
+  for (const [elapsedMs, startedAt] of [
+    [20, 980],
+    [0, 1000],
+    [-1, 1000],
+    [-60_000, 1000],
+    [1.5, 1000],
+    ["10", 1000],
+    [Number.NaN, 1000],
+    [undefined, 1000],
+  ]) {
+    const gate = createInterviewerReadiness({
+      now: () => 1000,
+      schedule: () => 1,
+      cancel() {},
+    });
+    gate.receive({ type: "interviewer_state", startup: "ready", elapsedMs });
+    assert.deepEqual(
+      await gate.wait,
+      { startup: "ready", startedAt },
+      `elapsedMs ${String(elapsedMs)}`,
+    );
+  }
 });
 
 test("the actual connection preserves refusal reasons and gates the init deadline on readiness", async () => {
@@ -212,9 +245,16 @@ test("the actual connection preserves refusal reasons and gates the init deadlin
     let mediaStopped = 0;
     let boardRefreshes = 0;
     const warnings = [];
+    // As init leaves it before connect: Practice work is guarded from page
+    // load, and nothing in the start may arm the guard for Strict.
     const context = {
-      protected: false,
-      state: { endsAt: 0, phase: "live", language: "python" },
+      protected: !strict,
+      state: {
+        endsAt: 0,
+        phase: "live",
+        language: "python",
+        workStarted: !strict,
+      },
       preferredLanguage: "python",
       languageChoiceCommitted: false,
       LANGUAGE_KEY,
@@ -281,7 +321,7 @@ test("the actual connection preserves refusal reasons and gates the init deadlin
         hideExamples: { checked: false },
         interviewerAccent: { value: "" },
         interviewerVoice: { value: "" },
-        editor: { disabled: false },
+        editor: { disabled: strict },
         run: { disabled: false },
         audioStatus: { textContent: "" },
         audioCheck: { hidden: true, querySelectorAll: () => [] },
@@ -348,10 +388,17 @@ test("the actual connection preserves refusal reasons and gates the init deadlin
         `${outcome}: ${warnings.join(", ")}`,
       );
       assert.equal(boardRefreshes, 0);
+      // Practice work is editable from page load; Strict editing waits for
+      // the clock, so there is nothing yet to protect.
       assert.equal(
         context.protected,
-        true,
+        !strict,
         `${outcome}: work is protected before readiness`,
+      );
+      assert.equal(
+        context.nodes.editor.disabled,
+        strict,
+        `${outcome}: Strict editing waits for the clock`,
       );
       if (outcome === "ended-ready") context.state.phase = "ending";
       gate.receive({
@@ -535,7 +582,7 @@ test("the room disconnects on actual pagehide, not when beforeunload is cancelle
   const calls = [];
   const state = {
     phase: "live",
-    connected: true,
+    initialMediaPublished: true,
     room: {
       disconnect() {
         calls.push("disconnect");

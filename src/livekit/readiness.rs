@@ -18,7 +18,7 @@ use super::*;
 /// browser clock. Unlike a best-effort reconnect notice, it can wait out a slow
 /// publish. First open (30s), maximum greeting wait (120s), this publish (15s),
 /// shutdown (2s) and failure notice (1s) leave headroom in the browser's 180s
-/// wait.
+/// wait, which the page counts from the same room join.
 pub(super) const STARTUP_READY_PUBLICATION_LIMIT: Duration = Duration::from_secs(15);
 /// Publication must not turn a busy room into another unbounded event buffer.
 pub(super) const STARTUP_READY_EVENT_LIMIT: usize = 256;
