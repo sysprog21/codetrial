@@ -206,7 +206,7 @@ test("the lobby offers an editor or a whiteboard and carries the choice into the
     css,
     /\.framework-hint \{[^}]*background: none;[^}]*pointer-events: none;/s,
   );
-  assert.match(css, /\.framework-hint-card \{[^}]*max-height: 70vh;/s);
+  assert.match(css, /\.framework-hint-card \{[^}]*max-height: 70dvh;/s);
   assert.match(css, /\.framework-hint-card \{[^}]*max-width: min\(/s);
   assert.doesNotMatch(interview, /showModal\(\)/);
   assert.match(interview, /frameworkHintBody\.innerHTML/);

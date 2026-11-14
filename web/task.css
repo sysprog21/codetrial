@@ -347,7 +347,7 @@ label:has(input[type="checkbox"]) {
   display: none;
 }
 .task-grid[data-maximized="true"] .editor-stack {
-  min-height: 70vh;
+  min-height: 70dvh;
 }
 /* The overlay and the textarea must agree on every metric that affects where
    a glyph lands, or the painted text drifts away from the caret. */

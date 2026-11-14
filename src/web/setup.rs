@@ -233,7 +233,7 @@ const SETUP_PAGE: &str = r#"<!doctype html>
   }
   * { box-sizing: border-box; }
   body {
-    min-height: 100vh;
+    min-height: 100dvh;
     margin: 0;
     background: var(--page);
     color: var(--ink);
