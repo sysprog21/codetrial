@@ -22,7 +22,7 @@ the binary's: `src/main.rs` runs the Setup handover and binds the socket, and
 builds the server from `src/launch.rs` (config search, every refusal it makes
 before serving). Calling that from the app would have meant a second launcher
 beside the one the CLI's behavior is pinned to. As a child it is the binary the CLI
-tests already cover, started with five things a launcher needs that the CLI
+tests already cover, started with six things a launcher needs that the CLI
 did not have. Each is decided in the server, so the app keeps no copy of the
 server's rules:
 
@@ -69,15 +69,24 @@ server's rules:
   quitting or by crashing, the server goes too and does not keep the port.
   This one stays in the environment even for `--data-dir`, because it is not
   configuration but a description of the pipe the launcher handed over.
+- `CODETRIAL_CHANGE_KEYS_CODE`: the code Change keys asks for, which a
+  terminal launch prints and a child has no terminal to print to. The app
+  makes a new one on every launch, the server takes it only when it is at
+  least 24 letters and digits, and never prints it. The app fills it into the
+  Setup page in its own window, or, with the interview in the browser, shows
+  it on the page it leaves in its window. Read from the environment for the
+  same reason as the pipe above.
 - `--no-update-check`: the lobby never offers a newer release, whatever the
   config file says about `CODETRIAL_UPDATE_CHECK`. That check compares the
   server with the `latest` release, and the app is published as
   `desktop-latest`, so it would offer every desktop install an update to the
   CLI binary.
 
-All five are ordinary server options, and a CLI install can use them the same
-way. `codetrial --help` lists the four flags, and the README's configuration
-table lists `CODETRIAL_ALLOWED_HOSTS`.
+All six are ordinary server options, and a CLI install can use them the same
+way, except that the server takes `CODETRIAL_CHANGE_KEYS_CODE` only when
+`CODETRIAL_EXIT_WITH_STDIN` says it was started as a child: a launch from a
+terminal makes and prints its own code. `codetrial --help` lists the four
+flags, and the README's configuration table lists `CODETRIAL_ALLOWED_HOSTS`.
 
 ## Where it keeps things
 
@@ -94,7 +103,8 @@ session signing key and a roaming profile is copied to a server:
 In it:
 
 - `codetrial.env.local`: the keys the Setup page takes, in plain text, the
-  same file the CLI writes. Edit it to change a key or add an option. The first
+  same file the CLI writes. Change keys in the lobby rewrites its keys, which
+  take effect when the app next starts; edit it to add an option. The first
   launch writes it from exported LiveKit keys without asking (see `--data-dir`
   above); otherwise Setup asks, and offers to use a CLI config found in the
   folder the app was started in (see `--import-config`). An app opened from the Dock,

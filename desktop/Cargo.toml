@@ -27,6 +27,8 @@ all = "deny"
 tauri-build = { version = "=2.7.4", features = [] }
 
 [dependencies]
+# Already in the tree through tauri; the Change keys code is read from it.
+getrandom = "=0.3.4"
 open = { version = "=5.4.4", features = ["shellexecute-on-windows"] }
 tauri = { version = "=2.12.5", features = [] }
 tauri-plugin-dialog = "=2.8.4"
