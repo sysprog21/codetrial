@@ -10,6 +10,12 @@
   --edge: #232b34;
   --pass: #3fb950;
   --fail: #f85149;
+  --page: #0d1117;
+  --text-primary: #ffffff;
+  --surface-dark: #000;
+  --surface: #000;
+  --border: #33332c;
+  --paper: #ffffff;
 }
 
 * {

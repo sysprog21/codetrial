@@ -897,7 +897,7 @@ p {
   overflow: auto;
   border: 1px solid var(--hairline);
   border-radius: var(--radius-sm);
-  background: var(--editor-panel-bg);
+  background: var(--surface);
 }
 
 .interview-sidebar {
@@ -1260,7 +1260,6 @@ p {
   border-color: color-mix(in srgb, var(--good) 65%, transparent);
   background: color-mix(in srgb, var(--good) 12%, transparent);
   color: var(--on-good-tint);
-  color: var(--ready-ink);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--good) 8%, transparent);
 }
 
@@ -1401,7 +1400,6 @@ p {
 .pill-button.danger {
   border-color: var(--danger);
   background: var(--danger);
-  color: var(--on-accent);
   color: var(--on-accent);
 }
 
@@ -1579,7 +1577,6 @@ p {
   border-color: var(--accent);
   background: var(--accent-fill);
   color: var(--on-accent);
-  color: var(--on-accent);
 }
 
 .editor-stack {
@@ -1596,7 +1593,7 @@ p {
      the two panes. The old 25rem flex minimum prevented the drawer from
      reaching its bound and made the panel overflow. */
   min-height: 6rem;
-  background: var(--code-bg);
+  background: var(--editor-panel-bg);
 }
 
 /* The overlay and the textarea must agree on every metric that affects where a
@@ -2152,7 +2149,6 @@ table.phase-scores {
   border: 1px solid var(--hairline);
   border-radius: var(--radius-sm);
   background: var(--accent-fill);
-  color: var(--on-accent);
   color: var(--on-accent);
   padding: 0.75rem 1rem;
   cursor: pointer;
