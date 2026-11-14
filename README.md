@@ -353,6 +353,7 @@ The common ones:
 | `CODETRIAL_MAX_CONCURRENT_INTERVIEWS` | `16` | Interviews one `web` process hosts agents for |
 | `CODETRIAL_ALLOWED_HOSTS` | empty | Comma-separated `Host` values the server answers; any other is refused with 421. Empty answers every name, but a value that names no host is refused at startup. `--allowed-hosts` sets it from the command line |
 | `CODETRIAL_EXIT_WITH_STDIN` | unset | For a program that starts the server as its child: exit when standard input reaches end of file, so the server does not outlive a launcher that crashed. Read from the process environment even under `--data-dir` |
+| `CODETRIAL_CHANGE_KEYS_CODE` | unset | For a program that starts the server as its child: the Change keys code, at least 24 letters and digits, which the server then never prints. Read from the process environment even under `--data-dir`; ignored by a launch from a terminal, which makes and prints its own |
 
 Two more matter in production. `SESSION_SECRET` signs the session cookie, and
 its built-in default is a string published in this repository, so the server

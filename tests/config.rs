@@ -299,19 +299,6 @@ fn guest_mode_is_disabled_by_default_and_fails_closed() {
     }
 }
 
-/// Off unless asked for: a server whose stdin is `/dev/null`, which is every
-/// service manager's default, would otherwise exit the moment it started.
-#[test]
-fn exiting_with_stdin_is_only_on_when_a_launcher_asks() {
-    let exits = codetrial::config::exit_with_stdin;
-    for off in [None, Some(""), Some("0"), Some("false"), Some("maybe")] {
-        assert!(!exits(off), "{off:?} should leave it off");
-    }
-    for on in ["1", "true", "yes"] {
-        assert!(exits(Some(on)), "{on} should turn it on");
-    }
-}
-
 /// Asserted on the parser rather than through a config struct, because the
 /// struct field it used to be read through was only ever consumed by `serve`.
 ///
@@ -1339,6 +1326,8 @@ fn loading_config_does_not_depend_on_the_current_directory() {
     assert_eq!(config.pool.providers[0].google_api_keys, ["google"]);
 }
 
+#[path = "config/launcher.rs"]
+mod launcher;
 /// The recording block, which is off in every deployment until an operator
 /// provisions the resources in `docs/recording-contract.md`. These read the
 /// parser directly rather than through `load_from_pairs`, because

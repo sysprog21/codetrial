@@ -142,7 +142,7 @@ fn serve(
         &values,
         &options,
         bound,
-        LaunchedBy::Parent,
+        LaunchedBy::Parent(None),
     )?;
     config.probe_provider_quota &= !settings.offline;
     let agent = local_agent_config(values)?

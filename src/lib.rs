@@ -102,6 +102,15 @@ pub fn exit_when_stdin_closes() -> bool {
     true
 }
 
+/// The Change keys code a launcher handed its child in
+/// `CODETRIAL_CHANGE_KEYS_CODE`, or `None` when it handed none strong enough.
+/// From the process environment for the same reason as
+/// `exit_when_stdin_closes`: it is not configuration but what the launcher
+/// handed over, and its child has no terminal to print a code of its own to.
+pub fn handed_change_keys_code() -> Option<String> {
+    config::change_keys_code(std::env::var("CODETRIAL_CHANGE_KEYS_CODE").ok().as_deref())
+}
+
 /// Writes a new file that only its owner can read, and refuses rather than
 /// replacing one: the config file Setup writes and the session key a
 /// `--data-dir` launch makes both hold secrets.
