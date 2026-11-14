@@ -114,6 +114,68 @@ first audio in about 950 ms against 565 ms when the whole buffer came with the
 prompt, and the read returned the whole buffer regardless. The code is source,
 so it is taken from the runtime's buffer and never enters the ledger.
 
+A `read_editor` page from the line a definition starts at stops where the
+definition ends (`src/agent/prompts/code_map.rs`), and ends as a cut page does,
+with how many lines follow and the line to page from for them. A change review
+shows the model where a definition begins, and it pages from that line to read
+it; the page would otherwise run to the end of the buffer. Like any later page
+it moves no review baseline and carries no review instruction, and a cut page
+whose pointer lands where a definition starts is followed by that definition
+alone, up to the page limit, with a pointer of its own. The definition is the
+outermost one that starts on that line: from its first decorator, its template
+header or its `typedef` it is the whole definition, the alias line included;
+from the line under them, the rest of it; a function nested in another, or under
+a statement, is one too. Line 1 stays the full read, and a line no definition
+starts at, a language with no grammar and a buffer past the 64 KiB parse limit
+are paged as before. The lookup descends from the root to the line and looks
+through wrappers and nested objects one at a time, so nesting of any depth costs
+no stack. Definitions are named functions, methods, classes, structs, interfaces
+and enums in Python, JavaScript (including functions, classes and objects of
+functions held by declarators, exported or not, class fields, object
+properties, assignments and `export default`), Java (including records and enum
+methods), C and C++ (including reference and parenthesized declarators, methods
+and conversion operators defined outside their class, templates, inline `friend`
+definitions, `typedef` structs and `#if` blocks; a struct, class or enum without
+a body, or an anonymous struct outside a `typedef`, is not one); a syntax error
+leaves the definitions around it in the tree.
+
+The declaration is unchanged for it. Measured against the Live model
+(`gemini-3.1-flash-live-preview`, a 353-line buffer grown from the starter, the
+runtime's change review with its line excerpt, then the candidate asking about
+one helper by name or about the helpers in general; eight replies a cell; the
+harness was a scratch script, not kept in the repository), three arms: the page
+as before; a `symbol` parameter that read a definition by name; and this, its
+page then ending with a note that named the line to page from. Asked about
+`_skip_duplicates`, the interviewer read the editor in 5 of 8 replies before,
+four of them paging from the line the excerpt showed it starting at to the end
+of the buffer, 57 KB in all; it read the definition by name in 5 of 8 with the
+parameter, 2.8 KB; and with this it paged from that line in 5 of 8 and was given
+the definition, 2.9 KB. Across the three questions the arms read 68, 48 and 16
+KB, first audio came in a median 1,060, 1,059 and 1,092 ms, and replies about
+the helper pointed at the boundary bug on line 31 or asked about it in 8, 6 and
+8 of 8. The parameter cost 408 bytes of declaration on every generation, and its
+first wording, "for a long buffer", had the interviewer read the editor during
+the opening review in 23 of 24 sessions, though the whole starter was in the
+prompt (7 of 24 without it); so the definition is read where the model already
+pages to it.
+
+Showing a change by definition rather than by line, with an outline and each
+changed definition's own lines in place of the lines around the change, was
+built and measured against the Live model (`gemini-3.1-flash-live-preview`,
+text in and audio out, the tool answered locally, buffers and edits written for
+the test, six replies a cell, 24 replies an arm, medians the lower middle of
+24; the harness was a scratch script, not kept in the repository). Each pair
+below gives the line excerpt first and the definition excerpt second. On an
+86-line buffer with one edit, the interviewer read the editor after 0 and 2 of
+24 reviews, and first audio came in a median 700 and 658 ms. On a 353-line
+buffer with two or three definitions edited at once, it read the editor after 1
+and 4 of 24, and each of the four definition-arm reads fetched a definition the
+excerpt already showed whole. First audio came in a median 761 and 759 ms, at
+the 90th percentile 846 and 1,100 ms, and the review turn took a median 10,485
+and 11,072 input tokens. Replies named the change in 11 and 15 of 24, but
+neither arm caught more of the bugs the edits planted. With no read or latency
+saved and more tokens spent, a change is shown by line.
+
 An edit that repairs a buffer that did not parse is a semantic change even when
 there is nothing to diff it against. The pairwise analysis reports
 `syntax_invalid` when either side fails to parse, so the repair is recovered

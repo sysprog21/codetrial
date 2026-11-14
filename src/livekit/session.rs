@@ -30,7 +30,7 @@ pub(super) use recovery::{
     apply_recovery_transcript, drain_retired_usage, prepare_input, prepare_listening_handoff,
     prepare_plain_context,
 };
-use tool_calls::on_tool_calls;
+use tool_calls::{has_framework_state, has_tool_continuity, on_tool_calls};
 #[cfg(test)]
 pub(in crate::livekit) use wrap_up::goodbye_heard;
 pub(in crate::livekit) use wrap_up::send_wrap_up_and_wait;
@@ -1737,26 +1737,6 @@ pub fn execute_tool_call(state: &mut RuntimeState, call: &GeminiFunctionCall) ->
     execute_tool_batch(state, vec![call.clone()], 0).remove(0).1
 }
 
-fn has_framework_state(name: &str) -> bool {
-    [
-        TOOL_READ_EDITOR,
-        TOOL_READ_BOARD,
-        TOOL_RECORD_FRAMEWORK_EVIDENCE,
-    ]
-    .contains(&name)
-}
-
-fn has_tool_continuity(name: &str) -> bool {
-    [
-        TOOL_READ_EDITOR,
-        TOOL_READ_CONVERSATION,
-        TOOL_READ_BOARD,
-        TOOL_LOG_HINT,
-        TOOL_RECORD_FRAMEWORK_EVIDENCE,
-    ]
-    .contains(&name)
-}
-
 /// Whether the editor may be put in front of the model now: by a review, an
 /// evidence continuation's update, or silent delivery during speech.
 pub(super) fn editor_review_allowed(state: &RuntimeState) -> bool {
@@ -1917,8 +1897,9 @@ fn editor_page_truncated(text: &str) -> bool {
 }
 
 /// An editor read that moves the baseline only when it showed the whole
-/// buffer: a later-line page or one stopped at its limit has not shown every
-/// change, so the watcher still reviews what it missed.
+/// buffer: a later-line page, one that stops where a definition ends, or one
+/// stopped at its limit has not shown every change, so the watcher still
+/// reviews what it missed.
 fn read_editor_marking_shown(state: &mut RuntimeState, from_line: Option<usize>) -> String {
     let text = editor_read_text(state, from_line);
     if from_line.is_none_or(|from| from <= 1) && !editor_page_truncated(&text) {
@@ -1995,7 +1976,13 @@ fn editor_read_body(state: &RuntimeState, from_line: Option<usize>) -> String {
     };
     let read = |from| read_numbered(&crate::agent::numbered_from(&state.code, from));
     if let Some(from) = from_line.filter(|from| *from > 1) {
-        return read(from);
+        // A page from where a definition starts stops where it ends.
+        return read_numbered(&crate::agent::numbered_page(
+            &state.language,
+            &state.code,
+            &state.parse_cache,
+            from,
+        ));
     }
     let comment = match state.language.as_str() {
         "python" => "#",

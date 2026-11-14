@@ -1,6 +1,7 @@
 //! How candidate material reaches the model: numbering, excerpts, test-run
 //! rendering, untrusted fences and the read-tool and hint texts.
 
+use super::code_map;
 use crate::agent::{
     MAX_CANDIDATE_CASES, MAX_TEST_FAILURES, python_truthy, truthy_string, value_string,
 };
@@ -132,6 +133,13 @@ pub fn numbered_from(code: &str, from: usize) -> String {
 }
 
 pub(crate) fn numbered_from_with_limit(code: &str, from: usize, max_bytes: usize) -> String {
+    numbered_span(code, from, None, max_bytes)
+}
+
+/// `numbered` from line `from` through line `through` when one is given, held
+/// to `max_bytes`; a view that stops before the buffer's last line ends with
+/// the line `read_editor` takes as `fromLine` for the rest.
+fn numbered_span(code: &str, from: usize, through: Option<usize>, max_bytes: usize) -> String {
     let lines = content_lines(code);
     if lines.is_empty() {
         return "(the editor is currently empty)".to_string();
@@ -148,7 +156,8 @@ pub(crate) fn numbered_from_with_limit(code: &str, from: usize, max_bytes: usize
         // `read_editor` below is added once the loop stops, so a view that had
         // to stop is that string longer: the cap is on what is quoted, as in
         // `code_head`.
-        if !out.is_empty() && out.len() + rendered.len() + 1 > max_bytes {
+        let past = through.is_some_and(|last| index >= last);
+        if past || !out.is_empty() && out.len() + rendered.len() + 1 > max_bytes {
             out.push_str(&format!(
                 "\n... {} more lines; call `read_editor` with fromLine {} for them",
                 lines.len() - index,
@@ -287,6 +296,27 @@ pub fn changed_excerpt(language: &str, previous: &str, current: &str) -> Option<
         &format!(" ({language}, {scope})"),
         &body,
     ))
+}
+
+/// A `read_editor` page from `from_line`, a line after the first: it stops
+/// where the definition starting there ends, since a change review shows the
+/// model where a definition begins and it pages from that line to read it, and
+/// otherwise runs to the page limit as any page does. `cache` holds the tree of
+/// the buffer the runtime last parsed, which is this one unless it changed
+/// since.
+pub(crate) fn numbered_page(
+    language: &str,
+    code: &str,
+    cache: &crate::agent::evidence::ParseCache,
+    from_line: usize,
+) -> String {
+    // Line 1 is the full read, never a definition page.
+    let end = if from_line > 1 {
+        code_map::definition_end(language, code, cache, from_line)
+    } else {
+        None
+    };
+    numbered_span(code, from_line, end, MAX_NUMBERED_BYTES)
 }
 
 pub fn format_test_run(run: Option<&serde_json::Value>, total_runs: u32) -> String {

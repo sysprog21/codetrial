@@ -84,7 +84,7 @@ pub use prompts::{
 };
 pub(crate) use prompts::{
     behavioral_round_start, editor_tool_continuity, end_interview_refusal, evidenced_among,
-    latest_candidate_continuity, numbered_bounded_line, numbered_from_with_limit,
+    latest_candidate_continuity, numbered_bounded_line, numbered_from_with_limit, numbered_page,
     pending_candidate_line, read_editor_text_from_numbered, report_transcript_lines,
     tool_editor_review, untrusted_block,
 };
@@ -230,8 +230,8 @@ pub const THINKING_CHECK_IN_S: u64 = 120;
 pub(crate) const THINKING_RELEASE_COOLDOWN: std::time::Duration =
     std::time::Duration::from_secs(10);
 
-pub const INTERVIEW_CONTRACT_BUNDLE_VERSION: u32 = 46;
-pub const LIVE_PROMPT_VERSION: u32 = 34;
+pub const INTERVIEW_CONTRACT_BUNDLE_VERSION: u32 = 47;
+pub const LIVE_PROMPT_VERSION: u32 = 35;
 pub const REPORT_PROMPT_VERSION: u32 = 26;
 pub const RUBRIC_VERSION: u32 = 1;
 pub const REPORT_SCHEMA_VERSION: u32 = 4;
