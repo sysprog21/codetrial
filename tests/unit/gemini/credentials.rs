@@ -604,7 +604,7 @@ async fn check_tries_each_key_once_even_when_cooldowns_expire() {
     });
     let result = tokio::time::timeout(
         Duration::from_secs(10),
-        super::super::check_live_session_at(&url, &keys, &boot),
+        super::super::startup::check_live_session_at(&url, &keys, &boot),
     )
     .await
     .expect("the check must stop after one attempt per key");

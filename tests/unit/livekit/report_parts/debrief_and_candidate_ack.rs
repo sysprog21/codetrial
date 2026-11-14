@@ -183,7 +183,7 @@ impl DeliveryEvent for AckEvent {
 struct AckingRoom {
     participant: super::super::room_link::ParticipantLink,
     sender: tokio::sync::mpsc::UnboundedSender<AckEvent>,
-    events: tokio::sync::mpsc::UnboundedReceiver<AckEvent>,
+    events: super::super::RoomEventReader<AckEvent>,
     candidate_acks: bool,
     receipts: Vec<serde_json::Value>,
 }
@@ -194,7 +194,7 @@ impl AckingRoom {
         Self {
             participant,
             sender,
-            events,
+            events: events.into(),
             candidate_acks,
             receipts: Vec::new(),
         }

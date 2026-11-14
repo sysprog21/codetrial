@@ -22,6 +22,7 @@ use crate::agent::{
 };
 
 mod trailing;
+mod voice;
 
 /// How long the room has to be quiet before a pause is worth reading into.
 ///
@@ -172,7 +173,7 @@ pub(super) struct ReplyDebt {
 /// makes the new interviewer discard output or wait on work it did not
 /// create. Grouped so that clearing is one assignment, and a wait added here
 /// is cleared with the rest without anyone remembering to.
-#[derive(Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub(super) struct SocketWork {
     /// A hold can arrive between Gemini producing a reply and this loop
     /// receiving its final event. Drop that old turn after the release too.
@@ -484,6 +485,13 @@ pub(super) struct RuntimeActivity {
     pub(super) generating: bool,
     /// Progress within a turn that has not completed, distinct from its debt.
     pub(super) last_output_at: Option<Instant>,
+    /// The startup probe saw output that the room loop has not replayed yet.
+    /// Keep its progress deadline without marking earlier queued boundaries as
+    /// completed output or applying their effects out of receive order.
+    pub(super) buffered_startup_output_at: Option<Instant>,
+    /// Stable wall-clock counterpart of the successful probe's monotonic start.
+    /// Survives socket replacement so reconnect cannot grant a fresh clock.
+    pub(super) startup_ready_at: Option<u64>,
     /// When the tool response behind `tool_response_outstanding` went out, so
     /// a continuation Gemini never produces stalls like a prompt does.
     pub(super) tool_response_at: Option<Instant>,
@@ -746,99 +754,6 @@ impl RuntimeActivity {
         self.clear_candidate_voice_activity();
     }
 
-    pub(super) fn note_candidate_voice_activity(&mut self, active: bool, now: Instant) {
-        if active || self.candidate_voice_active {
-            self.reset_completed_coding_idle();
-        }
-        if active {
-            self.note_rotation_spoken_over(now);
-        }
-        self.candidate_voice_active = active;
-        self.candidate_voice_ended_at = (!active).then_some(now);
-        self.last_user_speech = now;
-        self.candidate_voice_at = Some(now);
-        if active && self.recent_voiced_pcm(now) && self.voiced_pcm_at != self.rebased_voiced_pcm_at
-        {
-            self.incoming_speech_owed |= self.reply_unfinished();
-        } else if !active && std::mem::take(&mut self.incoming_speech_owed) {
-            self.rebased_voiced_pcm_at = self.voiced_pcm_at;
-            self.resume_reply_wait(now);
-        }
-    }
-
-    /// Ends a speech-start whose end never came, as if it had come when the
-    /// evidence went stale, so the transcription grace still applies.
-    pub(super) fn expire_stale_voice_activity(&mut self, now: Instant) {
-        if self.candidate_voice_active
-            && self
-                .candidate_voice_at
-                .is_none_or(|at| now.saturating_duration_since(at) >= STALE_VOICE_ACTIVITY)
-        {
-            self.candidate_voice_active = false;
-            self.candidate_voice_ended_at = Some(now);
-        }
-    }
-
-    pub(super) fn clear_candidate_voice_activity(&mut self) {
-        self.candidate_voice_active = false;
-        self.candidate_voice_ended_at = None;
-        self.voiced_pcm_at = None;
-        self.rebased_voiced_pcm_at = None;
-        self.incoming_speech_owed = false;
-    }
-
-    fn recent_voiced_pcm(&self, now: Instant) -> bool {
-        self.voiced_pcm_at
-            .is_some_and(|at| now.saturating_duration_since(at) < CHECKPOINT_VOICE_QUIET)
-    }
-
-    pub(super) fn incoming_speech_active(&self, now: Instant) -> bool {
-        (self.candidate_voice_active || self.incoming_speech_owed) && self.recent_voiced_pcm(now)
-    }
-
-    // A stale VAD edge cannot renew the wait without microphone evidence.
-    // Rebase once at the acoustic quiet boundary, not at every watch tick.
-    fn settle_incoming_speech(&mut self, now: Instant) {
-        if self.incoming_speech_owed && !self.incoming_speech_active(now) {
-            self.incoming_speech_owed = false;
-            self.rebased_voiced_pcm_at = self.voiced_pcm_at;
-            if let Some(at) = self.voiced_pcm_at {
-                self.resume_reply_wait(at + CHECKPOINT_VOICE_QUIET);
-            }
-        }
-    }
-
-    /// The provider reported the end of candidate speech that no later start
-    /// has superseded.
-    pub(super) fn candidate_voice_ended(&self) -> bool {
-        self.candidate_voice_ended_at.is_some()
-    }
-
-    pub(super) fn candidate_transcription_pending(&self, now: Instant) -> bool {
-        self.candidate_voice_ended_at
-            .is_some_and(|at| now.saturating_duration_since(at) < CHECKPOINT_VOICE_QUIET)
-            || (self.candidate_voice_active
-                && self.candidate_voice_at.is_some_and(|at| {
-                    now.saturating_duration_since(at) >= Duration::from_millis(500)
-                }))
-    }
-
-    /// The candidate's microphone carried more than room noise. Until the
-    /// socket has transcribed them, this is also the idle timers' evidence of
-    /// speech: a candidate talking to a socket that cannot hear them would
-    /// otherwise be counted silent and nudged. Only until then, because room
-    /// noise above `VOICE_RMS` would hold every nudge back for good.
-    pub(super) fn note_candidate_voice(&mut self, now: Instant) {
-        self.note_rotation_spoken_over(now);
-        self.voiced_pcm_at = Some(now);
-        self.incoming_speech_owed |= self.candidate_voice_active && self.reply_unfinished();
-        self.candidate_voice_at = Some(now);
-        if !self.transcribed_on_socket {
-            self.reset_completed_coding_idle();
-            self.last_user_speech = now;
-        }
-    }
-
     #[cfg(test)]
     pub(super) fn new(now: Instant) -> Self {
         Self::with_interim_review_cap(now, DEFAULT_MAX_INTERIM_REVIEWS)
@@ -869,6 +784,8 @@ impl RuntimeActivity {
             prompt_text: None,
             generating: false,
             last_output_at: None,
+            buffered_startup_output_at: None,
+            startup_ready_at: None,
             tool_response_at: None,
             prompt_sequence: 0,
             last_agent_speech: now,
@@ -1045,6 +962,7 @@ impl RuntimeActivity {
     /// wrap-up before the continuation finishes.
     pub(super) fn note_output(&mut self, now: Instant) {
         self.drop_handoff_reply();
+        self.buffered_startup_output_at = None;
         self.generating = true;
         self.socket.thinking_reply_fallback = None;
         self.last_output_at = Some(now);
@@ -1200,6 +1118,9 @@ impl RuntimeActivity {
                 .is_some_and(|at| now.saturating_duration_since(at) >= wait)
                 .then_some(wait)
         };
+        if self.buffered_startup_output_at.is_some() {
+            return expired(self.buffered_startup_output_at, self.reply_timeout);
+        }
         if self.first_output_owed() {
             // A recovery, a replacement's briefing or a check on a reply that
             // stalled, is never held to less than the default deadline, so a
@@ -1317,7 +1238,7 @@ impl RuntimeActivity {
     /// A reply is owed, or one under way has not finished: what a replaced
     /// socket leaves the next one to give, and what keeps the nudges out.
     pub(super) fn reply_unfinished(&self) -> bool {
-        self.owes_reply() || self.generating
+        self.owes_reply() || self.generating || self.buffered_startup_output_at.is_some()
     }
 
     /// The oldest reply still owed with no output toward it: a candidate turn,

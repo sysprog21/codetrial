@@ -110,6 +110,7 @@ mod open;
 mod packets;
 #[cfg(test)]
 mod probe;
+mod readiness;
 mod recovery;
 mod replacement;
 mod report;
@@ -142,6 +143,10 @@ use candidate::{
     join_room,
 };
 use open::{OpenSession, OpenSessionOutcome, open_cold_session_into, open_session};
+use readiness::{
+    RoomEventReader, TimedRoomEvent, candidate_departed, candidate_returned,
+    handle_candidate_packet, next_timed_room_event,
+};
 use replacement::{
     Fallback, Replacement, Trigger, earlier_references, end_without_interviewer, fallback_reason,
     hand_over, handover_kind, hold_owed_reply, interviewer_state, prepare_recovery_brief,
@@ -264,7 +269,7 @@ pub(super) const REPORT_TIMEOUT: Duration = Duration::from_secs(125);
 ///
 /// `now` is a parameter rather than an `Instant::now()` inside, so the grace
 /// can be tested without waiting ninety seconds for it.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 struct CandidatePresence {
     left_at: Option<Instant>,
 
@@ -276,7 +281,7 @@ struct CandidatePresence {
 
 impl CandidatePresence {
     fn left(&mut self, now: Instant) {
-        self.left_at = Some(now);
+        self.left_at.get_or_insert(now);
     }
 
     fn returned(&mut self) {
@@ -506,11 +511,11 @@ async fn on_watch_tick(
     context: &mut GeminiEventContext<'_>,
     loops: &mut RoomLoop,
     interview: InterviewContext<'_>,
+    tick_at: Instant,
 ) -> Result<ControlFlow<()>, Box<dyn std::error::Error + Send + Sync>> {
     // One reading of the clock for the whole tick. Three calls gave three
     // instants microseconds apart, so a cooldown stamped from one and tested
     // against another was answering a question nobody asked.
-    let tick_at = Instant::now();
     if let Some(line) = context.activity.latency.clock_sample(tick_at) {
         eprintln!("{line}");
     }
@@ -520,7 +525,11 @@ async fn on_watch_tick(
     if let Some(line) = context.activity.latency.task_sample(tick_at, alive_tasks) {
         eprintln!("{line}");
     }
-    if loops.presence.gave_up(tick_at) {
+    let presence = loops.presence.with_queued(
+        &*interview.events.lock().await,
+        interview.candidate_identity,
+    );
+    if presence.gave_up(tick_at) {
         // No report: it would be graded from a session the candidate walked out
         // of, and there is nobody in the room to receive it. The browser writes
         // the report the candidate actually sees.
@@ -1322,32 +1331,20 @@ pub(crate) async fn run_room_with_slot(
             u64::try_from(since.as_millis()).unwrap_or(u64::MAX)
         });
     let keys = Arc::new(GeminiKeys::from_config(config));
-    let session = open_session(config, &keys, room_name, now_seconds, session_id, slot)
-        .await
-        .inspect_err(|error| {
-            eprintln!(
-                "{}",
-                startup_failure_line(
-                    &config.gemini_live_model,
-                    room_name,
-                    session_id,
-                    error.as_ref(),
-                )
-            );
-        })?;
+    let session = open_session(
+        config,
+        &keys,
+        room_name,
+        now_seconds,
+        session_id,
+        slot,
+        |summary| eprintln!("{summary}"),
+    )
+    .await?;
     let session = match session {
         OpenSessionOutcome::Started(session) => session,
         OpenSessionOutcome::NoCandidate => return Ok(RoomRunOutcome::NoCandidate),
         OpenSessionOutcome::FailedBeforeCandidate(error) => {
-            eprintln!(
-                "{}",
-                startup_failure_line(
-                    &config.gemini_live_model,
-                    room_name,
-                    session_id,
-                    error.as_ref(),
-                )
-            );
             return Ok(RoomRunOutcome::FailedBeforeCandidate(error));
         }
     };
@@ -1363,7 +1360,12 @@ pub(crate) async fn run_room_with_slot(
         mut turn,
         started_at,
         restarts,
+        deferred_events,
     } = *session;
+
+    // The report handler takes exclusive ownership of this same queue after
+    // End, including packets received while startup publication was pending.
+    events.lock().await.deferred = deferred_events;
 
     #[cfg(test)]
     let reader_probe = take_live_reader_probe(room_name);
@@ -1389,7 +1391,8 @@ pub(crate) async fn run_room_with_slot(
         agent: &agent_identity,
         candidate: &candidate_identity,
     };
-    let deadline_at = tokio::time::Instant::now() + interview_hard_deadline(boot.duration_min);
+    let deadline_at =
+        tokio::time::Instant::from_std(started_at) + interview_hard_deadline(boot.duration_min);
     let mut loops = RoomLoop {
         pending_round_notice: None,
         deadline_at,
@@ -1450,10 +1453,10 @@ pub(crate) async fn run_room_with_slot(
                         &mut board,
                         &mut media,
                     );
-                    on_watch_tick(&room, &mut context, &mut loops, interview).await?
+                    on_watch_tick(&room, &mut context, &mut loops, interview, Instant::now()).await?
                 }
-                event = async { events.lock().await.recv().await } => {
-                    let Some(event) = event else {
+                event = next_timed_room_event(&events) => {
+                    let Some((received_at, event)) = event else {
                         eprintln!(
                             "LiveKit event stream ended for room={room_name}; ending with no report, \
                              because the room closed before the interview did"
@@ -1502,7 +1505,7 @@ pub(crate) async fn run_room_with_slot(
                                     &mut loops.presence,
                                     interview,
                                     &ids,
-                                    event,
+                                    (received_at, event),
                                 )
                                 .await?
                             }
@@ -1678,7 +1681,7 @@ async fn handle_room_event(
     presence: &mut CandidatePresence,
     interview: InterviewContext<'_>,
     ids: &RoomIdentities<'_>,
-    event: RoomEvent,
+    (received_at, event): TimedRoomEvent,
 ) -> Result<ControlFlow<()>, Box<dyn std::error::Error + Send + Sync>> {
     let RoomIdentities {
         room_name,
@@ -1704,7 +1707,7 @@ async fn handle_room_event(
             ) else {
                 return Ok(ControlFlow::Continue(()));
             };
-            if handle_data_packet(room, context, interview, topic, &payload, true)
+            if handle_candidate_packet(room, context, presence, interview, topic, &payload)
                 .await?
                 .is_break()
             {
@@ -1746,15 +1749,12 @@ async fn handle_room_event(
             if participant.identity().0 == candidate_identity =>
         {
             eprintln!("candidate left room={room_name}; waiting for a return");
-            presence.left(Instant::now());
+            candidate_departed(presence, received_at);
         }
         RoomEvent::ParticipantConnected(participant)
             if participant.identity().0 == candidate_identity =>
         {
-            presence.returned();
-            context.state.announce_thinking();
-            // A rejoined page starts with an empty checklist.
-            context.state.framework_published.clear();
+            candidate_returned(room, context, presence, candidate_identity, received_at).await;
         }
         _ => {}
     }
@@ -1817,7 +1817,7 @@ struct InterviewContext<'a> {
     live_endpoint: Option<&'a str>,
     started_at: Instant,
     candidate_identity: &'a str,
-    events: &'a tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<RoomEvent>>,
+    events: &'a tokio::sync::Mutex<RoomEventReader>,
     slot: Option<&'a crate::dispatch::Slot>,
 }
 

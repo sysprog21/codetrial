@@ -45,33 +45,198 @@ at once or was held for the end of a thinking hold: every replacement asks for
 one, so a run of sockets that each answer their briefing and die still ends the
 interview.
 
-A candidate turn, required prompt (including the opening greeting), or tool
-continuation that gets nothing back for 10 seconds, not even the end of a turn
-that chose silence, replaces the socket even without a `GoAway`. This bounds
-sockets that stay open without answering.
-`CODETRIAL_GEMINI_FIRST_OUTPUT_S` sets that deadline within 5 to 120 seconds,
-never above the reply timeout below, for a model whose replies are slow to
-begin. The deadline waits while Gemini reports the candidate still mid-turn. A
-prompt sent after such a reply waits its own full deadline, and when Gemini
-cuts a stalled generation to take the prompt, the cut leaves the reply owed
-rather than settled, since the candidate did not cause it. A generation that
-has started and then stops producing output is given longer, 45 seconds, since
-its next chunk may simply be slow; `CODETRIAL_GEMINI_REPLY_TIMEOUT_S` sets that
-interval within 20 to 120 seconds. A recovery prompt, a replacement
+Before the interview timer starts, one bounded Live generation verifies that
+the configured model can answer, not merely accept setup. The opening greeting
+is that request on the interview's own socket; there is no separate paid probe
+turn. The initial socket open retains its bounded cold-open retry and key
+failover policy; those attempts send setup, not a readiness generation. Once
+setup succeeds, the greeting is sent once and a failed or silent generation
+is not retried. Connect and setup retain their existing limits, and
+`CODETRIAL_GEMINI_FIRST_OUTPUT_S` bounds the greeting send and wait for the
+first model output, floored at `DEFAULT_GEMINI_FIRST_OUTPUT_S` (10 seconds)
+and capped by the reply timeout. A shorter setting still makes ordinary
+post-startup recovery more eager, but cannot end startup before 10 seconds. A
+silent startup fails without replacing the socket or repeating the greeting;
+the recovery policy below applies only after readiness. Keepalive pings and
+candidate media continue during that wait, without another explicit generation
+request, so a slow first output cannot overflow the microphone's setup queue.
+Candidate departure during startup does not cancel the opening: startup keeps
+its original output deadline and queues the departure and any return for the
+interview loop's normal presence grace. Room disconnection still cancels startup,
+closes the Live session and releases the task's capacity slot without waiting for
+the output deadline. Other room events remain queued for the interview loop.
+Nonempty audio, model text, output transcription, or a nonempty tool-call batch counts; input
+transcription, voice activity, usage, empty output and turn completion alone
+do not. The private clock travels as non-generating context before the opening
+turn; it does not add another generation request.
+
+Events observed by the probe retain their original receive timestamps and are
+preserved, in order, for the normal room loop, with the event queue's bound
+also applied to the startup buffer. Only observed usage is logged on failure;
+no observation does not mean the request was free.
+If End overtakes that replay, buffered candidate speech enters the assessment
+before it is frozen, retaining its turn boundaries. Those input events are
+consumed once; output and usage retain their normal replay order and receive
+times. This does not wait for more transcription or request another generation.
+If candidate-input forwarding fails or the outer startup deadline cancels it,
+qualifying output received strictly before that original deadline can still
+establish readiness at its original receive time. Settlement checks the bounded
+queue and already-visible reader observation without waiting, extending the
+deadline or generating again; setup, usage and completion alone do not qualify.
+Preceding candidate evidence, output and usage keep their original order and
+timestamps, even if the output itself is waiting for queue space. The reader
+publishes its first qualifying observation after queuing preceding events and
+before queuing the output. Settlement snapshots it before inspecting the queue;
+the observation itself does not consume or duplicate events or usage.
+Reception or decoding before publication is insufficient: settlement does not
+wait for an unpublished observation or reader progress. An aborted or ended
+reader cannot supply metadata-only evidence for output it may no longer enqueue;
+already-queued output remains eligible. Output at or after the original deadline
+never qualifies, regardless of publication or insertion time.
+
+If a cancelled microphone write already handed its frame to the sink,
+successful rescue clears the media-buffer copy so the next write flushes
+without resending it. An unqueued frame or an explicit write failure retains
+the buffered audio. Socket recovery and buffered output and accounting retain
+their normal runtime handling.
+The server clock and hard deadline begin at the qualifying output's original
+receive time, including when a successful microphone write delays the probe's
+dequeue. Normal success and input-write rescue use that same clock. Readiness carries
+that original start time as `startedAt` (Unix epoch milliseconds) and its monotonic
+age as `elapsedMs`. The browser derives a local start from the age, never by
+subtracting the server's wall clock from its own. A replay computes the age again
+from the same original start, so skew cannot grant or remove interview time.
+Transport delay is not measured by this one-way notice. It retains an early
+readiness notice while publishing tracks or starting recording. Recording is still
+requested after joining the room, not delayed until the greeting is heard.
+Its response does not block readiness or startup-failure cleanup. Recording
+status remains independent of the readiness outcome, since the server may have
+started recording before the opening failed.
+
+After successful output, the ready notice has its own 15-second publication
+limit, separate from the best-effort reconnect notice. The bounded cold open,
+maximum opening generation, ready publication and failure cleanup fit within
+the browser's 180-second readiness wait with headroom for other startup work.
+A rejected or timed-out ready publication closes the session and accounts for
+observed usage once, without repeating the greeting. It reports `delivery`,
+not provider silence: the interviewer answered but its confirmation could not
+be delivered. Room and candidate setup still retain their independent limits.
+
+While that publication is pending, room events continue to receive application
+observation timestamps and join the existing deferred prefix in receiver order.
+Runtime replay retains those times; its presence watchdog projects the whole
+prefix before deciding that an absence expired. A return strictly before the
+original 90-second grace deadline remains timely even if publication completes
+after it. A return exactly at the deadline or later cannot revive the absence,
+and duplicate departures do not restart it. Collection runs under the same
+publication timeout, without running event handlers or generating another turn.
+It refuses to add an event once the retained prefix reaches 256 events, failing
+locally as `delivery` rather than growing another unbounded queue. Room
+disconnection or receiver closure cancels publication and uses startup cleanup
+without trying to send a failure notice into the closed room. Other room events
+retain their normal runtime handling; cancellation leaves ownership with the
+opening task and starts no detached collector.
+
+Startup outcomes use the existing `interviewer_state` control topic with
+`startup: "ready"` or `startup: "failed"`, and `reconnecting: false`. A failure
+can carry a classified `reason`: `quota`, `billing`, `credentials`, `refused`, or
+the local ready-publication failure `delivery`.
+Only a provider response identifies quota, billing, credential or refusal causes;
+provider timeout, 1011, 503, and an unexplained close use `unavailable`.
+The browser uses fixed wording through the
+existing degraded-start banner, not raw provider text or a second notification
+channel. A missing notice or a disconnected room also ends its finite startup
+wait without starting the timer. Replacement notices contain no startup field
+and cannot restart the clock.
+
+Only the pinned interviewer can settle browser startup. Before leaving after a
+failure, the agent waits for the candidate's `startup_received` control receipt,
+whose `deliveryId` hashes the exact failure packet bytes. Publication and receipt
+share the existing one-second notice budget; the notice is not retransmitted.
+The browser retains the classified failure immediately and gives its receipt a
+bounded chance to leave before cleanup. This keeps the agent identifiable while
+the packet is delivered: LiveKit removes a departed sender from its roster, so a
+packet arriving afterwards has no participant. Such unattributed notices cannot
+settle startup. An unexpected departure without an identified notice ends with
+the generic unavailable guidance instead of guessing a quota or billing cause.
+A classified failure or readiness timeout interrupts outstanding room/media and
+integrity publication waits. Capture stops immediately; disconnect only waits
+for the bounded receipt flush. Late publication results cannot replace the
+diagnosis, publish more tracks or restart monitoring. A ready notice still waits
+for publication to finish before the browser starts the interview.
+An agent departure ends the wait only when no agent remains in the room, including
+departures before identity binding. Removing a duplicate does not settle readiness.
+Keeping the wait open does not adopt another participant as the pinned interviewer
+or report sender.
+
+The browser distinguishes a last-agent departure from the SDK's full-reconnect
+roster teardown. The SDK emits those departures before changing its room state,
+so startup checks the resulting state after that synchronous transition. A room
+that is reconnecting retains the same readiness wait and original deadline;
+successful reconnection can still deliver ready, while a terminal room
+disconnect or the original deadline still ends startup. Post-startup departure
+handling keeps its normal behavior.
+
+Reliable data packets are not retained for an absent candidate. A candidate
+return within the existing presence grace re-announces successful readiness to
+that candidate with the same `startedAt`. While startup is pending, the browser
+also sends one `startup_sync` control query on SDK `Reconnected`, covering resume
+without a new participant event and a return notice sent before the data channel
+was usable. The room's authenticated candidate alone may query. The response is
+best effort within the existing reconnect-notice budget; neither path repeats
+the opening, changes its watchdog handoff, nor extends the startup wait or the
+presence grace. A failed opening has no ready state to replay; an ended interview
+or expired absence cannot replay it. Browser readiness settles once, and a
+notice from an obsolete room or outside the live phase cannot revive it.
+Deferred room events retain the monotonic time they were observed. Departure
+starts the existing ninety-second grace then, not when startup replays it, and
+duplicate departures do not renew it. A queued return is judged at its receive
+time, so a timely return is not refused merely because readiness publication
+was slow. The absence watch evaluates pending presence history without waiting
+for unrelated queued work or applying its side effects early. A return at or
+after the original deadline cannot clear an expired absence.
+
+A deployment without a live session still offers timed offline practice as
+before. That local clock is not granted after a joined session fails readiness.
+Editable work is protected by the browser's leave warning independently of the
+clock, including while awaiting readiness and during untimed offline practice.
+End remains disabled during startup in Strict mode. Practice End
+remains available and cancels a pending startup without requesting an agent report
+or waiting for one. A local ungraded summary preserves work and cleanup releases
+media, even if readiness arrived before media publication finished. Late startup
+results cannot restart the interview or publish tracks from a late join.
+Practice keeps editing and End available when startup fails; Strict keeps them
+disabled and offers a return to the lobby or another media preflight
+instead of promising offline
+practice. A readiness result cannot start the clock after the page has moved
+out of its live phase.
+
+After startup, a candidate turn, required prompt, or tool continuation that
+gets nothing back for 10 seconds, not even the end of a turn that chose silence,
+replaces the socket even without a `GoAway`. This bounds sockets that stay open
+without answering. `CODETRIAL_GEMINI_FIRST_OUTPUT_S` sets that deadline within
+5 to 120 seconds, never above the reply timeout below, for a model whose replies
+are slow to begin. The deadline waits while Gemini reports the candidate still
+mid-turn. A prompt sent after such a reply waits its own full deadline, and when
+Gemini cuts a stalled generation to take the prompt, the cut leaves the reply
+owed rather than settled, since the candidate did not cause it. A generation
+that has started and then stops producing output is given longer, 45 seconds,
+since its next chunk may simply be slow; `CODETRIAL_GEMINI_REPLY_TIMEOUT_S`
+sets that interval within 20 to 120 seconds. A recovery prompt, a replacement
 socket's briefing or a same-socket reply check, is timed from its own request
 and never given less than the default 10 seconds for its first output, so a
 shorter `CODETRIAL_GEMINI_FIRST_OUTPUT_S` cannot cut one recovery straight into
 the next. A superseding candidate turn or ordinary prompt uses the configured
-deadline again. The `codetrial turn_timing` summaries
-record observed reply waits, and [reply timing](turn-timing.md) defines their
-measurement boundaries and unavailable observations; the
-[latency records](latency-observability.md) break the server reply path into
-segments, including tool batches and output queueing. A reply the watchdog
-replaces is paid for twice, so an endpoint whose slow replies do arrive
-warrants a longer timeout. For recovery, a candidate turn is timed from the
-last transcript fragment of it, and a fragment arriving within two seconds of
-a turn that said something is taken as the lagging tail of speech that turn
-already answered, so it owes nothing. The replacement, resumed or cold, carries
+deadline again. The `codetrial turn_timing` summaries record observed reply
+waits, and [reply timing](turn-timing.md) defines their measurement boundaries
+and unavailable observations; the [latency records](latency-observability.md)
+break the server reply path into segments, including tool batches and output
+queueing. A reply the watchdog replaces is paid for twice, so an endpoint whose
+slow replies do arrive warrants a longer timeout. For recovery, a candidate
+turn is timed from the last transcript fragment of it, and a fragment arriving
+within two seconds of a turn that said something is taken as the lagging tail
+of speech that turn already answered, so it owes nothing. The replacement,
+resumed or cold, carries
 the unanswered reply across and publishes the same reconnecting state. A reply
 cut off mid-generation is owed too, and the replacement is told not to repeat
 what was already said. Optional editor reviews accept silence; queued audio and

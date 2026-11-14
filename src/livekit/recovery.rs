@@ -1132,7 +1132,11 @@ pub(super) async fn replace(
             Ok(Ok(()))
         } else {
             let mut restarts = driver.loops.restarts;
-            let opened = driver.wait(open_cold_session_into(interview, &mut restarts, Some(room), &mut fresh)).await;
+
+            // Boxed: the cold-open state is the largest thing this wait holds,
+            // and a debug build polls it on the room task's stack.
+            let opening = Box::pin(open_cold_session_into(interview, &mut restarts, Some(room), None, &mut fresh));
+            let opened = driver.wait(opening).await;
             driver.loops.restarts = restarts;
             opened
         };

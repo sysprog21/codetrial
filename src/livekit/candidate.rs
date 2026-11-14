@@ -128,7 +128,7 @@ fn candidate_pair(participant: &RemoteParticipant) -> (String, String) {
 pub(super) async fn candidate_metadata(
     room: &Room,
     events: &mut tokio::sync::mpsc::UnboundedReceiver<RoomEvent>,
-    deferred: &mut Vec<RoomEvent>,
+    deferred: &mut Vec<TimedRoomEvent>,
     slot: Option<&crate::dispatch::Slot>,
 ) -> Result<Option<(String, String)>, Box<dyn std::error::Error + Send + Sync>> {
     if let Some(participant) = room
@@ -147,7 +147,7 @@ pub(super) async fn candidate_metadata(
 pub(crate) async fn arriving_candidate(
     room_name: &str,
     events: &mut tokio::sync::mpsc::UnboundedReceiver<RoomEvent>,
-    deferred: &mut Vec<RoomEvent>,
+    deferred: &mut Vec<TimedRoomEvent>,
     slot: Option<&crate::dispatch::Slot>,
 ) -> Result<Option<(String, String)>, Box<dyn std::error::Error + Send + Sync>> {
     let deadline = tokio::time::Instant::now() + CANDIDATE_JOIN_LIMIT;
@@ -186,7 +186,7 @@ pub(crate) async fn arriving_candidate(
                         "disconnected from room={room_name} while waiting for a candidate: {reason:?}"
                     );
                 }
-                deferred.push(other);
+                deferred.push((Instant::now(), other));
             }
             Ok(None) => return Err("room closed before a candidate joined".into()),
         }

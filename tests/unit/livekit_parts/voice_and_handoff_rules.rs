@@ -564,7 +564,7 @@ async fn an_idle_goaway_resumes_on_a_replacement_socket() {
         let event = gemini.next_event().await.unwrap();
         assert!(matches!(event, GeminiEvent::GoAway { .. }));
         let (_sender, receiver) = tokio::sync::mpsc::unbounded_channel();
-        let events = tokio::sync::Mutex::new(receiver);
+        let events = tokio::sync::Mutex::new(receiver.into());
         let interview = InterviewContext {
             config: &config,
             keys: &keys,
@@ -649,7 +649,7 @@ async fn only_a_packet_that_starts_a_hold_flushes_the_open_floor_overlap() {
     let keys = Arc::new(GeminiKeys::from_config(&config));
     let boot = candidate_bootstrap(&config, "room-test", None);
     let (_room_events, events) = tokio::sync::mpsc::unbounded_channel();
-    let events = tokio::sync::Mutex::new(events);
+    let events = tokio::sync::Mutex::new(events.into());
     for (payload, flushed) in [
         (serde_json::json!({"type":"thinking","thinking":true}), true),
         (
@@ -733,7 +733,7 @@ fn the_interview_length_is_counted_in_minutes() {
     let keys = Arc::new(GeminiKeys::from_config(&config));
     let boot = candidate_bootstrap(&config, "room-test", None);
     let (_room_events, events) = tokio::sync::mpsc::unbounded_channel();
-    let events = tokio::sync::Mutex::new(events);
+    let events = tokio::sync::Mutex::new(events.into());
     let interview = InterviewContext {
         config: &config,
         keys: &keys,

@@ -42,11 +42,6 @@ fn every_error_exit_after_the_join_leaves_the_room() {
     let hub = include_str!("../../../src/livekit.rs");
     for (name, source, call) in [
         (
-            "the room and Gemini setup",
-            open,
-            "room.close_on_error(joined)",
-        ),
-        (
             "the opening attributes",
             open,
             "room.close_on_error(opened_attributes)",
@@ -56,7 +51,7 @@ fn every_error_exit_after_the_join_leaves_the_room() {
             open,
             "room.close_on_error(arrival)",
         ),
-        ("the greeting", open, "room.close_on_error(greeted)"),
+        ("the startup", open, "room.close_on_error(Err(error))"),
         ("the room loop", hub, "room.close_on_error(result)"),
     ] {
         assert_eq!(source.matches(call).count(), 1, "{name} leaves on error");

@@ -520,6 +520,7 @@ pub(super) fn clear_abandoned_socket_work(
     activity: &mut RuntimeActivity,
 ) {
     activity.turn_timing.reset();
+    activity.buffered_startup_output_at = None;
     activity.socket = turn::SocketWork::default();
     state.recovery_reply_pending = false;
 
