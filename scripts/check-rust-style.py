@@ -29,6 +29,7 @@ Cargo; the default run needs none. Exit status 1 when anything is reported.
 
 import argparse
 import functools
+import importlib.util
 import json
 import re
 import subprocess
@@ -116,11 +117,15 @@ EMPTY_EXPECT = re.compile(r"\.\s*(?:r#)?expect\s*\(\s*\"\"\s*,?\s*\)")
 MARKER = re.compile(
     r"\b(?:TODO|FIXME|XXX|HACK)\b|ponytail:|\b(?:TODO|DONE|CLAUDE)\.md\b"
 )
-CJK = re.compile(
-    "[\u1100-\u11ff\u2e80-\u33ff\u3400-\u4dbf\u4e00-\u9fff"
-    "\ua960-\ua97f\uac00-\ud7ff\uf900-\ufaff\ufe10-\ufe1f\ufe30-\ufe4f"
-    "\uff00-\uffef\U0001aff0-\U0001b16f\U00020000-\U0003ffff]"
+_spec = importlib.util.spec_from_file_location(
+    "check_cjk", Path(__file__).with_name("check-cjk.py")
 )
+_check_cjk = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_check_cjk)
+# The CJK ranges belong to the hook, which allows quoted data elsewhere; Rust
+# and the browser half refuse every match.
+CJK = _check_cjk.CJK
+
 # What can hide a rule's text from a line scan: the first alternative to match at
 # a position wins, so a raw string is tried before a plain one.
 TOKEN = re.compile(

@@ -203,6 +203,8 @@ class Blobs:
         self.proc.wait()
 
 
+# scripts/check-cjk.py reads the same blobs through git, Blobs, targets and
+# InspectionError, so keep their names and the "staged" context in step.
 def targets(commits):
     """Yield (context, path, blob ID) for the staged index or for each commit."""
     if commits is None:

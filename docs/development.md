@@ -382,6 +382,21 @@ credential value or provider request is logged or transmitted. This is a
 bounded set of checks, not a claim to detect every secret format or encoding.
 The regression suite is `tests/test_check_secrets.py`.
 
+`scripts/check-cjk.py` refuses CJK prose (comments, docstrings, messages,
+names) in the same changed index blobs at pre-commit and in the same outgoing
+commits at pre-push, and pull-request CI repeats the history check; the
+`cjk-check` gate runs it over every indexed file. CJK passes only where it is
+visibly data: inside a quoted string that opens and closes on one line (`'...'`,
+`"..."` or `` `...` ``), or between two fence lines, each three or more
+backticks at the start of a line after an optional comment leader. Anything
+else is refused, a one-line docstring, a string spanning lines, a heredoc body
+and a YAML plain scalar included: quote the value, or fence the block. The
+script's comments state the edges. Markdown, vendored paths and files that are
+not UTF-8 text are exempt. Rust and the browser's `.js`, `.mjs`, `.html` and
+`.css` under `web/` keep the stricter language rule of
+`scripts/check-rust-style.py`, which uses the same character ranges and allows
+no CJK there at all. The regression suite is `tests/test_check_cjk.py`.
+
 The prepare-commit-msg hook preserves supplied messages and adds its guidance
 only once. It shows at most forty staged filenames and a short change summary
 above the scissors line, without generating a subject or sending a diff to an

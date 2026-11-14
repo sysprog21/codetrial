@@ -215,8 +215,12 @@ instead of being touched by several that each say `Refs`.
 
 Comments follow from the same rule: every line says something the code cannot.
 The ASCII rule the hook enforces covers the commit message, and source comments
-follow it by convention, with no em dash, typographic quote, arrow character, or
-CJK.
+follow it by convention, with no em dash, typographic quote or arrow character.
+CJK is refused by the hooks outside Markdown: test data that needs it goes in a
+quoted string on one line (`'...'`, `"..."` or `` `...` ``), or between two
+```` ``` ```` lines when the sample spans several. Rust and the browser's
+JavaScript, HTML and CSS take no CJK at all, quoted or not; a multi-byte
+fixture there uses Greek letters or an emoji.
 
 ## Pull requests
 

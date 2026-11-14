@@ -741,6 +741,8 @@ gate ruff ruff_gate
 # rather than here, so nothing else notices when one stops rejecting. The suite
 # builds a scratch repository, installs the hooks into it and drives them.
 gate secret-check-tests unittest_gate "$ROOT/tests/test_check_secrets.py"
+gate cjk-check-tests unittest_gate "$ROOT/tests/test_check_cjk.py"
+gate cjk-check "$PYTHON" "$ROOT/scripts/check-cjk.py" --tree
 gate git-hooks "$ROOT/scripts/test-git-hooks.sh"
 gate shell-syntax shell_syntax
 gate browser-check-env env BROWSER_CHECK_VALIDATE_ENV_ONLY=1 sh "$ROOT/scripts/browser-check.sh"

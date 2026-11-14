@@ -82,7 +82,8 @@ message()
 mkdir -p "$work/repo/scripts" || exit 1
 cp "$ROOT"/scripts/git-*.sh "$ROOT/scripts/git-commit-msg.awk" \
     "$ROOT/scripts/check-commit-log.sh" "$ROOT/scripts/check-secrets.py" \
-    "$ROOT/scripts/check-interactive-review.py" "$ROOT/scripts/hashchain.py" \
+    "$ROOT/scripts/check-cjk.py" "$ROOT/scripts/check-interactive-review.py" \
+    "$ROOT/scripts/hashchain.py" \
     "$ROOT/scripts/install-git-hooks.sh" "$ROOT/scripts/indent.sh" \
     "$work/repo/scripts/" || exit 1
 for config in .editorconfig .shellcheckrc; do
@@ -699,6 +700,18 @@ contains "the pre-commit refusal is redacted" "$work/last.out" "GitHub token (re
 git rm -q --cached credential.txt
 rm credential.txt
 
+# Octal escapes, so this file stays ASCII: a comment that reads "U+4E2D", once
+# as prose and once as quoted test data.
+printf '# \344\270\255\n' > prose.py
+git add prose.py
+expect 1 "the pre-commit hook refuses CJK prose" sh ./scripts/git-pre-commit.sh
+contains "the pre-commit refusal names the line" "$work/last.out" "prose.py:1:"
+printf 'x = "\344\270\255"\n' > prose.py
+git add prose.py
+expect 0 "the pre-commit hook allows quoted CJK" sh ./scripts/git-pre-commit.sh
+git rm -q --cached prose.py
+rm prose.py
+
 echo "  HOOKS   path-triggered checks"
 printf '#!/bin/sh\necho hook-suite-fixture\nexit 1\n' > scripts/test-git-hooks.sh
 git add scripts/test-git-hooks.sh
@@ -827,6 +840,14 @@ expect 0 "a new remote does not rescan history another remote holds" \
     git push -q "$work/backup.git" HEAD:refs/heads/main
 git push -q origin :refs/heads/leak
 git update-ref -d refs/remotes/origin/leak
+git reset -q --hard HEAD~1
+printf '# \344\270\255\n' > prose.py
+git add prose.py
+git -c core.hooksPath=/dev/null commit -q -m "Add a comment in Chinese" \
+    -m "The hook must inspect outgoing commits made without local checks."
+expect 1 "the pre-push hook refuses CJK prose in outgoing commits" \
+    git push -q origin HEAD:refs/heads/main
+contains "the pre-push refusal names the CJK check" "$work/last.out" "failed the CJK check"
 git reset -q --hard HEAD~1
 
 git commit -q --allow-empty --no-verify -m "wip: skipped the hook"
