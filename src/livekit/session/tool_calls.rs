@@ -1,13 +1,34 @@
 //! Executes and sends one interview tool batch.
 
 use super::{
-    GeminiEventContext, GeminiFunctionCall, HintCounters, Instant, RoomLink, TOOL_READ_BOARD,
-    TOOL_RECORD_FRAMEWORK_EVIDENCE, ToolTiming, TurnCause, board, execute_timed_tool_batch,
-    flush_framework_progress, known_tool_name, latency, log_clock, observations, play_tool_ack,
+    GeminiEventContext, GeminiFunctionCall, HintCounters, Instant, RoomLink, TOOL_LOG_HINT,
+    TOOL_READ_BOARD, TOOL_READ_CONVERSATION, TOOL_READ_EDITOR, TOOL_RECORD_FRAMEWORK_EVIDENCE,
+    ToolTiming, TurnCause, board, execute_timed_tool_batch, flush_framework_progress,
+    known_tool_name, latency, log_clock, observations, play_tool_ack,
 };
 
 #[cfg(test)]
 use crate::livekit::probe::acquisition::owner::{self, Stage};
+
+pub(super) fn has_framework_state(name: &str) -> bool {
+    [
+        TOOL_READ_EDITOR,
+        TOOL_READ_BOARD,
+        TOOL_RECORD_FRAMEWORK_EVIDENCE,
+    ]
+    .contains(&name)
+}
+
+pub(super) fn has_tool_continuity(name: &str) -> bool {
+    [
+        TOOL_READ_EDITOR,
+        TOOL_READ_CONVERSATION,
+        TOOL_READ_BOARD,
+        TOOL_LOG_HINT,
+        TOOL_RECORD_FRAMEWORK_EVIDENCE,
+    ]
+    .contains(&name)
+}
 
 /// Answers every call in the batch in one message, and republishes the
 /// checklist once when any of them moved it.

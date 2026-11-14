@@ -328,3 +328,126 @@ fn executed_tool_capture_precedes_send_and_telemetry_gates() {
     assert_eq!(capture.snapshot().batches.len(), 2);
     let _reinstalled = install(&capture).unwrap();
 }
+
+/// A page from the line a definition starts at stops where the definition
+/// ends: part of the buffer, so like any later page it moves no baseline and
+/// carries no review instruction, which a full read does.
+#[test]
+fn a_targeted_editor_read_carries_no_review_and_a_full_one_does() {
+    const CODE: &str =
+        "import math\n\ndef f(values):\n    return sum(values)\n\n\ndef g():\n    return 1\n";
+    let read = |language: &str, args: serde_json::Value| {
+        let mut state = RuntimeState {
+            language: language.into(),
+            code: CODE.into(),
+            code_shown: "def f(values):\n    pass\n".into(),
+            ..RuntimeState::default()
+        };
+        state.evidence_ledger.code.parser_observation = Some(crate::agent::CodeObservation::Parsed);
+        state.evidence_ledger.code.substantive_revision = 2;
+        let call = GeminiFunctionCall {
+            id: "read".into(),
+            name: crate::runtime::TOOL_READ_EDITOR.into(),
+            args,
+        };
+        let answers = execute_tool_batch_observed(&mut state, vec![call], 1, |_, _, _| {});
+        (answers[0].1.clone(), state.code == state.code_shown)
+    };
+    let (answer, shown) = read("python", json!({"fromLine": 3}));
+    let text = answer["result"].as_str().unwrap_or_default();
+    assert!(
+        text.contains("3| def f(values):") && !text.contains("def g"),
+        "{text}"
+    );
+    assert!(answer.get("editorReview").is_none(), "{answer}");
+    assert!(!shown, "a definition read leaves the baseline");
+
+    // A later line no definition starts at is the page it always was, and a
+    // buffer with no map pages the same from any line.
+    for (language, args) in [
+        ("python", json!({"fromLine": 2})),
+        ("rust", json!({"fromLine": 3})),
+    ] {
+        let (answer, shown) = read(language, args.clone());
+        let text = answer["result"].as_str().unwrap_or_default();
+        assert!(text.contains("def g"), "{args}: {text}");
+        assert!(answer.get("editorReview").is_none(), "{args}");
+        assert!(!shown, "{args}");
+    }
+
+    // A full read, and the parameters the declaration does not offer, read it
+    // all, move the baseline and carry the review.
+    for args in [
+        json!({}),
+        json!({"fromLine": 1}),
+        json!({"symbol": "f"}),
+        json!({"outline": true}),
+    ] {
+        let (answer, shown) = read("python", args.clone());
+        assert!(
+            answer["editorReview"].as_str().is_some(),
+            "{args}: {answer}"
+        );
+        assert!(shown, "{args}");
+    }
+}
+
+/// A test report run on other code says so ahead of everything else, on a
+/// definition read as on a full one.
+#[test]
+fn every_editor_read_says_first_when_its_test_report_is_stale() {
+    for args in [json!({}), json!({"fromLine": 3})] {
+        let mut state = RuntimeState {
+            language: "python".into(),
+            code: "import math\n\ndef f(values):\n    return sum(values)\n".into(),
+            last_test_run: Some(json!({"passed": 1, "failed": 0})),
+            last_test_run_code: Some(crate::agent::TestedCode {
+                language: "python".into(),
+                code: "other code".into(),
+            }),
+            ..RuntimeState::default()
+        };
+        let call = GeminiFunctionCall {
+            id: "read".into(),
+            name: crate::runtime::TOOL_READ_EDITOR.into(),
+            args: args.clone(),
+        };
+        let answers = execute_tool_batch_observed(&mut state, vec![call], 1, |_, _, _| {});
+        let text = answers[0].1["result"].as_str().unwrap_or_default();
+        assert!(
+            text.starts_with(
+                "The displayed browser report belongs to different source or language."
+            ),
+            "{args}: {text}"
+        );
+    }
+}
+
+#[test]
+fn batch_attaches_review_to_a_complete_read_not_a_later_targeted_read() {
+    for full_first in [true, false] {
+        let mut state = RuntimeState {
+            language: "python".into(),
+            code: "import math\n\ndef f(values):\n    return sum(values)\n".into(),
+            code_shown: "def f(values):\n    pass\n".into(),
+            ..RuntimeState::default()
+        };
+        state.evidence_ledger.code.parser_observation = Some(crate::agent::CodeObservation::Parsed);
+        state.evidence_ledger.code.substantive_revision = 2;
+        let call = |args| GeminiFunctionCall {
+            id: "read".into(),
+            name: TOOL_READ_EDITOR.into(),
+            args,
+        };
+        let targeted = json!({"fromLine": 3});
+        let calls = if full_first {
+            vec![call(json!({})), call(targeted)]
+        } else {
+            vec![call(targeted), call(json!({}))]
+        };
+        let answers = execute_tool_batch_observed(&mut state, calls, 1, |_, _, _| {});
+        let full = usize::from(!full_first);
+        assert!(answers[full].1["editorReview"].as_str().is_some());
+        assert!(answers[1 - full].1.get("editorReview").is_none());
+    }
+}

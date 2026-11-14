@@ -5,6 +5,7 @@
 //! interviewer behaves, not a refactor.
 
 mod assessment;
+mod code_map;
 mod instructions;
 mod material;
 mod nudges;
@@ -24,7 +25,7 @@ pub use material::{
     log_hint_text, numbered, numbered_from, read_board_text, read_editor_text,
 };
 pub(crate) use material::{
-    numbered_bounded_line, numbered_from_with_limit, read_editor_text_from_numbered,
+    numbered_bounded_line, numbered_from_with_limit, numbered_page, read_editor_text_from_numbered,
     untrusted_block,
 };
 pub(crate) use nudges::{
