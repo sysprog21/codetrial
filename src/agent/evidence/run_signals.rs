@@ -206,14 +206,20 @@ impl EvidenceLedger {
                 source_timestamp_ms,
             };
             self.progress.tested = true;
-            self.progress.test_progress |= self.tests.newly_passed > 0;
-            if self.tests.newly_passed > 0 {
+
+            // Progress needs an earlier executed run in the same language: the
+            // first executed run, and the first one after a switch, is the
+            // baseline.
+            if self.tests.follows_executed_run && self.tests.newly_passed > 0 {
+                self.progress.test_progress = true;
                 self.stuck.last_test_progress_ms = Some(receipt_timestamp_ms);
                 self.stuck.test_progress_latency_ms = self
                     .stuck
                     .last_meaningful_change_ms
                     .map(|meaningful| receipt_timestamp_ms.saturating_sub(meaningful));
             }
+
+            // An all-pass baseline still counts as an all-pass run.
             self.progress.all_tests_passed_once |= passed == total;
             self.stuck.repeated_failure_count = self.tests.consecutive_identical_failures;
         }

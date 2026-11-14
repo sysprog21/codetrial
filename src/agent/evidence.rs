@@ -217,16 +217,13 @@ fn is_zero(count: &u32) -> bool {
     *count == 0
 }
 
+/// Latched milestones. Read the ledger's `tests` for the current result.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct InterviewProgress {
-    /// Milestones, each latching once reached: this struct answers what has
-    /// happened at some point in the interview, never what is true of the
-    /// buffer or the last run right now. `tests` is where the current state
-    /// lives, and a reader that takes a mark here for the present will read a
-    /// solution that passed once and has since regressed as passing.
     pub first_edit_ms: Option<u64>,
     pub runner_attempted: bool,
     pub tested: bool,
+    /// Latches on more passes than the prior executed run in the same language.
     pub test_progress: bool,
     pub all_tests_passed_once: bool,
 }
@@ -238,7 +235,9 @@ pub struct StuckSignals {
     pub edit_test_cycles: u32,
     pub undo_redo_cycles: u32,
     pub last_meaningful_change_ms: Option<u64>,
+    /// Receipt time of the latest test progress, or `None` before progress.
     pub last_test_progress_ms: Option<u64>,
+    /// Delay from the last meaningful edit to that progress, if both exist.
     pub test_progress_latency_ms: Option<u64>,
 }
 
