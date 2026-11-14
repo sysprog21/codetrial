@@ -71,7 +71,7 @@ button {
 
 main {
   width: min(100%, 64rem);
-  min-height: 100vh;
+  min-height: 100dvh;
   margin: 0 auto;
   padding: 2.5rem 1.25rem;
 }
@@ -877,7 +877,7 @@ p {
   display: grid;
   width: 100%;
   max-width: none;
-  min-height: 100vh;
+  min-height: 100dvh;
   gap: 1rem;
   padding: 1rem;
 }
@@ -983,7 +983,7 @@ p {
    height while scrolling keeps longer turns readable. */
 .jim-stage .captions-bar {
   margin: 0.35rem 0 0;
-  max-height: min(40vh, 20rem);
+  max-height: min(40dvh, 20rem);
   overflow-y: auto;
   background: var(--float-surface);
   border: 1px solid var(--hairline);
@@ -2021,7 +2021,7 @@ p {
 
 .report-card {
   width: min(100%, 48rem);
-  max-height: 92vh;
+  max-height: 92dvh;
   overflow-y: auto;
   border: 1px solid var(--hairline);
   border-radius: var(--radius-md);
@@ -2206,7 +2206,7 @@ table.phase-scores {
 /* Expanded controls and a playback warning can outgrow the wait's remaining
    space on a phone. Keep that card scrollable rather than covering its actions. */
 #ending-overlay:not([hidden]) ~ .jim-stage.compact {
-  max-height: 35vh;
+  max-height: 35dvh;
   overflow-y: auto;
   pointer-events: auto;
 }
@@ -2298,7 +2298,7 @@ table.phase-scores {
      --sidebar-width is the candidate's own width, set by interview.js; until
      there is one the sidebar keeps the range it always had. */
   .interview-shell {
-    height: 100vh;
+    height: 100dvh;
     column-gap: 0;
     grid-template-columns:
       var(--sidebar-width, minmax(17.5rem, 22.5rem))
@@ -2688,7 +2688,6 @@ table.phase-scores {
 .audio-check-card {
   display: flex;
   width: min(60rem, 100%);
-  max-height: calc(100vh - 2rem);
   max-height: calc(100dvh - 2rem);
   flex-direction: column;
   overflow: hidden;
@@ -2704,7 +2703,7 @@ table.phase-scores {
 .observer-card {
   gap: 0.75rem;
   width: min(32rem, 100%);
-  margin: 12vh auto 0;
+  margin: 12dvh auto 0;
   padding: 2rem;
 }
 
@@ -3071,7 +3070,7 @@ body:not([data-recording]) .replay-detail > :not(header) {
      scroll is unreachable and a short viewport clips the tables. */
   pointer-events: auto;
   max-width: min(44rem, 92vw);
-  max-height: 70vh;
+  max-height: 70dvh;
   overflow: auto;
   padding: 0.9rem 1.2rem 1rem;
   border: 1px solid var(--hairline);
@@ -3334,7 +3333,7 @@ body:not([data-recording]) .replay-detail > :not(header) {
 /* Open, the Meet notes scroll inside themselves rather than pushing the
    dock, and End interview with it, out of a short sidebar. */
 .session-dock .meet-mode-body {
-  max-height: 30vh;
+  max-height: 30dvh;
   overflow-y: auto;
 }
 
@@ -3354,7 +3353,6 @@ body:not([data-recording]) .replay-detail > :not(header) {
    controls stay in view under it. */
 @media (max-width: 1023px) {
   .interview-sidebar {
-    max-height: 80vh;
     max-height: 80dvh;
   }
 }

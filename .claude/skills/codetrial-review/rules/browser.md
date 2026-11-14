@@ -6,7 +6,8 @@ state that changed during an await, a control left reachable in the wrong
 phase, or an assistive-technology state that disagrees with the screen. The UI
 rules
 [codetrial-web](../../codetrial-web/SKILL.md#what-review-checks-in-a-ui-change)
-already states are not repeated here.
+already states are not repeated here, nor is the browser support rule in
+[platform.md](../../codetrial-web/platform.md).
 
 ## Re-read state after every await, and fence async results with a generation
 

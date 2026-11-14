@@ -1,6 +1,6 @@
 ---
 name: codetrial-web
-description: The CodeTrial browser half and the boundary it talks across - why web/ has no build step, how a file reaches the browser embedded or from disk, the vendored checksum-pinned assets, the data-channel topics implemented once in web/lib.js and once against the TOPIC_ constants in src/runtime.rs, in both directions, and the wire fixtures that keep the two agreeing. Use when editing anything under web/, adding or changing a data-channel message, touching src/web/, reviewing UI accessibility or interaction states, designing a new page or an explicit redesign, or wondering why a browser change passed every Rust test and still broke the interview. The method of a multi-batch refactor is codetrial-improve.
+description: The CodeTrial browser half and the boundary it talks across - why web/ has no build step, how a file reaches the browser embedded or from disk, the vendored checksum-pinned assets, the data-channel topics implemented once in web/lib.js and once against the TOPIC_ constants in src/runtime.rs, in both directions, and the wire fixtures that keep the two agreeing. Use when editing anything under web/, adding or changing a data-channel message, touching src/web/, reviewing UI accessibility or interaction states, choosing a browser API, CSS feature or fallback and judging its browser support (Baseline, Modern Web Guidance), designing a new page or an explicit redesign, or wondering why a browser change passed every Rust test and still broke the interview. The method of a multi-batch refactor is codetrial-improve.
 ---
 
 # The CodeTrial browser boundary
@@ -110,6 +110,15 @@ The gate cannot see these, and reviews here keep raising them:
   `keyCode === 229` for engines that clear it early), `event.repeat`, and
   modifier chords it does not own; the Cmd/Ctrl+Enter handler in
   `web/interview.js` has all three guards (#144, #277).
+
+## Choosing a platform feature
+
+There is no transpiler or polyfill layer, so the API a change calls decides
+which browsers it works in. [platform.md](platform.md) has the support rule
+(Baseline Widely available directly; anything newer feature-detected with a
+fallback written here), the platform choices the tree has already made, and
+how to consult Modern Web Guidance before writing an overlay, a form field, a
+motion effect or other client code the platform may already provide.
 
 ## UI behavior and design
 

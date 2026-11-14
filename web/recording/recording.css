@@ -38,7 +38,7 @@ body {
   display: grid;
   grid-template-columns: 1fr 360px;
   gap: 16px;
-  height: 100vh;
+  height: 100dvh;
   padding: 16px;
 }
 
@@ -81,7 +81,7 @@ body {
 }
 
 .board.example {
-  max-height: 30vh;
+  max-height: 30dvh;
   width: auto;
   max-width: 100%;
 }

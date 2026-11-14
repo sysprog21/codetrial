@@ -489,7 +489,7 @@ function pumpAvatar(at) {
 /// for the volume to be wrong.
 function listenToAgent(track) {
   if (!track?.mediaStreamTrack) return;
-  audioContext ||= new (window.AudioContext || window.webkitAudioContext)();
+  audioContext ||= new AudioContext();
   if (audioContext.state === "suspended")
     void audioContext.resume().catch(() => {});
   // The old graph first. LiveKit re-subscribes the interviewer on every

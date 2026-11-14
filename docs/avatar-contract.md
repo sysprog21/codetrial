@@ -321,7 +321,7 @@ in the cost column for a borrowed mascot.
 ### Captions
 
 `#captions-bar` lives inside `#jim-stage`, under the avatar. It grows to fit
-its text, with `max-height: min(40vh, 20rem)`, and scrolls once a Jim turn
+its text, with `max-height: min(40dvh, 20rem)`, and scrolls once a Jim turn
 outgrows that height. Its head, `.captions-head`, holds the "Live CC:" label
 and the Unclear button and is sticky on the bar's own surface, so a bar pinned
 to the end of a long turn still shows both without the candidate scrolling up.

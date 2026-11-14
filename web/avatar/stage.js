@@ -402,9 +402,7 @@ function bindAnalyser(track, participant) {
   jimTrack = track;
   jimParticipant = participant;
   try {
-    jimAnalyserContext ||= new (
-      window.AudioContext || window.webkitAudioContext
-    )();
+    jimAnalyserContext ||= new window.AudioContext();
     // TrackSubscribed is not a user gesture, so a context first built here can
     // arrive suspended and then read silence forever. The mouth would simply
     // never open, with nothing anywhere saying why.

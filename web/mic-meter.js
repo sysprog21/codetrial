@@ -18,7 +18,7 @@ import { MIC_CONFIRM_FRAMES, peakLevel, sustainedPeak } from "./audio-check.js";
 /// testing is not the analyser.
 export async function startMediaMeter(stream, onPeak, onError, shouldStop) {
   try {
-    const context = new (window.AudioContext || window.webkitAudioContext)();
+    const context = new AudioContext();
     const analyser = context.createAnalyser();
     analyser.fftSize = 1024;
     context.createMediaStreamSource(stream).connect(analyser);

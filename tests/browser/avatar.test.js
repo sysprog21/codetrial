@@ -755,7 +755,7 @@ test("caption CSS keeps a viewport cap and scrolling", () => {
     /max-height:\s*\d+(\.\d+)?rem;/,
     "captions must retain a viewport-relative height cap",
   );
-  assert.match(rule, /max-height:\s*min\(40vh/);
+  assert.match(rule, /max-height:\s*min\(40dvh/);
   assert.match(rule, /overflow-y:\s*auto;/);
   assert.match(rule, /pointer-events:\s*auto;/);
 });
