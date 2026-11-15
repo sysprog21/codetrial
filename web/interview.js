@@ -222,6 +222,11 @@ import { parseCandidateCase, runBrowserTests } from "./runners.js";
 import { mountBehavioralReview } from "./behavioral-review.js";
 import { consumeGroundingPacket } from "./document-grounding.js";
 
+import {
+  createAudioResponseTiming,
+  startAudioActivityMonitor,
+} from "./audio-response-timing.js";
+
 /// Which framework the candidate is being read against right now. The rounds
 /// never overlap, so this is a single value rather than a pair. Declared up
 /// here because `codingClosed` reads it and `init` runs before the rest of the
@@ -336,6 +341,20 @@ const consentVersion = globalThis.CODETRIAL_CONSENT_VERSION || "";
 const replayVersion = globalThis.CODETRIAL_REPLAY_VERSION || 1;
 
 const params = new URLSearchParams(window.location.search);
+const audioTimingEnabled = params.get("audioTiming") === "1";
+const audioTiming = audioTimingEnabled
+  ? createAudioResponseTiming({
+      report: (elapsedMs) => {
+        console.info(
+          `[audio-timing] Browser-observed speaking-to-audio gap: ${elapsedMs.toFixed(1)} ms`,
+        );
+      },
+    })
+  : null;
+
+let audioTimingTrack = null;
+let stopAudioTimingMonitor = null;
+let audioTimingReady = false;
 const editorOptions = editorOptionsFromParams(params);
 const indentUnit = INDENT_UNITS[indentFromParams(params)];
 const strict = params.get("selection") === "strict";
@@ -2397,6 +2416,7 @@ async function connectLiveKit(connection, preflight, presenting = false) {
   // on its own, so the candidate is told to wait rather than to restart.
   room.on(livekit.RoomEvent.Reconnecting, () => {
     if (state.room !== room) return;
+    releaseAudioTiming();
     state.connected = false;
     if (strict) updateRunAvailability();
     setBanner("connection", providerUiState("reconnecting").message);
@@ -2404,6 +2424,11 @@ async function connectLiveKit(connection, preflight, presenting = false) {
   room.on(livekit.RoomEvent.Reconnected, () => {
     if (state.room !== room) return;
     state.connected = true;
+    // LiveKit may retain the same remote audio track across reconnects.
+    // Reattach the diagnostic even when no new TrackSubscribed event fires.
+    if (jimTrack?.mediaStreamTrack?.readyState === "live") {
+      attachAudioTiming(jimTrack);
+    }
     if (strict) updateRunAvailability();
     setBanner("connection", "");
     if (state.phase === "live" && state.interviewerReadiness?.pending) {
@@ -2433,6 +2458,10 @@ async function connectLiveKit(connection, preflight, presenting = false) {
   });
   room.on(livekit.RoomEvent.Disconnected, () => {
     audioPlayback.release(room);
+    if (state.room === room) {
+      releaseAudioTiming();
+      audioTiming?.reset();
+    }
     const startupCleanup = state.startupCleanupRoom === room;
     if (startupCleanup) state.startupCleanupRoom = null;
     if (state.room !== room) return;
@@ -2680,6 +2709,8 @@ let detachSelfView = () => {};
 /// left only once that notice is acknowledged or given up on.
 function abandonStart(preflight, { preserveMicrophone = false, flushed } = {}) {
   const joined = state.room;
+  releaseAudioTiming();
+  audioTiming?.reset();
   state.connected = false;
   state.room = null;
   if (joined) audioPlayback.release(joined);
@@ -3004,7 +3035,56 @@ async function receiveReport(room, payload, flushed = Promise.resolve()) {
     reportRenderFailed(error, { offlineSummary: !renderAttempted });
   }
 }
+function releaseAudioTiming(track = null) {
+  if (!audioTiming) return;
 
+  // A late unsubscribe from an old track must not remove the new monitor.
+  if (track && track !== audioTimingTrack) return;
+
+  stopAudioTimingMonitor?.();
+
+  stopAudioTimingMonitor = null;
+  audioTimingTrack = null;
+  audioTimingReady = false;
+
+  audioTiming.cancelPending();
+}
+function attachAudioTiming(track) {
+  if (!audioTiming) return;
+
+  if (audioTimingTrack === track) return;
+
+  releaseAudioTiming();
+
+  const mediaTrack = track.mediaStreamTrack;
+  if (!mediaTrack) return;
+
+  audioTimingTrack = track;
+
+  try {
+    stopAudioTimingMonitor = startAudioActivityMonitor(
+      mediaTrack,
+      () => {
+        if (!audioTimingReady || audioTimingTrack !== track) return;
+        audioTiming.audioActivity();
+      },
+      {
+        onAvailable: () => {
+          if (audioTimingTrack !== track) return;
+          audioTimingReady = true;
+        },
+        onUnavailable: () => {
+          if (audioTimingTrack !== track) return;
+          audioTimingReady = false;
+          audioTiming.cancelPending();
+        },
+      },
+    );
+  } catch (error) {
+    releaseAudioTiming();
+    console.warn("[audio-timing] Monitor unavailable", error);
+  }
+}
 // One element for the whole session. LiveKit re-subscribes on reconnect, and
 // track.attach() with no argument mints a fresh element every time: two of
 // them play the same track into the shared tab, audibly doubled, while
@@ -3052,10 +3132,13 @@ function playRemoteAudio(track, participant) {
     });
   }
   attachAvatarAnalyser(track, participant);
+  attachAudioTiming(track);
 }
 
 function dropRemoteAudio(track) {
   if (track.kind !== "audio") return;
+  releaseAudioTiming(track);
+
   // Cleared only if the element that went away was Jim's. Any other remote
   // audio track unsubscribing -- a second participant leaving -- would
   // otherwise drop the handle while the element is still playing, and
@@ -5295,6 +5378,7 @@ function updateAgentState() {
     return;
   }
   if (!agent) {
+    audioTiming?.reset();
     setAgentStateLabel("Waiting", false);
     // "Waiting" is honest but useless on its own: it looks identical whether
     // the interviewer has not arrived yet or arrived, greeted, and died. Once
@@ -5375,6 +5459,15 @@ function updateAgentState() {
   const value = published || "listening";
   state.agentSpeaking = value === "speaking";
   state.agentThinking = value === "thinking";
+  if (audioTiming) {
+    audioTiming.speakingChanged(published === "speaking");
+
+    // A speaking transition is measurable only if the monitor was
+    // already observing audio when the transition occurred.
+    if (!audioTimingReady || !state.connected) {
+      audioTiming.cancelPending();
+    }
+  }
   if (state.agentSpeaking || state.agentThinking) {
     drawingTurn?.reset();
     hideTurnRing();

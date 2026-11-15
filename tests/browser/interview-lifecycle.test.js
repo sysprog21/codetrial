@@ -248,6 +248,9 @@ test("the actual connection preserves refusal reasons and gates the init deadlin
     // As init leaves it before connect: Practice work is guarded from page
     // load, and nothing in the start may arm the guard for Strict.
     const context = {
+      releaseAudioTiming: () => {},
+      audioTiming: null,
+
       protected: !strict,
       state: {
         endsAt: 0,
