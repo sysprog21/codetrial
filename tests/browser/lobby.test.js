@@ -795,7 +795,7 @@ lobbyTest(
       );
       await page.goto(`${base}/`, { waitUntil: "load" });
       await sessionRequest;
-      await page.click("details.problem-picker summary");
+      await toggleProblemPicker(page);
       await page.click(`[data-problem="${MEDIUM[0]}"]`);
       assert.equal(await page.isDisabled("#start"), true);
       await page.evaluate(() => {
@@ -979,7 +979,7 @@ lobbyTest(
       );
       await page.goto(`${base}/`, { waitUntil: "load" });
       await sessionRequest;
-      await page.click("details.problem-picker summary");
+      await toggleProblemPicker(page);
       await page.click(`[data-problem="${MEDIUM[0]}"]`);
       assert.equal(await page.isDisabled("#start"), false);
     } finally {
@@ -1200,8 +1200,21 @@ const restore = (page) =>
     ),
   );
 
+const problemPickerDialog = (page) =>
+  page.getByRole("dialog", { name: "Choose a specific problem" });
+
+async function toggleProblemPicker(page) {
+  const dialog = problemPickerDialog(page);
+  if (await dialog.isVisible()) {
+    await page.mouse.click(2, 2);
+    await dialog.waitFor({ state: "hidden" });
+  } else {
+    await page.click("details.problem-picker summary");
+  }
+}
+
 async function openTopicFilter(page) {
-  await page.click("details.problem-picker summary");
+  await toggleProblemPicker(page);
   await page.waitForFunction(
     () => !document.querySelector("#problem-topic").disabled,
   );
@@ -1219,6 +1232,7 @@ lobbyTest(
     const pick = page.getByRole("button", {
       name: "Pick from my list",
       exact: true,
+      includeHidden: true,
     });
     assert.equal(await pick.isDisabled(), true);
     assert.equal(
@@ -1227,7 +1241,7 @@ lobbyTest(
     );
     assert.match(
       await page.locator("#practice-list-status").textContent(),
-      /Open the problem picker/,
+      /Check problems in the problem picker to add them\./,
     );
     const problemTitle = await page
       .locator(`[data-problem="${MEDIUM[0]}"] .problem-title`)
@@ -1344,7 +1358,7 @@ lobbyTest(
       await lobby(page);
       await openTopicFilter(page);
       await practiceInput(page, MEDIUM[0]).check();
-      await page.click("details.problem-picker summary");
+      await toggleProblemPicker(page);
       await lobby(other);
       await openTopicFilter(other);
       await page.locator("#practice-list-pick").focus();
@@ -1390,10 +1404,10 @@ for (const filter of ["difficulty", "topic"]) {
         [PRACTICE_LIST_KEY, id],
       );
       await lobby(page);
-      await openTopicFilter(page);
       await page.click('[data-duration="60"]');
       await page.click("#practice-list-pick");
       assert.equal((await snapshot(page)).card, id);
+      await openTopicFilter(page);
       if (filter === "difficulty") await setLevel(page, "Easy", true);
       else await page.selectOption("#problem-topic", "Array");
       assert.equal((await snapshot(page)).card, id);
@@ -1414,6 +1428,7 @@ for (const filter of ["difficulty", "topic"]) {
         ),
         [id],
       );
+      await toggleProblemPicker(page);
       await page.click("#practice-list-pick");
       const drawn = await snapshot(page);
       assert.equal(drawn.card, id);
@@ -1465,7 +1480,9 @@ lobbyTest("practice lists stay in sync across lobby tabs", async (page) => {
         .textContent.startsWith("1 problem"),
     );
     assert.equal(await practiceInput(other, MEDIUM[0]).isChecked(), false);
+    await toggleProblemPicker(other);
     await other.click("#practice-list-pick");
+    await openTopicFilter(other);
     assert.equal((await snapshot(other)).card, MEDIUM[1]);
     for (const clearAll of [false, true]) {
       await page.evaluate(
@@ -1588,6 +1605,7 @@ for (const change of ["replace", "empty", "remove", "clear"]) {
           await page.locator("#practice-list-pick").isEnabled(),
           true,
         );
+        await toggleProblemPicker(page);
         await page.click("#practice-list-pick");
         if (change === "replace") {
           assert.equal((await snapshot(page)).card, MEDIUM[1]);
@@ -1631,14 +1649,16 @@ lobbyTest(
       [PRACTICE_LIST_KEY, [EASY[1], HARD[0]]],
     );
     await lobby(page);
+    await page.click('[data-duration="60"]');
     await openTopicFilter(page);
     await page.selectOption("#problem-topic", "Array");
-    await page.click('[data-duration="60"]');
     const before = await snapshot(page);
     await page.evaluate(() => {
       Math.random = () => 0;
     });
+    await toggleProblemPicker(page);
     await page.click("#practice-list-pick");
+    await openTopicFilter(page);
     const first = await snapshot(page);
     assert.equal(first.card, EASY[1]);
     assert.equal(first.pressed, EASY[1]);
@@ -1648,7 +1668,9 @@ lobbyTest(
     assert.match(first.note, /From my list:.*\(Easy\)/);
     assert.equal(await practiceInput(page, EASY[1]).isVisible(), true);
     assert.equal(await practiceInput(page, HARD[0]).isVisible(), false);
+    await toggleProblemPicker(page);
     await page.click("#practice-list-pick");
+    await openTopicFilter(page);
     assert.equal((await snapshot(page)).card, HARD[0]);
     assert.equal(await practiceInput(page, EASY[1]).isVisible(), false);
     assert.equal(await practiceInput(page, HARD[0]).isVisible(), true);
@@ -1676,7 +1698,6 @@ lobbyTest(
       [PRACTICE_LIST_KEY, EASY[0]],
     );
     await lobby(page);
-    await openTopicFilter(page);
     for (let draw = 0; draw < 2; draw++) {
       await page.click("#practice-list-pick");
       const picked = await snapshot(page);
@@ -1846,7 +1867,9 @@ for (const failure of ["throw", "ignore"]) {
         ),
         [MEDIUM[0]],
       );
+      await toggleProblemPicker(page);
       await page.click("#practice-list-pick");
+      await openTopicFilter(page);
       assert.equal((await snapshot(page)).card, MEDIUM[1]);
       const other = await page.context().newPage();
       try {
@@ -1964,6 +1987,7 @@ lobbyTest(
     assert.equal(await practiceInput(page, MEDIUM[0]).isChecked(), true);
     assert.equal(await practiceInput(page, MEDIUM[1]).isChecked(), true);
     await practiceInput(page, MEDIUM[1]).uncheck();
+    await toggleProblemPicker(page);
     await page.click("#practice-list-pick");
     assert.equal((await snapshot(page)).card, MEDIUM[0]);
     assert.match(
@@ -2000,7 +2024,7 @@ lobbyTest(
       );
       document.fonts.add(await font.load());
     });
-    await page.click("details.problem-picker summary");
+    await toggleProblemPicker(page);
     // A very long title, the same worst case the next test uses.
     await page.click(`[data-problem="${LONG_TITLE}"]`);
     assert.equal(
@@ -2051,11 +2075,14 @@ lobbyTest(
       }
 
       // And the wall is still reachable, just not in the way.
-      await page.click("details.problem-picker summary");
+      await toggleProblemPicker(page);
       await page.locator(".problem-grid").waitFor({ state: "visible" });
-      const open = await page.evaluate(() => document.body.scrollHeight);
-      assert.ok(open > layout.height, "opening the picker shows nothing");
-      await page.click("details.problem-picker summary");
+      const dialog = problemPickerDialog(page);
+      assert.equal(await dialog.isVisible(), true);
+      assert.ok(
+        await dialog.evaluate((node) => node.scrollHeight > node.clientHeight),
+      );
+      await toggleProblemPicker(page);
       await page.locator(".problem-grid").waitFor({ state: "hidden" });
     }
   },
@@ -2106,7 +2133,7 @@ lobbyTest(
   "the selected problem drops below the button only when it cannot fit beside it",
   async (page) => {
     await lobby(page);
-    await page.click("details.problem-picker summary");
+    await toggleProblemPicker(page);
     await page.click(`[data-problem="${LONG_TITLE}"]`);
     assert.equal(
       await page
@@ -2256,7 +2283,7 @@ lobbyTest(
   "switching search modes looks up published titles without changing recommendations",
   async (page) => {
     await lobby(page);
-    await page.click("details.problem-picker summary");
+    await toggleProblemPicker(page);
     await setLevel(page, "Easy", true);
     const chosen = pageOf("two-sum");
     const originalRecommendation = (await snapshot(page)).card;
@@ -2323,7 +2350,7 @@ lobbyTest(
   "search field stays above Topic and leaves room for the focus ring",
   async (page) => {
     await lobby(page);
-    await page.click("details.problem-picker summary");
+    await toggleProblemPicker(page);
     for (const width of [320, 375, 800]) {
       await page.setViewportSize({ width, height: 800 });
       await page.locator("#problem-search").focus();
@@ -2364,11 +2391,12 @@ lobbyTest(
     await openTopicFilter(page);
     const chosen = MEDIUM[0];
     await page.click(`[data-problem="${chosen}"]`);
-    await page.click("details.problem-picker summary");
+    await toggleProblemPicker(page);
     await page.fill("#problem-search", "no-title-has-this-unique-phrase-404");
     assert.equal(await page.locator(".problem-card:visible").count(), 0);
     assert.equal((await snapshot(page)).card, chosen);
 
+    await toggleProblemPicker(page);
     await page.fill("#github-login", "candidate");
     await page.click("#login-link");
     await reaches(
@@ -2379,6 +2407,7 @@ lobbyTest(
         !document.querySelector("#start").disabled,
     );
 
+    await openTopicFilter(page);
     assert.equal((await snapshot(page)).card, chosen);
     assert.equal(
       await page.locator(".problem-card:visible").count(),
@@ -2412,7 +2441,7 @@ lobbyTest(
     await page.click(`[data-problem="${easyArray}"]`);
     assert.equal((await snapshot(page)).card, easyArray);
 
-    await page.click("details.problem-picker summary");
+    await toggleProblemPicker(page);
     await page.fill("#problem-search", "no_such_scenario_title_404");
     assert.equal(
       await page.locator(`[data-problem="${easyArray}"]`).isVisible(),
@@ -2471,7 +2500,7 @@ lobbyTest(
           .locator(`[data-problem="${easyArray}"] .problem-title`)
           .textContent()
       ).trim();
-      await page.click("details.problem-picker summary");
+      await toggleProblemPicker(page);
       await page.fill("#problem-search", scenarioTitle);
       assert.equal(
         await page.locator(`[data-problem="${easyArray}"]`).isVisible(),
@@ -2506,6 +2535,7 @@ lobbyTest(
       assert.notEqual(state.card, easyArray);
       assert.ok(state.card, "the Tree filter found no replacement problem");
       assert.equal(TOPICS_BY_PAGE[state.card].includes("Tree"), true);
+      await toggleProblemPicker(page);
       await page.click("#start");
       await page.waitForURL(/\/interview/);
       assert.equal(new URL(page.url()).searchParams.get("problem"), state.card);
@@ -2526,7 +2556,7 @@ lobbyTest(
     });
     try {
       await lobby(page);
-      await page.click("details.problem-picker summary");
+      await toggleProblemPicker(page);
       const originalRecommendation = (await snapshot(page)).card;
       const scenarioTitle = (
         await page
@@ -2577,7 +2607,7 @@ lobbyTest(
       route.fulfill({ status: 503, body: "unavailable" }),
     );
     await lobby(page);
-    await page.click("details.problem-picker summary");
+    await toggleProblemPicker(page);
     const originalRecommendation = (await snapshot(page)).card;
     const scenarioTitle = (
       await page
@@ -2622,7 +2652,7 @@ lobbyTest(
     });
     try {
       await lobby(page);
-      await page.click("details.problem-picker summary");
+      await toggleProblemPicker(page);
       const scenarioTitle = (
         await page
           .locator(".problem-card:visible .problem-title")
@@ -2678,7 +2708,7 @@ lobbyTest(
       route.fulfill({ status: 404, body: "not found" }),
     );
     await lobby(page);
-    await page.click("details.problem-picker summary");
+    await toggleProblemPicker(page);
     await page.fill("#problem-search", "1. Two Sum");
     await page
       .locator('[name="problem-search-mode"][value="leetcode"]')
@@ -2717,7 +2747,7 @@ lobbyTest(
     });
     await lobby(page);
 
-    await page.click("details.problem-picker summary");
+    await toggleProblemPicker(page);
     await page.waitForFunction(() =>
       document
         .querySelector("#problem-filter-summary")
@@ -2725,7 +2755,7 @@ lobbyTest(
     );
     assert.equal(await page.locator("#problem-topic").isDisabled(), true);
 
-    await page.click("details.problem-picker summary");
+    await toggleProblemPicker(page);
     await openTopicFilter(page);
     assert.equal(requests, 3);
     assert.ok((await page.locator("#problem-topic option").count()) > 1);
@@ -2771,7 +2801,7 @@ lobbyTest(
       card.click();
     }, hardArray);
 
-    await page.click("details.problem-picker summary");
+    await toggleProblemPicker(page);
     await page.selectOption("#problem-topic", "Array");
     const state = await snapshot(page);
     assert.notEqual(state.card, hardArray);
@@ -2797,7 +2827,7 @@ lobbyTest(
     await page.click(`[data-problem="${manual}"]`);
     assert.equal((await snapshot(page)).card, manual);
 
-    await page.click("details.problem-picker summary");
+    await toggleProblemPicker(page);
     await page.fill("#problem-search", "zzzzzz-no-match");
     assert.equal(await page.locator(".problem-card:visible").count(), 0);
     await page.selectOption("#problem-topic", "Array");
@@ -2892,15 +2922,14 @@ lobbyTest(
       "out-of-filter card must be hidden after deselection",
     );
 
-    // Focus must move to problem-picker summary when deselected card hides
+    // Focus stays in the dialog when the deselected card disappears.
     assert.equal(
       await page.evaluate(
         () =>
-          document.activeElement ===
-          document.querySelector("details.problem-picker summary"),
+          document.activeElement === document.querySelector("#problem-search"),
       ),
       true,
-      "focus must move to problem-picker summary when deselected card hides",
+      "focus must move to search when the deselected card hides",
     );
   },
 );
@@ -3036,14 +3065,14 @@ lobbyTest(
     assert.match(initial.note, /Review due after/);
 
     // Open picker and manually select the recommended card
-    await page.click("details.problem-picker summary");
+    await toggleProblemPicker(page);
     await page.click(`[data-problem="${dueProblem}"]`);
 
     const selected = await snapshot(page);
     assert.equal(selected.card, dueProblem);
     assert.match(selected.note, /Selected problem:/);
 
-    await page.click("details.problem-picker summary");
+    await toggleProblemPicker(page);
     // Click it again to deselect
     await page.click(`[data-problem="${dueProblem}"]`);
 
@@ -3073,13 +3102,13 @@ lobbyTest(
     const otherCard = MEDIUM.find((id) => id !== initial.card) ?? MEDIUM[1];
     const cardButton = page.locator(`[data-problem="${otherCard}"]`);
 
-    await page.click("details.problem-picker summary");
+    await toggleProblemPicker(page);
     await cardButton.click();
 
     const manualPick = await snapshot(page);
     assert.equal(manualPick.card, otherCard);
 
-    await page.click("details.problem-picker summary");
+    await toggleProblemPicker(page);
     // Focus the button and release via keyboard
     await cardButton.focus();
     await page.keyboard.press("Enter");
@@ -3116,7 +3145,7 @@ lobbyTest(
   async (page) => {
     const release = await heldLobby(page);
     try {
-      await page.click("details.problem-picker summary");
+      await toggleProblemPicker(page);
       const card = MEDIUM[0];
       const cardButton = page.locator(`[data-problem="${card}"]`);
 
@@ -3127,7 +3156,7 @@ lobbyTest(
       assert.equal(selected.card, card);
       assert.equal(selected.startDisabled, false);
 
-      await page.click("details.problem-picker summary");
+      await toggleProblemPicker(page);
       // Deselect the card while history is still held
       await cardButton.click();
 
@@ -3155,7 +3184,7 @@ lobbyTest(
     reports = [missed(MEDIUM[0]), missed(MEDIUM[1])];
     const release = await heldLobby(page);
     try {
-      await page.click("details.problem-picker summary");
+      await toggleProblemPicker(page);
       const card = MEDIUM[0];
       const cardButton = page.locator(`[data-problem="${card}"]`);
 
@@ -3169,7 +3198,7 @@ lobbyTest(
         page,
         () => !document.querySelector("#random-problem").disabled,
       );
-      await page.click("details.problem-picker summary");
+      await toggleProblemPicker(page);
       // Deselect the card after held history has settled
       await cardButton.click();
 
@@ -3191,18 +3220,18 @@ lobbyTest(
 );
 
 lobbyTest(
-  "releasing a card before history loads moves focus to summary if card gets hidden",
+  "releasing a card before history loads moves focus to search if card gets hidden",
   async (page) => {
     const errors = [];
     page.on("pageerror", (error) => errors.push(error.message));
     reports = [missed(MEDIUM[0]), missed(MEDIUM[1])];
     const release = await heldLobby(page);
     try {
-      await page.click("details.problem-picker summary");
+      await toggleProblemPicker(page);
       const cardButton = page.locator(`[data-problem="${MEDIUM[0]}"]`);
 
       await cardButton.click();
-      await page.click("details.problem-picker summary");
+      await toggleProblemPicker(page);
       await cardButton.click();
       assert.equal(
         await isFocused(cardButton),
@@ -3216,9 +3245,9 @@ lobbyTest(
       assert.deepEqual((await snapshot(page)).levels, ["Easy"]);
       assert.equal(await cardButton.isHidden(), true);
       assert.equal(
-        await isFocused(page.locator("details.problem-picker summary")),
+        await isFocused(page.locator("#problem-search")),
         true,
-        "focus must move to the picker summary when the focused card is hidden",
+        "focus must move to search when the focused card is hidden",
       );
       assert.deepEqual(errors, []);
     } finally {
@@ -3291,7 +3320,7 @@ lobbyTest(
     );
     // Clicking the visible review card also must not lose its exception.
     await page.locator(`[data-problem="${due}"]`).click();
-    await page.click("details.problem-picker summary");
+    await toggleProblemPicker(page);
     await page.fill("#problem-search", "no-title-matches-this-query-404");
     await page.fill("#problem-search", "");
     assert.equal((await cardInfo(page, due)).hidden, false);
@@ -3303,8 +3332,8 @@ lobbyTest(
   async (page) => {
     reports = [savedAttempt(EASY[0])];
     await lobby(page);
-    await openTopicFilter(page);
     await page.getByRole("button", { name: "Try again", exact: true }).click();
+    await openTopicFilter(page);
     assert.equal((await snapshot(page)).card, EASY[0]);
     assert.equal((await cardInfo(page, EASY[0])).hidden, false);
 
@@ -3353,6 +3382,7 @@ lobbyTest(
     assert.match(state.note, /Review due after/);
     assert.equal((await cardInfo(page, due)).hidden, false);
 
+    await toggleProblemPicker(page);
     await page.click("#start");
     await page.waitForURL(/\/interview/);
     assert.equal(new URL(page.url()).searchParams.get("problem"), due);
@@ -3398,6 +3428,7 @@ lobbyTest(
     assert.equal(TOPICS_BY_PAGE[redrawn.card].includes(topic), true);
     assert.equal((await cardInfo(page, redrawn.card)).hidden, false);
 
+    await toggleProblemPicker(page);
     await page.click("#start");
     await page.waitForURL(/\/interview/);
     assert.equal(new URL(page.url()).searchParams.get("problem"), redrawn.card);
@@ -3509,6 +3540,7 @@ lobbyTest(
     await page.waitForFunction(() =>
       document.querySelector("#recent-weak-topics button"),
     );
+    await toggleProblemPicker(page);
     assert.equal(
       await topics
         .getByRole("button", {
@@ -3541,7 +3573,7 @@ lobbyTest(
     assert.doesNotMatch(await topics.textContent(), /few interviews/);
     await openTopicFilter(page);
     const { levels } = await snapshot(page);
-    await page.click("details.problem-picker summary");
+    await toggleProblemPicker(page);
     const button = topics.getByRole("button", {
       name: "Filter problems by Hash Table",
       exact: true,
@@ -3578,6 +3610,7 @@ lobbyTest(
       assert.ok(visible.length > 0);
       for (const id of visible)
         assert.ok(TOPICS_BY_PAGE[id].includes("Hash Table"));
+      await toggleProblemPicker(page);
     }
   },
 );
@@ -3591,6 +3624,7 @@ lobbyTest(
     ];
     await lobby(page);
     await openTopicFilter(page);
+    await toggleProblemPicker(page);
     const button = page.getByRole("button", {
       name: "Filter problems by Hash Table",
       exact: true,
@@ -3642,7 +3676,7 @@ lobbyTest(
       await weakTopics.textContent(),
       /Topic filters load when the specific-problem picker opens\.$/,
     );
-    await page.click("details.problem-picker summary");
+    await toggleProblemPicker(page);
     await page.waitForFunction(
       () =>
         document.querySelector("#problem-filter-summary").textContent ===
@@ -3654,7 +3688,7 @@ lobbyTest(
     );
     assert.equal(await page.locator("#recent-weak-topics button").count(), 0);
     failing.delete("/problem-topics.json");
-    await page.click("details.problem-picker summary");
+    await toggleProblemPicker(page);
     await openTopicFilter(page);
     await page.waitForFunction(() =>
       document.querySelector("#recent-weak-topics button"),
@@ -4536,7 +4570,7 @@ lobbyTest(
     assert.deepEqual(before.levels, ["Medium", "Hard"]);
     assert.equal(before.duration, "60");
 
-    await page.click("details.problem-picker summary");
+    await toggleProblemPicker(page);
     await page.click(`[data-problem="${pageOf("candy")}"]`);
     const after = await snapshot(page);
 
@@ -4575,7 +4609,7 @@ lobbyTest(
     await lobby(page);
     await setLevel(page, "Hard", true);
     await page.click('[data-duration="60"]');
-    await page.click("details.problem-picker summary");
+    await toggleProblemPicker(page);
     const eligible = await page
       .locator(".problem-card:not([hidden])")
       .evaluateAll((cards) => cards.map((card) => card.dataset.problem));
@@ -4598,19 +4632,27 @@ lobbyTest(
     await restore(page);
     await awaitReady(page);
     assert.equal((await snapshot(page)).card, first.card);
-    const button = await page.locator("#random-problem").boundingBox();
-    const recommendation = await page.locator("#recommendation").boundingBox();
+    // Selection scrolls the page; compare document positions, not the viewport.
+    const bounds = (node) => {
+      const { x, y, width, height } = node.getBoundingClientRect();
+      return { x, y: y + window.scrollY, width, height };
+    };
+    const button = await page.locator("#random-problem").evaluate(bounds);
+    const recommendation = await page
+      .locator("#recommendation")
+      .evaluate(bounds);
     assert.ok(button.x + button.width <= recommendation.x);
     assert.ok(
       recommendation.y >= button.y &&
         recommendation.y < button.y + button.height,
+      JSON.stringify({ button, recommendation }),
     );
 
     await page.click("#random-problem");
     const second = await snapshot(page);
     assert.equal(second.card, eligible[0]);
     assert.deepEqual(
-      await page.locator("#random-problem").boundingBox(),
+      await page.locator("#random-problem").evaluate(bounds),
       button,
     );
     await page.click("#start");
@@ -4794,7 +4836,7 @@ for (const first of [0, 1]) {
           latestDone ? MEDIUM[0] : null,
         );
       }
-      await page.click("details.problem-picker summary");
+      await toggleProblemPicker(page);
       await page.click(`[data-problem="${MEDIUM[1]}"]`);
       assert.equal((await snapshot(page)).card, MEDIUM[1]);
       await page.click("#random-problem");
@@ -5583,7 +5625,9 @@ lobbyTest(
     await page.fill("#problem-search", "zzzzzz-no-match");
     assert.equal(await page.locator(".problem-card:visible").count(), 0);
 
+    await toggleProblemPicker(page);
     await page.getByRole("button", { name: "Try again", exact: true }).click();
+    await openTopicFilter(page);
     assert.equal((await snapshot(page)).card, EASY[0]);
     assert.equal(
       await page.locator(".problem-card:visible").count(),
@@ -5813,9 +5857,11 @@ for (const filter of ["difficulty", "topic"]) {
       assert.equal(await entry.isHidden(), true);
       assert.equal(await card.isHidden(), true);
       assert.equal(await checkbox.isHidden(), true);
+      await toggleProblemPicker(page);
       await page
         .getByRole("button", { name: "Try again", exact: true })
         .click();
+      await openTopicFilter(page);
       const retried = await snapshot(page);
       assert.equal(retried.card, EASY[0]);
       assert.equal(retried.pressed, EASY[0]);
@@ -5831,6 +5877,7 @@ for (const filter of ["difficulty", "topic"]) {
       assert.equal(await card.isVisible(), true);
       assert.equal(await checkbox.isVisible(), true);
       assert.equal(await checkbox.isChecked(), true);
+      await toggleProblemPicker(page);
       await page.click("#start");
       await page.waitForURL("**/interview?**");
       assert.equal(new URL(page.url()).searchParams.get("problem"), EASY[0]);
@@ -6166,7 +6213,7 @@ lobbyTest(
 
     // All of this while the history is held open, where there is nothing to
     // choose a replacement with.
-    await page.click("details.problem-picker summary");
+    await toggleProblemPicker(page);
     await page.click(`[data-problem="${pageOf("jump-game")}"]`);
     assert.equal((await snapshot(page)).card, pageOf("jump-game"));
 
@@ -6211,7 +6258,7 @@ lobbyTest(
   async (page) => {
     const release = await heldLobby(page);
 
-    await page.click("details.problem-picker summary");
+    await toggleProblemPicker(page);
     await page.click(`[data-problem="${pageOf("jump-game")}"]`);
 
     // Adding a level does not hide their card, so it is not a reason to discard
@@ -6605,7 +6652,7 @@ lobbyTest(
     page.on("pageerror", (error) => errors.push(error.message));
     const release = await heldLobby(page);
 
-    await page.click("details.problem-picker summary");
+    await toggleProblemPicker(page);
     await page.click(`[data-problem="${pageOf("jump-game")}"]`);
     await page.fill("#github-login", "candidate");
 
@@ -6627,7 +6674,7 @@ lobbyTest(
 
     // A second card while the button reads "Recording GitHub...": re-arming it
     // here buys the candidate a second navigation out of one start.
-    await page.click("details.problem-picker summary");
+    await toggleProblemPicker(page);
     await page.click(`[data-problem="${pageOf("gas-station")}"]`);
     assert.equal(
       (await snapshot(page)).startDisabled,
@@ -8098,7 +8145,7 @@ lobbyTest(
       await page.press("#github-login", "Enter");
       await login;
       await page.evaluate(() => document.querySelector("#start").click());
-      await page.click("details.problem-picker summary");
+      await toggleProblemPicker(page);
       await page.click(`[data-problem="${pageOf("gas-station")}"]`);
       await page.evaluate(() => document.querySelector("#start").click());
       assert.equal(
@@ -8178,7 +8225,7 @@ lobbyTest(
       await page.press("#github-login", "Enter");
       await account;
       await assertBusy();
-      await page.click("details.problem-picker summary");
+      await toggleProblemPicker(page);
       await page.click(`[data-problem="${pageOf("gas-station")}"]`);
       assert.equal(
         await page.locator("#start").isDisabled(),
@@ -8268,7 +8315,7 @@ for (const trigger of ["Enter", "button"]) {
       }, focusedAttempt(EASY[0]).payload);
       await lobby(page);
       await page.check("#practice-focus-share-input");
-      await page.click("details.problem-picker summary");
+      await toggleProblemPicker(page);
       await setLevel(page, "Hard", true);
       await page.click(`[data-problem="${MEDIUM[1]}"]`);
       await page.click('[data-duration="60"]');
@@ -8400,7 +8447,7 @@ lobbyTest(
     assert.equal(await page.locator("#login-link").isVisible(), true);
     assert.equal(await page.locator("#login-link").isDisabled(), false);
     assert.equal(await page.locator("#start").isDisabled(), true);
-    await page.click("details.problem-picker summary");
+    await toggleProblemPicker(page);
     await page.click(`[data-problem="${MEDIUM[1]}"]`);
     assert.equal(
       await page.locator("#start").isDisabled(),
@@ -8862,7 +8909,7 @@ for (const trigger of ["header", "Start"]) {
       session = { signedIn: false, loginRequired: true };
       await stallTimedRequest(page, { url: "/api/login" });
       await lobby(page);
-      await page.click("details.problem-picker summary");
+      await toggleProblemPicker(page);
       await page.click(`[data-problem="${MEDIUM[1]}"]`);
       await page.click('[data-duration="60"]');
       await page.fill("#github-login", "candidate");
@@ -9835,246 +9882,600 @@ for (const storage of ["account", "device"]) {
   });
 }
 
-lobbyTest(
-  "problem cards span desktop panels and return home on narrow screens",
-  async (page) => {
-    await page.setViewportSize({ width: 1440, height: 1000 });
+for (const entry of ["weak topic", "offscreen picker"]) {
+  lobbyTest(
+    `closing the ${entry} preserves the lobby scroll position`,
+    async (page) => {
+      await page.setViewportSize({ width: 390, height: 600 });
+      reports = [20, 10].map((createdAt) =>
+        missed(EASY[0], { createdAt, topics: ["Hash Table"] }),
+      );
+      await lobby(page);
+      await openTopicFilter(page);
+      await page.keyboard.press("Escape");
+      const dialog = problemPickerDialog(page);
+      await dialog.waitFor({ state: "hidden" });
+      const button = page.getByRole("button", {
+        name: "Filter problems by Hash Table",
+        exact: true,
+      });
+      await button.evaluate((node) => node.scrollIntoView({ block: "center" }));
+      const before = (await button.boundingBox()).y;
+      assert.ok((await page.evaluate(() => scrollY)) > 600);
+      if (entry === "weak topic") await button.click();
+      else
+        await page.locator("details.problem-picker").evaluate((node) => {
+          node.open = true;
+        });
+      await dialog.waitFor({ state: "visible" });
+      await page.keyboard.press("Escape");
+      await dialog.waitFor({ state: "hidden" });
+      if (entry === "weak topic") assert.ok(await isFocused(button));
+      await page.waitForFunction(
+        (top) =>
+          Math.abs(
+            document
+              .querySelector("#recent-weak-topics button")
+              .getBoundingClientRect().y - top,
+          ) < 2,
+        before,
+        { timeout: 3000 },
+      );
+      assert.ok(
+        await button.evaluate((node) => {
+          const rect = node.getBoundingClientRect();
+          return rect.top >= 0 && rect.bottom <= innerHeight;
+        }),
+      );
+    },
+  );
+}
+
+for (const state of ["available", "hidden", "removed", "selected"]) {
+  lobbyTest(`picker restores focus with a ${state} outcome`, async (page) => {
+    await page.setViewportSize({ width: 390, height: 600 });
+    reports = [20, 10].map((createdAt) =>
+      missed(EASY[0], { createdAt, topics: ["Hash Table"] }),
+    );
     await lobby(page);
-    const grid = page.locator(".problem-grid");
-    const picker = page.locator("details.problem-picker");
-    const summary = picker.locator("summary");
-    assert.equal(await grid.isVisible(), false);
     await openTopicFilter(page);
-    await grid.waitFor({ state: "visible" });
-    assert.ok(
-      await grid.evaluate(
-        (node) =>
-          node.previousElementSibling ===
-            document.querySelector(".setup-panel") &&
-          node.nextElementSibling === document.querySelector(".session-panel"),
-      ),
+    await page.keyboard.press("Escape");
+    const dialog = problemPickerDialog(page);
+    await dialog.waitFor({ state: "hidden" });
+    const summary = page.locator("details.problem-picker > summary");
+    const button = page.getByRole("button", {
+      name: "Filter problems by Hash Table",
+      exact: true,
+    });
+    await button.focus();
+    await page.keyboard.press("Enter");
+    await dialog.waitFor({ state: "visible" });
+    if (state === "hidden" || state === "removed") {
+      await button.evaluate((node, state) => {
+        if (state === "removed") node.remove();
+        else node.hidden = true;
+      }, state);
+    }
+    if (state === "selected")
+      await dialog.locator(".problem-card:visible").first().click();
+    else
+      await dialog.getByRole("button", { name: "Done", exact: true }).click();
+    await dialog.waitFor({ state: "hidden" });
+    assert.ok(await isFocused(state === "available" ? button : summary));
+    await summary.click();
+    await dialog.waitFor({ state: "visible" });
+    await page.keyboard.press("Escape");
+    await dialog.waitFor({ state: "hidden" });
+    assert.ok(await isFocused(summary));
+  });
+}
+
+lobbyTest(
+  "inline weak topic entry brings the focused filter into view",
+  async (page) => {
+    await page.setViewportSize({ width: 390, height: 600 });
+    await page.addInitScript(() => {
+      window.HTMLDialogElement = undefined;
+    });
+    reports = [20, 10].map((createdAt) =>
+      missed(EASY[0], { createdAt, topics: ["Hash Table"] }),
     );
-    await page.locator("#problem-filters-reset").focus();
-    await page.keyboard.press("Tab");
+    await lobby(page);
+    await openTopicFilter(page);
+    await page.getByRole("button", { name: "Done", exact: true }).click();
+    const button = page.getByRole("button", {
+      name: "Filter problems by Hash Table",
+      exact: true,
+    });
+    await button.click();
+    const topic = page.locator("#problem-topic");
+    assert.ok(await isFocused(topic));
     assert.ok(
-      await grid.evaluate((node) => node.contains(document.activeElement)),
+      await topic.evaluate((node) => {
+        const rect = node.getBoundingClientRect();
+        return (
+          document.elementFromPoint(
+            rect.x + rect.width / 2,
+            rect.y + rect.height / 2,
+          ) === node
+        );
+      }),
     );
-    const framesAgree = await page.evaluate(async () => {
-      const picker = document.querySelector("details.problem-picker");
-      const grid = document.querySelector(".problem-grid");
-      const outline = document.querySelector(".problem-picker-outline");
-      const summary = picker.querySelector("summary");
-      for (let index = 0; index < 12; index++) {
-        summary.click();
-        await new Promise(requestAnimationFrame);
-        if (
-          Boolean(grid.hidden) === picker.open ||
-          outline.hasAttribute("hidden") === picker.open ||
-          document
-            .querySelector(".lobby")
-            .classList.contains("problem-picker-connected") !== picker.open
-        )
-          return false;
+  },
+);
+
+for (const [width, height, fontSize] of [
+  [320, 220, 16],
+  [390, 480, 32],
+]) {
+  lobbyTest(
+    `normal picker entry keeps search visible at ${width}x${height} with ${fontSize}px text`,
+    async (page) => {
+      await page.setViewportSize({ width, height });
+      await lobby(page);
+      await page.addStyleTag({ content: `html { font-size: ${fontSize}px; }` });
+      const dialog = problemPickerDialog(page);
+      const search = page.locator("#problem-search");
+      for (const query of ["", "Pipeline"]) {
+        await page.locator("details.problem-picker > summary").click();
+        await dialog.waitFor({ state: "visible" });
+        assert.ok(await isFocused(search));
+        assert.equal(await search.inputValue(), query);
+        assert.ok(
+          await search.evaluate((node) => {
+            const rect = node.getBoundingClientRect();
+            return (
+              document.elementFromPoint(
+                rect.x + rect.width / 2,
+                rect.y + rect.height / 2,
+              ) === node
+            );
+          }),
+        );
+        await search.fill("Pipeline");
+        await page.keyboard.press("Escape");
+        await dialog.waitFor({ state: "hidden" });
       }
-      return picker.open;
-    });
-    assert.ok(
-      framesAgree,
-      "cards and outline must agree with the native picker before paint",
-    );
-    await grid.evaluate((node) => {
-      for (const [index, entry] of [
-        ...node.querySelectorAll(".problem-entry"),
-      ].entries())
-        entry.hidden = index > 0;
-    });
-    await page.waitForFunction(() => {
-      const path = document.querySelector(".problem-picker-outline path");
-      const lobby = document.querySelector(".lobby").getBoundingClientRect();
-      const panel = document
-        .querySelector(".setup-panel")
-        .getBoundingClientRect();
-      const grid = document.querySelector(".problem-grid");
-      const card = grid.querySelector(".problem-card").getBoundingClientRect();
-      const expected =
-        Math.max(
-          panel.right,
-          card.right + parseFloat(getComputedStyle(grid).paddingRight),
-        ) - lobby.left;
-      const bounds = path.getBBox();
-      return Math.abs(bounds.x + bounds.width - expected) < 1;
-    });
-    await grid.evaluate((node) => {
-      // Filtering hides both the entry and its card, so both come back.
-      for (const item of node.querySelectorAll(".problem-entry, .problem-card"))
-        item.hidden = false;
-    });
-    const bounds = await page.evaluate(() => {
-      const setup = document
-        .querySelector(".setup-grid")
-        .getBoundingClientRect();
-      const cards = document
-        .querySelector(".problem-grid")
-        .getBoundingClientRect();
-      return {
-        left: Math.abs(setup.left - cards.left),
-        width: Math.abs(setup.width - cards.width),
-        below: [...document.querySelectorAll(".setup-panel")].every(
-          (panel) => cards.top >= panel.getBoundingClientRect().bottom + 24,
-        ),
+    },
+  );
+}
+
+for (const [height, fontSize] of [
+  [300, 16],
+  [600, 32],
+]) {
+  lobbyTest(
+    `weak topic focus stays visible at 390x${height} with ${fontSize}px text`,
+    async (page) => {
+      await page.setViewportSize({ width: 390, height });
+      reports = [20, 10].map((createdAt) =>
+        missed(EASY[0], { createdAt, topics: ["Hash Table"] }),
+      );
+      await lobby(page);
+      await page.addStyleTag({ content: `html { font-size: ${fontSize}px; }` });
+      await openTopicFilter(page);
+      await page.keyboard.press("Escape");
+      const dialog = problemPickerDialog(page);
+      await dialog.waitFor({ state: "hidden" });
+      await page
+        .getByRole("button", {
+          name: "Filter problems by Hash Table",
+          exact: true,
+        })
+        .click();
+      await dialog.waitFor({ state: "visible" });
+      assert.ok(await isFocused(page.locator("#problem-topic")));
+      assert.ok(
+        await page.locator("#problem-topic").evaluate((node) => {
+          const rect = node.getBoundingClientRect();
+          return (
+            document.elementFromPoint(
+              rect.x + rect.width / 2,
+              rect.y + rect.height / 2,
+            ) === node
+          );
+        }),
+      );
+    },
+  );
+}
+
+lobbyTest(
+  "practice list write failures remain accessible inside the picker",
+  async (page) => {
+    await page.addInitScript((key) => {
+      const setItem = Storage.prototype.setItem;
+      Storage.prototype.setItem = function (name, value) {
+        if (name === key) throw new DOMException("Full", "QuotaExceededError");
+        return setItem.call(this, name, value);
       };
-    });
-    assert.ok(bounds.left < 1 && bounds.width < 1 && bounds.below);
+    }, PRACTICE_LIST_KEY);
+    await lobby(page);
+    await openTopicFilter(page);
+    await practiceInput(page, MEDIUM[0]).check();
+    const dialog = problemPickerDialog(page);
+    assert.match(
+      await dialog.ariaSnapshot(),
+      /Kept for this visit only; browser storage is unavailable/,
+    );
+    const status = page.locator("#practice-list-status");
+    await status.scrollIntoViewIfNeeded();
+    assert.ok(await status.isVisible());
+    assert.equal(await status.getAttribute("aria-live"), "polite");
+    await page.keyboard.press("Escape");
+    await dialog.waitFor({ state: "hidden" });
     assert.equal(
-      await page.locator(".setup-panel:first-child #problem-topic").count(),
+      await page.locator(".practice-list-picker #practice-list-status").count(),
       1,
     );
-    for (const selector of [".setup-panel", ".session-panel", ".start-panel"]) {
-      const outline = await page
-        .locator(".problem-picker-outline path")
-        .getAttribute("d");
-      await page
-        .locator(selector)
-        .first()
-        .evaluate((node) => {
-          node.style.minHeight = `${node.getBoundingClientRect().height + 600}px`;
+    await page.click("#practice-list-pick");
+    assert.equal((await snapshot(page)).card, MEDIUM[0]);
+    await openTopicFilter(page);
+    await practiceInput(page, MEDIUM[0]).uncheck();
+    assert.match(
+      await dialog.ariaSnapshot(),
+      /0 problems in your list.*Kept for this visit only/,
+    );
+  },
+);
+
+for (const modal of [true, false]) {
+  lobbyTest(
+    `Done closes the ${modal ? "modal" : "inline"} picker without losing choices`,
+    async (page) => {
+      if (!modal) {
+        await page.addInitScript(() => {
+          window.HTMLDialogElement = undefined;
         });
+      }
+      await page.setViewportSize({ width: 390, height: 844 });
+      await lobby(page);
+      const before = await snapshot(page);
+      await openTopicFilter(page);
+      const picker = page.locator("details.problem-picker");
+      const done = picker.getByRole("button", { name: "Done", exact: true });
+      assert.ok(await done.isVisible());
+      await page.fill("#problem-search", "Pipeline");
+      const saved = practiceInput(page, "pipeline-stage-gains");
+      await saved.check();
+      await done.click();
       await page.waitForFunction(
-        (previous) =>
-          document
-            .querySelector(".problem-picker-outline path")
-            .getAttribute("d") !== previous,
-        outline,
+        () => !document.querySelector("details.problem-picker").open,
+      );
+      if (modal) {
+        await page.getByRole("dialog").waitFor({ state: "hidden" });
+      }
+      assert.ok(await isFocused(picker.locator("summary")));
+      assert.equal((await snapshot(page)).card, before.card);
+      await openTopicFilter(page);
+      assert.equal(
+        await page.locator("#problem-search").inputValue(),
+        "Pipeline",
+      );
+      assert.ok(await saved.isChecked());
+      await page.locator("#problem-search").focus();
+      await page.keyboard.press("Shift+Tab");
+      assert.ok(await isFocused(done));
+      await page.keyboard.press("Enter");
+      await page.waitForFunction(
+        () => !document.querySelector("details.problem-picker").open,
+      );
+      assert.ok(await isFocused(picker.locator("summary")));
+    },
+  );
+}
+
+for (const width of [1440, 800, 390]) {
+  lobbyTest(
+    `problem picker opens a modal and returns without losing state at ${width}px`,
+    async (page) => {
+      await page.setViewportSize({ width, height: 900 });
+      await lobby(page);
+      await page.click('[data-duration="60"]');
+      const before = await snapshot(page);
+      await openTopicFilter(page);
+      const picker = page.locator("details.problem-picker");
+      const summary = picker.locator("summary");
+      const dialog = problemPickerDialog(page);
+      assert.equal(await dialog.isVisible(), true);
+      assert.equal(
+        await dialog.evaluate((node) => node.matches(":modal")),
+        true,
+      );
+      assert.equal(await page.locator(".session-panel").isVisible(), true);
+      assert.equal(await summary.isVisible(), false);
+      const panel = await dialog.boundingBox();
+      assert.ok(panel.x > 0 && panel.width < width);
+      await page.locator("#start").evaluate((node) => node.focus());
+      assert.equal(
+        await dialog.evaluate((node) => node.contains(document.activeElement)),
+        true,
+      );
+      await page.mouse.click(panel.x + 4, panel.y + 4);
+      assert.equal(await dialog.isVisible(), true);
+      await page.mouse.move(panel.x + 4, panel.y + 4);
+      await page.mouse.down();
+      await page.mouse.move(2, 2);
+      await page.mouse.up();
+      assert.equal(await dialog.isVisible(), true);
+      await page.fill("#problem-search", "Pipeline");
+      assert.equal(
+        await page.locator('[data-problem="pipeline-stage-gains"]').isVisible(),
+        true,
       );
       assert.ok(
-        await page.evaluate(() => {
-          const cards = document
-            .querySelector(".problem-grid")
-            .getBoundingClientRect();
-          return [...document.querySelectorAll(".setup-panel")].every(
-            (panel) => cards.top >= panel.getBoundingClientRect().bottom + 24,
+        await page.evaluate(
+          () => document.documentElement.scrollWidth <= innerWidth,
+        ),
+      );
+      await page.keyboard.press("Escape");
+      await dialog.waitFor({ state: "hidden", timeout: 3000 });
+      assert.equal(await dialog.isVisible(), false);
+      assert.equal(await page.locator(".session-panel").isVisible(), true);
+      assert.equal((await snapshot(page)).duration, before.duration);
+      assert.equal((await snapshot(page)).card, before.card);
+      assert.ok(
+        await summary.evaluate((node) => node === document.activeElement),
+      );
+      await summary.click();
+      assert.equal(
+        await page.locator("#problem-search").inputValue(),
+        "Pipeline",
+      );
+      await page.mouse.click(2, 2);
+      await dialog.waitFor({ state: "hidden" });
+      assert.equal(await dialog.isVisible(), false);
+      assert.equal(await summary.getAttribute("aria-haspopup"), "dialog");
+      assert.equal(
+        await summary.evaluate((node) => getComputedStyle(node).listStyleType),
+        "none",
+      );
+      await summary.click();
+      await page.click('[data-problem="pipeline-stage-gains"]');
+      assert.equal(await picker.evaluate((node) => node.open), false);
+      assert.equal(await page.locator(".start-panel").isVisible(), true);
+      assert.equal((await snapshot(page)).card, "pipeline-stage-gains");
+    },
+  );
+}
+
+test("the picker keeps the page's classic scrollbar", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const visibleScrollbars = await launchChromium({
+    ignoreDefaultArgs: ["--hide-scrollbars"],
+  });
+  assert.ok(visibleScrollbars);
+  t.after(() => visibleScrollbars.close());
+  const page = await visibleScrollbars.newPage({
+    viewport: { width: 1110, height: 700 },
+  });
+  await lobby(page);
+  const width = () => page.evaluate(() => document.documentElement.clientWidth);
+  const before = await width();
+  assert.ok(before < 1110, "the page must have a classic scrollbar");
+  await openTopicFilter(page);
+  assert.equal(await width(), before);
+  await page.keyboard.press("Escape");
+  await page.locator(".problem-picker-dialog").waitFor({ state: "hidden" });
+  assert.equal(await width(), before);
+});
+
+for (const interruption of ["touch cancellation", "Escape while pressed"]) {
+  lobbyTest(
+    `the picker forgets a backdrop press after ${interruption}`,
+    async (page) => {
+      await lobby(page);
+      await openTopicFilter(page);
+      const dialog = page.locator(".problem-picker-dialog");
+      if (interruption === "touch cancellation") {
+        await dialog.evaluate((node) => {
+          node.addEventListener(
+            "pointercancel",
+            () => (node.dataset.cancelled = "true"),
+            { once: true },
           );
-        }),
-      );
-      await page
-        .locator(selector)
-        .first()
-        .evaluate((node) => node.style.removeProperty("min-height"));
-      await page.evaluate(
-        () =>
-          new Promise((resolve) =>
-            requestAnimationFrame(() => requestAnimationFrame(resolve)),
-          ),
-      );
-    }
-    const first = grid.locator(".problem-card:visible").first();
-    const id = await first.getAttribute("data-problem");
-    await first.click();
-    await summary.click();
-    assert.equal(
-      await grid.evaluate((node) => {
-        // Rendered cards, not unhidden ones: filtering hides the enclosing
-        // entry, and a card inside it measures as a zero box at the top.
-        const cards = [...node.querySelectorAll(".problem-card")].filter(
-          (card) => card.checkVisibility(),
+        });
+        const input = await page.context().newCDPSession(page);
+        await input.send("Input.dispatchTouchEvent", {
+          type: "touchStart",
+          touchPoints: [{ x: 2, y: 100 }],
+        });
+        await input.send("Input.dispatchTouchEvent", {
+          type: "touchMove",
+          touchPoints: [{ x: 2, y: 250 }],
+        });
+        await input.send("Input.dispatchTouchEvent", {
+          type: "touchEnd",
+          touchPoints: [],
+        });
+        await page.waitForFunction(
+          () =>
+            document.querySelector(".problem-picker-dialog").dataset.cancelled,
         );
-        const top = cards[0].getBoundingClientRect().top;
-        return cards.filter(
-          (card) => Math.abs(card.getBoundingClientRect().top - top) < 1,
-        ).length;
-      }),
-      4,
-    );
-    assert.ok(
-      await page.evaluate(() => {
-        const topic = document
-          .querySelector("#problem-topic")
-          .getBoundingClientRect();
-        const reset = document
-          .querySelector("#problem-filters-reset")
-          .getBoundingClientRect();
-        return Math.abs(topic.top - reset.top) < 1;
-      }),
-    );
-    const width = (await first.boundingBox()).width;
-    await page.setViewportSize({ width: 1600, height: 1000 });
-    assert.ok(Math.abs((await first.boundingBox()).width - width) < 1);
-    for (const viewportWidth of [1101, 1100, 1000, 761]) {
-      await page.setViewportSize({ width: viewportWidth, height: 1000 });
-      await page.waitForFunction(() =>
-        document.querySelector(".setup-grid > .problem-grid"),
-      );
-      const layout = await page.locator(".setup-grid").evaluate((node) => {
-        const start = node
-          .querySelector(".start-panel")
-          .getBoundingClientRect();
-        const cards = node
-          .querySelector(".problem-grid")
-          .getBoundingClientRect();
-        return {
-          columns: getComputedStyle(node).gridTemplateColumns.split(" ").length,
-          startAboveCards: start.bottom <= cards.top,
-          startBelowCards: start.top >= cards.bottom,
-        };
-      });
-      assert.equal(layout.columns, viewportWidth > 1100 ? 3 : 2);
-      assert.equal(layout.startAboveCards, viewportWidth > 1100);
-      assert.equal(layout.startBelowCards, viewportWidth <= 1100);
-      assert.ok(
-        await page.evaluate(() => {
-          const setup = document
-            .querySelector(".setup-grid")
-            .getBoundingClientRect();
-          const cards = document
-            .querySelector(".problem-grid")
-            .getBoundingClientRect();
-          const panels = [...document.querySelectorAll(".setup-panel")].slice(
-            0,
-            2,
-          );
-          return (
-            Math.abs(setup.width - cards.width) < 1 &&
-            Math.abs(setup.left - cards.left) < 1 &&
-            panels.every(
-              (panel) => cards.top >= panel.getBoundingClientRect().bottom + 24,
-            ) &&
-            document.documentElement.scrollWidth <= innerWidth
-          );
-        }),
-      );
-    }
-    await first.focus();
-    await page.setViewportSize({ width: 760, height: 1000 });
-    await page.waitForFunction(() =>
-      document.querySelector("details.problem-picker .problem-grid"),
-    );
+      } else {
+        await page.mouse.move(2, 2);
+        await page.mouse.down();
+        await page.keyboard.press("Escape");
+        await dialog.waitFor({ state: "hidden" });
+        await page.mouse.up();
+        await page.keyboard.press("Enter");
+        await dialog.waitFor({ state: "visible" });
+      }
+      const checkbox = page.locator("#show-sources");
+      const before = await checkbox.isChecked();
+      await checkbox.focus();
+      await page.keyboard.press("Space");
+      assert.equal(await checkbox.isChecked(), !before);
+      assert.equal(await dialog.isVisible(), true);
+    },
+    { hasTouch: true },
+  );
+}
+
+lobbyTest(
+  "a keyboard click cannot finish a held backdrop press",
+  async (page) => {
+    await lobby(page);
+    await openTopicFilter(page);
+    await page.mouse.move(2, 2);
+    await page.mouse.down();
+    const checkbox = page.locator("#show-sources");
+    const before = await checkbox.isChecked();
+    await checkbox.focus();
+    await page.keyboard.press("Space");
+    assert.equal(await checkbox.isChecked(), !before);
     assert.equal(
-      await first.evaluate((node) => node === document.activeElement),
+      await page.locator(".problem-picker-dialog").isVisible(),
       true,
     );
-    assert.equal(
-      await page.locator(`[data-problem="${id}"]`).getAttribute("aria-pressed"),
-      "true",
-    );
-    await summary.click();
-    await grid.waitFor({ state: "hidden" });
-    await page.setViewportSize({ width: 1440, height: 1000 });
-    await page.waitForFunction(() =>
-      document.querySelector(".setup-grid > .problem-grid"),
-    );
-    assert.equal(await grid.isVisible(), false);
-    await summary.click();
-    await grid.waitFor({ state: "visible" });
-    assert.equal(await first.getAttribute("aria-pressed"), "true");
-    await page.setViewportSize({ width: 320, height: 800 });
-    await page.waitForFunction(() =>
-      document.querySelector("details.problem-picker .problem-grid"),
-    );
-    assert.ok(
-      await page.evaluate(
-        () => document.documentElement.scrollWidth <= innerWidth,
-      ),
-    );
+    await page.mouse.up();
+  },
+);
+
+for (const colorScheme of ["light", "dark"]) {
+  lobbyTest(
+    `the picker uses the shared backdrop role in ${colorScheme} mode`,
+    async (page) => {
+      await page.emulateMedia({ colorScheme });
+      await lobby(page);
+      await openTopicFilter(page);
+      const dialog = page.locator(".problem-picker-dialog");
+      const backdrop = () =>
+        dialog.evaluate(
+          (node) => getComputedStyle(node, "::backdrop").backgroundColor,
+        );
+      assert.equal(
+        await backdrop(),
+        colorScheme === "light" ? "rgba(0, 0, 0, 0.35)" : "rgba(0, 0, 0, 0.65)",
+      );
+      await page.addStyleTag({
+        content: ".practice-page { --backdrop: rgb(10 20 30 / 45%); }",
+      });
+      assert.equal(await backdrop(), "rgba(10, 20, 30, 0.45)");
+    },
+  );
+}
+
+for (const width of [1440, 800]) {
+  lobbyTest(
+    `opening the picker keeps setup cards stretched at ${width}px`,
+    async (page) => {
+      await page.setViewportSize({ width, height: 900 });
+      await lobby(page);
+      const panels = page.locator(".setup-grid > .setup-panel");
+      const assertStretched = async () => {
+        const heights = await panels.evaluateAll((nodes) =>
+          nodes.map((node) => node.getBoundingClientRect().height),
+        );
+        assert.equal(heights.length, 3);
+        assert.ok(heights.every((height) => height > 0));
+        assert.equal(heights[0], heights[1]);
+        if (width === 1440) assert.equal(heights[1], heights[2]);
+      };
+      await assertStretched();
+      await openTopicFilter(page);
+      await assertStretched();
+      await page.keyboard.press("Escape");
+      await page.locator(".problem-picker-dialog").waitFor({ state: "hidden" });
+      await assertStretched();
+
+      await page.locator(".interview-context > summary").click();
+      assert.equal(
+        await page
+          .locator(".setup-grid")
+          .evaluate((node) => getComputedStyle(node).alignItems),
+        "start",
+      );
+    },
+  );
+}
+
+for (const [control, selector] of [
+  ["checkbox", "#show-sources"],
+  ["problem card", '[data-problem="pipeline-stage-gains"]'],
+]) {
+  lobbyTest(
+    `Escape from a ${control} closes the picker without losing state`,
+    async (page) => {
+      await lobby(page);
+      await page.click('[data-duration="60"]');
+      await openTopicFilter(page);
+      await page.fill("#problem-search", "Pipeline");
+      await page.locator("#show-sources").check();
+      const before = await snapshot(page);
+      const picker = page.locator("details.problem-picker");
+      const summary = picker.locator("summary");
+      const dialog = problemPickerDialog(page);
+      await page.locator(selector).focus();
+      assert.ok(await isFocused(page.locator(selector)));
+
+      await page.keyboard.press("Escape");
+      await dialog.waitFor({ state: "hidden", timeout: 3000 });
+      assert.equal(await picker.evaluate((node) => node.open), false);
+      assert.ok(await isFocused(summary));
+      assert.equal((await snapshot(page)).card, before.card);
+      assert.equal((await snapshot(page)).duration, before.duration);
+
+      await summary.click();
+      await dialog.waitFor({ state: "visible", timeout: 3000 });
+      assert.equal(
+        await dialog.evaluate((node) => node.matches(":modal")),
+        true,
+      );
+      assert.equal(
+        await page.locator("#problem-search").inputValue(),
+        "Pipeline",
+      );
+      assert.equal(await page.locator("#show-sources").isChecked(), true);
+      assert.equal(
+        await page.locator('[data-problem="pipeline-stage-gains"]').isVisible(),
+        true,
+      );
+    },
+  );
+}
+
+lobbyTest(
+  "picker follows visual tab order and keeps cards accessible across viewport changes",
+  async (page) => {
+    await lobby(page);
+    await openTopicFilter(page);
+    const grid = page.locator(".problem-grid");
+    const first = grid.locator(".problem-card:visible").first();
+    await page.locator("#problem-search").focus();
+    for (const selector of [
+      '[name="problem-search-mode"]:checked',
+      "#problem-only-list",
+      "#problem-topic",
+      "#problem-filters-reset",
+      "#show-sources",
+    ]) {
+      await page.keyboard.press("Tab");
+      assert.ok(await isFocused(page.locator(selector)), selector);
+    }
+    await page.keyboard.press("Tab");
+    assert.ok(await isFocused(first));
+    await page.keyboard.press("Shift+Tab");
+    assert.ok(await isFocused(page.locator("#show-sources")));
+    const reset = await page.locator("#problem-filters-reset").boundingBox();
+    const source = await page.locator("#show-sources").boundingBox();
+    const card = await first.boundingBox();
+    assert.ok(reset.y + reset.height <= source.y);
+    assert.ok(source.y + source.height <= card.y);
+    await first.click();
+    await toggleProblemPicker(page);
+    await first.focus();
+    for (const width of [1100, 760, 320, 1440]) {
+      await page.setViewportSize({ width, height: 1000 });
+      assert.equal(await first.isVisible(), true);
+      assert.equal(await isFocused(first), true);
+      assert.equal(await first.getAttribute("aria-pressed"), "true");
+      assert.ok(
+        await page.evaluate(
+          () => document.documentElement.scrollWidth <= innerWidth,
+        ),
+      );
+    }
   },
   { viewport: { width: 1440, height: 1000 } },
 );
@@ -10114,46 +10515,6 @@ lobbyTest(
       "16px",
     );
     assert.deepEqual(errors, []);
-  },
-);
-
-lobbyTest(
-  "picker outline stays aligned after lower content grows",
-  async (page) => {
-    await page.setViewportSize({ width: 1440, height: 1000 });
-    await lobby(page);
-    await openTopicFilter(page);
-    const path = page.locator(".problem-picker-outline path");
-    await path.waitFor({ state: "visible" });
-    const before = await path.boundingBox();
-    for (const selector of ["#recent-performance", "#history"]) {
-      const previousHeight = await page
-        .locator(".lobby")
-        .evaluate((node) => node.getBoundingClientRect().height);
-      await page.locator(selector).evaluate((node) => {
-        node.hidden = false;
-        node.style.minHeight = `${node.getBoundingClientRect().height + 600}px`;
-      });
-      await page.waitForFunction(
-        (height) =>
-          document.querySelector(".lobby").getBoundingClientRect().height >
-          height + 500,
-        previousHeight,
-      );
-      await page.evaluate(
-        () =>
-          new Promise((resolve) =>
-            requestAnimationFrame(() => requestAnimationFrame(resolve)),
-          ),
-      );
-      const after = await path.boundingBox();
-      for (const property of ["x", "y", "width", "height"]) {
-        assert.ok(
-          Math.abs(after[property] - before[property]) < 1,
-          `${selector} growth must not change outline ${property}`,
-        );
-      }
-    }
   },
 );
 
@@ -10211,69 +10572,52 @@ lobbyTest(
     );
     assert.equal(await grid.getAttribute("hidden"), null);
     assert.equal(await page.locator("#find-problem-card").isVisible(), true);
-    await picker.locator("summary").click();
+    await toggleProblemPicker(page);
     await page.waitForFunction(
       () => document.querySelector(".problem-grid").hidden === "until-found",
     );
     await page.setViewportSize({ width: 375, height: 800 });
-    await page.waitForFunction(() =>
-      document.querySelector("details.problem-picker .problem-grid"),
+    assert.equal(await grid.getAttribute("hidden"), "until-found");
+    await page.getByRole("link", { name: "Find collapsed problem" }).click();
+    await page.waitForFunction(
+      () => document.querySelector("details.problem-picker").open,
     );
-    assert.equal(await grid.getAttribute("hidden"), null);
+    assert.equal(await page.locator("#find-problem-card").isVisible(), true);
   },
 );
 
-lobbyTest(
-  "picker outline follows mode changes and a late topic error",
-  async (page) => {
-    let releaseTopics;
-    const topicsHeld = new Promise((resolve) => {
-      releaseTopics = resolve;
-    });
-    await page.route("**/problem-topics.json", async (route) => {
-      await topicsHeld;
-      await route.fulfill({ status: 500, body: "nope" });
-    });
-    try {
-      await page.setViewportSize({ width: 1101, height: 1000 });
-      await lobby(page);
-      await page.locator("details.problem-picker summary").click();
-      const aligned = () =>
-        page.waitForFunction(() => {
-          const panel = document
-            .querySelector(".setup-panel")
-            .getBoundingClientRect();
-          const grid = document
-            .querySelector(".problem-grid")
-            .getBoundingClientRect();
-          const outline = document
-            .querySelector(".problem-picker-outline path")
-            .getBoundingClientRect();
-          return (
-            Math.abs(outline.left - panel.left) < 1 &&
-            Math.abs(outline.top - panel.top) < 1 &&
-            Math.abs(outline.bottom - grid.bottom) < 1
-          );
-        });
-      await aligned();
-      await page.locator('[data-mode="whiteboard"]').click();
-      assert.equal(await page.locator("#mode-note").isVisible(), true);
-      await aligned();
-      releaseTopics();
-      await page.waitForFunction(() =>
-        document
-          .querySelector("#problem-filter-summary")
-          .textContent.includes("could not be loaded"),
-      );
-      await aligned();
-      await page.locator('[data-mode="coding"]').click();
-      assert.equal(await page.locator("#mode-note").isVisible(), false);
-      await aligned();
-    } finally {
-      releaseTopics();
-    }
-  },
-);
+lobbyTest("picker remains usable after a late topic error", async (page) => {
+  let releaseTopics;
+  const topicsHeld = new Promise((resolve) => {
+    releaseTopics = resolve;
+  });
+  await page.route("**/problem-topics.json", async (route) => {
+    await topicsHeld;
+    await route.fulfill({ status: 500, body: "nope" });
+  });
+  try {
+    await lobby(page);
+    await page.locator('[data-mode="whiteboard"]').click();
+    await toggleProblemPicker(page);
+    releaseTopics();
+    await page.waitForFunction(() =>
+      document
+        .querySelector("#problem-filter-summary")
+        .textContent.includes("could not be loaded"),
+    );
+    assert.equal(
+      await page.locator("#problem-filter-summary").isVisible(),
+      true,
+    );
+    assert.equal(await page.locator(".problem-grid").isVisible(), true);
+    await toggleProblemPicker(page);
+    assert.equal(await page.locator("#mode-note").isVisible(), true);
+    await page.locator('[data-mode="coding"]').click();
+    assert.equal(await page.locator("#mode-note").isVisible(), false);
+  } finally {
+    releaseTopics();
+  }
+});
 
 for (const storage of ["account", "device"]) {
   lobbyTest(
@@ -10366,7 +10710,7 @@ for (const storage of ["account", "device"]) {
         );
       }
       assert.equal((await snapshot(page)).card, original.card);
-      await page.click("details.problem-picker summary");
+      await toggleProblemPicker(page);
       const card = page.locator(`[data-problem="${EASY[0]}"]`);
       assert.equal(
         await card.getAttribute("aria-describedby"),
@@ -10402,7 +10746,7 @@ for (const storage of ["account", "device"]) {
           .count(),
         0,
       );
-      await page.click("details.problem-picker summary");
+      await toggleProblemPicker(page);
       await page.locator(`[data-practice-problem="${EASY[0]}"]`).check();
       assert.equal(
         await summary.textContent(),
@@ -10584,7 +10928,7 @@ lobbyTest(
     }));
     await lobby(page);
     await awaitReady(page);
-    await page.click("details.problem-picker summary");
+    await toggleProblemPicker(page);
     const summary = page.locator(
       `#problem-entry-${EASY[0]} .problem-attempt-summary`,
     );
@@ -11108,7 +11452,7 @@ lobbyTest(
       );
       document.fonts.add(await font.load());
     });
-    await page.click("details.problem-picker summary");
+    await toggleProblemPicker(page);
     await page.click(`[data-problem="${LONG_TITLE}"]`);
     assert.equal(
       await page
@@ -11439,7 +11783,7 @@ lobbyTest(
     await only.check();
     await page.locator(`[data-problem="${MEDIUM[0]}"]`).click();
     assert.equal((await snapshot(page)).card, MEDIUM[0]);
-    await page.click("details.problem-picker summary");
+    await toggleProblemPicker(page);
     await practiceInput(page, MEDIUM[0]).focus();
     await page.keyboard.press("Space");
     assert.equal((await snapshot(page)).card, MEDIUM[0]);
@@ -11492,7 +11836,9 @@ lobbyTest(
     await openSavedList(page, [EASY[0]]);
     await page.getByLabel("Only my list", { exact: true }).check();
     assert.equal(await page.locator(".problem-card:not([hidden])").count(), 0);
+    await toggleProblemPicker(page);
     await page.click("#practice-list-pick");
+    await openTopicFilter(page);
     assert.equal((await snapshot(page)).card, EASY[0]);
     await page.locator("#problem-search").fill("missing");
     assert.equal(await page.locator(".problem-card:not([hidden])").count(), 0);
@@ -11531,7 +11877,9 @@ lobbyTest(
     reports = [savedAttempt(MEDIUM[0])];
     await openSavedList(page, [MEDIUM[1]]);
     await page.getByLabel("Only my list", { exact: true }).check();
+    await toggleProblemPicker(page);
     await page.getByRole("button", { name: "Try again", exact: true }).click();
+    await openTopicFilter(page);
     assert.equal((await snapshot(page)).card, MEDIUM[0]);
     assert.equal((await cardInfo(page, MEDIUM[0])).hidden, true);
     await page.locator("#problem-search").fill("missing");
@@ -11563,6 +11911,7 @@ lobbyTest(
     const sequel = pageOf("two-sum-ii-input-array-is-sorted");
     await openSavedList(page, [MEDIUM[1]]);
     await page.getByLabel("Only my list", { exact: true }).check();
+    await toggleProblemPicker(page);
     await page.click("#sequel-suggestion-pick");
     assert.equal((await snapshot(page)).card, sequel);
     assert.equal((await cardInfo(page, sequel)).hidden, true);
@@ -11575,8 +11924,9 @@ lobbyTest(
     session = { signedIn: false, guestModeAvailable: true };
     await openSavedList(page, [MEDIUM[1]]);
     await page.locator(`[data-problem="${MEDIUM[0]}"]`).click();
-    await page.click("details.problem-picker summary");
+    await toggleProblemPicker(page);
     await page.getByLabel("Only my list", { exact: true }).check();
+    await toggleProblemPicker(page);
     await page.fill("#github-login", "candidate");
     await page.click("#login-link");
     await page.waitForFunction(
@@ -11585,6 +11935,7 @@ lobbyTest(
         "Signed in as candidate",
     );
     await awaitReady(page);
+    await openTopicFilter(page);
     assert.equal((await snapshot(page)).card, MEDIUM[0]);
     assert.equal((await cardInfo(page, MEDIUM[0])).hidden, true);
   },

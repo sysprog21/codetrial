@@ -72,7 +72,7 @@ const UNIDENTIFIED = {
   "progress-summary":
     "Could not load account progress. Retry the account check.",
   "practice-list-status":
-    "0 problems in your list. Open the problem picker below to check problems. Kept for this visit only; browser storage is unavailable.",
+    "0 problems in your list. Check problems in the problem picker to add them. Kept for this visit only; browser storage is unavailable.",
 };
 test("the lobby page loads outside a browser and says what it was given", () => {
   for (const [id, expected] of Object.entries(UNIDENTIFIED)) {
