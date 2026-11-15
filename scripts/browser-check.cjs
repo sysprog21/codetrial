@@ -63,6 +63,7 @@ const {
   judgeSettledSwapAudio,
   startSwapMarker,
 } = require("./swap-audio-owner.cjs");
+const { createLogTail } = require("./log-tail.cjs");
 const {
   clockEvidenceLines,
   completeLines,
@@ -715,41 +716,11 @@ function readServerLog() {
 }
 
 /// The lines SERVER_LOG gained since the last call, complete ones only and
-/// redacted, so a swap can be noticed within a fraction of a second without
-/// reading the whole file each time.
+/// redacted, so a reader that polls it does not read the whole file each time.
 function serverLogTail() {
-  let offset = 0;
-  let rest = Buffer.alloc(0);
-  return () => {
-    const file = process.env.SERVER_LOG;
-    if (!file) return "";
-    let size;
-    try {
-      size = fs.statSync(file).size;
-    } catch {
-      return "";
-    }
-    if (size < offset) {
-      offset = 0;
-      rest = Buffer.alloc(0);
-    }
-    if (size > offset) {
-      const fresh = Buffer.alloc(size - offset);
-      const fd = fs.openSync(file, "r");
-      try {
-        fs.readSync(fd, fresh, 0, fresh.length, offset);
-      } finally {
-        fs.closeSync(fd);
-      }
-      offset = size;
-      rest = Buffer.concat([rest, fresh]);
-    }
-    const cut = rest.lastIndexOf(10);
-    if (cut < 0) return "";
-    const lines = rest.subarray(0, cut + 1).toString("utf8");
-    rest = rest.subarray(cut + 1);
-    return redact(lines);
-  };
+  const file = process.env.SERVER_LOG;
+  const tail = file ? createLogTail(file) : () => "";
+  return () => redact(tail());
 }
 
 /// Prints each timing line a socket replacement of this room logged, once, as
@@ -815,8 +786,12 @@ async function longInterview(
   page.once("close", () => {
     browserDisconnected = !ended;
   });
+  // Only what the server's log gained since the last read. Everything below
+  // accumulates, and reading and redacting the whole log on every tick costs
+  // more the longer the interview has run, in the loop that times the stimuli.
+  const newServerLines = serverLogTail();
   const refresh = () => {
-    const log = `${agentOutput.join("")}\n${readServerLog()}`;
+    const log = `${agentOutput.join("")}\n${newServerLines()}`;
     for (const minutes of bootstrapMinutes(log, roomName))
       bootstrap.add(minutes);
     for (const minutes of deadlineMinutes(log, roomName)) deadline.add(minutes);
@@ -1035,10 +1010,11 @@ async function soakInterview(
   // window.
   const evidence = new Map();
 
-  // One read per call rather than one per signal: this is the whole server
-  // log, and the loop runs for minutes.
+  // Only what the server's log gained since the last read: everything below
+  // accumulates.
+  const newServerLines = serverLogTail();
   const refresh = () => {
-    const log = `${agentOutput.join("")}\n${readServerLog()}`;
+    const log = `${agentOutput.join("")}\n${newServerLines()}`;
     for (const [name, needle] of Object.entries(HANDOVER_SIGNALS)) {
       seen[name] ||= roomLogged(log, needle, roomName);
     }
