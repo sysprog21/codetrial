@@ -174,7 +174,7 @@ export function showRecordingState(status) {
   // interview is not the end of the recording: `transferring` and `ready` both
   // happen afterwards, which is exactly when a candidate wants to know.
   // A `failed` recording whose recovery is another delivery attempt is not
-  // finished: the transfer queue can still deliver it, and the candidate is the
+  // finished: the delivery queue can still deliver it, and the candidate is the
   // person who wants to know when it does.
   return (
     ["ready", "deleted", "cleanup_failed"].includes(status?.state) ||
