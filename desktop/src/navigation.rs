@@ -54,6 +54,29 @@ pub fn judge(url: &Url, server: &Url, start_page: &Url) -> Verdict {
     }
 }
 
+/// What a page the window finished loading is handed of the Change keys code.
+#[derive(Debug, PartialEq, Eq)]
+pub enum ChangeKeysCode {
+    /// Filled into the code field of the server's own Setup page.
+    Fill,
+    /// Shown on the start page left in the window while the interview runs in
+    /// the browser, where nothing here can fill a field.
+    Show,
+}
+
+/// Which pages get the code, and no other: a mistake here either hides Change
+/// keys or hands the code to a page that is not the server's Setup page. Built
+/// on `judge`, so a page the window may not show never gets it.
+pub fn change_keys_code_for(url: &Url, server: &Url, start_page: &Url) -> Option<ChangeKeysCode> {
+    match judge(url, server, start_page) {
+        Verdict::Server if url.path() == "/setup" => Some(ChangeKeysCode::Fill),
+        Verdict::StartPage(Ask::Nothing) if url.query_pairs().any(|(key, _)| key == "browser") => {
+            Some(ChangeKeysCode::Show)
+        }
+        _ => None,
+    }
+}
+
 /// Where the window's start page loads, `http_scheme` being true on Windows
 /// and Android. Tauri serves `WebviewUrl::App("index.html")` at the root of
 /// its own origin, `http://tauri.localhost/` there and `tauri://localhost/`

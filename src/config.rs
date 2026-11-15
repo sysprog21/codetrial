@@ -690,6 +690,16 @@ pub fn exit_with_stdin(value: Option<&str>) -> bool {
     parse_bool(value, false)
 }
 
+/// `CODETRIAL_CHANGE_KEYS_CODE`: the code the desktop app hands its child.
+/// One too short to stand in for the code `run_web` makes is no code, so a
+/// launcher that set it carelessly gets no Change keys rather than a weak one.
+pub fn change_keys_code(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|code| code.len() >= 24 && code.bytes().all(|byte| byte.is_ascii_alphanumeric()))
+        .map(str::to_string)
+}
+
 pub fn gemini_candidate_video_enabled(value: Option<&str>) -> bool {
     parse_bool(value, DEFAULT_GEMINI_CANDIDATE_VIDEO_ENABLED)
 }

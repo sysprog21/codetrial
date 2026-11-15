@@ -284,8 +284,11 @@ fn run_web(options: CliOptions) -> Result<(), String> {
     // Why that socket is carried here rather than rebound: `serve_setup`. Read
     // once, so the question and the page it opens answer from the same map.
     let before_config = environment_and_flags(&options);
+
+    // A child has no terminal anyone reads, so the code Change keys asks for is
+    // the one its launcher handed over, if any.
     let launched_by = if codetrial::exit_when_stdin_closes() {
-        LaunchedBy::Parent
+        LaunchedBy::Parent(codetrial::handed_change_keys_code())
     } else {
         LaunchedBy::Operator
     };

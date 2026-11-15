@@ -176,3 +176,47 @@ fn a_download_keeps_its_name_and_never_overwrites() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn only_the_servers_setup_page_and_the_browser_start_page_get_the_code() {
+    let server = url("http://127.0.0.1:3101/");
+    for start in [
+        "tauri://localhost/index.html",
+        "http://tauri.localhost/index.html",
+    ] {
+        let start = url(start);
+        let code_for = |page: &str| change_keys_code_for(&url(page), &server, &start);
+        assert_eq!(
+            code_for("http://127.0.0.1:3101/setup"),
+            Some(ChangeKeysCode::Fill)
+        );
+
+        // `show_start_page` loads the root with the query, which serves
+        // `index.html`; the named file is the same page.
+        for shown in ["/?browser=", "index.html?browser="] {
+            assert_eq!(
+                code_for(start.join(shown).unwrap().as_str()),
+                Some(ChangeKeysCode::Show),
+                "{shown}"
+            );
+        }
+
+        // The server's own `?browser` is just a server page, and only its Setup
+        // page has the field: not another path, not another port, not the start
+        // page while it is starting, failing or asking.
+        for nothing in [
+            "http://127.0.0.1:3101/?browser=",
+            "http://127.0.0.1:3101/",
+            "http://127.0.0.1:3101/setup/x",
+            "http://127.0.0.1:3102/setup",
+            "http://localhost:3101/setup",
+        ] {
+            assert_eq!(code_for(nothing), None, "{nothing}");
+        }
+        for query in ["", "?error=x", "?webrtc=no", "?reopen", "?browser=&reopen"] {
+            let page = start.join(&format!("index.html{query}")).unwrap();
+            assert_eq!(code_for(page.as_str()), None, "{page}");
+        }
+        assert_eq!(code_for(start.join("setup").unwrap().as_str()), None);
+    }
+}
