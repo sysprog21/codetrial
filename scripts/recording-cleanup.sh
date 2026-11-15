@@ -143,7 +143,7 @@ SELECT id FROM recordings
 WHERE deleted_at IS NULL
   AND state IN ('ready', 'failed', 'cleanup_failed')
   AND (egress_id IS NULL OR stopped_at IS NOT NULL)
-  AND ((expires_at IS NOT NULL AND expires_at <= $now)
+  AND ((expires_at IS NOT NULL AND expires_at <= $now AND (state = 'ready' OR deleted_by = 'operator')) OR state = 'cleanup_failed'
        OR error = 'consent_withdrawn'
        OR interview_id IN (SELECT id FROM interviews WHERE consent_withdrawn_at IS NOT NULL))
 ORDER BY id

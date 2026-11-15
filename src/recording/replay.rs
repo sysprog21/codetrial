@@ -693,18 +693,18 @@ fn replay_view(
         // deletion against. The history events route and the template's replay
         // read find the recording first, so through them the row is always
         // there.
-        let recording: Option<(String, Option<i64>, i64)> = transaction
+        let recording: Option<(String, Option<i64>, i64, Option<String>)> = transaction
             .query_row(
                 "
-        SELECT state, expires_at, quota_exceeded FROM recordings
+        SELECT state, expires_at, quota_exceeded, deleted_by FROM recordings
         WHERE interview_id = ?1 AND account_id = ?2
         ",
                 (interview_id, account_id),
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
             .optional()?;
         let mut quota_exceeded = false;
-        if let Some((state, expires_at, quota)) = recording {
+        if let Some((state, expires_at, quota, deleted_by)) = recording {
             quota_exceeded = quota != 0;
             if RecordingState::parse(&state) == Some(RecordingState::Deleted) {
                 return Ok(SnapshotView::Deleted);
@@ -714,7 +714,10 @@ fn replay_view(
             // deadline that has passed is a refusal whether or not the sweeper
             // has run yet, because the link outliving the file is the failure
             // this check exists for.
-            if expires_at.is_some_and(|expires_at| expires_at <= now) {
+            if (deleted_by.as_deref() == Some("operator")
+                || !matches!(state.as_str(), "transferring" | "failed"))
+                && expires_at.is_some_and(|expires_at| expires_at <= now)
+            {
                 return Ok(SnapshotView::Expired);
             }
         }

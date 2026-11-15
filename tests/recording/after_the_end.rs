@@ -2,9 +2,9 @@
 //! asked about it.
 
 use codetrial::recording::{
-    Clock, DELIVERY_BACKOFF_SECONDS, Failure, RETENTION_SECONDS, RecordingState, delete_recording,
-    deliver_recording, due_for_deletion, enqueue_delivery, record_egress_id, recording_by_id,
-    run_delivery_queue, sweep_recordings,
+    Clock, DELIVERY_BACKOFF_SECONDS, Failure, RETENTION_SECONDS, RecordingState, SnapshotView,
+    delete_recording, deliver_recording, due_for_deletion, enqueue_delivery, record_egress_id,
+    recording_by_id, recording_summary, replay_snapshot, run_delivery_queue, sweep_recordings,
 };
 
 use std::sync::Arc;
@@ -278,4 +278,72 @@ async fn an_adopted_job_is_stopped_when_its_row_was_deleted() {
         "the job nothing names is stopped: {stops:?}"
     );
     assert!(stops[0].starts_with("EG_orphan@"), "{stops:?}");
+}
+
+/// A retry after `share_file` keeps or refreshes the Drive grant's deadline.
+#[tokio::test]
+async fn retried_delivery_preserves_and_enforces_the_drive_expiry() {
+    let (scratch, accounts, _provider, clock, recorder) = harness("transfer-retry-expiry");
+    let id = &transferring(&accounts, &recorder).await.id;
+    enqueue_delivery(&accounts, id, clock.now()).unwrap();
+    let exp = clock.now() + RETENTION_SECONDS;
+    let conn = scratch.open();
+    let exec = |sql| conn.execute_batch(sql).unwrap();
+    exec(
+        "CREATE TRIGGER fail_finish BEFORE UPDATE OF state ON recordings
+         WHEN NEW.state = 'ready' BEGIN SELECT RAISE(ABORT, 'finish'); END;",
+    );
+    let q = "SELECT expires_at FROM recordings";
+    let expires_of = || conn.query_row(q, [], |r| r.get(0)).unwrap();
+    let summary_of = || recording_summary(&accounts, id, 1).unwrap().unwrap();
+    let snapshot_at = |t| replay_snapshot(&accounts, "int-1", 1, t).unwrap();
+    let due = |t| due_for_deletion(&accounts, t).unwrap().len();
+    let delivery = FakeDelivery::default();
+    let shared = || delivery.shared_expires_at.lock().unwrap().clone();
+    let observed = || (state_of(&accounts, id).as_str(), expires_of(), shared());
+    let sh = |c: &str| {
+        let out = std::process::Command::new("sh").args(["-c", c]).status();
+        out.unwrap().success()
+    };
+    run_delivery_queue(&accounts, &recorder, &delivery).await;
+    assert_eq!(observed(), ("transferring", Some(exp), vec![exp]));
+    for backoff in DELIVERY_BACKOFF_SECONDS {
+        clock.advance(backoff);
+        run_delivery_queue(&accounts, &recorder, &delivery).await;
+    }
+    let between = clock.now() + RETENTION_SECONDS - 1;
+    assert_eq!((observed().0, summary_of().expires_at), ("failed", None));
+    assert_eq!((due(between), due(between + 1)), (0, 1));
+    assert!(matches!(snapshot_at(between), SnapshotView::Ready(_)));
+    if !sh("command -v sqlite3") {
+        assert_ne!(std::env::var("CI").as_deref(), Ok("true"));
+        eprintln!("skipping: sqlite3 is not installed");
+    } else {
+        let db = scratch.path().display();
+        let cmd = format!("scripts/recording-cleanup.sh --db {db} --now {exp}");
+        assert!(sh(&format!("{cmd} --expire {id}")));
+        assert_eq!((due(exp), summary_of().expires_at), (1, Some(exp)));
+        assert!(matches!(snapshot_at(exp), SnapshotView::Expired));
+        exec("UPDATE recordings SET state = 'cleanup_failed', deleted_by = NULL;");
+        assert!(sh(&format!("{cmd} | grep -qx {id}")));
+        exec("UPDATE recordings SET state = 'failed';");
+    }
+    exec("DROP TRIGGER fail_finish;");
+    enqueue_delivery(&accounts, id, clock.now()).unwrap();
+    run_delivery_queue(&accounts, &recorder, &delivery).await;
+    assert_eq!(observed(), ("ready", Some(exp), vec![exp]));
+    assert_eq!(delivery.calls(), ["transfer", "share"]);
+    exec("UPDATE recordings SET state = 'transferring';");
+    clock.advance(RETENTION_SECONDS);
+    enqueue_delivery(&accounts, id, clock.now()).unwrap();
+    run_delivery_queue(&accounts, &recorder, &delivery).await;
+    let err = recording_by_id(&accounts, id).unwrap().unwrap().error;
+    assert_eq!((err.as_deref(), expires_of()), (Some("drive_failed"), None));
+    clock.advance(DELIVERY_BACKOFF_SECONDS[0]);
+    let fresh = clock.now() + RETENTION_SECONDS;
+    run_delivery_queue(&accounts, &recorder, &delivery).await;
+    assert_eq!(observed(), ("ready", Some(fresh), vec![exp, fresh]));
+    exec("UPDATE recordings SET state = 'cleanup_failed';");
+    assert_eq!(summary_of().expires_at, Some(fresh));
+    assert!(matches!(snapshot_at(fresh), SnapshotView::Expired));
 }

@@ -1366,6 +1366,7 @@ mod failure {
         refuse_revoke: Mutex<bool>,
         refuse_object_delete: Mutex<bool>,
         calls: Mutex<Vec<String>>,
+        pub(crate) shared_expires_at: Mutex<Vec<i64>>,
     }
 
     impl FakeDelivery {
@@ -1405,11 +1406,12 @@ mod failure {
             &'a self,
             _drive_file_id: &'a str,
             _recipient_email: &'a str,
-            _expires_at: i64,
+            expires_at: i64,
         ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, String>> + Send + 'a>>
         {
             Box::pin(async move {
                 self.calls.lock().unwrap().push("share".to_string());
+                self.shared_expires_at.lock().unwrap().push(expires_at);
                 if let Some(path) = self.preempt_share.lock().unwrap().as_ref() {
                     rusqlite::Connection::open(path)
                         .unwrap()
@@ -2214,9 +2216,11 @@ mod failure {
 
         // The withdrawal lands while the share is in flight, which is after the
         // file id is written down and before the permission id is.
+        let conn = scratch.open();
+        conn.execute("UPDATE recordings SET expires_at = 1", [])
+            .unwrap();
         let delivery = FakeDelivery::default();
         *delivery.preempt_share.lock().unwrap() = Some(scratch.path().to_path_buf());
-
         assert_eq!(
             deliver_recording(
                 &accounts,
@@ -2235,20 +2239,14 @@ mod failure {
             .find(|call| call.starts_with("revoke_and_delete"))
             .expect("this attempt uploaded the file, so it is this attempt's to delete");
         assert!(cleanup.contains("file=drive-file-1"), "{cleanup}");
-
-        let (file, permission): (Option<String>, Option<String>) = scratch
-            .open()
+        let handles: (Option<String>, Option<String>, Option<i64>) = conn
             .query_row(
-                "SELECT drive_file_id, drive_permission_id FROM recordings WHERE id = 'rec-1'",
+                "SELECT drive_file_id, drive_permission_id, expires_at FROM recordings",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .unwrap();
-        assert_eq!(
-            (file, permission),
-            (None, None),
-            "a handle for a file this call just deleted has to go with it"
-        );
+        assert_eq!(handles, (None, None, None));
     }
 
     /// The same loss, against a winner that has already failed its own share.

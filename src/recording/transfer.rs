@@ -284,7 +284,7 @@ impl Transfer<'_> {
             let accounts = Arc::clone(self.accounts);
             let id = self.recording.id.clone();
             let permission_id = permission_id.clone();
-            blocking(move || set_drive_permission(&accounts, &id, &permission_id)).await
+            blocking(move || set_drive_permission(&accounts, &id, &permission_id, expires_at)).await
         } else {
             Ok(true)
         };
@@ -333,7 +333,15 @@ impl Transfer<'_> {
             blocking(move || finish_delivery(&accounts, clock.as_ref(), &id, expires_at)).await
         };
         match finished {
-            Ok(true) => Ok(()),
+            Ok(Some(true)) => Ok(()),
+            Ok(Some(false)) => {
+                let perm = (&*uploaded.drive_file_id, &*shared.permission_id);
+                self.clean_up_after_losing("finish", (None, Some(perm)))
+                    .await;
+                let failure = self.failed("finish", "the Drive permission has already expired");
+                self.record_failure().await;
+                Err(failure)
+            }
             Err(_) => {
                 let failure = self.failed("finish", "the delivery could not be written down");
                 self.record_failure().await;
@@ -345,7 +353,7 @@ impl Transfer<'_> {
             // over it would overwrite a newer answer with an older complaint.
             // What this delivery made goes with it, because nothing is going to
             // come back for a file belonging to a recording that ended.
-            Ok(false) => {
+            Ok(None) => {
                 audit(
                     "recording_delivery_lost",
                     &self.recording.id,
@@ -422,8 +430,8 @@ async fn cleanup_scope(accounts: &Arc<Accounts>, recording_id: &str) -> CleanupS
 
 /// The cleanup one lost delivery is allowed to perform.
 ///
-/// `mine` is what this invocation created: a file it uploaded, and a permission
-/// it granted paired with the file that permission is on. A file it reused
+/// `mine` is what this invocation may remove: a file it uploaded, or a
+/// permission to revoke paired with the file it sits on. A file it reused
 /// belongs to an earlier attempt and the staged object belongs to the
 /// recording, so deleting either because this call lost a race takes media from
 /// somebody who still wants it.
@@ -447,32 +455,33 @@ async fn clean_up_after_losing(
     let deleted = outcome.is_ok();
     report_cleanup(recording_id, step, outcome);
 
-    // A handle that names a file this call just deleted is worse than no
-    // handle: a later attempt reads it, skips the upload, and tries to share
-    // something that is not there. Guarded on the value, so a row that has
-    // moved on to some other file keeps it.
-    if deleted && let Some(drive_file_id) = drive_file_id {
+    // Forget a deleted file, and forget a revoked permission with its deadline
+    // even when its file is kept, guarded on the values so another file stays.
+    if deleted {
         let accounts = Arc::clone(accounts);
-        let recording_id = recording_id.to_string();
-        let drive_file_id = drive_file_id.to_string();
-        let _ = blocking(move || forget_drive_file(&accounts, &recording_id, &drive_file_id)).await;
+        let id = recording_id.to_string();
+        let file = drive_file_id.map(str::to_string);
+        let perm = permission.map(|(_, id)| id.to_string());
+        let _ = blocking(move || forget_drive_file(&accounts, &id, file, perm)).await;
     }
 }
 
-/// Give up a Drive handle whose file is gone.
+/// Give up a deleted Drive file, or a revoked permission and its deadline.
 fn forget_drive_file(
     accounts: &Accounts,
     recording_id: &str,
-    drive_file_id: &str,
+    drive_file_id: Option<String>,
+    permission_id: Option<String>,
 ) -> rusqlite::Result<()> {
     accounts.with(|connection| {
         connection.execute(
             "
         UPDATE recordings
-        SET drive_file_id = NULL, drive_permission_id = NULL
-        WHERE id = ?1 AND drive_file_id = ?2 AND deleted_at IS NULL
+        SET drive_file_id = CASE WHEN drive_file_id = ?2 THEN NULL ELSE drive_file_id END,
+            drive_permission_id = NULL, expires_at = NULL
+        WHERE id = ?1 AND (drive_file_id = ?2 OR drive_permission_id = ?3) AND deleted_at IS NULL
         ",
-            (recording_id, drive_file_id),
+            (recording_id, drive_file_id, permission_id),
         )?;
         Ok(())
     })
@@ -553,14 +562,15 @@ fn set_drive_permission(
     accounts: &Accounts,
     recording_id: &str,
     permission_id: &str,
+    expires_at: i64,
 ) -> rusqlite::Result<bool> {
     accounts.with(|connection| {
         let changed = connection.execute(
             "
-        UPDATE recordings SET drive_permission_id = ?2
+        UPDATE recordings SET drive_permission_id = ?2, expires_at = ?3
         WHERE id = ?1 AND state = 'transferring' AND drive_permission_id IS NULL
         ",
-            (recording_id, permission_id),
+            (recording_id, permission_id, expires_at),
         )?;
         Ok(changed > 0)
     })
@@ -583,20 +593,20 @@ fn set_gcs_object(
     })
 }
 
-/// `false` when the row was no longer `transferring`, which is somebody else
-/// having moved it.
+/// `None` when the row was no longer `transferring`, which is somebody else
+/// having moved it; `Some(false)` when its Drive permission has expired.
 fn finish_delivery(
     accounts: &Accounts,
     clock: &dyn Clock,
     recording_id: &str,
     expires_at: i64,
-) -> rusqlite::Result<bool> {
+) -> rusqlite::Result<Option<bool>> {
     let now = clock.now();
     accounts.with(|connection| {
         let changed = connection.execute(
             "
         UPDATE recordings
-        SET expires_at = ?2,
+        SET expires_at = COALESCE(expires_at, ?2),
             state = 'ready',
             -- Cleared, or a delivery that failed once and then worked would be
             -- `ready` still carrying `drive_failed`, and the status route would
@@ -604,10 +614,13 @@ fn finish_delivery(
             error = NULL,
             ready_at = ?3,
             updated_at = ?3
-        WHERE id = ?1 AND state = 'transferring'
+        WHERE id = ?1 AND state = 'transferring' AND COALESCE(expires_at, ?2) > ?3
         ",
             (recording_id, expires_at, now),
         )?;
-        Ok(changed > 0)
+        let sql =
+            "SELECT EXISTS(SELECT 1 FROM recordings WHERE id = ?1 AND state = 'transferring')";
+        let live: bool = connection.query_row(sql, [recording_id], |row| row.get(0))?;
+        Ok((changed > 0).then_some(true).or(live.then_some(false)))
     })
 }

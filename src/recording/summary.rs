@@ -69,7 +69,8 @@ pub fn recording_summary(
         connection
             .query_row(
                 "
-        SELECT id, interview_id, state, error, created_at, ready_at, expires_at,
+        SELECT id, interview_id, state, error, created_at, ready_at,
+               CASE WHEN state NOT IN ('transferring', 'failed') OR deleted_by = 'operator' THEN expires_at END,
                deleted_at, quota_exceeded
         FROM recordings WHERE id = ?1 AND account_id = ?2
         ",
@@ -111,10 +112,11 @@ pub fn recording_summary(
 /// row, and the ones it did remove are not.
 ///
 /// A delivery that ran out of attempts is due the retention window after its
-/// last failure, which is how long an operator has to retry it: it has no
-/// `expires_at`, and its Drive file, recipient and replay would otherwise stay.
+/// last failure, which is how long an operator has to retry it: only a `ready`
+/// or operator-expired row is due by `expires_at`, and these rows are due
+/// regardless of it.
 /// A deletion of it that fails moves it to `cleanup_failed` and replaces the
-/// error that made it due, so that state is due on its own while it has no
+/// error that made it due, so that state is due on its own regardless of
 /// `expires_at`.
 ///
 /// A recording whose Egress job was never confirmed stopped is not due, however
@@ -129,11 +131,11 @@ pub fn due_for_deletion(accounts: &Accounts, now: i64) -> rusqlite::Result<Vec<R
         WHERE deleted_at IS NULL
           AND state IN ('ready', 'failed', 'cleanup_failed')
           AND (egress_id IS NULL OR stopped_at IS NOT NULL)
-          AND ((expires_at IS NOT NULL AND expires_at <= ?1)
+          AND ((expires_at IS NOT NULL AND expires_at <= ?1 AND (state = 'ready' OR deleted_by = 'operator'))
                OR error = ?2
-               OR (state = 'failed' AND error = ?3 AND expires_at IS NULL
+               OR (state = 'failed' AND error = ?3
                    AND updated_at <= ?1 - ?4)
-               OR (state = 'cleanup_failed' AND expires_at IS NULL)
+               OR state = 'cleanup_failed'
                OR interview_id IN (
                    SELECT id FROM interviews WHERE consent_withdrawn_at IS NOT NULL
                ))
