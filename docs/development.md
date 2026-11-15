@@ -402,6 +402,34 @@ only once. It shows at most forty staged filenames and a short change summary
 above the scissors line, without generating a subject or sending a diff to an
 AI service. The existing message rules remain authoritative.
 
+Drafting is `scripts/commit-draft.py`, which a person starts and no hook does,
+so a plain `git commit` sends nothing anywhere. The backend is the one named by
+`--backend` or `git config codetrial.draftBackend`, run from an empty
+temporary directory so the prompt is all it is given: `claude` runs
+`claude -p` with every tool off and `--setting-sources=`, so the user's own
+instructions and memory stay out of the request too, `ollama:<model>` stays on
+the machine, and `cmd:<command>` takes any command reading the prompt on
+standard input. An agent CLI that reads the tree for itself is not offered:
+`codex exec`'s read-only sandbox still reads every file, and what it read would
+pass no secret check. With none set it refuses and sends nothing.
+`scripts/check-secrets.py` reads the index first, and a finding stops the
+draft before anything is sent; every prompt, a retry's included, passes the
+same check on its way out. The prompt carries
+`git-commit-msg.sh --rules`, recent subjects and two short messages from the
+staged paths' own history, the staged file list, and the diff with lock,
+vendored and binary files reduced to a line saying they changed. The diff is
+held to a character budget (`--budget`, 20000) in fair shares from the smallest
+file up, so a small fix beside a regenerated fixture is read whole and the
+large file is cut with a marker. A reply loses its reasoning tags, code fence,
+preamble and any copied Change-Id, its body goes through
+`scripts/commit-reflow.py` (below), and `git-commit-msg.sh` judges it. A
+refusal goes back with the draft for another attempt (`--attempts`, 3; each
+waits `--timeout`, 180 seconds), and a draft is never trimmed to fit, since a
+subject cut at 50 columns passes and says less. The result is kept in
+`.git/CODETRIAL_DRAFT_MSG`; `--commit` opens it through `git commit -e -F`, so
+the hooks and the Change-Id run as for a typed message. The suite is
+`tests/test_commit_draft.py`, against a stub backend that records each prompt.
+
 `scripts/commit-reflow.py` rejoins a ragged body and packs it at 72, counted in
 bytes as the hook counts. It follows the rule commentflow keeps for comments:
 only prose moves, and a line that might be layout passes through byte for

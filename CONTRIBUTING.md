@@ -173,7 +173,23 @@ and leaves alone what it cannot be sure is prose: the subject, comments, code
 fences, indented samples, quotes, tables, `Key: value` rows, the closing line,
 trailers and everything below the scissors line. `-` filters standard input,
 and `--check` exits 1 when the text would change. It never runs from a hook,
-since it rewrites what you wrote.
+since it rewrites what you wrote; the drafter below uses the same pass.
+
+`scripts/commit-draft.py` drafts a message for the staged change, for you to
+edit. No hook runs it: it sends the staged diff only when you type the command,
+and only to the model you configured, once, with
+`git config codetrial.draftBackend claude` or `ollama:<model>`, or
+`cmd:<command>` for anything that reads a prompt on standard input. The
+backend runs from an empty directory, so it sees the prompt and nothing else;
+an agent that would read your tree itself is not offered.
+`--print-prompt` shows what would be sent without sending it, and a staged
+credential stops it before anything leaves. The draft is written against the
+same rules, with recent subjects from this log as its examples, and judged by
+`scripts/git-commit-msg.sh` before you see it. A draft that hook refuses goes
+back to the model with the refusal. The reason for a change is not in the
+diff, so give it with `--why "..."`; without it the draft says what changed
+and stops. `--commit` opens the draft in your editor through `git commit -e`,
+with every hook in effect, and what you commit is yours to stand behind.
 
 Subjects from this tree's log read like this:
 

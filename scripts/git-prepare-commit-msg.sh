@@ -47,6 +47,10 @@ trap 'rm -f "$rules"' EXIT
     git diff --cached --name-only | awk 'NR <= 40 { print "  " $0 } END { if (NR > 40) print "  ... and " NR - 40 " more" }'
     printf '\nChange summary (describe the reason in your own words):\n'
     git diff --cached --no-ext-diff --shortstat
+    printf '\nA draft to edit, from a model you choose (sends the staged diff):\n'
+    # Absolute, since the commit may have been started from a subdirectory.
+    printf '  python3 %s/scripts/commit-draft.py --why "..." --commit\n' \
+        "$(git rev-parse --show-toplevel)"
 } | awk -v char="$comment_char" '{sub(/[[:space:]]+$/, ""); print char " " $0}' \
     | sed 's/[[:space:]]*$//' > "$rules"
 

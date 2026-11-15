@@ -745,6 +745,7 @@ gate cjk-check-tests unittest_gate "$ROOT/tests/test_check_cjk.py"
 gate cjk-check "$PYTHON" "$ROOT/scripts/check-cjk.py" --tree
 gate git-hooks "$ROOT/scripts/test-git-hooks.sh"
 gate commit-reflow-tests unittest_gate "$ROOT/tests/test_commit_reflow.py"
+gate commit-draft-tests unittest_gate "$ROOT/tests/test_commit_draft.py"
 gate shell-syntax shell_syntax
 gate browser-check-env env BROWSER_CHECK_VALIDATE_ENV_ONLY=1 sh "$ROOT/scripts/browser-check.sh"
 

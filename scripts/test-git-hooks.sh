@@ -854,6 +854,8 @@ expect 0 "reopening the editor preserves the existing guidance" \
     sh ./scripts/git-prepare-commit-msg.sh "$work/empty.msg"
 expect 0 "guidance is not duplicated" cmp -s "$work/empty.msg" "$work/once.msg"
 contains "guidance includes a change summary" "$work/empty.msg" "Change summary"
+contains "guidance names the drafter, which only a person starts" \
+    "$work/empty.msg" "scripts/commit-draft.py"
 
 printf '\n# ------------------------ >8 ------------------------\n+Commit rules, enforced by scripts/git-commit-msg.sh:\n' \
     > "$work/quoted.msg"
