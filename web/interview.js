@@ -311,6 +311,12 @@ const JIM_AVATAR_PANEL_MIN_REM = 49;
 /// Below this window width the editor is narrow enough that a floating avatar
 /// eats code rather than decorating it, whatever the sidebar does.
 const JIM_STAGE_NARROW_WINDOW = "(max-width: 1200px)";
+const JIM_DRAWING_DESKTOP_WINDOW = "(min-width: 1024px)";
+// Match styles.css: 1rem pane padding on each side, the 17.5rem drawing and
+// `.jim-stage`'s 1.5rem right offset, which the margin-right rule repeats.
+const JIM_DRAWING_RESERVED_REM = 21;
+// Match the compact self view's fixed width in styles.css.
+const JIM_SELF_VIEW_WIDTH_PX = 120;
 /// In rem. A fixed ladder rather than a free number, so a stored value is
 /// either one of these or ignored, and every size the page can show is one the
 /// browser check has seen keep the three editor layers in line.
@@ -5625,17 +5631,27 @@ function testDrawerBounds() {
 /// the same way, so Jim's captions stay over a corner of the board. One class
 /// for all three, so the stylesheet says what compact looks like once, and
 /// the avatar's own width observer pauses and resumes its drawing from the
-/// result.
+/// result. On desktop, an expanded drawing also caps the card to the strip
+/// beside the reserved drawing, unless that strip cannot hold a readable card.
 function compactJimStageBesideNarrowPanel(panel) {
   const narrowWindow = matchMedia(JIM_STAGE_NARROW_WINDOW);
+  const desktopDrawing = matchMedia(JIM_DRAWING_DESKTOP_WINDOW);
   const example = document.querySelector("#example-board");
   const fit = () => {
     const rem = Number.parseFloat(
       getComputedStyle(document.documentElement).fontSize,
     );
+    const panelWidth = panel.getBoundingClientRect().width;
+    const cardWidth = panelWidth - JIM_DRAWING_RESERVED_REM * rem;
+    nodes.jimStage.style.maxWidth =
+      example?.hasAttribute("data-expanded") &&
+      desktopDrawing.matches &&
+      cardWidth >= JIM_SELF_VIEW_WIDTH_PX + 1.25 * rem + 2
+        ? `${cardWidth}px`
+        : "";
     const compact =
       narrowWindow.matches ||
-      panel.getBoundingClientRect().width < JIM_AVATAR_PANEL_MIN_REM * rem ||
+      panelWidth < JIM_AVATAR_PANEL_MIN_REM * rem ||
       example?.hasAttribute("data-expanded") === true;
     nodes.jimStage.classList.toggle("compact", compact);
     // Hide avatar goes with the avatar, so focus left on it moves to the
@@ -5646,6 +5662,7 @@ function compactJimStageBesideNarrowPanel(panel) {
   if (window.ResizeObserver) new window.ResizeObserver(fit).observe(panel);
   else window.addEventListener("resize", fit);
   narrowWindow.addEventListener("change", fit);
+  desktopDrawing.addEventListener("change", fit);
   // A whiteboard interview has removed the editor panel by now, and the board
   // inside it, so there is no board to watch.
   if (example)

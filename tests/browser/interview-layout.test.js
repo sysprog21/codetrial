@@ -36,8 +36,28 @@ after(async () => {
   await new Promise((closed) => (server ? server.close(closed) : closed()));
 });
 
-async function openInterview(width, height, query = "") {
+async function openInterview(width, height, query = "", drawing = false) {
+  let unlocked;
+  if (drawing) {
+    const source = read("web/interview.js");
+    unlocked = source.replace(
+      /locked: \(\) =>\s*!board\.ready \|\|\s*state\.phase !== "live" \|\|\s*frameworkRound !== "coding"/,
+      "locked: () => false",
+    );
+    assert.notEqual(
+      unlocked,
+      source,
+      "the example board's lock moved; update openInterview's pattern",
+    );
+  }
   const page = await browser.newPage({ viewport: { width, height } });
+  if (drawing)
+    await page.route("**/interview.js", (route) =>
+      route.fulfill({
+        contentType: "text/javascript",
+        body: unlocked,
+      }),
+    );
   await page.goto(
     `${base}/interview.html?problem=chargeback-pair-match${query}`,
     { waitUntil: "domcontentloaded" },
@@ -945,5 +965,196 @@ test("local recording controls preserve the original problem reading space", asy
     } finally {
       await page.close();
     }
+  }
+});
+
+// Room admission is outside this layout check; the real page and drawing
+// handlers run with an editable board, without joining a provider.
+test("expanded drawing text controls stay reachable beside long captions and self-view", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  for (const [width, height, wideSidebar] of [
+    [1280, 800],
+    [1440, 900],
+    [1920, 1080],
+    [1250, 630],
+    [1024, 768],
+    [1024, 768, true],
+    [1280, 800, true],
+  ]) {
+    const page = await openInterview(width, height, "&exampleDrawing=1", true);
+    try {
+      await closeSetupCheck(page);
+      if (wideSidebar) {
+        await page.locator("#sidebar-resizer").focus();
+        await page.keyboard.press("End");
+      }
+      await page
+        .locator("#example-board")
+        .evaluate((node) => (node.open = true));
+      await page.locator(".drawer-resizer").focus();
+      await page.keyboard.press("End");
+      await page.getByRole("button", { name: "Expand drawing" }).click();
+      await page.evaluate(() => {
+        document.querySelector("#self-view").hidden = false;
+        document.querySelector("#captions-bar").hidden = false;
+        document.querySelector("#captions-text").textContent =
+          "Explain the boundary cases and how your approach handles each one. ".repeat(
+            30,
+          );
+      });
+      await settled(page);
+      const surface = await page.locator(".example-surface").boundingBox();
+      assert.ok(
+        surface.width >= 280,
+        `${width}px: text controls fit at full width`,
+      );
+      const card = await page.locator("#jim-stage").boundingBox();
+      assert.ok(
+        surface.x + surface.width <= card.x,
+        `${width}px: the caption card stays beside the drawing`,
+      );
+      if (width === 1280 && !wideSidebar) {
+        await page.evaluate(() =>
+          document.documentElement.style.setProperty(
+            "--jim-card-width",
+            "320px",
+          ),
+        );
+        await settled(page);
+        const card = await page.locator("#jim-stage").boundingBox();
+        const resized = await page.locator(".example-surface").boundingBox();
+        assert.equal(card.width, 320);
+        assert.ok(
+          resized.x + resized.width <= card.x,
+          "drawing clearance follows the card width",
+        );
+      }
+      await page.getByRole("button", { name: "Text", exact: true }).click();
+      const canvas = page.locator("#example-board canvas");
+      for (const [x, y] of [
+        [0.05, 0.05],
+        [0.5, 0.5],
+        [0.95, 0.95],
+        [0.05, 0.95],
+        [0.95, 0.05],
+      ]) {
+        for (const action of ["Confirm", "Cancel"]) {
+          await canvas.evaluate((node) => {
+            node.parentElement.scrollTop = 0;
+          });
+          const rect = await canvas.boundingBox();
+          await page.mouse.click(
+            rect.x + rect.width * x,
+            rect.y + rect.height * y,
+          );
+          await page
+            .getByRole("textbox", { name: "Label text" })
+            .fill("boundary label");
+          const button = page.getByRole("button", {
+            name: action,
+            exact: true,
+          });
+          await button.click();
+          await page.locator(".board-text-draft").waitFor({ state: "hidden" });
+        }
+      }
+      if (wideSidebar) {
+        await page.getByRole("button", { name: "Shrink drawing" }).click();
+        await settled(page);
+        assert.equal(
+          await page
+            .locator("#jim-stage")
+            .evaluate((node) => node.style.maxWidth),
+          "",
+          "shrinking restores the normal caption card width",
+        );
+      }
+    } finally {
+      await page.close();
+    }
+  }
+});
+
+test("a stacked expanded drawing keeps the panel's available width", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  for (const width of [481, 900]) {
+    const page = await openInterview(width, 800, "&exampleDrawing=1");
+    try {
+      await closeSetupCheck(page);
+      await page
+        .locator("#example-board")
+        .evaluate((node) => (node.open = true));
+      await page.getByRole("button", { name: "Expand drawing" }).click();
+      await settled(page);
+      const panel = await page.locator(".editor-panel").boundingBox();
+      const surface = await page.locator(".example-surface").boundingBox();
+      assert.ok(
+        surface.width >= panel.width * 0.9,
+        `${width}px: drawing uses the panel width`,
+      );
+    } finally {
+      await page.close();
+    }
+  }
+});
+
+test("an expanded drawing keeps the card readable at a larger root font", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  for (const width of [1024, 1640]) {
+    const page = await openInterview(width, 800, "&exampleDrawing=1");
+    try {
+      await closeSetupCheck(page);
+      await page.evaluate(() => {
+        document.documentElement.style.fontSize = "32px";
+      });
+      await settled(page);
+      const card = page.locator("#jim-stage");
+      const original = await card.boundingBox();
+      await page
+        .locator("#example-board")
+        .evaluate((node) => (node.open = true));
+      await page.getByRole("button", { name: "Expand drawing" }).click();
+      await settled(page);
+      const expanded = await card.boundingBox();
+      assert.equal(
+        expanded.width,
+        original.width,
+        "an insufficient strip keeps the card's normal readable width",
+      );
+    } finally {
+      await page.close();
+    }
+  }
+});
+
+test("a constrained caption card keeps the self view inside its padding at a smaller root font", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const page = await openInterview(1024, 800, "&exampleDrawing=1");
+  try {
+    await closeSetupCheck(page);
+    await page.evaluate(() => {
+      document.documentElement.style.fontSize = "14px";
+      // Pin the panel at the sidebar resizer's 30rem neighbour floor.
+      document.querySelector(".editor-panel").style.width = "30rem";
+      document.querySelector("#self-view").hidden = false;
+      document.querySelector("#example-board").open = true;
+    });
+    await page.getByRole("button", { name: "Expand drawing" }).click();
+    await settled(page);
+    const layout = await page.evaluate(() => {
+      const card = document.querySelector("#jim-stage");
+      const style = getComputedStyle(card);
+      return {
+        viewRight: document.querySelector("#self-view").getBoundingClientRect()
+          .right,
+        contentRight:
+          card.getBoundingClientRect().right -
+          Number.parseFloat(style.paddingRight) -
+          Number.parseFloat(style.borderRightWidth),
+      };
+    });
+    assert.ok(layout.viewRight <= layout.contentRight, JSON.stringify(layout));
+  } finally {
+    await page.close();
   }
 });

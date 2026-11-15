@@ -1122,7 +1122,7 @@ p {
 .jim-stage.compact {
   top: auto;
   bottom: 1.5rem;
-  width: min(260px, calc(100vw - 3rem));
+  width: min(var(--jim-card-width), calc(100vw - 3rem));
   padding: 0.5rem 0.625rem;
   border: 1px solid var(--hairline);
   border-radius: var(--radius-md);
@@ -1820,6 +1820,16 @@ p {
   width: min(100cqw, 100cqh * var(--board-ratio));
   min-width: 0;
   margin: 0 auto;
+}
+
+/* Reserve the card's strip only beside the editor, not on stacked screens. */
+@media (min-width: 1024px) {
+  .example-board[data-expanded] .example-surface {
+    margin-right: min(
+      calc(var(--jim-card-width) + 1.5rem),
+      max(0px, 100% - 17.5rem)
+    );
+  }
 }
 
 /* The expanded pane is laid over the panel, which would scroll it on a short

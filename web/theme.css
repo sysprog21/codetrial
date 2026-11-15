@@ -30,6 +30,7 @@
      derived from it, as the lobby block below does. */
 
 :root {
+  --jim-card-width: 260px; /* Compact captions card and drawing clearance. */
   color-scheme: dark;
 
   /* Type. One scale for every page: a role picks the step whose rank fits
