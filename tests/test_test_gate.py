@@ -248,6 +248,17 @@ gate()
         self.assertNotIn("cargo-audit", rust | portable | browser)
         self.assertEqual(self.run_lane()[1], results["all"][1])
 
+    def test_every_python_suite_is_run_by_the_gate(self):
+        # A suite no gate line names passes every run because it never runs:
+        # three did, until a review traced a green gate back to its list.
+        text = SCRIPT.read_text()
+        missing = [
+            path.name
+            for path in sorted((ROOT / "tests").glob("test_*.py"))
+            if f'"$ROOT/tests/{path.name}"' not in text
+        ]
+        self.assertEqual(missing, [])
+
     def test_new_gate_is_included_in_portable_lane(self):
         self.assertIn("future-check", self.run_lane("portable", extra_gate=True)[1])
         self.assertNotIn("future-check", self.run_lane("rust", extra_gate=True)[1])
