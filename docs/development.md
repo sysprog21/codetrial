@@ -402,6 +402,29 @@ only once. It shows at most forty staged filenames and a short change summary
 above the scissors line, without generating a subject or sending a diff to an
 AI service. The existing message rules remain authoritative.
 
+`scripts/commit-reflow.py` rejoins a ragged body and packs it at 72, counted in
+bytes as the hook counts. It follows the rule commentflow keeps for comments:
+only prose moves, and a line that might be layout passes through byte for
+byte. Each line gets one kind, in an order that decides it: below the scissors
+and inside a fence nothing else is asked; then a comment line, a list item, an
+indented line inside an item (its continuation, as the hang under `10. ` is four
+columns), a numbered line inside a paragraph that is not `1.` (a sentence that
+wrapped after a number), indented code, a quote, a table, a diagram, the closing
+line and a trailer-shaped line; prose last. A run of two or more `Key: value`
+rows and the final trailer block are decided over whole paragraphs. A break
+never opens a line with the comment character, a list marker, `>`, `|`, a rule,
+a `Key:` word or a closing keyword with its issue: it moves the fewest words
+down that give a safe opener, and overflows when none fits, since a long line
+is named by the hook and a forged trailer is not. A join can still change what
+a run reads as (a lone `1.` joined to its next line is an item), so the result
+is classified again and a run that no longer reads as it did goes out
+unchanged. That is what makes a second run a no-op. `tests/test_commit_reflow.py`
+holds the cases and a fixed-seed sweep over words chosen to sit on those seams.
+Run over the bodies of this log re-broken at widths from 20 to 150 and as one
+line, it lost no word, changed nothing on a second pass and left no line the
+hook refuses. It is not a check: it would rewrap 521 of the 941 bodies that
+pass today, since people break before 72, and that is theirs to choose.
+
 ### Build-time installation
 
 Every `cargo build`, `cargo check`, `cargo run` and rust-analyzer pass in a

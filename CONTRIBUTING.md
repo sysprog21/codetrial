@@ -162,8 +162,18 @@ read it from there rather than from a copy that can drift:
 ./scripts/git-commit-msg.sh --rules
 ```
 
-The `prepare-commit-msg` hook puts the same list in your editor. Subjects from
-this tree's log read like this:
+The `prepare-commit-msg` hook puts the same list in your editor.
+
+`python3 scripts/commit-reflow.py <file>` rewraps a body that arrived ragged:
+one long line, a paragraph broken at column 40, or the shape of a sentence you
+have since edited. It joins prose back into paragraphs and packs them at 72,
+and leaves alone what it cannot be sure is prose: the subject, comments, code
+fences, indented samples, quotes, tables, `Key: value` rows, the closing line,
+trailers and everything below the scissors line. `-` filters standard input,
+and `--check` exits 1 when the text would change. It never runs from a hook,
+since it rewrites what you wrote.
+
+Subjects from this tree's log read like this:
 
 ```
 Bound a video frame by the memory it will take
