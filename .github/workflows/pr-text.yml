@@ -1,0 +1,73 @@
+# Hold a pull request's title and description to CONTRIBUTING.md, the part of
+# it that is mechanical: the title follows the commit subject rules (and is the
+# subject, for one commit), and the description ends with Close #N alone, has
+# no Refs #N and credits no AI tool. scripts/check-pr-text.py says which.
+#
+# Its own workflow because check.yml does not run on `edited`: a title fixed in
+# the browser must be judged again without rebuilding the matrix, and this
+# costs seconds. The checker is the base branch's, so a pull request cannot
+# pass itself by editing scripts/check-pr-text.py; while the base has none
+# (the pull request that adds it) there is nothing to judge with. The head is
+# never checked out: its one subject comes from the API, as data. The token is
+# read-only and the text arrives through the environment, never spliced into
+# the script.
+# This file itself is the pull request's under this trigger, so an edit to it
+# is the code owners' to review (.github/CODEOWNERS), as for every workflow.
+name: pr-text
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+  # A merge group has no title or description of its own. The job's condition
+  # skips it there, and a skipped job counts as passing, so the check can be
+  # required without holding the queue.
+  merge_group:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-text-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  title-and-description:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          path: base
+      - name: Check the title and description
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+          BODY: ${{ github.event.pull_request.body }}
+          COMMITS: ${{ github.event.pull_request.commits }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          AUTHOR_TYPE: ${{ github.event.pull_request.user.type }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          REPOSITORY: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          if [ ! -f base/scripts/check-pr-text.py ]; then
+              echo "The base branch has no pull request text check yet; nothing to judge with."
+              exit 0
+          fi
+          printf '%s' "$BODY" > "$RUNNER_TEMP/body"
+          set -- --title "$TITLE" --body-file "$RUNNER_TEMP/body" \
+              --author "$AUTHOR" --author-type "$AUTHOR_TYPE"
+          # The only commit's subject, read as data from the API rather than
+          # from a checkout of the head; a fork's commit is served by the base
+          # repository too. The call stands alone so a failure stops the step
+          # instead of passing an empty subject on.
+          if [ "$COMMITS" = 1 ]; then
+              message=$(gh api "repos/$REPOSITORY/commits/$HEAD_SHA" --jq .commit.message)
+              subject=$(printf '%s\n' "$message" | head -n 1)
+              set -- "$@" --head-subject "$subject"
+          fi
+          python3 base/scripts/check-pr-text.py "$@"

@@ -549,6 +549,17 @@ browser or model starts in a hook.
 Deleting the local skill file does not disable a review policy present at the
 pushed tip or the upstream PR base.
 
+`.github/workflows/pr-text.yml` runs `scripts/check-pr-text.py` on a pull
+request's title and description, and again on every edit, since `check.yml`
+does not run on `edited`: the title through `--subject` and, for a single
+commit, equal to its subject; the description with no `Refs #N`, no AI
+attribution, any closing keyword only on the last line and as `Close #N` alone
+there, and not the template's empty `Close #`. The block a review bot writes
+between its `auto-generated description` comments is not the author's and is
+not read. A pull request Dependabot opens is exempt, and a merge group skips
+the job, which counts as passing. The checker is the base branch's, so a pull
+request cannot relax it. Its suite is `tests/test_check_pr_text.py`.
+
 `scripts/hashchain-base` holds the configurable chain anchor. Python's standard
 library implements `scripts/hashchain.py`: pre-commit records the checked
 index, commit-msg generates the tree-linked Change-Id, and post-commit repairs

@@ -284,6 +284,13 @@ pull request, tells the reviewer little, and leaves open whether the issue is
 finished. When the issue is too large for this change, split it into sub-issues
 and close one with each pull request.
 
+The `pr-text` check holds the title and description to the rules above that a
+script can judge: the title through the commit subject rules (and equal to the
+subject, for a single commit), and a description with no `Refs #N`, no AI
+attribution, and any `Close #N` alone on its last line. The summary a review
+bot writes into the description is not read. The check runs again when you edit the
+pull request, so fix the text in the browser; nothing needs pushing.
+
 Run `/codetrial-review` (in Codex, `$codetrial-review`) on the committed
 branch before opening the pull request; a large change needs Claude Code or
 Codex for its interactive review. It reads what the gate cannot: the scope the
