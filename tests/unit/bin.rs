@@ -356,9 +356,7 @@ fn an_unconfigured_provider_id_is_refused_not_guessed() {
     ] {
         let pool = codetrial::config::ProviderPool { providers };
         // Not `expect_err`: `AgentConfig` deliberately has no `Debug`.
-        let Err(error) =
-            super::select_provider(agent_config(pool.clone()), "interview-eu-a1b2c3d4")
-        else {
+        let Err(error) = super::select_provider(agent_config(pool), "interview-eu-a1b2c3d4") else {
             panic!("an unknown provider id should refuse");
         };
         assert!(error.contains("eu"), "{error}");

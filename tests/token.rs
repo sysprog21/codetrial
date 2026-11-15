@@ -1,8 +1,3 @@
-#![expect(
-    clippy::unwrap_used,
-    reason = "a test that fails by panicking is working as intended"
-)]
-
 //! The credential boundary. Everything here is a property the module already
 //! holds and states in a comment, pinned so that a later edit has to argue with
 //! a failing test rather than with prose.

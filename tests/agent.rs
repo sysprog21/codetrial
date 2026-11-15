@@ -1,11 +1,6 @@
 // `prompt_samples` names every prompt builder in one `json!` literal, which
 // outgrew the macro's default expansion depth.
 #![recursion_limit = "256"]
-#![expect(
-    clippy::panic,
-    clippy::unwrap_used,
-    reason = "a test that fails by panicking is working as intended"
-)]
 
 use codetrial::agent::*;
 use codetrial::runtime::{TOPIC_CODE_UPDATE, TOPIC_CONTROL, TOPIC_INTEGRITY, TOPIC_TEST_RESULTS};
