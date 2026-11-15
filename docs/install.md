@@ -102,7 +102,10 @@ the web side only and every room waits for an agent to join from elsewhere, and
 it says so on startup. There is no matching line for the hosting case, so a
 silent start is the one that hosts interviewers. `--config PATH` names the file
 if you would rather keep it somewhere else; see
-[Configuration](../README.md#configuration) for the rest.
+[Configuration](../README.md#configuration) for the rest. GitHub sign-in,
+which reciprocal practice needs, takes an OAuth App of your own:
+[the GitHub OAuth App](peer-interviews.md#the-github-oauth-app) says how to
+register it.
 
 Platform notes:
 
