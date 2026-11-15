@@ -45,11 +45,14 @@ const spec = {
 // legitimate object with that ID has already been visited.
 function candidate(
   language,
-  duplicate,
-  invalidId,
-  invalidRoot,
-  nullNeighbor,
-  originalNeighbors,
+  {
+    duplicate,
+    invalidId,
+    invalidRoot,
+    nullNeighbor,
+    originalNeighbors,
+    root = "a",
+  } = {},
 ) {
   const id = duplicate || 1;
   if (language === "javascript")
@@ -57,28 +60,28 @@ function candidate(
     const a = new Node(1), b = new Node(2), c = new Node(3);
     a.neighbors = [c, b]; b.neighbors = [c, a]; c.neighbors = [b, a];
     ${duplicate ? `const d = new Node(${id}, ${id === 1 ? "a" : "b"}.neighbors.slice()); ${id === 1 ? "b.neighbors = [c, d]" : "c.neighbors = [d, a]"};` : ""}
-    return a;
+    return ${root};
   }`;
   if (language === "python")
     return `def replicateTopology(node):
     a, b, c = Node(1), Node(2), Node(3)
     a.neighbors, b.neighbors, c.neighbors = [c, b], [c, a], [b, a]
     ${duplicate ? `d = Node(${id})\n    d.neighbors = list(${id === 1 ? "a" : "b"}.neighbors)\n    ${id === 1 ? "b.neighbors = [c, d]" : "c.neighbors = [d, a]"}` : ""}
-    return a
+    return ${root}
 `;
   if (language === "cpp")
     return `class Solution { public: Node* replicateTopology(Node* node) {
     auto* a = new Node(1); auto* b = new Node(2); auto* c = new Node(3);
     a->neighbors = {c, b}; b->neighbors = {c, a}; c->neighbors = {b, a};
     ${duplicate ? `auto* d = new Node(${id}); d->neighbors = ${id === 1 ? "a" : "b"}->neighbors; ${id === 1 ? "b->neighbors = {c, d}" : "c->neighbors = {d, a}"};` : ""}
-    return a;
+    return ${root};
   }};`;
   if (language === "java")
     return `class Solution { public Node replicateTopology(Node node) {
     Node a = new Node(1), b = new Node(2), c = new Node(3);
     a.neighbors.addAll(Arrays.asList(c, b)); b.neighbors.addAll(Arrays.asList(c, a)); c.neighbors.addAll(Arrays.asList(b, a));
     ${duplicate ? `Node d = new Node(${id}); d.neighbors.addAll(${id === 1 ? "a" : "b"}.neighbors); ${id === 1 ? "b.neighbors.set(1, d)" : "c.neighbors.set(0, d)"};` : ""}
-    return a;
+    return ${root};
   }}`;
   return `struct Node* replicateTopology(struct Node* node) {
     struct Node* a = calloc(1, sizeof(*a)); struct Node* b = calloc(1, sizeof(*b)); struct Node* c = calloc(1, sizeof(*c));
@@ -95,7 +98,7 @@ function candidate(
     }
     ${nullNeighbor ? "a->neighbors[0] = NULL;" : ""}
     ${originalNeighbors ? "b->neighbors = node->neighbors[0]->neighbors;" : ""}
-    return a;
+    return ${root};
   }`;
 }
 
@@ -118,8 +121,14 @@ after(async () => {
 });
 
 for (const language of ["javascript", "python"]) {
-  for (const duplicate of [0, 1, 2]) {
-    test(`${language} graph clone ${duplicate ? `rejects duplicate ID ${duplicate}` : "accepts shared nodes and reordered neighbors"}`, async (t) => {
+  for (const [duplicate, root] of [
+    [0, "a"],
+    [1, "a"],
+    [2, "a"],
+    [0, "b"],
+    [0, "c"],
+  ]) {
+    test(`${language} graph clone ${root !== "a" ? `rejects entry node ${root}` : duplicate ? `rejects duplicate ID ${duplicate}` : "accepts shared nodes and reordered neighbors"}`, async (t) => {
       if (!browser) return t.skip("playwright chromium unavailable");
       const page = await browser.newPage();
       try {
@@ -129,12 +138,17 @@ for (const language of ["javascript", "python"]) {
             const { runBrowserTests } = await import("/runners.js");
             return runBrowserTests("graph-clone-identity", code, language);
           },
-          { language, code: candidate(language, duplicate) },
+          {
+            language,
+            code: candidate(language, { duplicate, root }),
+          },
         );
         assert.equal(summary.setupError, undefined);
         assert.equal(summary.total, 1);
         assert.equal(summary.cases.length, 1);
-        assert.equal(summary.passed, duplicate ? 0 : 1);
+        assert.equal(summary.passed, duplicate || root !== "a" ? 0 : 1);
+        if (root !== "a")
+          assert.match(summary.cases[0].error, /must start at node 1/);
         if (duplicate)
           assert.match(
             summary.cases[0].error,
@@ -165,6 +179,7 @@ describe("graph clone toolchain harnesses", { concurrency: 4 }, () => {
       available = false;
     }
     const scenarios = [0, 1, 2].map((duplicate) => ({ duplicate }));
+    scenarios.push({ duplicate: 0, root: "b" }, { duplicate: 0, root: "c" });
     if (language === "c")
       for (const invalidId of [0, 1024])
         for (const invalidRoot of [true, false])
@@ -172,15 +187,17 @@ describe("graph clone toolchain harnesses", { concurrency: 4 }, () => {
     if (language === "c") scenarios.push({ duplicate: 0, nullNeighbor: true });
     if (language === "c")
       scenarios.push({ duplicate: 0, originalNeighbors: true });
-    for (const {
-      duplicate,
-      invalidId,
-      invalidRoot,
-      nullNeighbor,
-      originalNeighbors,
-    } of scenarios) {
+    for (const scenario of scenarios) {
+      const {
+        duplicate,
+        invalidId,
+        invalidRoot,
+        nullNeighbor,
+        originalNeighbors,
+        root = "a",
+      } = scenario;
       test(
-        `${language} graph clone ${originalNeighbors ? "reports input nodes before duplicate IDs" : nullNeighbor ? "rejects a NULL neighbor" : invalidId !== undefined ? `rejects out-of-range ${invalidRoot ? "root" : "neighbor"} ID ${invalidId}` : duplicate ? `rejects duplicate ID ${duplicate}` : language === "c" ? "accepts shared nodes" : "accepts shared nodes and reordered neighbors"}`,
+        `${language} graph clone ${root !== "a" ? `rejects entry node ${root}` : originalNeighbors ? "reports input nodes before duplicate IDs" : nullNeighbor ? "rejects a NULL neighbor" : invalidId !== undefined ? `rejects out-of-range ${invalidRoot ? "root" : "neighbor"} ID ${invalidId}` : duplicate ? `rejects duplicate ID ${duplicate}` : language === "c" ? "accepts shared nodes" : "accepts shared nodes and reordered neighbors"}`,
         {
           skip: available
             ? false
@@ -198,18 +215,7 @@ describe("graph clone toolchain harnesses", { concurrency: 4 }, () => {
             const binary = join(dir, "graph");
             writeFileSync(
               source,
-              generateHarness(
-                language,
-                spec,
-                candidate(
-                  language,
-                  duplicate,
-                  invalidId,
-                  invalidRoot,
-                  nullNeighbor,
-                  originalNeighbors,
-                ),
-              ),
+              generateHarness(language, spec, candidate(language, scenario)),
             );
             await run(
               compiler,
@@ -221,7 +227,9 @@ describe("graph clone toolchain harnesses", { concurrency: 4 }, () => {
                 : await run(binary);
             const results = parseCompilerResults(output.stdout).results;
             assert.equal(results.length, 1);
-            if (originalNeighbors)
+            if (root !== "a")
+              assert.match(results[0].error, /must start at node 1/);
+            else if (originalNeighbors)
               assert.equal(
                 results[0].error,
                 "Returned graph must be a deep copy.",

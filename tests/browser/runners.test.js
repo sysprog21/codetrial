@@ -13,10 +13,26 @@ import test from "node:test";
 import { runInNewContext } from "node:vm";
 import { MAX_QUAD_TREE_NODES } from "../../web/compiler-explorer.js";
 import { failFetchWith, functionBody, read } from "./source.js";
-import { testPayload } from "../../web/lib.js";
+import { checkAnswer, testPayload } from "../../web/lib.js";
 import { parseCandidateCase, runBrowserTests } from "../../web/runners.js";
 
 const runners = read("web/runners.js");
+
+function jsWorkerSource() {
+  const start = runners.indexOf("const JS_RUNNER_SOURCE = `");
+  assert.notEqual(start, -1, "JS_RUNNER_SOURCE is gone from web/runners.js");
+  const stop = runners.indexOf("\n  `;\n", start);
+  assert.notEqual(stop, -1, "JS_RUNNER_SOURCE has no closing delimiter");
+  const source = runners.slice(start, stop + "\n  `;".length);
+  assert.doesNotMatch(
+    source.replaceAll("${MAX_QUAD_TREE_NODES}", ""),
+    /\$\{/,
+    "an interpolation here would read from a scope it no longer has",
+  );
+  return runInNewContext(source + "\nJS_RUNNER_SOURCE;", {
+    MAX_QUAD_TREE_NODES,
+  });
+}
 
 test("a malformed candidate case is refused", () => {
   const spec = {
@@ -785,25 +801,15 @@ test("the runner evaluates no string, so the page needs no unsafe-eval", () => {
 
 // Module-level constants are safe here; values local to runWorker are not.
 test("the hoisted runner source only interpolates the module expansion limit", () => {
-  const start = runners.indexOf("const JS_RUNNER_SOURCE = `");
-  assert.notEqual(start, -1, "JS_RUNNER_SOURCE is gone from web/runners.js");
-  const source = runners.slice(start, runners.indexOf("\n  `;\n", start));
-
-  assert.match(source, /self\.onmessage/, "it has to still be a worker");
-  assert.doesNotMatch(
-    source.replaceAll("${MAX_QUAD_TREE_NODES}", ""),
-    /\$\{/,
-    "an interpolation here would read from a scope it no longer has",
+  assert.match(
+    jsWorkerSource(),
+    /self\.onmessage/,
+    "it has to still be a worker",
   );
 });
 
 test("the JavaScript worker enforces its budget with only spec and name", () => {
-  const start = runners.indexOf("const JS_RUNNER_SOURCE = `");
-  const end = runners.indexOf("\n  `;\n", start) + "\n  `;".length;
-  const workerSource = runInNewContext(
-    runners.slice(start, end) + "\nJS_RUNNER_SOURCE;",
-    { MAX_QUAD_TREE_NODES },
-  );
+  const workerSource = jsWorkerSource();
   const leaf = { isLeaf: true, val: true };
   let root = leaf;
   for (let depth = 0; depth < 6; depth++) {
@@ -840,6 +846,44 @@ test("the JavaScript worker enforces its budget with only spec and name", () => 
   assert.equal(response.results[1].error, undefined);
   assert.equal(JSON.stringify(response.results[1].actual), "[[1,1]]");
 });
+
+for (const wrongRoot of [false, true]) {
+  test(`JavaScript graph clone ${wrongRoot ? "rejects another entry node" : "accepts the corresponding entry node"} across built-in cases`, () => {
+    const workerSource = jsWorkerSource();
+    const spec = JSON.parse(read("web/judges/sandbox-topology-replica.json"));
+    let response;
+    const self = {
+      postMessage: (message) => {
+        response = message;
+      },
+    };
+    self.__codetrialEntry = (node) => {
+      const copies = new Map();
+      function clone(current) {
+        if (!current) return null;
+        if (copies.has(current)) return copies.get(current);
+        const copy = new self.Node(current.val);
+        copies.set(current, copy);
+        copy.neighbors = current.neighbors.map(clone).reverse();
+        return copy;
+      }
+      const root = clone(node);
+      return wrongRoot && root?.neighbors.length ? root.neighbors[0] : root;
+    };
+    runInNewContext(workerSource, { self, performance });
+    self.onmessage({ data: { spec, name: spec.entry } });
+    assert.equal(response.results.length, spec.cases.length);
+    response.results.forEach((result, index) => {
+      const testCase = spec.cases[index];
+      if (wrongRoot && testCase.input[0][0]?.length) {
+        assert.match(result.error, /must start at node 1/, testCase.label);
+      } else {
+        assert.equal(result.error, undefined, testCase.label);
+        assert.ok(checkAnswer(spec, testCase, result.actual), testCase.label);
+      }
+    });
+  });
+}
 
 test("execution infrastructure failures allow tracing but candidate failures do not", async (t) => {
   const spec = {
