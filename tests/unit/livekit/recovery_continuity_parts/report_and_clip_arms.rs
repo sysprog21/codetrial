@@ -285,7 +285,7 @@ fn judge_arm(
 }
 
 /// NOT RUN against LiveKit or Gemini. One arm per invocation, chosen by
-/// `CODETRIAL_LIVE_SCENARIO` (s0, s20, s39, s41 or s60), under the B0.1
+/// `CODETRIAL_LIVE_SCENARIO` (s0, s20, s39, s41 or s60), under the run-budget
 /// launcher with the clip manifest `live_write_manifest` writes: planned
 /// actions `candidate_join` and `clip_start`, plus the reserved close permit.
 /// It needs `CODETRIAL_LIVE_CONFIG` and `CODETRIAL_LIVE_CLIPS`, the directory
@@ -299,7 +299,7 @@ fn judge_arm(
 /// report is generated and no end or report behavior is certified) and the
 /// transcript's fidelity, which is Gemini's speech-to-text.
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "NOT RUN: spends LiveKit and Gemini quota; needs the B0.1 launcher variables, CODETRIAL_LIVE_CONFIG, CODETRIAL_LIVE_CLIPS, CODETRIAL_LIVE_SCENARIO and budget approval"]
+#[ignore = "NOT RUN: spends LiveKit and Gemini quota; needs the run-budget launcher variables, CODETRIAL_LIVE_CONFIG, CODETRIAL_LIVE_CLIPS, CODETRIAL_LIVE_SCENARIO and budget approval"]
 async fn live_sdk_clip_continuity_arm() {
     let mut permits = PermitClient::from_env()
         .await

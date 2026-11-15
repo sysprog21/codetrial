@@ -1530,7 +1530,7 @@ queue holds 4000 ten-millisecond frames (40 s) and drops the oldest when full.
 | s41 | 41 s | the oldest 1 s of audio is dropped |
 | s60 | 60 s | the oldest 20 s is dropped, so the first clip is lost |
 
-Each arm is one invocation under the B0.1 manifest: `run_kind` `clip`,
+Each arm is one invocation under the run-budget manifest: `run_kind` `clip`,
 `end_mode` `native_close`, 60 s of setup, 180 s for the clip, the hold and the
 drain, 60 s of cleanup (a 300 s cap), the planned actions `candidate_join` and
 `clip_start`, and the reserved close permit as the third. The fixture closes the
