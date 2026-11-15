@@ -162,8 +162,36 @@ read it from there rather than from a copy that can drift:
 ./scripts/git-commit-msg.sh --rules
 ```
 
-The `prepare-commit-msg` hook puts the same list in your editor. Subjects from
-this tree's log read like this:
+The `prepare-commit-msg` hook puts the same list in your editor. When a hook
+refuses a message, it says how to reopen it with `git commit -v -e -F`, so
+nothing has to be retyped.
+
+`python3 scripts/commit-reflow.py <file>` rewraps a body that arrived ragged:
+one long line, a paragraph broken at column 40, or the shape of a sentence you
+have since edited. It joins prose back into paragraphs and packs them at 72,
+and leaves alone what it cannot be sure is prose: the subject, comments, code
+fences, indented samples, quotes, tables, `Key: value` rows, the closing line,
+trailers and everything below the scissors line. `-` filters standard input,
+and `--check` exits 1 when the text would change. It never runs from a hook,
+since it rewrites what you wrote; the drafter below uses the same pass.
+
+`scripts/commit-draft.py` drafts a message for the staged change, for you to
+edit. No hook runs it: it sends the staged diff only when you type the command,
+and only to the model you configured, once, with
+`git config codetrial.draftBackend claude` or `ollama:<model>`, or
+`cmd:<command>` for anything that reads a prompt on standard input. The
+backend runs from an empty directory, so it sees the prompt and nothing else;
+an agent that would read your tree itself is not offered.
+`--print-prompt` shows what would be sent without sending it, and a staged
+credential stops it before anything leaves. The draft is written against the
+same rules, with recent subjects from this log as its examples, and judged by
+`scripts/git-commit-msg.sh` before you see it. A draft that hook refuses goes
+back to the model with the refusal. The reason for a change is not in the
+diff, so give it with `--why "..."`; without it the draft says what changed
+and stops. `--commit` opens the draft in your editor through `git commit -e`,
+with every hook in effect, and what you commit is yours to stand behind.
+
+Subjects from this tree's log read like this:
 
 ```
 Bound a video frame by the memory it will take
@@ -178,9 +206,15 @@ fixes, with `git rebase -i --autosquash` for an older one. The body carries the
 premise and the trade, usually in a single paragraph. This tree keeps its
 detailed reasoning in the comment next to the code, so a body retelling the
 mechanics duplicates that comment and then goes stale on its own.
-The hook rejects the shape that does it outright: a body line opening with
-`How:`, `Step:`, `Steps:`, `Changes:` or an `Implementation:` heading. Whether
-what is left says anything is the part only a reviewer can judge.
+The hook rejects the shapes that do it outright, which are also the shapes an
+agent's changelog body takes: a body line opening with `How:`, `Step:`,
+`Steps:`, `Changes:` or an `Implementation:` heading, a heading on a line of
+its own (`Summary:`, `## Summary`, `**Changes**`), a sentence that narrates the
+commit (`This commit adds`), a sentence that opens like a changelog line
+(`Added a cache`, `Updated main.rs`), a body under six words, and one that only
+repeats the subject. A lead-in to an indented sample (`It now reads:`) is not a
+heading. Whether what is left says anything is the part only a reviewer can
+judge: a fluent paragraph that retells the diff passes every one of these.
 
 Body lines wrap at 72 characters. The one exception is a token that cannot be
 wrapped without breaking it: a link or a file name longer than a whole line may
@@ -249,6 +283,13 @@ body has no `Refs #N`: a reference that closes nothing is easy to add to every
 pull request, tells the reviewer little, and leaves open whether the issue is
 finished. When the issue is too large for this change, split it into sub-issues
 and close one with each pull request.
+
+The `pr-text` check holds the title and description to the rules above that a
+script can judge: the title through the commit subject rules (and equal to the
+subject, for a single commit), and a description with no `Refs #N`, no AI
+attribution, and any `Close #N` alone on its last line. The summary a review
+bot writes into the description is not read. The check runs again when you edit the
+pull request, so fix the text in the browser; nothing needs pushing.
 
 Run `/codetrial-review` (in Codex, `$codetrial-review`) on the committed
 branch before opening the pull request; a large change needs Claude Code or

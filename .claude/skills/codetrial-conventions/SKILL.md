@@ -41,7 +41,10 @@ message, rewrite the message: the pre-push hook and CI replay the same rules
 later, when fixing them costs a rebase.
 
 `./scripts/git-commit-msg.sh --rules` prints what the hook enforces, and
-`CONTRIBUTING.md` says what the body has to carry. Neither gives the
+`CONTRIBUTING.md` says what the body has to carry. `scripts/commit-draft.py`
+drafts against both for a person to edit, and only when one starts it; an
+agent writing its own message does not need it, and the reason in `--why` has
+to be the user's, not one read off the diff. Neither gives the
 calibration, so run this when a subject is hard to fit:
 
 ```

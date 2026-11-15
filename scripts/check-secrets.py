@@ -239,9 +239,14 @@ def main():
     parser.add_argument(
         "--commits", action="store_true", help="read commit IDs on stdin"
     )
+    parser.add_argument("--stdin", action="store_true", help="inspect text on stdin")
     args = parser.parse_args()
+    if args.stdin and args.commits:
+        parser.error("--stdin and --commits cannot be combined")
     root = Path(os.fsdecode(git("rev-parse", "--show-toplevel").rstrip(b"\n")))
     values = local_values(root)
+    if args.stdin:
+        return int(inspect(b"prompt", sys.stdin.buffer.read(), values, "input"))
     commits = sys.stdin.read().splitlines() if args.commits else None
     failed = False
     with Blobs() as blobs:

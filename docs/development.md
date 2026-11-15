@@ -402,6 +402,57 @@ only once. It shows at most forty staged filenames and a short change summary
 above the scissors line, without generating a subject or sending a diff to an
 AI service. The existing message rules remain authoritative.
 
+Drafting is `scripts/commit-draft.py`, which a person starts and no hook does,
+so a plain `git commit` sends nothing anywhere. The backend is the one named by
+`--backend` or `git config codetrial.draftBackend`, run from an empty
+temporary directory so the prompt is all it is given: `claude` runs
+`claude -p` with every tool off and `--setting-sources=`, so the user's own
+instructions and memory stay out of the request too, `ollama:<model>` stays on
+the machine, and `cmd:<command>` takes any command reading the prompt on
+standard input. An agent CLI that reads the tree for itself is not offered:
+`codex exec`'s read-only sandbox still reads every file, and what it read would
+pass no secret check. With none set it refuses and sends nothing.
+`scripts/check-secrets.py` reads the index first, and a finding stops the
+draft before anything is sent; every prompt, a retry's included, passes the
+same check on its way out. The prompt carries
+`git-commit-msg.sh --rules`, recent subjects and two short messages from the
+staged paths' own history, the staged file list, and the diff with lock,
+vendored and binary files reduced to a line saying they changed. The diff is
+held to a character budget (`--budget`, 20000) in fair shares from the smallest
+file up, so a small fix beside a regenerated fixture is read whole and the
+large file is cut with a marker. A reply loses its reasoning tags, code fence,
+preamble and any copied Change-Id, its body goes through
+`scripts/commit-reflow.py` (below), and `git-commit-msg.sh` judges it. A
+refusal goes back with the draft for another attempt (`--attempts`, 3; each
+waits `--timeout`, 180 seconds), and a draft is never trimmed to fit, since a
+subject cut at 50 columns passes and says less. The result is kept in
+`.git/CODETRIAL_DRAFT_MSG`; `--commit` opens it through `git commit -e -F`, so
+the hooks and the Change-Id run as for a typed message. The suite is
+`tests/test_commit_draft.py`, against a stub backend that records each prompt.
+
+`scripts/commit-reflow.py` rejoins a ragged body and packs it at 72, counted in
+bytes as the hook counts. It follows the rule commentflow keeps for comments:
+only prose moves, and a line that might be layout passes through byte for
+byte. Each line gets one kind, in an order that decides it: below the scissors
+and inside a fence nothing else is asked; then a comment line, a list item, an
+indented line inside an item (its continuation, as the hang under `10. ` is four
+columns), a numbered line inside a paragraph that is not `1.` (a sentence that
+wrapped after a number), indented code, a quote, a table, a diagram, the closing
+line and a trailer-shaped line; prose last. A run of two or more `Key: value`
+rows and the final trailer block are decided over whole paragraphs. A break
+never opens a line with the comment character, a list marker, `>`, `|`, a rule,
+a `Key:` word or a closing keyword with its issue: it moves the fewest words
+down that give a safe opener, and overflows when none fits, since a long line
+is named by the hook and a forged trailer is not. A join can still change what
+a run reads as (a lone `1.` joined to its next line is an item), so the result
+is classified again and a run that no longer reads as it did goes out
+unchanged. That is what makes a second run a no-op. `tests/test_commit_reflow.py`
+holds the cases and a fixed-seed sweep over words chosen to sit on those seams.
+Run over the bodies of this log re-broken at widths from 20 to 150 and as one
+line, it lost no word, changed nothing on a second pass and left no line the
+hook refuses. It is not a check: it would rewrap 521 of the 941 bodies that
+pass today, since people break before 72, and that is theirs to choose.
+
 ### Build-time installation
 
 Every `cargo build`, `cargo check`, `cargo run` and rust-analyzer pass in a
@@ -441,13 +492,46 @@ its own name; one git still quotes, or one with a blank, is refused by name
 rather than skipped. A file added with `--intent-to-add` carries no content
 into the commit and is not judged. A missing formatter refuses the commit; a
 missing linter is skipped and named in the closing line. The commit-msg hook
-holds the subject to 50 characters and the body to 72, imperative and ASCII,
-with a link or file name longer than a line, or a trailer, allowed past the
-limit. It refuses a subject that only names a file, an AI attribution and a
-`Refs #N` on the last line, and says why (see CONTRIBUTING.md). The rules run
+checks the seven rules of https://cbea.ms/git-commit/ deterministically, in
+the order `--rules` prints them, with no model and no network. The subject is
+at most 50 characters, opens with a capital letter and ends on a word (no
+`.!?,;:`). Its first word, stripped of quotes and punctuation, is not a named
+non-imperative form, not a regular inflection by suffix (a gerund whose stem
+has a vowel, so Bring stays a verb; a past tense other than Seed, Need, Embed
+and its compounds, Shed and Shred; a third person other than Always and words
+in -us, -is, -as and -ss) and not an opener such as The, Now or Also. The body is wrapped at 72, with a
+link or file name longer than a line, or a trailer in the last paragraph where
+git reads trailers, allowed past the limit; it holds at least six words of
+prose outside trailers and the closing line, more than the subject said again,
+no heading on a line of its own unless it leads into an indented sample or a
+fence, and no sentence opening with "This commit/PR/patch/diff" or with a
+changelog past tense followed by an article, a backtick or a file name. Each
+of those was measured against this log before it became a rule and refuses
+none of the commits that pass the rest. It also refuses a subject that only
+names a file, one whose words after the verb would fit any commit ("Fix bug",
+"Minor changes"), a type, area or bracketed prefix (`fix:`, `web:`,
+`src/web.rs:`, `[Bug]`), an AI attribution and a `Refs #N` on the last line,
+and says why (see CONTRIBUTING.md). The text judged is the text git stores:
+git sets `GIT_EDITOR=:` for its hooks when no editor will open (`-m`, `-F`),
+and then its default cleanup keeps `#` lines, so the hook keeps them too;
+in an editor it strips them. A caller may export `GIT_EDITOR=:` itself and
+still get an editor (`--amend`, a rebase that stops), so the help block git
+writes for an editor overrides it: in every translation it holds a line that is
+the comment character alone, which a `-m` message (`## Summary`,
+`## Issue #12`) does not. Git cuts at a scissors line only in an editor and
+only at its own exact line, under `-v` in any cleanup mode or under the
+`scissors` mode; a line merely shaped like one is stored, and so judged. `-v`
+on the command line is invisible to a hook, but the diff it writes below the
+line is not, so the hook cuts where that diff follows or under `scissors`.
+A `--cleanup` given on the command line is invisible too. The suite runs
+the reference rule under mawk, busybox and gawk, since mawk 1.3.4 once read a
+plain `Refs #364` as prose; over this log all three return the same verdict on
+every commit. A refusal of a message file says how to reopen it with
+`git commit -v -e -F`. The rules run
 in `scripts/git-commit-msg.awk`, one process per message, which is also what
 `scripts/check-commit-log.sh` and the PR sweep's hygiene check ask, with
-`--stored` for a message a commit already holds. The pre-push hook replays the
+`--stored` for a message a commit already holds and `--subject` for a line
+judged by the subject rules alone. The pre-push hook replays the
 same message rules over commits a rebase or an amend rewrote after
 the fact, and CI runs them over a pull request's own commits. On a topic branch
 small changes get one advisory line when the head has no `/codetrial-review`
@@ -464,6 +548,17 @@ check would let any large change through, so fetch the base and push again. No
 browser or model starts in a hook.
 Deleting the local skill file does not disable a review policy present at the
 pushed tip or the upstream PR base.
+
+`.github/workflows/pr-text.yml` runs `scripts/check-pr-text.py` on a pull
+request's title and description, and again on every edit, since `check.yml`
+does not run on `edited`: the title through `--subject` and, for a single
+commit, equal to its subject; the description with no `Refs #N`, no AI
+attribution, any closing keyword only on the last line and as `Close #N` alone
+there, and not the template's empty `Close #`. The block a review bot writes
+between its `auto-generated description` comments is not the author's and is
+not read. A pull request Dependabot opens is exempt, and a merge group skips
+the job, which counts as passing. The checker is the base branch's, so a pull
+request cannot relax it. Its suite is `tests/test_check_pr_text.py`.
 
 `scripts/hashchain-base` holds the configurable chain anchor. Python's standard
 library implements `scripts/hashchain.py`: pre-commit records the checked
