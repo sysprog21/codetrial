@@ -45,7 +45,8 @@ BROWSER_CHECK_AGENT=${BROWSER_CHECK_AGENT:-home}
 # as a validation fixture, never as a speech run.
 # BROWSER_CHECK_LONG_ARTIFACT_DIR holds the failure-<class>.json artifacts; it
 # defaults to a directory beside BROWSER_CHECK_CAPTURE. The exit code is the
-# failure class's: 4 budget, 5 cleanup, 6 artifact, 77 no GoAway, 1 other.
+# failure class's: 4 budget, 5 cleanup, 6 artifact, 77 no GoAway, 1 other; a
+# qualification run's verdict codes are in docs/development.md.
 BROWSER_CHECK_FLOW=${BROWSER_CHECK_FLOW:-voice}
 case $BROWSER_CHECK_FLOW in
     voice | report | barge | avatar | soak | long-interview) ;;
@@ -167,32 +168,82 @@ cleanup_fixture()
     return "$fixture_status"
 }
 
+# Whether the judgment the consumer printed is a qualification of $1.
+judged_as()
+{
+    grep -q "^long-interview qualification=$1 " "$TMP/judgment"
+}
+
 # The reply content is judged once the serving fixture has stopped and its
 # report is kept: the worker finished before that and could not read it. The
-# verdict is written into the capture file and never into this script's own
-# status, so a run that could not be judged is still the run it was.
+# verdict is written into the capture file, and for every run kind but one it
+# never reaches this script's own status, so a run that could not be judged is
+# still the run it was.
+#
+# A qualification run is the exception, since whether it qualified is only known
+# here: its status is the consumer's verdict (docs/development.md gives the
+# codes). A verdict counts only when the consumer also stated it, so a crash
+# that exits 1, or anything else it exits with, is a run nobody judged, which is
+# inconclusive and not a pass. Its arguments go to the consumer:
+# --teardown-failed when the teardown before it failed, which fails the
+# qualification and is said in the capture.
 judge_reply_content()
 {
-    [ -n "${BROWSER_CHECK_CAPTURE:-}" ] && [ -f "$BROWSER_CHECK_CAPTURE" ] || return 0
+    if [ "${MANIFEST_RUN_KIND:-}" != qualification ]; then
+        [ -n "${BROWSER_CHECK_CAPTURE:-}" ] && [ -f "$BROWSER_CHECK_CAPTURE" ] || return 0
+    fi
+    verdict=0
     node "$ROOT/scripts/long-interview-evidence.cjs" \
-        --capture "$BROWSER_CHECK_CAPTURE" --fixture "$BROWSER_CHECK_FIXTURE_OUT" \
-        || echo "Reply content was not judged; the run's own result stands." >&2
+        --capture "${BROWSER_CHECK_CAPTURE:-}" --fixture "$BROWSER_CHECK_FIXTURE_OUT" \
+        --run-kind "${MANIFEST_RUN_KIND:-}" "$@" > "$TMP/judgment" || verdict=$?
+    cat "$TMP/judgment"
+    if [ "${MANIFEST_RUN_KIND:-}" != qualification ]; then
+        [ "$verdict" -eq 0 ] \
+            || echo "Reply content was not judged; the run's own result stands." >&2
+        return 0
+    fi
+    case $verdict in
+        0) judged_as pass && return 0 || verdict=77 ;;
+        1) judged_as fail || verdict=77 ;;
+        *) verdict=77 ;;
+    esac
+    echo "The run did not qualify (exit $verdict)." >&2
+    return "$verdict"
+}
+
+# What the teardown found, $1, taken into the run's status. A run that had
+# already failed keeps the status it failed with, whatever the fixture or the
+# judgment adds. One that was only inconclusive (77) had not failed, so a
+# failure found here still names it.
+note_status()
+{
+    case $cleanup_status in
+        0) cleanup_status=$1 ;;
+        77) [ "$1" -eq 0 ] || cleanup_status=$1 ;;
+    esac
 }
 
 cleanup()
 {
     cleanup_status=$?
     trap - EXIT INT TERM
+
+    # Everything that can fail after the worker is stopped before the judgment,
+    # so that the judgment knows.
+    teardown_failed=
     if [ "${SERVER_PID:-}" ] && [ -n "$FIXTURE_TEST" ]; then
-        cleanup_fixture || cleanup_status=1
-        judge_reply_content
+        cleanup_fixture || teardown_failed=1
     elif [ "${SERVER_PID:-}" ]; then
         kill "$SERVER_PID" 2> /dev/null || true
         wait "$SERVER_PID" 2> /dev/null || true
     fi
     if [ "${FLOOR_CAPTURE_PID:-}" ]; then
         : > "$TMP/floor.done"
-        wait "$FLOOR_CAPTURE_PID" || cleanup_status=1
+        wait "$FLOOR_CAPTURE_PID" || teardown_failed=1
+    fi
+    [ -z "$teardown_failed" ] || note_status 1
+    if [ "${SERVER_PID:-}" ] && [ -n "$FIXTURE_TEST" ]; then
+        judge_reply_content ${teardown_failed:+--teardown-failed} || note_status $?
     fi
     if [ "${BROWSER_CHECK_FLOOR_LOG:-}" ]; then
         echo "Floor diagnostics retained at $BROWSER_CHECK_FLOOR_LOG" >&2
@@ -267,6 +318,8 @@ esac
 # without a browser or credentials.
 PREBUILT_BIN=
 BUDGET_VARS=
+# The run kind the validated manifest names; empty outside a budgeted run.
+MANIFEST_RUN_KIND=
 for name in BROWSER_CHECK_RUN_MANIFEST BROWSER_CHECK_RUN_ID \
     BROWSER_CHECK_RUN_MANIFEST_SHA256 BROWSER_CHECK_BUDGET_SOCKET; do
     eval "value=\${$name:-}"
@@ -311,6 +364,17 @@ if [ -n "$BUDGET_VARS" ]; then
         --manifest "$BROWSER_CHECK_RUN_MANIFEST" --verify-binaries --print sha) || exit 2
     manifest_run_id=$("$BUDGET_PYTHON" "$BUDGET_TOOL" validate \
         --manifest "$BROWSER_CHECK_RUN_MANIFEST" --print run_id) || exit 2
+    MANIFEST_RUN_KIND=$("$BUDGET_PYTHON" "$BUDGET_TOOL" validate \
+        --manifest "$BROWSER_CHECK_RUN_MANIFEST" --print run_kind) || exit 2
+
+    # Only a long interview is judged for qualification, in this script's own
+    # teardown, and its plan refuses one without a capture or a serving fixture.
+    # Any other flow would spend the run and leave it unjudged.
+    if [ "$MANIFEST_RUN_KIND" = qualification ] \
+        && [ "$BROWSER_CHECK_FLOW" != long-interview ]; then
+        echo "a qualification run is a long interview (BROWSER_CHECK_FLOW=long-interview)" >&2
+        exit 2
+    fi
     if [ "$manifest_sha" != "$BROWSER_CHECK_RUN_MANIFEST_SHA256" ]; then
         echo "BROWSER_CHECK_RUN_MANIFEST_SHA256 does not match the manifest." >&2
         exit 2

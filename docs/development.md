@@ -1331,8 +1331,11 @@ clock's `start_unix_ms`, or failing that the first token request, so a page
 reload cannot reset it, and the exposure it actually had is recorded. The
 reserve is revalidated before launch against the resolved handover grace
 (`BROWSER_CHECK_HANDOVER_GRACE_S`, 90 when unset). A GoAway rotation that begins
-at or after the boundary is `late_idle` or `late_terminal_preempted` and never
-counts toward the two completed rotations a run needs.
+at or after the boundary is `late_idle` or `late_terminal_preempted`, and one
+that began before it but came up at or after it, or at no recorded time, is
+`late_idle` too; none counts toward the two completed rotations a run needs. A
+replacement that failed and ended at or after the boundary is `late_failed`
+whatever triggered it or when it began, and fails the qualification.
 
 `scripts/long-interview-evidence.cjs` reads the acquisition report the test
 fixture leaves (receipts, executed batches, interviewer segments and turn
@@ -1341,14 +1344,54 @@ endings, each with its socket and how many of the others preceded it) and gives
 leave one reading: a reply cites the calls received on its own socket after the
 previous ending, executed before it began, and not received while output was
 being discarded. A swallowed or missing ending, a segment sealed by a cut, a
-reply that spans a tool call, a socket replacement, a rewritten segment, two
-replies in one window, a window edge inside the clock uncertainty, a reply
-that began after the question but before its estimated end (a recording can
-finish speaking sooner than its word count says) or a latched capture failure
-makes the checkpoint `not_assessed` with the reason, never a pass. The
+reply that spans a tool call, a socket replacement, a rewritten segment, a window
+edge inside the clock uncertainty, a reply that began after the question but
+before its estimated end (a recording can finish speaking sooner than its word
+count says) or a latched capture failure makes the checkpoint `not_assessed`
+with the reason, never a pass. A window may hold several replies, since the
+interviewer nudges after an answer ("mm-hm", "just checking in"): each is
+judged alone, one that answers passes the checkpoint, and with none passing it
+fails only when every reply failed, otherwise it is `not_assessed`. The
 interview is `verified` only when every checkpoint passed.
 `tests/fixtures/acquisition-report.json` is real producer output, regenerated
 with `CODETRIAL_UPDATE_FIXTURES=1` on the test that writes it.
+
+Whether a long interview qualified is decided there too, after the fixture has
+stopped, and only for a manifest whose `run_kind` is `qualification`. Such a
+run is refused before it starts without `BROWSER_CHECK_CAPTURE` and
+`BROWSER_CHECK_FIXTURE_TEST`, its worker writes `qualification=pending`, and
+every other kind keeps `not_evaluated`. The worker's report carries the facts
+as `rotation`: the soak's strict verdict over the room's `replacement:` lines,
+with the same cap of one rebuild after a reply timeout, and each replacement
+with its ids, sockets, clock and its episode's class against the stimulus
+boundary. `scripts/long-interview-qualify.cjs` holds the rule that joins them
+to the checkpoint verdicts, and it has three outcomes. `fail` is something the
+run established against itself. `inconclusive` is evidence that is not there,
+a run that saw no GoAway or whose logs were cut short or evicted included
+(the rotation judge's verdict is then not held against it), and is never a
+pass. `pass` needs every
+fact present, two rotations completed before the stimuli stopped among them
+and no GoAway handover that failed (a failed watchdog swap is counted against
+the soak's cap of rebuilds instead, unless it ended at or after the stimulus
+boundary, which is `late_failed` whatever triggered it),
+each verified: a checkpoint passed on the socket that handover opened and
+asked for something only the candidate had said before it began, a seed or the
+question left open. An answer read back from the source, or one the problem's
+brief or the session evidence supplies (the constraints, the stage), verifies
+nothing. A checkpoint that is
+`not_assessed` blocks only what it would have shown. A run that logged more than
+64 replacements lists none, and is inconclusive. A qualification manifest on any
+flow but the long interview is refused before it starts. The capture's report
+gains `qualification`, `qualification_reasons`, `rotations_completed` and
+`rotations_verified`, and a qualification run that was good until then leaves
+with the verdict: 0, 1 for `fail`, 77 for `inconclusive`. A verdict counts only
+when the judge also printed it, so a judge that crashed, or one nobody could
+run, is 77 too. A fixture or floor capture that fails to stop after the worker
+fails the qualification and is named in its reasons. For every fixture run, a
+run that had already failed keeps its own status through the teardown; one
+whose worker left with 77 had not failed, so a failure found after it still
+names it. The run-budget controller passes 77 on as `child_inconclusive`, apart
+from the `child_failed` of every other nonzero worker exit.
 
 What a reply is judged on is what its question asks and no more
 (`scripts/long-interview-schedule.cjs`). An inspect question asks about the
@@ -1385,9 +1428,14 @@ derived, and a manifest that names a `duration_min` must carry one. A run
 that would exceed it, or whose sampler would outgrow its own
 bound, stops, writes `incomplete_artifact.json` and exits 6; nothing is
 evicted to make room. Exit codes: 1 a structural failure, 4
-`incomplete_budget`, 5 `incomplete_cleanup`, 6 `incomplete_artifact`, 77 no
-GoAway (inconclusive). When several apply the exit names the most serious in
-that order (5, 6, 4, 1, 77) and each class still has its own artifact.
+`incomplete_budget`, 5 `incomplete_cleanup`, 6 `incomplete_artifact`, 77
+inconclusive (no GoAway, or a qualification nobody could judge). When several
+apply the exit names the most serious in
+that order (5, 6, 4, 1, 77) and each class still has its own artifact. The
+launcher also makes a capture's qualification follow the exit it takes: a
+`pass` the worker wrote before the launcher assessed budget, cleanup and
+artifacts becomes `inconclusive` for exit 6 and `fail` for 1, 4 or 5, with the
+reason added; any other verdict is left alone.
 
 A worker asks for each scripted action by ID and sequence before dispatching it
 (`scripts/run-budget-guard.cjs` for the browser, `WorkerGuard` in the launcher
@@ -1425,9 +1473,11 @@ What is enforced and what is only observed:
 Exit codes: 0 complete, 1 the worker failed inside its budget, 2 preflight
 refused the run before anything started, 4 `incomplete_budget`, 5
 `incomplete_cleanup` (a surviving owned process, a failed resource cleanup or a
-reap over its budget). The artifact directory keeps `budget-result.json`,
-`budget-ledger.jsonl`, and `incomplete_budget.json` or `incomplete_cleanup.json`
-when either applies.
+reap over its budget), 6 `incomplete_artifact` (the archive bound was reached),
+77 `child_inconclusive` (the worker left with 77, having neither passed nor
+failed). The artifact directory keeps `budget-result.json`,
+`budget-ledger.jsonl`, and `incomplete_budget.json`, `incomplete_artifact.json`
+or `incomplete_cleanup.json` for each that applies.
 
 Limits of the process tracking: it reads `/proc`, or `ps` elsewhere, and on
 Linux marks the launcher a child subreaper so orphans stay in the tree; without

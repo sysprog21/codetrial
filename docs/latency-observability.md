@@ -224,14 +224,17 @@ node --test tests/browser/soak-judge.test.js tests/browser/long-interview-driver
   tests/browser/long-interview-evidence.test.js
 ```
 
-A long-interview report's `assessment_scope` is `structural`, even when
-`run_kind` declares a qualification workload. Its `qualification` remains
-`not_evaluated`. Checkpoint `reply_content` is `not_assessed` by this driver;
-in serving-fixture mode `scripts/browser-check.sh` judges it from the
-fixture's report once the fixture has stopped and writes the verdict into the
-capture. Post-swap `decoded_signal` (`verified`, `not_required`, `failed` or
-`not_assessed`) is reported beside it. Neither changes the qualification or the
-exit code. Separate evidence is required before qualifying a build. `exposure_s` ends at the harness's observation boundary;
+A long-interview report's `assessment_scope` is `structural` and its
+`qualification` `not_evaluated`, except for a manifest whose `run_kind` is
+`qualification`, whose worker writes `pending` and whose judgment then sets
+`assessment_scope` to `qualification`. Checkpoint `reply_content` is
+`not_assessed` by this driver; in serving-fixture mode
+`scripts/browser-check.sh` judges it from the fixture's report once the
+fixture has stopped and writes the verdict into the capture. Post-swap
+`decoded_signal` (`verified`, `not_required`, `failed` or `not_assessed`) is
+reported beside it. For every run kind but a qualification, neither changes the
+exit code; a qualification is decided there and leaves with its verdict, as
+`docs/development.md` describes. `exposure_s` ends at the harness's observation boundary;
 the analyzer's exposure can extend through the terminal socket's end and must
 not be substituted for it. `end_permit_granted` records permission, while
 `end_clicked` records the page action; the countdown can win after the permit

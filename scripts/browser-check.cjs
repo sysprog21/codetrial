@@ -71,14 +71,12 @@ const {
   isRotation,
   judgeEpisodeReplies,
   judgeSoak,
+  latchHandovers,
   parseClock,
   parseEpisodes,
   parseObligations,
-  parseReplacements,
   parseVerdictMode,
-  replacementKey,
   replacementsWithoutEpisode,
-  roomLogged,
   soakExposure,
   soakResult,
 } = require("./soak-judge.cjs");
@@ -517,16 +515,6 @@ const RESUME_GRACE_MS = 45_000;
 // and where its per-episode lines go.
 const SETTLE = { graceMs: RESUME_GRACE_MS, log: console.log };
 
-/// The two runtime lines that are not part of a replacement: the advisory and
-/// its expiry. Matched literally, printed by src/livekit.rs. What a replacement
-/// was is read from the fields of its `replacement:` line by
-/// scripts/soak-judge.cjs, since presence cannot tell a resumption from a
-/// rebuild: the interviewer stays in the room through both.
-const HANDOVER_SIGNALS = {
-  goAway: "Gemini requested a transport restart in",
-  expired: "goaway expired:",
-};
-
 function redact(text) {
   let output = String(text);
   // GOOGLE_API_KEYS is the pooled spelling and holds a comma-separated list,
@@ -781,6 +769,8 @@ async function longInterview(
   const deadline = new Set();
   const evidence = new Map();
   const episodeLines = new Map();
+  const seen = { goAway: false, expired: false };
+  const replacements = [];
   let ended = false;
   let browserDisconnected = false;
   page.once("close", () => {
@@ -801,6 +791,7 @@ async function longInterview(
     // as they go past for the end-of-run classes.
     for (const line of episodeEvidenceLines(log, roomName))
       episodeLines.set(line, true);
+    latchHandovers(log, roomName, seen, replacements);
   };
   let nextProgress = 0;
   const observe = async () => {
@@ -921,6 +912,8 @@ async function longInterview(
     clock,
     tokenRequestsMs,
     episodes: episodes.episodes,
+    unmatchedEpisodes: episodes.unmatched,
+    rotation: { replacements, ...seen },
     audio,
     replies,
     logs: { truncated: false, evicted: false, complete: logsComplete },
@@ -1015,9 +1008,6 @@ async function soakInterview(
   const newServerLines = serverLogTail();
   const refresh = () => {
     const log = `${agentOutput.join("")}\n${newServerLines()}`;
-    for (const [name, needle] of Object.entries(HANDOVER_SIGNALS)) {
-      seen[name] ||= roomLogged(log, needle, roomName);
-    }
     reportRotationLines(log, roomName, reported);
     for (const line of [
       ...episodeEvidenceLines(log, roomName),
@@ -1025,10 +1015,7 @@ async function soakInterview(
     ]) {
       evidence.set(line, true);
     }
-    const known = new Set(replacements.map(replacementKey));
-    for (const r of parseReplacements(log, roomName)) {
-      if (!known.has(replacementKey(r))) replacements.push(r);
-    }
+    latchHandovers(log, roomName, seen, replacements);
   };
   const evidenceText = () => `${[...evidence.keys()].join("\n")}\n`;
   const coverage = (final) =>

@@ -8,8 +8,10 @@ The launcher runs as its own process so its subreaper mark, its signals and its
 death are real and cannot leak into the other cases the runner runs at once.
 """
 
+import contextlib
 import hashlib
 import importlib.util
+import io
 import json
 import os
 import shutil
@@ -21,6 +23,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -649,6 +652,23 @@ class PermitClientFailureTests(Scratch):
 
 
 class LauncherRunTests(Scratch):
+    def test_a_worker_that_was_inconclusive_is_not_reported_as_failed(self):
+        # 77 is the worker neither passing nor failing: a soak with no GoAway,
+        # a qualification nobody could judge.
+        result, _ = self.launch("normal", env={"FAKE_EXIT": "77"})
+        self.assertEqual(result.returncode, irb.EXIT_CHILD_INCONCLUSIVE, result.stderr)
+        self.assertEqual(result.returncode, 77)
+        report = self.result()
+        self.assertEqual(report["status"], "child_inconclusive")
+        self.assertEqual(report["child_exit"], 77)
+        self.assertIn("run budget: child_inconclusive", result.stderr)
+
+    def test_any_other_worker_failure_is_child_failed(self):
+        result, _ = self.launch("normal", env={"FAKE_EXIT": "6"})
+        self.assertEqual(result.returncode, irb.EXIT_CHILD_FAILED, result.stderr)
+        self.assertEqual(self.result()["status"], "child_failed")
+        self.assertEqual(self.result()["child_exit"], 6)
+
     def test_a_clean_run_completes_with_every_action_granted_and_dispatched_once(self):
         started = time.time()
         result, _ = self.launch("normal", env={"FAKE_OBSERVED": "1"})
@@ -1346,18 +1366,29 @@ class BrowserCheckValidationTests(Scratch):
         capture["report"]["schedule_sha256"] = sha
         return json.dumps(capture)
 
-    def run_fixture_path(self, writes_report=True, worker_exit=0, capture_text=None):
+    def run_fixture_path(
+        self,
+        writes_report=True,
+        worker_exit=0,
+        capture_text=None,
+        env=None,
+        **manifest_fields,
+    ):
         """browser-check.sh from the manifest to the exit trap, with a stand-in
         fixture server and a stand-in worker: no browser, no credentials."""
         fixture = self.root / "stand-in-fixture"
         support.write_executable(
             fixture, support.stub("interview-run-budget/stand-in-fixture.py")
         )
+        windows = {
+            "outer_wall_cap_s": 3600,
+            "cleanup_reserve_s": 300,
+            "selected_duration_s": 600,
+            **manifest_fields,
+        }
         manifest = self.write_manifest(
-            outer_wall_cap_s=3600,
-            cleanup_reserve_s=300,
-            selected_duration_s=600,
             binaries={"candidate": {"path": str(fixture), "sha256": sha256(fixture)}},
+            **windows,
         )
         shim = self.root / "shim"
         shim.mkdir()
@@ -1377,7 +1408,7 @@ class BrowserCheckValidationTests(Scratch):
         capture = self.root / "capture.json"
         pidfile = self.root / "stand-in.pid"
         self.addCleanup(self.kill_pidfile, pidfile)
-        result = self.check(
+        settings = dict(
             BROWSER_CHECK_VALIDATE_ENV_ONLY=None,
             BROWSER_CHECK_AGENT="dispatch",
             BROWSER_CHECK_FIXTURE_TEST="module::serve",
@@ -1399,6 +1430,8 @@ class BrowserCheckValidationTests(Scratch):
             STAND_IN_WORKER_EXIT=str(worker_exit),
             STAND_IN_WRITES_REPORT="1" if writes_report else None,
         )
+        settings.update(env or {})
+        result = self.check(**settings)
         return result, report, capture
 
     def test_the_fixture_path_runs_from_start_to_a_judged_capture(self):
@@ -1438,6 +1471,97 @@ class BrowserCheckValidationTests(Scratch):
         self.assertIn("cannot read the capture", result.stderr)
         self.assertIn("run's own result stands", result.stderr)
         self.assertEqual(capture.read_text(), "not a capture")
+
+    # A qualification run leaves with its verdict: the worker's own exit says
+    # only that the interview ran, and whether it qualified is known after the
+    # fixture stops.
+    # A 90 minute qualification and its wall windows: setup, end and report, and
+    # teardown sit outside the selected duration.
+    QUALIFICATION_WALL_S = 5400 + 660
+    QUALIFICATION = {
+        "run_kind": "qualification",
+        "end_mode": "manual",
+        "duration_min": 90,
+        "observation_target_s": 5400,
+        "selected_duration_s": 5400,
+        "outer_wall_cap_s": QUALIFICATION_WALL_S,
+        "cleanup_reserve_s": 360,
+        "max_archive_bytes": irb.archive_bounds(QUALIFICATION_WALL_S)[0],
+    }
+
+    def qualification_path(self, **options):
+        """A qualification through the long-interview flow it must take."""
+        env = {
+            "BROWSER_CHECK_FLOW": "long-interview",
+            "BROWSER_CHECK_DURATION_MIN": "90",
+            "BROWSER_CHECK_BUDGET_REAP_AT": str(
+                int(time.time()) + self.QUALIFICATION_WALL_S
+            ),
+            **options.pop("env", {}),
+        }
+        return self.run_fixture_path(env=env, **options, **self.QUALIFICATION)
+
+    def test_a_qualification_that_failed_its_content_exits_1(self):
+        result, _, capture = self.qualification_path()
+        self.assertEqual(result.returncode, 1, result.stderr)
+        kept = json.loads(capture.read_text())["report"]
+        self.assertEqual(kept["qualification"], "fail", kept)
+        self.assertEqual(kept["assessment_scope"], "qualification")
+        self.assertIn("long-interview qualification=fail", result.stdout)
+        self.assertIn("did not qualify (exit 1)", result.stderr)
+
+    def test_a_qualification_nobody_could_judge_is_inconclusive_not_a_pass(self):
+        result, _, capture = self.qualification_path(capture_text="not a capture")
+        self.assertEqual(result.returncode, 77, result.stderr)
+        self.assertIn("qualification=inconclusive", result.stdout)
+        self.assertEqual(capture.read_text(), "not a capture")
+
+    def test_a_qualification_that_had_already_failed_keeps_its_own_status(self):
+        result, _, _ = self.qualification_path(worker_exit=6)
+        self.assertEqual(result.returncode, 6, result.stderr)
+
+    # 77 is a worker that neither passed nor failed, so it has no failure of its
+    # own to keep: a failure found after it still names the run.
+    def test_an_inconclusive_worker_does_not_hide_a_verdict_of_fail(self):
+        result, _, capture = self.qualification_path(worker_exit=77)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertEqual(
+            json.loads(capture.read_text())["report"]["qualification"], "fail"
+        )
+
+    def test_an_inconclusive_worker_does_not_hide_a_fixture_that_failed(self):
+        result, _, _ = self.run_fixture_path(worker_exit=77, writes_report=False)
+        self.assertEqual(result.returncode, 1, result.stderr)
+
+    def test_an_inconclusive_worker_stays_inconclusive_when_nothing_failed(self):
+        result, _, _ = self.run_fixture_path(worker_exit=77)
+        self.assertEqual(result.returncode, 77, result.stderr)
+
+    def test_a_failed_worker_keeps_its_status_when_the_fixture_fails_too(self):
+        # The fixture left no report, which is a failure of its own; the
+        # worker's is the one that names what went wrong first.
+        result, _, _ = self.qualification_path(worker_exit=6, writes_report=False)
+        self.assertEqual(result.returncode, 6, result.stderr)
+
+    def test_a_qualification_whose_fixture_left_no_report_fails_as_any_run_does(self):
+        result, _, capture = self.qualification_path(writes_report=False)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        # And the capture says so, rather than whatever the content came to.
+        kept = json.loads(capture.read_text())["report"]
+        self.assertEqual(kept["qualification"], "fail", kept)
+        self.assertIn("the run's teardown failed", kept["qualification_reasons"])
+
+    def test_a_judge_that_crashed_is_inconclusive_not_a_verdict_of_fail(self):
+        # Exit 1 with no verdict on record is a crash, not a failed run.
+        result, _, _ = self.qualification_path(env={"STAND_IN_JUDGE_EXIT": "1"})
+        self.assertEqual(result.returncode, 77, result.stderr)
+        self.assertIn("did not qualify (exit 77)", result.stderr)
+
+    def test_a_qualification_manifest_is_refused_on_any_other_flow(self):
+        # Only the long interview's teardown judges a qualification.
+        result, _, _ = self.run_fixture_path(**self.QUALIFICATION)
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("a qualification run is a long interview", result.stderr)
 
     def test_a_fixture_that_wrote_no_report_fails_the_run_and_says_so(self):
         result, report, capture = self.run_fixture_path(writes_report=False)
@@ -2089,6 +2213,104 @@ class ResourceRunTests(Scratch):
             self.assertEqual(result.returncode, irb.EXIT_PREFLIGHT, result.stderr)
             self.assertIn("--resource-cadence must be positive", result.stderr)
             self.assertFalse((self.out / irb.RESOURCE_SAMPLES_FILE).exists())
+
+    def capture_file(self, qualification):
+        path = self.root / "capture.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "report": {
+                        "qualification": qualification,
+                        "qualification_reasons": [],
+                    }
+                }
+            )
+        )
+        return path
+
+    # Expected: the worker judged the run before the controller assessed it, so
+    # a pass in the capture has to follow the exit the controller then takes.
+    def test_a_capture_that_says_pass_follows_the_controllers_incomplete_exit(self):
+        floor, _ = irb.archive_bounds(30)
+        capture = self.capture_file("pass")
+        result, _ = self.launch(
+            "fat",
+            extra=self.fast(),
+            env={"BROWSER_CHECK_CAPTURE": str(capture)},
+            max_archive_bytes=floor,
+        )
+        self.assertEqual(result.returncode, irb.EXIT_INCOMPLETE_ARTIFACT, result.stderr)
+        report = json.loads(capture.read_text())["report"]
+        self.assertEqual(report["qualification"], "inconclusive")
+        self.assertIn("incomplete_artifact", " ".join(report["qualification_reasons"]))
+
+    def test_a_capture_that_says_pass_follows_a_failed_child_too(self):
+        capture = self.capture_file("pass")
+        result, _ = self.launch(
+            "normal",
+            extra=self.fast(),
+            env={"BROWSER_CHECK_CAPTURE": str(capture), "FAKE_EXIT": "1"},
+        )
+        self.assertEqual(result.returncode, irb.EXIT_CHILD_FAILED, result.stderr)
+        report = json.loads(capture.read_text())["report"]
+        self.assertEqual(report["qualification"], "fail")
+
+    def test_each_exit_maps_a_pass_to_the_verdict_it_deserves(self):
+        # A cut archive is unjudgeable; a failed child, an overrun and an
+        # incomplete cleanup are failures; an accepted run and a worker that
+        # was itself inconclusive leave the capture alone.
+        wanted = {
+            irb.EXIT_CHILD_FAILED: "fail",
+            irb.EXIT_INCOMPLETE_BUDGET: "fail",
+            irb.EXIT_INCOMPLETE_CLEANUP: "fail",
+            irb.EXIT_INCOMPLETE_ARTIFACT: "inconclusive",
+            0: "pass",
+            irb.EXIT_CHILD_INCONCLUSIVE: "pass",
+        }
+        for code, verdict in wanted.items():
+            capture = self.capture_file("pass")
+            with mock.patch.dict(os.environ, {"BROWSER_CHECK_CAPTURE": str(capture)}):
+                irb.reconcile_capture("status", code)
+            report = json.loads(capture.read_text())["report"]
+            self.assertEqual(report["qualification"], verdict, code)
+
+    def test_a_capture_with_no_report_is_left_alone_and_quietly(self):
+        # A flow that is not a long interview writes a capture with no report.
+        for text in ('{"report": null}', "[]", '{"flow": "x"}'):
+            path = self.root / "capture.json"
+            path.write_text(text)
+            with mock.patch.dict(os.environ, {"BROWSER_CHECK_CAPTURE": str(path)}):
+                with contextlib.redirect_stderr(io.StringIO()) as err:
+                    irb.reconcile_capture(
+                        "incomplete_budget", irb.EXIT_INCOMPLETE_BUDGET
+                    )
+            self.assertEqual(path.read_text(), text)
+            self.assertEqual(err.getvalue(), "", text)
+
+    def test_a_capture_that_is_not_a_pass_is_left_as_it_is(self):
+        floor, _ = irb.archive_bounds(30)
+        capture = self.capture_file("fail")
+        before = capture.read_text()
+        self.launch(
+            "fat",
+            extra=self.fast(),
+            env={"BROWSER_CHECK_CAPTURE": str(capture)},
+            max_archive_bytes=floor,
+        )
+        self.assertEqual(capture.read_text(), before)
+
+    def test_a_capture_survives_a_run_the_controller_accepts(self):
+        _, ceiling = irb.archive_bounds(30)
+        capture = self.capture_file("pass")
+        before = capture.read_text()
+        result, _ = self.launch(
+            "fat",
+            extra=self.fast(),
+            env={"BROWSER_CHECK_CAPTURE": str(capture)},
+            max_archive_bytes=ceiling,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(capture.read_text(), before)
 
     def test_an_archive_within_its_bound_completes(self):
         _, ceiling = irb.archive_bounds(30)

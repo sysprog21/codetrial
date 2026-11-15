@@ -445,6 +445,25 @@ fn long_cases() -> Vec<LongCase> {
     );
     defaulted.unset = vec!["BROWSER_CHECK_DURATION_MIN"];
     cases.push(defaulted);
+
+    // A qualification with nowhere to leave its capture, or no fixture to judge
+    // it from, could never be judged.
+    for (name, variable, refusal) in [
+        (
+            "qualification_without_a_capture",
+            "BROWSER_CHECK_CAPTURE",
+            "a qualification run needs BROWSER_CHECK_CAPTURE",
+        ),
+        (
+            "qualification_without_a_fixture",
+            "BROWSER_CHECK_FIXTURE_TEST",
+            "a qualification run needs BROWSER_CHECK_FIXTURE_TEST",
+        ),
+    ] {
+        let mut unjudged = long_case(name, &[], json!({}), Some(refusal));
+        unjudged.unset = vec![variable];
+        cases.push(unjudged);
+    }
     cases
 }
 
@@ -544,6 +563,25 @@ fn run_long_case(case: &LongCase, entry: &str) -> (Option<i32>, String) {
         .env("BROWSER_CHECK_RUN_ID", LONG_RUN_ID)
         .env("BROWSER_CHECK_RUN_MANIFEST_SHA256", hex_sha256(&bytes))
         .env("BROWSER_CHECK_BUDGET_SOCKET", dir.join("budget.sock"));
+
+    // A qualification is judged after the run from its capture and from what
+    // the serving fixture observed, so one is refused without both; the fixture
+    // in turn needs a dispatch agent and somewhere to leave its report. A case
+    // about the agent itself keeps the agent it names and is refused for that,
+    // with the fixture's own preconditions out of its way.
+    let names_agent = case
+        .env
+        .iter()
+        .any(|(name, _)| *name == "BROWSER_CHECK_AGENT")
+        || case.unset.contains(&"BROWSER_CHECK_AGENT");
+    if manifest["run_kind"] == "qualification" && !names_agent {
+        command
+            .env("BROWSER_CHECK_AGENT", "dispatch")
+            .env("BROWSER_CHECK_CAPTURE", dir.join("capture.json"))
+            .env("BROWSER_CHECK_FIXTURE_TEST", "module::serve")
+            .env("BROWSER_CHECK_FIXTURE_OUT", dir.join("fixture-report.json"))
+            .env("BROWSER_CHECK_BUDGET_REAP_AT", "99999999999");
+    }
     for (name, value) in &case.env {
         command.env(name, value);
     }

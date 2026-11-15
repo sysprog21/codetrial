@@ -9,10 +9,12 @@ import sched from "../../scripts/long-interview-schedule.cjs";
 
 const {
   assessCheckpoint,
+  earliestSpokenFactS,
   fixtureProblems,
   judgeInterview,
   main,
   mergeVerdict,
+  qualificationExit,
   reportProblems,
   summarize,
   verdictFields,
@@ -79,12 +81,130 @@ function reasonsOf(result) {
 }
 
 test("a faithful reply that cites an executed read passes", () => {
-  const result = assess(faithful());
-  assert.deepEqual(result, {
+  const report = faithful();
+  const { identity } = report.capture.replies[0];
+  assert.deepEqual(assess(report), {
     checkpoint_id: CP.checkpoint_id,
     verdict: "pass",
     reasons: [],
+    // Where it was said, for the reader that ties an answer to a handover.
+    reply: {
+      session: identity.session,
+      socket: identity.socket,
+      clock_start_unix_ms: identity.clock.start_unix_ms,
+    },
+    // The first checkpoint reads the source back; nothing it asks was spoken.
+    earliest_fact_heard_s: null,
   });
+});
+
+test("a nudge after the answer, in the same window, does not void it", () => {
+  const result = assess(
+    faithful((r) => at(r.capture.replies[1].identity, 150)),
+  );
+  assert.equal(result.verdict, "pass", reasonsOf(result));
+  assert.equal(result.reply.socket, 1);
+});
+
+test("with two replies in the window and neither answering, each is named", () => {
+  const result = assess(
+    faithful((r) => {
+      r.capture.replies[0].text = "Nothing useful.";
+      at(r.capture.replies[1].identity, 150);
+    }),
+  );
+  assert.equal(result.verdict, "fail", reasonsOf(result));
+  assert.match(reasonsOf(result), /reply 1: .*\| reply 2: /);
+});
+
+test("a later nudge that repeats the answer without the read does not pass", () => {
+  const result = assess(
+    faithful((r) => {
+      const [a, b] = r.capture.replies;
+      b.text = a.text;
+      a.text = "Nothing useful.";
+      at(b.identity, 150);
+    }),
+  );
+  assert.equal(result.verdict, "fail", reasonsOf(result));
+  assert.match(reasonsOf(result), /reply 2: .*no read_editor call/);
+});
+
+test("one reply that cannot be assessed keeps a failing checkpoint open", () => {
+  const result = assess(
+    faithful((r) => {
+      r.capture.replies[0].text = "Nothing useful.";
+      r.capture.replies[1].revised = true;
+      at(r.capture.replies[1].identity, 150);
+    }),
+  );
+  assert.equal(result.verdict, "not_assessed", reasonsOf(result));
+  assert.match(reasonsOf(result), /reply 2: .*rewritten/);
+});
+
+test("an answer that passes stands when the nudge after it cannot be assessed", () => {
+  const result = assess(
+    faithful((r) => {
+      r.capture.replies[1].revised = true;
+      at(r.capture.replies[1].identity, 150);
+    }),
+  );
+  assert.equal(result.verdict, "pass", reasonsOf(result));
+  assert.equal(result.reply.socket, 1);
+});
+
+test("only what the candidate alone said can show the conversation survived", () => {
+  const reach = (id) =>
+    earliestSpokenFactS(
+      BUNDLE,
+      BUNDLE.answer_key.checkpoints.find((k) => k.checkpoint_id === id),
+    );
+  // The constraints and the stage are spoken too, but the problem's own brief
+  // gives the constraints and the session evidence gives the stage, so a
+  // checkpoint that asks only for them shows nothing remembered. The seeds and
+  // the question left open are said by the candidate and nowhere else.
+  const reaching = BUNDLE.schedule.checkpoints
+    .map((cp) => cp.checkpoint_id)
+    .filter((id) => reach(id) !== null);
+  assert.deepEqual(reaching, [
+    "c07_cp_state",
+    "c08_cp_state",
+    "c13_cp_state",
+    "c14_cp_state",
+    "cp_final",
+  ]);
+  // A seed is heard by the end of the clip that says it, long before its
+  // recall; the question left open is said late, before the final checkpoint.
+  for (const id of reaching.slice(0, 4)) assert.ok(reach(id) < 700, id);
+  assert.ok(reach("cp_final") > 4000);
+  // A question that quoted a seed would not make the seed its own: with every
+  // clip that says the seed made to say nothing, and the checkpoint's own
+  // question quoting it, nothing was heard.
+  const quoting = structuredClone(BUNDLE);
+  const key = quoting.answer_key.checkpoints.find(
+    (k) => k.checkpoint_id === "c07_cp_state",
+  );
+  const facts = quoting.answer_key.facts.filter(
+    (f) =>
+      key.element_fact_ids.includes(f.id) &&
+      sched.CONVERSATION_FACT_IDS.includes(f.id),
+  );
+  assert.ok(facts.length > 0);
+  const question = quoting.schedule.clips.find(
+    (c) =>
+      c.clip_id ===
+      quoting.schedule.checkpoints.find(
+        (cp) => cp.checkpoint_id === key.checkpoint_id,
+      ).clip_id,
+  );
+  assert.equal(question.role, "checkpoint");
+  for (const fact of facts) {
+    for (const clip of quoting.schedule.clips) {
+      clip.source_text = clip.source_text.split(fact.text).join("nothing");
+    }
+    question.source_text += ` ${fact.text}`;
+  }
+  assert.equal(earliestSpokenFactS(quoting, key), null);
 });
 
 test("the raw producer report cannot place anything in time", () => {
@@ -166,11 +286,6 @@ const UNKNOWN = [
     "a reply never sealed",
     (r) => (r.capture.replies[0].final_segment = false),
     /never sealed/,
-  ],
-  [
-    "a second reply inside the window",
-    (r) => at(r.capture.replies[1].identity, 150),
-    /2 replies/,
   ],
   [
     "a reply just before the window, within the uncertainty",
@@ -446,6 +561,7 @@ function capture() {
       anchor: { source: "server_clock" },
       validation_fixture: false,
       schedule_mode: "coding",
+      assessment_scope: "structural",
       qualification: "not_evaluated",
       reply_content: "not_assessed",
       schedule_sha256: BUNDLE.schedule.schedule_sha256,
@@ -545,13 +661,20 @@ for (const [name, edit, pattern] of UNJUDGED) {
   });
 }
 
-test("only the three verdict fields move", () => {
+test("only the verdict fields move, and a pilot stays not evaluated", () => {
   const file = capture();
-  const after = mergeVerdict(file, servingReport());
+  const after = mergeVerdict(file, servingReport(), "pilot");
+  assert.equal(after.report.qualification, "not_evaluated");
+  assert.deepEqual(after.report.qualification_reasons, []);
+  assert.equal(after.report.assessment_scope, "structural");
   const VERDICT = [
     "reply_content",
     "reply_content_checkpoints",
     "reply_content_reasons",
+    "qualification",
+    "qualification_reasons",
+    "rotations_completed",
+    "rotations_verified",
   ];
   const without = (report) =>
     Object.fromEntries(
@@ -560,8 +683,34 @@ test("only the three verdict fields move", () => {
   assert.deepEqual(without(after.report), without(file.report));
   assert.deepEqual(
     Object.keys(after.report).filter((key) => key.startsWith("reply_content")),
-    VERDICT,
+    VERDICT.slice(0, 3),
   );
+});
+
+test("judging again without a run kind leaves a qualification as it was", () => {
+  const file = capture();
+  Object.assign(file.report, {
+    qualification: "pass",
+    qualification_reasons: [],
+    assessment_scope: "qualification",
+  });
+  const after = mergeVerdict(file, servingReport());
+  assert.equal(after.report.reply_content, "failed");
+  assert.equal(after.report.qualification, "pass");
+  assert.equal(after.report.assessment_scope, "qualification");
+  assert.equal("rotations_completed" in after.report, false);
+});
+
+test("a qualification run is evaluated and says so", () => {
+  const after = mergeVerdict(capture(), servingReport(), "qualification");
+  // One checkpoint answered and the rest silent: the content failed.
+  assert.equal(after.report.qualification, "fail");
+  assert.equal(after.report.assessment_scope, "qualification");
+  assert.match(
+    after.report.qualification_reasons.join("\n"),
+    /checkpoints failed/,
+  );
+  assert.equal(after.report.exit_code, 0);
 });
 
 test("a verified interview carries an empty reasons list, not a stale one", () => {
@@ -606,6 +755,105 @@ test("the command rewrites the capture in place and reports one line", () => {
     assert.match(lines[0], /^long-interview reply_content=failed pass=1 /);
     const after = JSON.parse(fs.readFileSync(`${dir}/capture.json`, "utf8"));
     assert.equal(after.report.reply_content, "failed");
+  });
+});
+
+// For a qualification the exit is the verdict, and whatever kept the run from
+// being judged is inconclusive rather than nothing to report.
+test("each qualification verdict leaves with its own exit", () => {
+  assert.equal(qualificationExit("pass"), 0);
+  assert.equal(qualificationExit("fail"), 1);
+  for (const other of ["inconclusive", "not_evaluated", "pending", undefined]) {
+    assert.equal(qualificationExit(other), 77, String(other));
+  }
+});
+
+test("a qualification run kind makes the exit the verdict", () => {
+  withFiles((dir) => {
+    const run = (kind, captureFile = `${dir}/capture.json`) => {
+      const lines = [];
+      const code = main(
+        [
+          "--capture",
+          captureFile,
+          "--fixture",
+          `${dir}/out.json`,
+          "--run-kind",
+          kind,
+        ],
+        { out: (line) => lines.push(line), err: () => {} },
+      );
+      return [code, lines.join("\n")];
+    };
+    assert.equal(run("pilot")[0], 0);
+    assert.equal(run("")[0], 0, "outside a budgeted run");
+    const [code, lines] = run("qualification");
+    assert.equal(code, 1);
+    assert.match(lines, /qualification=fail rotations_completed=0 /);
+    assert.match(lines, /long-interview qualification: .*checkpoints failed/);
+
+    // Nothing failed and nothing was shown: no rotation facts at all.
+    const quiet = capture();
+    quiet.plan.durationMin = 1;
+    fs.writeFileSync(`${dir}/quiet.json`, JSON.stringify(quiet));
+    const [unknown, why] = run("qualification", `${dir}/quiet.json`);
+    assert.equal(unknown, 77);
+    assert.match(why, /qualification=inconclusive/);
+
+    assert.equal(run("qualification", `${dir}/no`)[0], 77, "no capture");
+    assert.equal(run("qualification", "")[0], 77, "no capture named");
+    fs.writeFileSync(`${dir}/soak.json`, JSON.stringify({ flow: "soak" }));
+    assert.equal(
+      run("qualification", `${dir}/soak.json`)[0],
+      77,
+      "a capture of another flow",
+    );
+    assert.equal(run("pilot", `${dir}/no`)[0], 2);
+
+    // A capture judged but not written back was not judged: its `.partial`
+    // cannot be written where a directory stands.
+    fs.mkdirSync(`${dir}/capture.json.partial`);
+    assert.equal(run("qualification")[0], 77, "a capture it cannot write");
+    assert.equal(run("pilot")[0], 2);
+    assert.equal(run("pilot", `${dir}/soak.json`)[0], 0);
+  });
+});
+
+// An exception would leave the process with the runtime's own status, 1, which
+// is the status of a qualification that failed.
+test("a judge that throws is a run nobody judged, never a failed one", () => {
+  withFiles((dir) => {
+    // A tool result nested deeper than the stack that walks it.
+    const deep = servingReport();
+    for (const batch of deep.capture.batches) {
+      for (const call of batch.calls) call.result = "DEEP";
+    }
+    const nested = `${"[".repeat(100000)}${"]".repeat(100000)}`;
+    fs.writeFileSync(
+      `${dir}/out.json`,
+      JSON.stringify(deep).replaceAll('"DEEP"', nested),
+    );
+    const run = (kind) => {
+      const said = [];
+      const code = main(
+        [
+          "--capture",
+          `${dir}/capture.json`,
+          "--fixture",
+          `${dir}/out.json`,
+          "--run-kind",
+          kind,
+        ],
+        { out: () => {}, err: (line) => said.push(line) },
+      );
+      return [code, said.join("\n")];
+    };
+    const [code, said] = run("qualification");
+    assert.equal(code, 77);
+    assert.match(said, /cannot judge /);
+    assert.equal(run("pilot")[0], 2);
+    const kept = JSON.parse(fs.readFileSync(`${dir}/capture.json`, "utf8"));
+    assert.deepEqual(kept, capture());
   });
 });
 

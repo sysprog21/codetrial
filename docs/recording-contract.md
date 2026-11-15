@@ -532,11 +532,12 @@ permission to delete either.
 
 The sweep fails a `transferring` row only under the kill switch or when no
 queue row names it. It first queues every `transferring` row it finds without
-one, so the second case takes an insert that failed. A row that already says
-`drive_failed` keeps it, because overwriting it with `abandoned` would change
-the recovery from "retry the delivery" to "record again", for a recording whose
-media may still exist. A row with no reason is failed as `abandoned`, and under
-the kill switch as `kill_switch`.
+one, so the second case takes an insert that failed. Outside the kill
+switch a row that already says `drive_failed` keeps it, because overwriting it
+with `abandoned` would change the recovery from "retry the delivery" to "record
+again", for a recording whose media may still exist, and a row with no reason is
+failed as `abandoned`. Under the kill switch every row it fails takes
+`kill_switch`, whatever reason it held.
 
 `retry_delivery` is performed by the delivery queue. A delivery failure is not
 terminal at once, and that is the point: the bytes are still in the staging

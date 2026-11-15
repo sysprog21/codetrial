@@ -51,6 +51,9 @@ const MAX_SAMPLE_LINE_BYTES = 4096;
 const CONTROL_FILES_ALLOWANCE_BYTES = 256 * 1024;
 const ARCHIVE_EVIDENCE_ALLOWANCE_BYTES = 256 * 1024 * 1024;
 
+/// A run that neither passed nor failed, whatever kept it from being judged.
+const INCONCLUSIVE = 77;
+
 const EXIT = Object.freeze({
   pass: 0,
   failed: 1,
@@ -59,7 +62,8 @@ const EXIT = Object.freeze({
   incompleteArtifact: 6,
   /// Gemini sent no GoAway: nothing was learned about rotation, which is
   /// neither a pass nor a failure of it.
-  noGoAway: 77,
+  noGoAway: INCONCLUSIVE,
+  inconclusive: INCONCLUSIVE,
 });
 
 const isInt = (value) => Number.isSafeInteger(value);
@@ -278,29 +282,55 @@ function judgeTimestamps(timing, ts) {
   };
 }
 
+/// Whether a replacement episode, whatever triggered it, began at or after
+/// the stimulus boundary.
+function beganLate(episode, timing) {
+  return (
+    Number.isFinite(episode.startInterviewMs) &&
+    episode.startInterviewMs / 1000 >= timing.lastStimulusBoundaryS
+  );
+}
+
+/// Whether an episode's end line came at or after the stimulus boundary.
+function endedLate(episode, timing) {
+  return (
+    Number.isFinite(episode.endInterviewMs) &&
+    episode.endInterviewMs / 1000 >= timing.lastStimulusBoundaryS
+  );
+}
+
 /// Classes of a replacement episode against the stimulus boundary.
 ///
 /// A rotation counts toward the completed minimum only when a GoAway-triggered
 /// replacement installed a socket before the boundary. One begun at or after
 /// it is late: the stimuli had stopped, so the room was idle or the end was
-/// preempting it, and neither tests a handover under load.
+/// preempting it, and neither tests a handover under load. One begun before it
+/// whose socket came up at or after it, or at no recorded time, is late too.
+/// A replacement that failed after the boundary failed whatever triggered it
+/// and whenever it began, since a failed watchdog swap loses as much as a
+/// failed rotation.
 function classifyRotation(episode, timing) {
   const startS = Number.isFinite(episode.startInterviewMs)
     ? episode.startInterviewMs / 1000
     : null;
-  const late = startS !== null && startS >= timing.lastStimulusBoundaryS;
+  const failed = episode.result === "failed" || episode.result === "no_setup";
+  const late = beganLate(episode, timing);
+  if (failed && (late || endedLate(episode, timing))) return "late_failed";
   if (episode.trigger !== "goaway") return "not_a_goaway";
+  // A handover that failed is a failure whether or not its start was recorded.
+  if (failed) return "failed";
   if (startS === null) return "unknown_start";
   if (late) {
-    if (episode.result === "installed") return "late_idle";
-    if (episode.result === "failed" || episode.result === "no_setup") {
-      return "late_failed";
-    }
-    return "late_terminal_preempted";
+    return episode.result === "installed"
+      ? "late_idle"
+      : "late_terminal_preempted";
   }
   switch (episode.result) {
     case "installed":
-      return "completed";
+      return Number.isFinite(episode.endInterviewMs) &&
+        episode.endInterviewMs / 1000 < timing.lastStimulusBoundaryS
+        ? "completed"
+        : "late_idle";
     case "cancelled":
       return "cancelled";
     case "incomplete":
@@ -310,7 +340,15 @@ function classifyRotation(episode, timing) {
   }
 }
 
-function judgeRotations(episodes, timing, { minCompleted = 2 } = {}) {
+/// The rotations a run must complete under load, which is also how many an
+/// answer must verify (scripts/long-interview-qualify.cjs).
+const MIN_COMPLETED_ROTATIONS = 2;
+
+function judgeRotations(
+  episodes,
+  timing,
+  { minCompleted = MIN_COMPLETED_ROTATIONS } = {},
+) {
   const classes = {};
   const rows = episodes.map((episode) => {
     const kind = classifyRotation(episode, timing);
@@ -323,6 +361,12 @@ function judgeRotations(episodes, timing, { minCompleted = 2 } = {}) {
     reasons.push(
       `${classes.late_failed} rotation(s) failed after the stimulus boundary`,
     );
+  }
+  // A GoAway handover that failed under load. A failed watchdog swap is no
+  // rotation: the soak counts it against its cap of rebuilds a stalled
+  // provider can account for.
+  if (classes.failed) {
+    reasons.push(`${classes.failed} GoAway handover(s) failed`);
   }
   if (completed < minCompleted) {
     const late =
@@ -580,6 +624,8 @@ module.exports = {
   anchorInterview,
   archiveBounds,
   classifyEvidence,
+  MIN_COMPLETED_ROTATIONS,
+  beganLate,
   classifyRotation,
   judgeRotations,
   judgeTimestamps,

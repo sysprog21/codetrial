@@ -920,6 +920,15 @@ function containsToken(text, token, caseFolded, spoken = false) {
 const containsSpoken = (text, token) => containsToken(text, token, true, true);
 const matchSpoken = (match, text) => matchFact(match, text, true);
 
+/// The facts only the candidate's own speech carries: the seeds and the
+/// question left open. The constraints are spoken too, but the problem's brief
+/// gives them, and the stage is in the session evidence the interviewer is
+/// shown, so an answer about either shows nothing kept from the conversation.
+const CONVERSATION_FACT_IDS = Object.freeze([
+  ...AUTHORED.seeds.map((seed) => seed.id),
+  AUTHORED.pending.id,
+]);
+
 /// How long a clip lasts in all: its speech, its internal pause and the quiet
 /// after it.
 const clipBudgetS = (clip) =>
@@ -1617,6 +1626,7 @@ module.exports = {
   buildClipManifest,
   buildTimeline,
   clipBudgetS,
+  CONVERSATION_FACT_IDS,
   checkAuthoredPin,
   ffmpegDecodes,
   ffmpegPreflight,

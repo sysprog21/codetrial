@@ -310,6 +310,17 @@ function planFromEnv(env, io = {}) {
     } else if (manifest.run_id !== runId) {
       errors.push("BROWSER_CHECK_RUN_ID does not match the manifest");
     }
+    // A qualification is decided after the run from the capture and from what
+    // the serving fixture observed; without both it could only ever come out
+    // inconclusive, so it is refused before anything is spent.
+    if (manifest.run_kind === "qualification") {
+      for (const name of [
+        "BROWSER_CHECK_CAPTURE",
+        "BROWSER_CHECK_FIXTURE_TEST",
+      ]) {
+        if (!env[name]) errors.push(`a qualification run needs ${name}`);
+      }
+    }
     if (duration.value !== undefined) {
       errors.push(...validateManifest(manifest, duration.value));
       // The wall windows and the archive bound are the budget controller's to

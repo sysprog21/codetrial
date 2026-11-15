@@ -96,6 +96,8 @@ try:
         for action in manifest_actions():
             run(action)
         run("end")
+        # A run that did everything and still leaves with a verdict of its own.
+        sys.exit(int(os.environ.get("FAKE_EXIT", "0")))
     elif MODE == "linger":
         # Stays up long enough for the fast-cadence sampler to take several
         # samples, then finishes the run normally.
