@@ -1195,3 +1195,150 @@ async fn a_first_open_refused_on_every_key_reports_the_refusal() {
         );
     }
 }
+
+/// What a retry moved past stands in only for a rotation that then ran dry.
+/// A transient failure followed by the provider's own refusal reports the
+/// refusal, not the earlier failure.
+#[tokio::test]
+#[expect(
+    clippy::result_large_err,
+    reason = "the handshake callback's error type is a full HTTP response"
+)]
+async fn a_refusal_after_a_retried_failure_reports_the_refusal() {
+    use tokio_tungstenite::tungstenite::handshake::server;
+    let config = load_from_pairs([
+        ("LIVEKIT_URL", "wss://example.livekit.cloud"),
+        ("LIVEKIT_API_KEY", "devkey"),
+        ("LIVEKIT_API_SECRET", "devsecret"),
+        ("GOOGLE_API_KEY", "retry-then-refused"),
+    ])
+    .unwrap();
+    let keys = GeminiKeys::from_config(&config);
+    let boot = crate::runtime::bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        for status in [
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            axum::http::StatusCode::UNAUTHORIZED,
+        ] {
+            let (socket, _) = listener.accept().await.unwrap();
+            let _ = tokio_tungstenite::accept_hdr_async(socket, |_: &server::Request, _| {
+                let mut refusal = server::ErrorResponse::new(None);
+                *refusal.status_mut() = status;
+                Err(refusal)
+            })
+            .await;
+        }
+    });
+    let error = crate::gemini::first_open_within(
+        Duration::from_secs(10),
+        retry_cold_open(
+            &keys,
+            &mut 0,
+            None,
+            || fixture_session_at(&url, &keys, &boot, None),
+            |_| async {},
+        ),
+    )
+    .await
+    .err()
+    .unwrap();
+    assert_eq!(
+        crate::gemini::startup_failure_reason(error.as_ref()),
+        "credentials",
+        "{error}"
+    );
+
+    // Bounded: a cold open that stopped after the first refusal never comes
+    // back for the second, and the peer would wait for it forever.
+    tokio::time::timeout(Duration::from_secs(10), server)
+        .await
+        .expect("both attempts reached the peer")
+        .unwrap();
+}
+
+/// A probe the provider refused marks the key it used, but not when the
+/// room's own closing ended it; and what arrived while the candidate was
+/// awaited and is not media stays queued for the room loop.
+#[tokio::test]
+async fn a_refused_probe_marks_its_key_only_while_the_room_is_open() {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+    let config = load_from_pairs([
+        ("LIVEKIT_URL", "wss://example.livekit.cloud"),
+        ("LIVEKIT_API_KEY", "devkey"),
+        ("LIVEKIT_API_SECRET", "devsecret"),
+        (
+            "GOOGLE_API_KEYS",
+            "probe-refused-first,probe-refused-second",
+        ),
+    ])
+    .unwrap();
+    let keys = GeminiKeys::from_config(&config);
+    let boot = crate::runtime::bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut socket = tokio_tungstenite::accept_async(socket).await.unwrap();
+        socket.next().await.unwrap().unwrap();
+        socket
+            .send(Message::Text(r#"{"setupComplete":{}}"#.into()))
+            .await
+            .unwrap();
+        while let Some(Ok(message)) = socket.next().await {
+            if let Message::Text(text) = message
+                && text.contains(r#""turnComplete":true"#)
+            {
+                socket
+                    .send(Message::Text(
+                        r#"{"error":{"code":401,"message":"invalid API key"}}"#.into(),
+                    ))
+                    .await
+                    .unwrap();
+            }
+        }
+    });
+    let mut gemini = crate::gemini::live_session_with_keys_at(&url, &keys, &boot, None)
+        .await
+        .unwrap();
+    let mut state = initial_runtime_state(&boot, Instant::now());
+    let greeting = with_timer(&state, "opening".to_string());
+    let error = probe_live_output(
+        &mut gemini,
+        &mut state,
+        &greeting,
+        Duration::from_millis(500),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(
+        crate::gemini::startup_failure_reason(error.as_ref()),
+        "credentials"
+    );
+
+    let kept = crate::livekit::open::attach_waiting_media(
+        &mut CandidateMedia::new(),
+        &mut gemini,
+        "candidate",
+        false,
+        vec![
+            (Instant::now(), RoomEvent::Reconnecting),
+            (Instant::now(), RoomEvent::Reconnected),
+        ],
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        kept[..],
+        [(_, RoomEvent::Reconnecting), (_, RoomEvent::Reconnected)]
+    ));
+
+    crate::livekit::open::record_probe_failure(&gemini, &keys, true);
+    assert_eq!(keys.select().unwrap(), "probe-refused-first");
+    crate::livekit::open::record_probe_failure(&gemini, &keys, false);
+    assert_eq!(keys.select().unwrap(), "probe-refused-second");
+    gemini.shutdown().await.unwrap();
+    server.abort();
+}

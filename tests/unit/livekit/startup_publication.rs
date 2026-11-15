@@ -4,9 +4,13 @@ use super::*;
 // from a loopback JoinResponse and a local data-only WebRTC peer. No SFU,
 // credentials, remote ICE servers or vendored test constructor is needed.
 async fn candidate_participant() -> RemoteParticipant {
-    let (room, _events, _arrive, server) = candidate_room("candidate", "{}", true).await;
+    participant("candidate").await
+}
+
+async fn participant(identity: &str) -> RemoteParticipant {
+    let (room, _events, _arrive, server) = candidate_room(identity, "{}", true).await;
     let candidate = room.remote_participants().into_values().next().unwrap();
-    assert_eq!(candidate.identity().0, "candidate");
+    assert_eq!(candidate.identity().0, identity);
     startup_fixture_io("participant room close", room.close())
         .await
         .unwrap();
@@ -758,4 +762,105 @@ async fn startup_publication_collection_keeps_failure_bounds_and_ownership() {
         assert_eq!(io_at_fixed_time(server).await.unwrap(), 1);
         tokio::time::resume();
     }
+}
+
+/// The failure notice is left only on the candidate's own receipt for it, or
+/// once the room or the candidate is gone. A bystander's receipt or departure
+/// and a receipt for another notice keep the wait going.
+#[tokio::test]
+async fn the_failure_notice_waits_for_the_candidates_receipt_or_departure() {
+    use futures_util::FutureExt;
+    let candidate = candidate_participant().await;
+    let bystander = participant("bystander").await;
+    let receipt = |id: &str, sender: &RemoteParticipant| RoomEvent::DataReceived {
+        topic: Some(TOPIC_CONTROL.into()),
+        payload: Arc::new(
+            serde_json::to_vec(&serde_json::json!({"type":"startup_received","deliveryId":id}))
+                .unwrap(),
+        ),
+        kind: ::livekit::DataPacketKind::Reliable,
+        participant: Some(sender.clone()),
+    };
+    for end in ["receipt", "disconnected", "candidate left"] {
+        let (tx, receiver) = mpsc::unbounded_channel();
+        let events = tokio::sync::Mutex::new(RoomEventReader::from(receiver));
+        let waiting =
+            crate::livekit::readiness::startup_failure_receipt(&events, "candidate", "notice");
+        tokio::pin!(waiting);
+        assert!(
+            waiting.as_mut().now_or_never().is_none(),
+            "{end}: waits at first"
+        );
+        tx.send(receipt("notice", &bystander)).unwrap();
+        tx.send(receipt("another", &candidate)).unwrap();
+        tx.send(RoomEvent::ParticipantDisconnected(bystander.clone()))
+            .unwrap();
+        assert!(
+            waiting.as_mut().now_or_never().is_none(),
+            "{end}: nothing settled it"
+        );
+        tx.send(match end {
+            "receipt" => receipt("notice", &candidate),
+            "disconnected" => RoomEvent::Disconnected {
+                reason: DisconnectReason::ClientInitiated,
+            },
+            _ => RoomEvent::ParticipantDisconnected(candidate.clone()),
+        })
+        .unwrap();
+        assert!(
+            waiting.as_mut().now_or_never().is_some(),
+            "{end}: settles it"
+        );
+    }
+}
+
+/// Only the candidate's queued departure and return move the projection; a
+/// bystander leaving or joining says nothing about the candidate's grace.
+#[tokio::test]
+async fn queued_presence_follows_only_the_candidate() {
+    let candidate = candidate_participant().await;
+    let bystander = participant("bystander").await;
+    let start = Instant::now();
+    let after = start + CANDIDATE_ABSENCE_LIMIT;
+    let reader = |events: Vec<RoomEvent>| {
+        let (_tx, receiver) = mpsc::unbounded_channel();
+        let mut reader = RoomEventReader::from(receiver);
+        reader.deferred = events.into_iter().map(|event| (start, event)).collect();
+        reader
+    };
+    let present = CandidatePresence::default();
+    let projected = present.with_queued(
+        &reader(vec![RoomEvent::ParticipantDisconnected(bystander.clone())]),
+        "candidate",
+    );
+    assert!(
+        !projected.gave_up(after),
+        "a bystander leaving is not an absence"
+    );
+    assert!(
+        present
+            .with_queued(
+                &reader(vec![RoomEvent::ParticipantDisconnected(candidate.clone())]),
+                "candidate",
+            )
+            .gave_up(after)
+    );
+    let mut away = CandidatePresence::default();
+    away.left(start);
+    assert!(
+        away.with_queued(
+            &reader(vec![RoomEvent::ParticipantConnected(bystander)]),
+            "candidate",
+        )
+        .gave_up(after),
+        "a bystander joining is not a return"
+    );
+    assert!(
+        !away
+            .with_queued(
+                &reader(vec![RoomEvent::ParticipantConnected(candidate.clone())]),
+                "candidate",
+            )
+            .gave_up(after)
+    );
 }

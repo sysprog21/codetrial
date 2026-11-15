@@ -532,20 +532,15 @@ async fn start_interview(
     // Before the greeting, not after: these arrived while we were waiting for
     // the candidate, and one of them is what attaches the microphone. Greeting
     // first would open the interview deaf for as long as Gemini takes to
-    // answer. What is not media is kept for the room loop, in receive order.
-    for (received_at, event) in std::mem::take(deferred_events) {
-        if !handle_media_event(
-            &mut media,
-            &mut gemini,
-            candidate_identity,
-            boot.candidate_video,
-            &event,
-        )
-        .await?
-        {
-            deferred_events.push((received_at, event));
-        }
-    }
+    // answer.
+    *deferred_events = attach_waiting_media(
+        &mut media,
+        &mut gemini,
+        candidate_identity,
+        boot.candidate_video,
+        std::mem::take(deferred_events),
+    )
+    .await?;
 
     let started_at = open_interview(
         startup,
@@ -602,9 +597,7 @@ async fn open_interview(
     let started_at = match probed {
         Ok(started_at) => started_at,
         Err(error) => {
-            if !*room_closed {
-                gemini.record_failure(keys);
-            }
+            record_probe_failure(gemini, keys, *room_closed);
             close_and_account(gemini, startup_usage).await;
             return Err(error);
         }
@@ -640,4 +633,35 @@ async fn open_interview(
     // ready was publishing is answered in order either way.
     events.lock().await.deferred = std::mem::take(deferred_events).into();
     Ok(started_at)
+}
+
+/// Attaches the media that arrived while the candidate was awaited, and hands
+/// back what is not media, in receive order, for the room loop.
+pub(super) async fn attach_waiting_media(
+    media: &mut CandidateMedia,
+    gemini: &mut GeminiLiveSession,
+    candidate_identity: &str,
+    candidate_video: bool,
+    events: Vec<TimedRoomEvent>,
+) -> Result<Vec<TimedRoomEvent>, Box<dyn std::error::Error + Send + Sync>> {
+    let mut deferred = Vec::new();
+    for (received_at, event) in events {
+        if !handle_media_event(media, gemini, candidate_identity, candidate_video, &event).await? {
+            deferred.push((received_at, event));
+        }
+    }
+    Ok(deferred)
+}
+
+/// A probe that failed with its room still there failed on the provider, so
+/// the key it used is marked. One the room's closing ended says nothing about
+/// the key.
+pub(super) fn record_probe_failure(
+    gemini: &GeminiLiveSession,
+    keys: &GeminiKeys,
+    room_closed: bool,
+) {
+    if !room_closed {
+        gemini.record_failure(keys);
+    }
 }

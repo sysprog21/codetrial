@@ -612,3 +612,15 @@ async fn check_tries_each_key_once_even_when_cooldowns_expire() {
     assert!(result.is_err());
     assert_eq!(connections.load(Ordering::SeqCst), 3);
 }
+
+/// Only a rotation that ran dry with no cooldown and no billing cause stands
+/// for the refusals before it; a timed cooldown and a billing exhaustion name
+/// their own cause, and a provider error is not an empty rotation at all.
+#[test]
+fn only_a_causeless_empty_rotation_ran_dry() {
+    assert!(rotation_ran_dry(&exhausted(None, false)));
+    assert!(!rotation_ran_dry(&exhausted(Some(Instant::now()), false)));
+    assert!(!rotation_ran_dry(&exhausted(None, true)));
+    assert!(!rotation_ran_dry(&exhausted(Some(Instant::now()), true)));
+    assert!(!rotation_ran_dry(&io::Error::other("1011 Internal error")));
+}
