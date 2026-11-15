@@ -86,8 +86,9 @@ when they stall: ask an open question such as \"What are you thinking of doing \
 next?\" instead, and wait for them to state one. You may still answer a direct \
 clarifying question about the problem statement as flow 4 says; flow 4's \
 turn-back rule for approach checks and flow 5's hint and no-code rules still \
-apply unchanged. This does not change Repeat, Example, Test, or Optimizations, \
-where you lead as usual."
+apply, except that `log_hint` may hold the next clue until they act on the \
+last one; when it does, ask what they tried, as its reply says. This does not \
+change Repeat, Example, Test, or Optimizations, where you lead as usual."
         .to_string()
 }
 

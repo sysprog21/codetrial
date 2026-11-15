@@ -710,6 +710,8 @@ fn prompt_samples() -> Value {
         "logHint": log_hint_text(2),
         "hintRung": hint_rung_text(2, 2, "Compare the current value with what you recorded."),
         "hintRungWithheld": hint_rung_withheld_text(2),
+        "hintRungHeld": ({ let mut state = RuntimeState { candidate_led_enabled: true, hint_ladder: &["Look at the ends."; 3], ..RuntimeState::default() }; record_hint(&mut state, true); record_hint(&mut state, true) }),
+        "hintRungHeldForWork": ({ let mut state = RuntimeState { candidate_led_enabled: true, hint_ladder: &["Look at the ends."; 3], ..RuntimeState::default() }; record_hint(&mut state, true); for phase in ["repeat", "example", "algorithm"] { let said = json!({"phase": phase, "source": "candidate_speech", "kind": "observed", "confidence": 90, "summary": "Said it."}); record_framework_evidence(&mut state, &said).unwrap(); } record_hint(&mut state, true) }),
         "report": report_prompt(ReportPromptInput {
             problem,
             interview_mode: InterviewMode::Coding,
