@@ -825,7 +825,7 @@ const FULL: [(u64, &str); 6] = [
         6_000,
         "My constraints are at most 10,000 numbers, exactly one valid pair. ",
     ),
-    (14_000, "Codename saffron heron. "),
+    (14_000, "Codename purple river. "),
     (24_000, "For each value I check the complement "),
     (28_000, "before adding the current index to the map. "),
     (
@@ -852,7 +852,7 @@ fn the_answer_key_counts_missing_repeated_and_delayed_turns() {
     let control = observation(&ARMS[0], &FULL);
     let mut lines = FULL.to_vec();
     lines.remove(0);
-    lines.insert(2, (15_000, "saffron heron again. "));
+    lines.insert(2, (15_000, "purple river again. "));
     lines.push((90_000, "ignored text. "));
     let late = [(70_000, "For each value I check the complement ")];
     let mut stalled = observation(&ARMS[1], &lines);
@@ -955,9 +955,9 @@ fn a_miss_also_present_in_the_control_is_inconclusive_not_a_loss() {
             (1_000, "the algo"),
             (2_000, "rithm. we a"),
             (3_000, "re now"),
-            (4_000, " saff"),
-            (5_000, "ron he"),
-            (6_000, "ron"),
+            (4_000, " purp"),
+            (5_000, "le ri"),
+            (6_000, "ver"),
         ],
     );
     let raw = raw_findings(&split);

@@ -1362,7 +1362,13 @@ its questions do not ask for a revision, and `tests/agent/whiteboard.rs` pins
 the wording the judge reads, which the judge's own test takes from
 `tests/golden/prompts.json`. The rubrics are lexical and were checked against
 the first pilot's real replies. Changing any of this changes the catalogue, so
-`SCHEDULE_VERSION`, the pins and every clip manifest move with it.
+`SCHEDULE_VERSION`, the pins and every clip manifest move with it. A reply
+reaches the judge as its transcription, which spells what was said as it likes:
+a code word or a seed phrase a recognizer respells is kept out of the
+catalogue, every checkpoint of a schedule has its own pair of code words, and
+in a reply or a conversation read the break between a token's words may be
+written as a space, a hyphen or a comma, but not as a full stop. Source a tool
+read is matched as written.
 
 `run` also samples the owned process tree (RSS, open descriptors and threads
 for every process, keyed by PID and start time so a reused PID is another

@@ -230,8 +230,8 @@ const ANSWER_KEY: [Turn; 6] = [
         n: 3,
         clip_id: "c01_say_plan",
         part: 2,
-        text: "For the record, my codename for this attempt is saffron heron.",
-        required: &[&["saffron"], &["heron"]],
+        text: "For the record, my codename for this attempt is purple river.",
+        required: &[&["purple"], &["river"]],
     },
     Turn {
         n: 4,
