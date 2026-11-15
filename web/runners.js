@@ -790,6 +790,8 @@ const JS_RUNNER_SOURCE = `
           byValue.set(current.val, current);
           for (const neighbor of current.neighbors || []) queue.push(neighbor);
         }
+        // graphFromAdjacency always supplies node 1; sorting below loses the entry node.
+        if (node.val !== 1) throw new TypeError("Returned graph must start at node 1.");
         return Array.from(byValue.keys()).sort((a, b) => a - b).map((value) =>
           (byValue.get(value).neighbors || []).map((neighbor) => neighbor.val).sort((a, b) => a - b)
         );
@@ -1145,6 +1147,8 @@ def _graph_to_adjacency(node):
             continue
         by_value[current.val] = current
         queue.extend(getattr(current, "neighbors", []) or [])
+    if node.val != 1:
+        raise TypeError("Returned graph must start at node 1.")
     return [sorted(neighbor.val for neighbor in by_value[value].neighbors) for value in sorted(by_value)]
 
 # The JavaScript runner turns a non-finite number into null, and so does the
