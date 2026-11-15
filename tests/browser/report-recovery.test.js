@@ -505,9 +505,9 @@ test("terminal room disconnect finalizes recovery before clearing the room", asy
     "room.on(livekit.RoomEvent.Disconnected, () => {".length;
   const body = source.slice(start, source.indexOf("\n  });", start));
   page.scope.reportRecovery = page.reportRecovery;
+  page.scope.room = page.room;
   page.scope.console = { warn() {} };
   const playbackRooms = [];
-  page.scope.room = page.room;
   page.scope.audioPlayback = { release: (room) => playbackRooms.push(room) };
   page.scope.preflight = { userStream: { label: "Preflight stream" } };
   page.scope.localRecording.needsMicrophone = false;

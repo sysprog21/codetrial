@@ -182,7 +182,7 @@ test("stopping the camera takes the self view down first", () => {
   const connect = functionBody(script, "connect");
   assertIncludesCompact(
     connect.slice(connect.indexOf("} catch (error) {")),
-    "abandonStart(preflight, { preserveMicrophone });",
+    "await abandonStart(preflight, { preserveMicrophone, flushed: error?.startup?.flushed, });",
     "the offline fallback after a failed connect must leave through abandonStart",
   );
   assertIncludesCompact(

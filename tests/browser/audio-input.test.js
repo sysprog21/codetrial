@@ -428,6 +428,9 @@ test("the chosen microphone track is the one handed to LiveKit", async (t) => {
         on() {
           return this;
         }
+        off() {
+          return this;
+        }
         async connect() {}
         async disconnect() {}
       },

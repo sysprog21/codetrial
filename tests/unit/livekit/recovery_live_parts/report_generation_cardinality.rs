@@ -293,7 +293,7 @@ impl G2NativeRun {
             .map_err(|error| error.to_string())??;
         self.rig.as_mut().unwrap().room = super::super::super::room_link::RoomLink::live(agent);
         let (forward, received) = tokio::sync::mpsc::unbounded_channel();
-        self.rig.as_mut().unwrap().events = tokio::sync::Mutex::new(received);
+        self.rig.as_mut().unwrap().events = tokio::sync::Mutex::new(received.into());
         if case != G2Case::RoomClosed {
             if permits.stop_requested() {
                 return Err("launcher stopped before End".into());

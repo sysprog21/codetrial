@@ -38,7 +38,8 @@ export function mediaAndRoom() {
   window.LivekitClient = {
     RoomEvent: new Proxy({}, { get: (_, key) => key }),
     Room: class {
-      remoteParticipants = new Map();
+      agent = { identity: "agent-test", kind: "AGENT", attributes: {} };
+      remoteParticipants = new Map([[this.agent.identity, this.agent]]);
       // Each publish's topic is recorded, and a test that sets
       // `window.roomPublishHeld` to a promise holds every publish there.
       // A test that sets `window.roomTrackHeld` to a promise holds each track
@@ -48,9 +49,21 @@ export function mediaAndRoom() {
         publishTrack: async () => {
           await window.roomTrackHeld;
         },
-        publishData: async (payload, options) => {
+        publishData: async (_bytes, options) => {
           (window.roomPublishes ??= []).push(options?.topic);
           await window.roomPublishHeld;
+          (window.roomPublicationSettled ??= []).push(options?.topic);
+          if (options.topic !== "integrity" || this.ready) return;
+          this.ready = true;
+          const payload = new TextEncoder().encode(
+            JSON.stringify({
+              type: "interviewer_state",
+              reconnecting: false,
+              startup: "ready",
+            }),
+          );
+          for (const handler of window.roomEvents.DataReceived ?? [])
+            handler(payload, this.agent, undefined, "control");
         },
       };
       on(event, callback) {

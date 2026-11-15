@@ -506,6 +506,41 @@ test("a join that outlasts the offline summary still leaves its room and release
   );
 });
 
+// The microphone is the candidate's from preflight, so a mute pressed while
+// the room is still joining holds; the join must not paint it back as on.
+test("a mute pressed while the room joins is still shown once joined", async (t) => {
+  const page = await interview(t, "problem=chargeback-pair-match", (route) =>
+    route.fulfill({ json: grant("chargeback-pair-match", "mute-during-join") }),
+  );
+  if (!page) return;
+  await page.evaluate(() => {
+    window.roomJoinHeld = new Promise((resolve) => {
+      window.releaseJoin = resolve;
+    });
+  });
+  await preflight(page);
+  await page.waitForFunction(() => window.roomJoins.length === 1);
+  await page.locator("#mic").click();
+  await page.locator("#mic-muted-status").waitFor({ state: "visible" });
+  await page.evaluate(() => window.releaseJoin());
+  await page.waitForFunction(() =>
+    (window.roomPublishes ?? []).includes("integrity"),
+  );
+  assert.match(await page.locator("#mic").textContent(), /Muted/);
+  assert.equal(
+    await page.locator("#mic").getAttribute("aria-label"),
+    "Muted: unmute microphone",
+  );
+  assert.equal(
+    await page.evaluate(() =>
+      window.acquiredTracks
+        .filter((track) => track.kind === "audio")
+        .every((track) => !track.enabled),
+    ),
+    true,
+  );
+});
+
 /// Hands `report` to the room's report handlers as the interviewer would.
 /// Not awaited: delivery waits on timers a paused clock may hold back.
 async function deliverReport(page, report) {
@@ -668,10 +703,9 @@ test("a join finishing after a report's receipt went out does not take the room 
   );
 });
 
-// Once the room is claimed, the join still publishes its integrity events. An
-// end there has already asked the interviewer for a report, so the start
-// stops without leaving the room: the report and leave paths own it now.
-test("Practice ended while its join publishes integrity events keeps the room for the report", async (t) => {
+// Publication alone does not start the interview. End during an integrity
+// write cancels startup without asking for evaluation or publishing more.
+test("Practice End during startup integrity publication leaves without a report", async (t) => {
   if (!browser) return t.skip("playwright chromium unavailable");
   // Paused, so no ending timer can move the page on while the start settles.
   const context = await browser.newContext();
@@ -695,19 +729,18 @@ test("Practice ended while its join publishes integrity events keeps the room fo
   await page.waitForFunction(() => window.roomPublishes?.includes("integrity"));
   await page.locator("#end").click();
   await page.locator("#ending-overlay:not([hidden])").waitFor();
-  await page.waitForFunction(() => window.roomPublishes.includes("control"));
-  await page.evaluate(() => window.releasePublishes());
-  // SESSION_START, MEDIA_PREFLIGHT_PASSED and CAMERA_NOT_USED: the join is
-  // done once the third is out, and the start then stops at its check.
-  await page.waitForFunction(
-    () =>
-      window.roomPublishes.filter((topic) => topic === "integrity").length >= 3,
+  assert.equal(
+    await page.evaluate(() => window.roomPublishes.includes("control")),
+    false,
+    "startup End sends no evaluation request",
   );
+  await page.evaluate(() => window.releasePublishes());
+  await tracksReleased(page);
   await page.evaluate(() => new Promise((resolve) => queueMicrotask(resolve)));
   assert.equal(
     await page.evaluate(() => window.roomLeaves ?? 0),
-    0,
-    "the room stays for the report the end asked for",
+    1,
+    "startup End leaves without a report",
   );
   assert.equal(
     await page.evaluate(() => window.roomPublishes.includes("code_update")),
@@ -753,21 +786,24 @@ test("a report arriving while the join publishes integrity events starts no moni
     null,
     { timeout: 5_000 },
   );
-  await page.evaluate(() => window.releasePublishes());
   const integrity = () =>
     page.evaluate(
       () =>
         window.roomPublishes.filter((topic) => topic === "integrity").length,
     );
-  // SESSION_START, MEDIA_PREFLIGHT_PASSED and CAMERA_NOT_USED.
-  await page.waitForFunction(
-    () =>
-      window.roomPublishes.filter((topic) => topic === "integrity").length >= 3,
+  const expected = await integrity();
+  assert.equal(expected, 1, "only SESSION_START is held");
+  await page.evaluate(() => window.releasePublishes());
+  await page.waitForFunction(() =>
+    window.roomPublicationSettled?.includes("integrity"),
   );
-  const settled = await integrity();
   // Two heartbeat periods, short of the recovery's 30 s retry.
   await page.clock.runFor(12_000);
-  assert.equal(await integrity(), settled, "no heartbeat behind the report");
+  assert.equal(
+    await integrity(),
+    expected,
+    "no later startup event or heartbeat behind the report",
+  );
 });
 
 // The interviewer can end the session itself, so a report may arrive while
@@ -801,11 +837,9 @@ test("a report arriving while the join publishes tracks keeps the room for recov
   );
 });
 
-// An end before the join leaves the offline summary's timer running, since no
-// interviewer was in a room to answer it. A recoverable report arriving
-// during the join outranks that summary, which would otherwise draw over the
-// recovery and leave the room its retry needs.
-test("an end before the join leaves a recovering report in place of the offline summary", async (t) => {
+// Startup End requests no evaluation. A late report cannot undo that exit;
+// reports already being received or recovered have their own cases above.
+test("Practice startup End ignores a late recovering report during the join", async (t) => {
   if (!browser) return t.skip("playwright chromium unavailable");
   // Paused, so the summary's 300 ms runs only when the clock is moved below.
   const context = await browser.newContext();
@@ -830,25 +864,19 @@ test("an end before the join leaves a recovering report in place of the offline 
     summary: "503",
     reportRecovery: { expiresInSeconds: 300, retryAfterSeconds: 30 },
   });
-  await page.waitForFunction(
-    () =>
-      document.querySelector("#ending-title").textContent ===
-      "Evaluation temporarily unavailable",
-    null,
-    { timeout: 5_000 },
-  );
   await page.clock.runFor(1_000);
-  assert.equal(
-    await page.locator("#ending-title").textContent(),
-    "Evaluation temporarily unavailable",
+  assert.equal(await page.locator("#report-modal").isVisible(), true);
+  assert.equal(await page.locator("#retry-report").isHidden(), true);
+  assert.match(
+    await page.locator("#report-modal").textContent(),
+    /Nothing you did was assessed/,
   );
-  assert.equal(await page.locator("#report-modal").isHidden(), true);
   await page.evaluate(() => window.releaseTracks());
   await tracksReleased(page);
   assert.equal(
     await page.evaluate(() => window.roomLeaves ?? 0),
-    0,
-    "the room stays for the retry",
+    1,
+    "the canceled startup cannot reclaim a room for report recovery",
   );
 });
 
@@ -2298,11 +2326,15 @@ for (const outcome of ["success", "failure"]) {
       window.LivekitClient.Room = class extends Room {
         constructor(...args) {
           super(...args);
+          // Still the fixture's publish underneath, whose agent answers the
+          // first integrity packet with readiness, as a live agent would.
+          const publish = this.localParticipant.publishData;
           this.localParticipant.publishData = async (payload, options) => {
             window.testPackets.push({
               topic: options.topic,
               payload: JSON.parse(new TextDecoder().decode(payload)),
             });
+            return publish(payload, options);
           };
         }
         async connect(...args) {

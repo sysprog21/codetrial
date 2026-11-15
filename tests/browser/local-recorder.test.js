@@ -1407,10 +1407,35 @@ for (const outcome of [
                 options.stopLocalTrackOnUnpublish;
             }
             handlers = new Map();
-            remoteParticipants = new Map();
+            // A joined room answers its first integrity packet with startup
+            // ready, the way an agent whose opening produced output does.
+            remoteParticipants = new Map(
+              joinedRoom
+                ? [
+                    [
+                      "interviewer-test",
+                      { identity: "interviewer-test", attributes: {} },
+                    ],
+                  ]
+                : [],
+            );
             canPlaybackAudio = true;
             localParticipant = {
-              publishData: async () => {},
+              publishData: async (_bytes, options) => {
+                if (!joinedRoom || options?.topic !== "integrity" || this.ready)
+                  return;
+                this.ready = true;
+                const ready = new TextEncoder().encode(
+                  JSON.stringify({
+                    type: "interviewer_state",
+                    reconnecting: false,
+                    startup: "ready",
+                  }),
+                );
+                const agent = this.remoteParticipants.get("interviewer-test");
+                for (const fn of this.handlers.get("DataReceived") || [])
+                  fn(ready, agent, undefined, "control");
+              },
               getTrackPublication: () => ({ track: this.microphone }),
               publishTrack: async (track) => {
                 published.push(track);

@@ -17,7 +17,7 @@ struct TickFixture {
     board: board::Board,
     room: room_link::RoomLink,
     loops: RoomLoop,
-    events: tokio::sync::Mutex<mpsc::UnboundedReceiver<RoomEvent>>,
+    events: tokio::sync::Mutex<RoomEventReader>,
     _events: mpsc::UnboundedSender<RoomEvent>,
     endpoint: String,
 }
@@ -75,7 +75,7 @@ impl TickFixture {
                 interim_review: SideCall::default(),
                 presence: CandidatePresence::default(),
             },
-            events: tokio::sync::Mutex::new(events),
+            events: tokio::sync::Mutex::new(events.into()),
             _events: event_sender,
             endpoint: "ws://127.0.0.1:9/".into(),
         }
@@ -105,6 +105,7 @@ impl TickFixture {
                 ),
                 &mut self.loops,
                 interview,
+                Instant::now(),
             ),
         )
         .await

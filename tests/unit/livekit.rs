@@ -18,6 +18,9 @@ use tokio::sync::mpsc;
 
 use crate::config::load_from_pairs;
 
+#[path = "livekit/startup.rs"]
+pub(crate) mod startup;
+
 // Only the tests below reach for it now: the report packet that carries this
 // topic is built in `report.rs`, and what is left here asserts which topics the
 // loop refuses from a browser.
@@ -231,17 +234,17 @@ fn a_published_packet_carries_its_topic_and_arrives_reliably() {
 /// tested against its format, but neither notices if a call site stops
 /// calling: deleting both recordings leaves the whole suite green, because a
 /// room that really connected is the only other witness. Read as source for
-/// the reason the interview clock is, one test below.
+/// the reason `the_interview_clock_starts_at_the_probed_first_output` is.
 #[test]
 fn both_ways_a_live_socket_opens_count_its_instruction() {
     for (source, opener) in [
         (
             include_str!("../../src/livekit/open.rs"),
-            "async fn open_session",
+            "async fn start_interview",
         ),
         (
             include_str!("../../src/livekit/recovery.rs"),
-            "async fn replace(",
+            "async fn replace_once(",
         ),
     ] {
         let body = source
@@ -286,7 +289,7 @@ fn only_a_replacement_publishes_its_reconnect_wait() {
         ),
         (
             include_str!("../../src/livekit/recovery.rs"),
-            "async fn replace(",
+            "async fn replace_once(",
             "Some(room)",
         ),
     ] {
@@ -304,34 +307,6 @@ fn only_a_replacement_publishes_its_reconnect_wait() {
             "{opener} must pass {room} to its cold opener: {call}"
         );
     }
-}
-
-/// The interview starts once, when the candidate joined.
-///
-/// Stamping a second `Instant::now()` after the room and the Gemini session
-/// came up put this process a second or two behind the tab for the rest of
-/// the interview, and the browser announces the round boundary exactly once
-/// off its own clock. The gap has to be absorbed by a tolerance nobody can
-/// justify, or removed here. Read as source because the two stamps are only
-/// distinguishable in a room that really connected.
-#[test]
-fn the_interview_clock_starts_when_the_candidate_joined() {
-    let source = include_str!("../../src/livekit/open.rs");
-    let opener = source
-        .split("async fn open_session")
-        .nth(1)
-        .expect("open_session is still defined here");
-    let bound = opener
-        .split_once("let started_at =")
-        .expect("open_session still stamps the interview clock")
-        .1
-        .lines()
-        .next()
-        .unwrap_or_default();
-    assert!(
-        bound.contains("setup_began"),
-        "the clock must start where the candidate's does, not after setup: {bound}"
-    );
 }
 
 /// The room task hears a release only through the slot it was dispatched
@@ -376,8 +351,9 @@ fn the_candidate_wait_listens_for_its_start_being_released() {
         include_str!("../../src/livekit.rs")
             .split("pub(crate) async fn run_room_with_slot")
             .nth(1)
-            .is_some_and(|run| run
-                .contains("open_session(config, &keys, room_name, now_seconds, session_id, slot)")),
+            .is_some_and(
+                |run| run.contains("        session_id,\n        slot,\n        |summary|")
+            ),
         "run_room_with_slot must pass its slot on"
     );
 }
@@ -1961,6 +1937,7 @@ async fn first_cold_open_retries_a_503_on_the_selected_key() {
         let session = retry_cold_open(
             &keys,
             &mut restarts,
+            None,
             || fixture_session_at(&url, &keys, &boot, None),
             |notice| {
                 // A room slow to take the estimate must not stretch the wait it
@@ -2041,6 +2018,7 @@ async fn a_sole_key_rate_limit_is_announced_as_quota() {
         retry_cold_open(
             &keys,
             &mut 0,
+            None,
             || fixture_session_at(&url, &keys, &boot, None),
             |notice| {
                 notices.push(notice);
@@ -2108,6 +2086,7 @@ async fn a_first_open_gives_up_at_its_time_limit() {
         retry_cold_open(
             &keys,
             &mut 0,
+            None,
             || fixture_session_at(&url, &keys, &boot, None),
             |_| async {},
         ),
@@ -2158,6 +2137,7 @@ async fn a_rotation_emptied_by_billing_failures_reports_billing() {
         retry_cold_open(
             &keys,
             &mut 0,
+            None,
             || {
                 attempts += 1;
                 fixture_session_at(&url, &keys, &boot, None)
@@ -2243,6 +2223,7 @@ async fn an_exhausted_rotation_waits_only_for_a_key_out_on_quota() {
             retry_cold_open(
                 &keys,
                 &mut restarts,
+                None,
                 || {
                     attempts += 1;
                     let error = keys.select().unwrap_err();
@@ -3484,7 +3465,7 @@ async fn finalize_speech_handoff_for_test(
     let keys = Arc::new(GeminiKeys::from_config(&config));
     let boot = crate::runtime::bootstrap(&config, "prefix-test", Some("two-sum"), 45);
     let (_sender, receiver) = mpsc::unbounded_channel();
-    let events = tokio::sync::Mutex::new(receiver);
+    let events = tokio::sync::Mutex::new(receiver.into());
     let interview = InterviewContext {
         config: &config,
         keys: &keys,

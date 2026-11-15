@@ -869,26 +869,6 @@ test("an interviewer reconnect banner is worded from the agent's notice", () => 
   );
 });
 
-// A degraded start looks identical whether the server has no LiveKit
-// credentials, is at capacity, or the microphone failed to publish. The server
-// writes candidate-facing text for exactly this; dropping it on the floor is
-// what makes a refusal indistinguishable from the product working.
-test("a refused interview says why instead of silently degrading", () => {
-  const script = interviewSource();
-  const connect = functionBody(script, "connect");
-
-  assert.match(
-    connect,
-    /const reason =\s*strict &&[\s\S]*?:\s*failure\?\.message;/,
-    "other refusals retain the server's reason",
-  );
-  assert.match(connect, /providerUiState\("degraded", reason\)/);
-  // The reason has to reach the candidate, not only the console.
-  const bannerAt = connect.indexOf('setBanner("connection", degraded.message)');
-  const offlineAt = connect.indexOf("Offline mode is ready");
-  assert.ok(bannerAt !== -1 && offlineAt !== -1 && bannerAt < offlineAt);
-});
-
 // One banner element with several owners, ranked, so a new owner is a row here
 // rather than another boolean lock and another branch.
 test("the presence banner ranks its owners instead of racing them", () => {

@@ -2,6 +2,7 @@ import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import {
   FAKE_SPEECH_CAPTURE,
+  fakeLiveKit,
   launchChromium,
   read,
   startStaticServer,
@@ -27,37 +28,25 @@ after(async () => {
   await new Promise((done) => (server ? server.close(done) : done()));
 });
 
-// Exercise the real preflight and page handlers without a server or agent.
-// The fake room exposes only its published track and participant events.
-const ROOM = `
-window.LivekitClient = {
-  RoomEvent: new Proxy({}, { get: (_, name) => String(name) }),
-  Track: { Source: { Microphone: "microphone", Camera: "camera" } },
-  Room: class {
-    constructor() {
-      window.__room = this;
-      this.handlers = {};
-      this.remoteParticipants = new Map();
-      this.localParticipant = {
-        identity: "candidate",
-        publishTrack: async (track) => {
-          if (track.kind === "audio") window.__microphone = track;
-        },
-        publishData: async () => {},
-        streamBytes: async () => ({ write: async () => {}, close: async () => {} }),
-      };
-    }
-    on(name, handler) {
-      (this.handlers[name] ||= []).push(handler);
-      return this;
-    }
-    off() {
-      return this;
-    }
-    registerTextStreamHandler() {}
-    async connect() {}
-    async disconnect() {}
-  },
+// A started interview needs the shared ready-room contract. Keep the real
+// captured track so the native setter still exercises failed unmute and retry.
+const ROOM = `${fakeLiveKit({ startupReady: true })}
+window.LivekitClient.Room = class extends window.LivekitClient.Room {
+  constructor() {
+    super();
+    window.__room = this;
+    this.handlers = {};
+    this.localParticipant.publishTrack = async (track) => {
+      if (track.kind === "audio") window.__microphone = track;
+    };
+  }
+  on(name, handler) {
+    (this.handlers[name] ||= []).push(handler);
+    return super.on(name, handler);
+  }
+  off() {
+    return this;
+  }
 };`;
 
 // Traces every clone the page takes, and three ways a track reaches Jim, the
@@ -233,13 +222,9 @@ test("mute remains visible beside changing interviewer states at narrow widths",
     ["speaking", "Speaking"],
   ]) {
     await page.evaluate((state) => {
-      const agent = {
-        identity: "interviewer-test",
-        attributes: { "lk.agent.state": state },
-      };
-      window.__room.remoteParticipants.set(agent.identity, agent);
-      for (const handler of window.__room.handlers.ParticipantAttributesChanged)
-        handler({}, agent);
+      const agent = window.__room.remoteParticipants.get("agent-fake-room");
+      agent.attributes["lk.agent.state"] = state;
+      window.__handlers.ParticipantAttributesChanged({}, agent);
     }, state);
     assert.equal(await page.locator("#agent-state").innerText(), label);
     for (const width of [390, 320]) {
@@ -343,11 +328,8 @@ test("without consent a muted microphone is not listened to", async (t) => {
 /// for as long as a test needs it to.
 async function jimSpeaks(page) {
   await page.evaluate(() => {
-    const agent = {
-      identity: "interviewer-test",
-      attributes: { "lk.agent.state": "speaking" },
-    };
-    window.__room.remoteParticipants.set(agent.identity, agent);
+    const agent = window.__room.remoteParticipants.get("agent-fake-room");
+    agent.attributes = { "lk.agent.state": "speaking" };
     for (const handler of window.__room.handlers.ParticipantAttributesChanged)
       handler({}, agent);
   });
@@ -434,7 +416,7 @@ test("no reminder while Jim speaks, and one once he stops", async (t) => {
   const reminder = page.locator("#muted-speech-reminder");
   assert.equal(await reminder.isVisible(), false);
   await page.evaluate(() => {
-    const agent = window.__room.remoteParticipants.get("interviewer-test");
+    const agent = window.__room.remoteParticipants.get("agent-fake-room");
     agent.attributes = { "lk.agent.state": "listening" };
     for (const handler of window.__room.handlers.ParticipantAttributesChanged)
       handler({}, agent);

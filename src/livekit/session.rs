@@ -13,12 +13,15 @@
 //! send them and go out from the parent, through [`send_model_text`], which is
 //! here because counting them is this half's job.
 
+mod boundary;
 mod floor;
 mod observations;
 mod recovery;
 mod tool_calls;
 mod wrap_up;
 
+pub(in crate::livekit) use boundary::preserve_startup_speech;
+use boundary::{TurnBoundary, turn_boundary};
 use floor::write_floor;
 pub(super) use floor::{observe_floor, reconcile_floor};
 use observations::{
@@ -607,43 +610,27 @@ pub(super) fn ends_turn(event: &GeminiEvent) -> bool {
     matches!(event, GeminiEvent::TurnComplete | GeminiEvent::Interrupted)
 }
 
-/// The old turn was already cut off by a hold. Its delayed ending must not
-/// settle or cancel a prompt, candidate turn, or tool continuation sent since.
-///
-/// A `TurnComplete` the interruption guard swallows ends the discard too. With
-/// both armed they wait on the same old turn, which sends one ending, and a
-/// discard left behind it eats the next reply.
 pub(super) fn accept_gemini_event(
     event: &GeminiEvent,
     activity: &mut RuntimeActivity,
     held: bool,
     now: Instant,
 ) -> bool {
-    if activity.socket.stale_turn_pending && ends_turn(event) {
-        // An `Interrupted` is followed by the same turn's `TurnComplete`, which
-        // ends the wait.
-        activity.socket.stale_turn_pending = matches!(event, GeminiEvent::Interrupted);
-        return false;
+    // Even a hold that drops the queued greeting has consumed the probe's
+    // observation. Subsequent work uses the normal output and recovery clocks.
+    if answers_prompt(event) {
+        activity.buffered_startup_output_at = None;
+    }
+    match turn_boundary(event, &mut activity.socket, held) {
+        TurnBoundary::Stale => return false,
+        TurnBoundary::InterruptedTail => {
+            activity.end_discard(false);
+            return false;
+        }
+        TurnBoundary::Current => {}
     }
     if matches!(event, GeminiEvent::Interrupted) {
-        activity.socket.interrupted_turn_pending = true;
         activity.turn_completed_at = None;
-    } else if answers_prompt(event) && !activity.socket.discarding_output && !held {
-        // Not under a hold, even for a tool call, which is still delivered then
-        // and counted as output below. The generation a hold cut off can keep
-        // calling tools, and those calls are no sign that a newer turn began;
-        // disarming on them handed its late ending the resume prompt. The cost
-        // falls on a newer turn under a hold that only calls tools: its ending
-        // is swallowed, and `generating` stays set until the stall check clears
-        // it.
-        activity.socket.interrupted_turn_pending = false;
-        activity.socket.stale_turn_pending = false;
-    }
-    if matches!(event, GeminiEvent::TurnComplete)
-        && std::mem::take(&mut activity.socket.interrupted_turn_pending)
-    {
-        activity.end_discard(false);
-        return false;
     }
     match output_disposition(event, activity.socket.discarding_output, held) {
         OutputDisposition::Drop => false,
@@ -1125,17 +1112,13 @@ fn prepare_input_transcript(
         if context.agent_state.current() == AGENT_STATE_THINKING {
             set_agent_state(room, context.agent_state, AGENT_STATE_LISTENING);
         }
-        let whole =
-            context
-                .turns
-                .candidate
-                .record(&mut context.state.transcript, CANDIDATE_SPEAKER, text);
+        let segment = record_candidate_transcript(context, text, identity);
         let was_thinking = context.state.thinking_hold.is_active();
         let was_requested = context.state.thinking_hold.is_requested();
         if interruptible == Interruptible::Yes {
             context.activity.observe_thinking_fragment(
                 context.state,
-                &whole,
+                &segment.text,
                 thinking_at.unwrap_or_else(Instant::now),
                 crate::current_epoch_millis(),
             );
@@ -1165,12 +1148,6 @@ fn prepare_input_transcript(
                 speech_release_briefing(context.state, was_requested),
             ));
         }
-        let segment = Segment {
-            id: context.turns.candidate.segment_id("candidate"),
-            text: whole,
-            final_segment: false,
-            identity: Some(identity.to_string()),
-        };
         return Some(PreparedTranscript { segment, release });
     }
     None
@@ -1216,6 +1193,24 @@ async fn on_input_transcript(
         context.transcripts.publish(room, prepared.segment);
     }
     Ok(())
+}
+
+fn record_candidate_transcript(
+    context: &mut GeminiEventContext<'_>,
+    text: &str,
+    identity: &str,
+) -> Segment {
+    let text =
+        context
+            .turns
+            .candidate
+            .record(&mut context.state.transcript, CANDIDATE_SPEAKER, text);
+    Segment {
+        id: context.turns.candidate.segment_id("candidate"),
+        text,
+        final_segment: false,
+        identity: Some(identity.to_string()),
+    }
 }
 
 fn context_floor(

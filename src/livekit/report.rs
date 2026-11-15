@@ -249,7 +249,7 @@ impl DeliveryEvent for RoomEvent {
 /// Neither retries nor receipt timeouts call the report model again.
 pub(super) async fn deliver_report<F, Fut, E, Event>(
     mut publish: F,
-    events: &mut tokio::sync::mpsc::UnboundedReceiver<Event>,
+    events: &mut super::RoomEventReader<Event>,
     candidate: &str,
     room_name: &str,
     candidate_present: impl Fn() -> bool,
@@ -281,7 +281,7 @@ where
         // A failed publish waits out the rest of its window. The wait also
         // accepts a late receipt for an earlier attempt and observes
         // departures.
-        let gone = |events: &mut tokio::sync::mpsc::UnboundedReceiver<Event>| {
+        let gone = |events: &mut super::RoomEventReader<Event>| {
             if queued_receipt(events, candidate, &id) {
                 Wait::Acknowledged
             } else {
@@ -344,7 +344,7 @@ enum Wait {
 /// this loop reads the queue, so a receipt the page sent just before leaving
 /// can still be waiting behind events the loop has not reached.
 fn queued_receipt<Event: DeliveryEvent>(
-    events: &mut tokio::sync::mpsc::UnboundedReceiver<Event>,
+    events: &mut super::RoomEventReader<Event>,
     candidate: &str,
     id: &str,
 ) -> bool {
@@ -461,10 +461,7 @@ pub(super) fn skip_report_ack() -> serde_json::Value {
 /// (see `candidate_present`), and no receipt can be queued before a report
 /// has been published. A closed event stream never resolves: the room is gone,
 /// and the generation then decides how this ends.
-pub(super) async fn wait_for_skip(
-    events: &mut tokio::sync::mpsc::UnboundedReceiver<::livekit::RoomEvent>,
-    candidate: &str,
-) {
+pub(super) async fn wait_for_skip(events: &mut super::RoomEventReader, candidate: &str) {
     while let Some(event) = events.recv().await {
         if let RoomEvent::DataReceived {
             topic,
@@ -552,7 +549,7 @@ struct LiveRecoveryRoom<'a> {
     room: &'a Room,
     room_name: &'a str,
     candidate: &'a str,
-    events: &'a mut tokio::sync::mpsc::UnboundedReceiver<::livekit::RoomEvent>,
+    events: &'a mut super::RoomEventReader,
 }
 
 /// What one room event means to a recovery wait. `None` is the event stream
@@ -790,7 +787,7 @@ pub(super) struct ReportRecovery<'a> {
 pub(super) async fn publish_with_recovery(
     recovery: ReportRecovery<'_>,
     generated: GeneratedReport,
-    events: &mut tokio::sync::mpsc::UnboundedReceiver<::livekit::RoomEvent>,
+    events: &mut super::RoomEventReader,
     room: &Room,
     close_live: impl std::future::Future<Output = ()>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -1307,3 +1304,7 @@ fn report_data_packet(report: serde_json::Value) -> Result<DataPacket, serde_jso
 #[cfg(test)]
 #[path = "../../tests/unit/livekit/report.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../tests/unit/livekit/report_startup.rs"]
+mod startup_tests;

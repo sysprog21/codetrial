@@ -604,11 +604,23 @@ async fn check_tries_each_key_once_even_when_cooldowns_expire() {
     });
     let result = tokio::time::timeout(
         Duration::from_secs(10),
-        super::super::check_live_session_at(&url, &keys, &boot),
+        super::super::startup::check_live_session_at(&url, &keys, &boot),
     )
     .await
     .expect("the check must stop after one attempt per key");
     server.abort();
     assert!(result.is_err());
     assert_eq!(connections.load(Ordering::SeqCst), 3);
+}
+
+/// Only a rotation that ran dry with no cooldown and no billing cause stands
+/// for the refusals before it; a timed cooldown and a billing exhaustion name
+/// their own cause, and a provider error is not an empty rotation at all.
+#[test]
+fn only_a_causeless_empty_rotation_ran_dry() {
+    assert!(rotation_ran_dry(&exhausted(None, false)));
+    assert!(!rotation_ran_dry(&exhausted(Some(Instant::now()), false)));
+    assert!(!rotation_ran_dry(&exhausted(None, true)));
+    assert!(!rotation_ran_dry(&exhausted(Some(Instant::now()), true)));
+    assert!(!rotation_ran_dry(&io::Error::other("1011 Internal error")));
 }

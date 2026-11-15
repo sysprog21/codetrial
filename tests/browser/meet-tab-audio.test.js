@@ -258,8 +258,8 @@ test("meet presentation releases the camera without accusing the candidate", () 
   );
   assert.match(
     script,
-    /await connectLiveKit\(connection, preflight, presenting\)/,
-    "and the caller must pass it",
+    /await Promise\.race\(\[\s*connectLiveKit\(connection, preflight, presenting\),\s*startupFailed,\s*\]\)/,
+    "and the awaited connection must pass it",
   );
   // The release is evidence, not silence: a report with no face events must not
   // read like one where the camera watched and saw nothing.

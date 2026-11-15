@@ -60,6 +60,7 @@ function microphonePage(overrides = {}, scope = {}) {
       "setAgentStateLabel",
       "watchMutedSpeech",
       "stopLocalMedia",
+      "stopIntegrityMonitoring",
     ],
     {
       state,

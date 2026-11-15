@@ -24,7 +24,7 @@ const SUFFICIENT_SPEECH: &str = "I keep each previously visited value in a map s
 ///
 /// `bootstrap` stays at the call sites: the problem id and the duration in it
 /// are arguments a test might reasonably vary.
-fn report_test_config() -> crate::config::AgentConfig {
+pub(super) fn report_test_config() -> crate::config::AgentConfig {
     load_from_pairs([
         ("LIVEKIT_URL", "wss://example.livekit.cloud"),
         ("LIVEKIT_API_KEY", "devkey"),
@@ -1632,7 +1632,7 @@ fn recovery_offer_matches_browser_limits_and_generation_deadline() {
 /// stream must not make it finish either.
 #[tokio::test]
 async fn skip_wait_does_not_finish_without_candidate_authorization() {
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
     tx.send(::livekit::RoomEvent::Reconnecting).unwrap();
     tx.send(::livekit::RoomEvent::DataReceived {
@@ -1647,7 +1647,7 @@ async fn skip_wait_does_not_finish_without_candidate_authorization() {
 
     let result = tokio::time::timeout(
         std::time::Duration::from_millis(50),
-        wait_for_skip(&mut rx, "candidate-original"),
+        wait_for_skip(&mut rx.into(), "candidate-original"),
     )
     .await;
 
@@ -2137,7 +2137,7 @@ fn report_receipt_requires_the_candidate_and_matching_delivery() {
 
 #[tokio::test(start_paused = true)]
 async fn report_delivery_retries_identical_bytes_after_a_publish_failure() {
-    let (_sender, mut events) = tokio::sync::mpsc::unbounded_channel::<RoomEvent>();
+    let (_sender, events) = tokio::sync::mpsc::unbounded_channel::<RoomEvent>();
     let payload = br#"{"codingScore":80}"#.to_vec();
     let mut published = Vec::new();
     let started = tokio::time::Instant::now();
@@ -2152,7 +2152,7 @@ async fn report_delivery_retries_identical_bytes_after_a_publish_failure() {
                 Ok(())
             })
         },
-        &mut events,
+        &mut events.into(),
         "candidate",
         "room",
         || true,
@@ -2166,7 +2166,7 @@ async fn report_delivery_retries_identical_bytes_after_a_publish_failure() {
 
 #[tokio::test(start_paused = true)]
 async fn a_hung_report_publish_is_bounded_and_retried() {
-    let (_sender, mut events) = tokio::sync::mpsc::unbounded_channel::<RoomEvent>();
+    let (_sender, events) = tokio::sync::mpsc::unbounded_channel::<RoomEvent>();
     let mut attempts = 0;
     let started = tokio::time::Instant::now();
     let result = deliver_report(
@@ -2174,7 +2174,7 @@ async fn a_hung_report_publish_is_bounded_and_retried() {
             attempts += 1;
             std::future::pending::<Result<(), std::io::Error>>()
         },
-        &mut events,
+        &mut events.into(),
         "candidate",
         "room",
         || true,
@@ -2186,9 +2186,9 @@ async fn a_hung_report_publish_is_bounded_and_retried() {
     assert_eq!(started.elapsed(), DELIVERY_WAIT * DELIVERY_ATTEMPTS as u32);
 }
 
-struct ReceiptTestEvent {
-    sender: &'static str,
-    payload: Vec<u8>,
+pub(super) struct ReceiptTestEvent {
+    pub(super) sender: &'static str,
+    pub(super) payload: Vec<u8>,
 }
 
 impl DeliveryEvent for ReceiptTestEvent {
@@ -2206,7 +2206,7 @@ impl DeliveryEvent for ReceiptTestEvent {
 
 #[tokio::test(start_paused = true)]
 async fn delivery_stops_on_the_candidate_receipt_after_retry() {
-    let (sender, mut events) = tokio::sync::mpsc::unbounded_channel();
+    let (sender, events) = tokio::sync::mpsc::unbounded_channel();
     let fixture: serde_json::Value =
         serde_json::from_str(include_str!("../../fixtures/report-receipt.json")).unwrap();
     let receipt = serde_json::to_vec(&fixture["cases"][0]["payload"]).unwrap();
@@ -2240,7 +2240,7 @@ async fn delivery_stops_on_the_candidate_receipt_after_retry() {
                 Ok(())
             })
         },
-        &mut events,
+        &mut events.into(),
         "candidate",
         "room",
         || true,
@@ -2254,7 +2254,7 @@ async fn delivery_stops_on_the_candidate_receipt_after_retry() {
 #[tokio::test(start_paused = true)]
 async fn a_lost_packet_is_retransmitted_until_receipt() {
     for acknowledged_on in [1, 2] {
-        let (sender, mut events) = tokio::sync::mpsc::unbounded_channel();
+        let (sender, events) = tokio::sync::mpsc::unbounded_channel();
         let payload = br#"{"codingScore":80}"#.to_vec();
         let id = crate::sha256_hex(&[&payload]);
         let mut published = Vec::new();
@@ -2272,7 +2272,7 @@ async fn a_lost_packet_is_retransmitted_until_receipt() {
                 }
                 std::future::ready(Ok::<(), std::io::Error>(()))
             },
-            &mut events,
+            &mut events.into(),
             "candidate",
             "room",
             || true,
@@ -2290,7 +2290,7 @@ async fn a_lost_packet_is_retransmitted_until_receipt() {
 
 #[tokio::test(start_paused = true)]
 async fn a_disconnected_room_stops_waiting_without_claiming_delivery_failure() {
-    let (sender, mut events) = tokio::sync::mpsc::unbounded_channel();
+    let (sender, events) = tokio::sync::mpsc::unbounded_channel();
     sender
         .send(RoomEvent::Disconnected {
             reason: ::livekit::DisconnectReason::ClientInitiated,
@@ -2303,7 +2303,7 @@ async fn a_disconnected_room_stops_waiting_without_claiming_delivery_failure() {
             attempts += 1;
             std::future::ready(Ok::<(), std::io::Error>(()))
         },
-        &mut events,
+        &mut events.into(),
         "candidate",
         "room",
         || true,
@@ -2317,14 +2317,14 @@ async fn a_disconnected_room_stops_waiting_without_claiming_delivery_failure() {
 
 #[tokio::test(start_paused = true)]
 async fn failed_report_publishes_are_retried_and_reported_as_failure() {
-    let (_sender, mut events) = tokio::sync::mpsc::unbounded_channel::<RoomEvent>();
+    let (_sender, events) = tokio::sync::mpsc::unbounded_channel::<RoomEvent>();
     let mut attempts = 0;
     let result = deliver_report(
         |_| {
             attempts += 1;
             std::future::ready(Err::<(), _>("transport"))
         },
-        &mut events,
+        &mut events.into(),
         "candidate",
         "room",
         || true,
@@ -2341,7 +2341,7 @@ async fn failed_report_publishes_are_retried_and_reported_as_failure() {
 }
 
 /// What the page sends back for a report whose bytes hash to `id`.
-fn receipt_bytes(id: &str) -> Vec<u8> {
+pub(super) fn receipt_bytes(id: &str) -> Vec<u8> {
     serde_json::to_vec(&serde_json::json!({
         "type": "report_received", "deliveryId": id,
     }))
@@ -2350,7 +2350,7 @@ fn receipt_bytes(id: &str) -> Vec<u8> {
 
 /// Built by the same `report_data_packet` the agent sends, so the topic and
 /// reliability under test cannot drift from the real packet's.
-fn delivery_test_packet(payload: Vec<u8>) -> DataPacket {
+pub(super) fn delivery_test_packet(payload: Vec<u8>) -> DataPacket {
     let packet = report_data_packet(serde_json::from_slice(&payload).unwrap()).unwrap();
     assert_eq!(packet.payload, payload, "the test bytes are the bytes sent");
     packet
@@ -2358,7 +2358,7 @@ fn delivery_test_packet(payload: Vec<u8>) -> DataPacket {
 
 #[tokio::test(start_paused = true)]
 async fn a_candidate_already_absent_gets_one_publish_without_a_receipt_wait() {
-    let (_sender, mut events) = tokio::sync::mpsc::unbounded_channel::<RoomEvent>();
+    let (_sender, events) = tokio::sync::mpsc::unbounded_channel::<RoomEvent>();
     let started = tokio::time::Instant::now();
     let mut attempts = 0;
     let result = deliver_report(
@@ -2366,7 +2366,7 @@ async fn a_candidate_already_absent_gets_one_publish_without_a_receipt_wait() {
             attempts += 1;
             std::future::ready(Ok::<(), std::io::Error>(()))
         },
-        &mut events,
+        &mut events.into(),
         "candidate",
         "room",
         || false,
@@ -2380,7 +2380,7 @@ async fn a_candidate_already_absent_gets_one_publish_without_a_receipt_wait() {
 
 #[tokio::test(start_paused = true)]
 async fn failed_publication_followed_by_disconnect_is_a_delivery_failure() {
-    let (sender, mut events) = tokio::sync::mpsc::unbounded_channel();
+    let (sender, events) = tokio::sync::mpsc::unbounded_channel();
     sender
         .send(RoomEvent::Disconnected {
             reason: ::livekit::DisconnectReason::ClientInitiated,
@@ -2388,7 +2388,7 @@ async fn failed_publication_followed_by_disconnect_is_a_delivery_failure() {
         .unwrap();
     let result = deliver_report(
         |_| std::future::ready(Err::<(), _>("transport")),
-        &mut events,
+        &mut events.into(),
         "candidate",
         "room",
         || true,
@@ -2407,7 +2407,7 @@ async fn failed_publication_followed_by_disconnect_is_a_delivery_failure() {
 // participant map is supplied through the presence probe rather than faked.
 #[tokio::test(start_paused = true)]
 async fn a_candidate_leaving_during_the_receipt_wait_stops_retries() {
-    let (sender, mut events) = tokio::sync::mpsc::unbounded_channel();
+    let (sender, events) = tokio::sync::mpsc::unbounded_channel();
     sender
         .send(ReceiptTestEvent {
             sender: "peer",
@@ -2422,7 +2422,7 @@ async fn a_candidate_leaving_during_the_receipt_wait_stops_retries() {
             attempts += 1;
             std::future::ready(Ok::<(), std::io::Error>(()))
         },
-        &mut events,
+        &mut events.into(),
         "candidate",
         "room",
         || {
@@ -2476,7 +2476,7 @@ async fn a_receipt_queued_before_the_candidate_left_is_still_acknowledged() {
     };
     // Gone before the wait starts, and gone while an unrelated event is read.
     for unrelated_first in [false, true] {
-        let (sender, mut events) = tokio::sync::mpsc::unbounded_channel();
+        let (sender, events) = tokio::sync::mpsc::unbounded_channel();
         if unrelated_first {
             sender
                 .send(ReceiptTestEvent {
@@ -2489,7 +2489,7 @@ async fn a_receipt_queued_before_the_candidate_left_is_still_acknowledged() {
         let presence_reads = std::cell::Cell::new(0);
         let result = deliver_report(
             |_| std::future::ready(Ok::<(), std::io::Error>(())),
-            &mut events,
+            &mut events.into(),
             "candidate",
             "room",
             || {
@@ -2549,7 +2549,7 @@ async fn a_candidate_gone_when_the_wait_begins_gets_only_the_rejoin_grace() {
 async fn an_unattributed_receipt_that_reveals_the_departure_is_acknowledged() {
     let payload = br#"{"codingScore":80}"#.to_vec();
     let id = crate::sha256_hex(&[&payload]);
-    let (sender, mut events) = tokio::sync::mpsc::unbounded_channel();
+    let (sender, events) = tokio::sync::mpsc::unbounded_channel();
     sender
         .send(RoomEvent::DataReceived {
             payload: std::sync::Arc::new(receipt_bytes(&id)),
@@ -2561,7 +2561,7 @@ async fn an_unattributed_receipt_that_reveals_the_departure_is_acknowledged() {
     let presence_reads = std::cell::Cell::new(0);
     let result = deliver_report(
         |_| std::future::ready(Ok::<(), std::io::Error>(())),
-        &mut events,
+        &mut events.into(),
         "candidate",
         "room",
         || {

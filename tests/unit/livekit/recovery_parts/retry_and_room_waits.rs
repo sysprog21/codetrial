@@ -69,6 +69,7 @@ async fn a_ready_retry_session_remains_owned_when_its_attempt_notice_is_cancelle
             let opening = retry_cold_open_into(
                 &keys,
                 &mut restarts,
+                None,
                 &mut ready,
                 || {
                     let reader = reader.clone();

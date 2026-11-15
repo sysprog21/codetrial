@@ -241,6 +241,7 @@ async fn outage_episode(schedule: &Schedule) -> Episode {
     let work = retry_cold_open_into(
         &keys,
         &mut charges,
+        None,
         &mut ready,
         || plant_open(std::rc::Rc::clone(&plant)),
         |_| async {},

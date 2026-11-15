@@ -908,11 +908,11 @@ test("the interviewer is whoever the page pinned, or else the first agent", () =
 
 // interview.js cannot run under node, so these read it. What they pin is the
 // question each asks, not the wording around it.
-test("ending the interview waits for a report only while an interviewer is in the room", () => {
+test("ending waits for a report only after startup and while the interviewer remains", () => {
   const end = functionBody(read("web/interview.js"), "endInterview");
   assertIncludesCompact(
     end,
-    "const reportComing = Boolean(roomInterviewer(roomParticipants(), state.agentIdentity))",
+    "const reportComing = !startupPending && Boolean(roomInterviewer(roomParticipants(), state.agentIdentity))",
   );
   assert.match(end, /nodes\.forceReport\.hidden = reportComing;/);
   assert.match(end, /if \(!reportComing\) setTimeout\(showReport, /);
@@ -2052,6 +2052,17 @@ test("a session that reached an interviewer is never scored by the browser", () 
       .summary,
     /interviewer never returned a report/,
   );
+
+  // Ended before readiness started the clock, or after a startup failure:
+  // no report was asked for, so none is said to be missing.
+  const unstarted = sessionReport({
+    ...scored,
+    joinedRoom: true,
+    interviewStarted: false,
+  });
+  assert.equal(unstarted.incomplete, true);
+  assert.doesNotMatch(unstarted.summary, /never returned a report/);
+  assert.match(unstarted.summary, /before the interviewer was ready to start/);
 
   // A report that arrived and could not be drawn is not a report that never
   // came, and this is the sentence a candidate quotes when asking for the
@@ -3699,6 +3710,62 @@ test("interviewer reconnect reasons use bounded wording and optional estimates",
       interviewerReconnectMessage({ reason: "quota", waitSeconds }),
       /seconds/,
     );
+  }
+});
+
+test("startup errors name only classified provider reasons", () => {
+  for (const [reason, expected] of [
+    ["billing", /billing or credit/],
+    ["quota", /quota or rate limit/],
+    ["credentials", /API credentials/],
+    ["refused", /refused this Live request/],
+  ]) {
+    const text = interviewerReconnectMessage({ startup: "failed", reason });
+    assert.match(text, expected);
+    assert.match(text, /timer has not started/);
+    assert.doesNotMatch(text, /Retrying in/);
+  }
+  for (const reason of [
+    undefined,
+    "1011",
+    "503",
+    "secret provider body",
+    "__proto__",
+    "toString",
+  ]) {
+    const text = interviewerReconnectMessage({ startup: "failed", reason });
+    assert.match(text, /did not become ready, and no cause was reported/);
+    assert.doesNotMatch(text, /Gemini|billing|quota|secret provider body/);
+  }
+});
+
+// The reasons are spelled once in Rust and once in the causes table here, and
+// the notice travels from the agent, so no generated fixture pairs them. Read
+// what the agent can send, so a reason renamed on one side falls back loudly.
+test("every startup failure reason the agent can send has its own wording", () => {
+  const startup = readFileSync(
+    new URL("../../src/gemini/startup.rs", import.meta.url),
+    "utf8",
+  );
+  const classifier = startup.slice(
+    startup.indexOf("pub(crate) fn startup_failure_reason"),
+  );
+  const body = classifier.slice(0, classifier.indexOf("\n}\n"));
+  const reasons = new Set(
+    [...body.matchAll(/"([a-z]+)"/g)].map((match) => match[1]),
+  );
+  const readiness = readFileSync(
+    new URL("../../src/livekit/readiness.rs", import.meta.url),
+    "utf8",
+  );
+  assert.match(readiness, /"delivery"/);
+  reasons.add("delivery");
+  assert.ok(reasons.has("unavailable"), `found ${[...reasons]}`);
+  assert.ok(reasons.size >= 6, `found ${[...reasons]}`);
+  for (const reason of reasons) {
+    const text = interviewerReconnectMessage({ startup: "failed", reason });
+    if (reason === "unavailable") assert.match(text, /no cause was reported/);
+    else assert.doesNotMatch(text, /no cause was reported/, reason);
   }
 });
 

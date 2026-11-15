@@ -385,18 +385,18 @@ export async function receiveReportDelivery(
   publishReceipt,
   receive,
 ) {
-  const flushed = sendReportReceipt(payload, publishReceipt);
+  const flushed = sendReceipt(reportReceipt(payload), publishReceipt);
   if (first) await receive(payload, flushed);
   await flushed;
 }
 
 /// Hashing and publication share one bound, so neither can hold the page.
-async function sendReportReceipt(payload, publishReceipt) {
+async function sendReceipt(receipt, publishReceipt) {
   let timer;
   let queued;
   try {
     queued = await Promise.race([
-      reportReceipt(payload)
+      receipt
         .then(async (receipt) => {
           if (!receipt) return false;
           await publishReceipt(receipt);
@@ -416,6 +416,18 @@ async function sendReportReceipt(payload, publishReceipt) {
 
 export function reportReceiptPayload(deliveryId) {
   return { type: "report_received", deliveryId };
+}
+
+export async function startupReceipt(payload) {
+  try {
+    return { type: "startup_received", deliveryId: await sha256Hex(payload) };
+  } catch {
+    return null;
+  }
+}
+
+export function sendStartupReceipt(payload, publishReceipt) {
+  return sendReceipt(startupReceipt(payload), publishReceipt);
 }
 
 // Data-channel payload builders. The agent decodes these by key, so they are
@@ -1618,6 +1630,7 @@ export function countdown(endsAt, now) {
 /// and only the first one decides this.
 export function sessionReport({
   joinedRoom,
+  interviewStarted = true,
   passed,
   total,
   candidateTurns,
@@ -1633,6 +1646,17 @@ export function sessionReport({
       incomplete: true,
       summary:
         "The interviewer returned a report and this page could not display it. What follows is only what this page recorded, so the interviewer's scores and verdict are not part of it.",
+      hintsUsed: 0,
+    };
+  }
+
+  // An interview that ended before its clock started never asked for a
+  // report, so its absence is not the interviewer's to answer for.
+  if (joinedRoom && !interviewStarted) {
+    return {
+      incomplete: true,
+      summary:
+        "This interview did not produce an evaluation: it ended before the interviewer was ready to start. Nothing you did was assessed, and no result was recorded.",
       hintsUsed: 0,
     };
   }
@@ -1720,7 +1744,28 @@ const RECONNECT_CAUSES = {
   retrying: "could not be reached",
 };
 
-export function interviewerReconnectMessage(message) {
+export function interviewerReconnectMessage(message, { strict = false } = {}) {
+  if (message.startup === "failed") {
+    const causes = {
+      delivery:
+        "The interviewer answered, but the startup confirmation could not be delivered. Check the interview connection before starting again.",
+      quota:
+        "Gemini reported a quota or rate limit. Check the project's limits before starting again.",
+      billing:
+        "Gemini reported a billing or credit problem. Check the project's billing before starting again.",
+      credentials:
+        "Gemini rejected the API credentials. Check the configured key before starting again.",
+      refused:
+        "Gemini refused this Live request. Check the project's access before starting again.",
+    };
+    const cause = Object.hasOwn(causes, message.reason)
+      ? causes[message.reason]
+      : "The interviewer did not become ready, and no cause was reported. Try starting again later.";
+    const next = strict
+      ? "Return to the lobby or retry media preflight."
+      : "You can still work the problem offline.";
+    return `${cause} The interview timer has not started. ${next}`;
+  }
   if (!Object.hasOwn(RECONNECT_CAUSES, message.reason)) {
     return providerUiState("interviewer_reconnecting").message;
   }
@@ -1731,6 +1776,67 @@ export function interviewerReconnectMessage(message) {
       ? ` Retrying in about ${reconnectWaitText(wait)}.`
       : "";
   return `The interviewer ${cause} and cannot hear you right now.${estimate} Keep working; nothing is lost.`;
+}
+
+/// Installed before joining: a fast agent may publish readiness before the
+/// caller finishes publishing media or starts recording. Replacement notices
+/// never settle this one-shot gate, and a missing notice has a finite wait,
+/// counted from `arm()` once the room is joined: the agent's own startup
+/// budget starts there too, so consent and the token request do not eat it.
+export function createInterviewerReadiness({
+  timeoutMs = 180_000,
+  now = Date.now,
+  schedule = setTimeout,
+  cancel = clearTimeout,
+} = {}) {
+  let finish;
+  let settled = false;
+  const wait = new Promise((resolve) => {
+    finish = resolve;
+  });
+  let timer;
+  const receive = (message, flushed) => {
+    if (
+      settled ||
+      message.type !== "interviewer_state" ||
+      !["ready", "failed"].includes(message.startup)
+    )
+      return;
+    settled = true;
+    cancel(timer);
+    finish(
+      message.startup === "ready"
+        ? {
+            startup: "ready",
+            startedAt:
+              now() -
+              (Number.isSafeInteger(message.elapsedMs) && message.elapsedMs >= 0
+                ? message.elapsedMs
+                : 0),
+          }
+        : {
+            startup: "failed",
+            reason: message.reason,
+            ...(flushed ? { flushed } : {}),
+          },
+    );
+  };
+  const fail = () => receive({ type: "interviewer_state", startup: "failed" });
+  return {
+    wait,
+    receive,
+    fail,
+    arm() {
+      if (!settled && timer === undefined) timer = schedule(fail, timeoutMs);
+    },
+    get pending() {
+      return !settled;
+    },
+  };
+}
+
+export function startupSyncPayload() {
+  return { type: "startup_sync" };
 }
 
 export function providerUiState(kind, detail = "") {

@@ -4,6 +4,9 @@ use super::*;
 use crate::config::load_from_pairs;
 use crate::runtime::bootstrap;
 
+#[path = "gemini/live_startup.rs"]
+pub(crate) mod live_startup;
+
 async fn setup_duplex() -> (
     WebSocketStream<tokio::io::DuplexStream>,
     WebSocketStream<tokio::io::DuplexStream>,
@@ -985,144 +988,6 @@ fn live_open_retries_within_budget_and_rotates_only_with_backups() {
     assert!(!retry_live_open(&exhausted, true));
 }
 
-/// A check that reached a key the interview's first open never could would
-/// pass on a configuration that cannot start an interview.
-#[tokio::test]
-#[expect(
-    clippy::result_large_err,
-    reason = "the handshake callback's error type is a full HTTP response"
-)]
-async fn check_stops_where_the_first_interview_open_would() {
-    let names: Vec<String> = (0..crate::livekit::GEMINI_RESTART_LIMIT + 3)
-        .map(|index| format!("check-budget-{index}"))
-        .collect();
-    let config = live_config(&[("GOOGLE_API_KEYS", &names.join(","))]);
-    let keys = GeminiKeys::from_config(&config);
-    let boot = bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let url = format!("ws://{}/", listener.local_addr().unwrap());
-    let connections = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let seen = Arc::clone(&connections);
-    let server = tokio::spawn(async move {
-        loop {
-            let (socket, _) = listener.accept().await.unwrap();
-            seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            let _ = tokio_tungstenite::accept_hdr_async(
-                socket,
-                |_: &tokio_tungstenite::tungstenite::handshake::server::Request,
-                 _: tokio_tungstenite::tungstenite::handshake::server::Response| {
-                    let mut refusal =
-                        tokio_tungstenite::tungstenite::handshake::server::ErrorResponse::new(None);
-                    *refusal.status_mut() = axum::http::StatusCode::UNAUTHORIZED;
-                    Err(refusal)
-                },
-            )
-            .await;
-        }
-    });
-    assert!(check_live_session_at(&url, &keys, &boot).await.is_err());
-    server.abort();
-    assert_eq!(
-        connections.load(std::sync::atomic::Ordering::SeqCst),
-        crate::livekit::GEMINI_RESTART_LIMIT + 1
-    );
-}
-
-/// A 503 says nothing about the key, so a check reports it instead of
-/// spreading the outage across the backups.
-#[tokio::test]
-#[expect(
-    clippy::result_large_err,
-    reason = "the handshake callback's error type is a full HTTP response"
-)]
-async fn check_reports_a_503_without_trying_the_backups() {
-    let config = live_config(&[("GOOGLE_API_KEYS", "check-503-first,check-503-backup")]);
-    let keys = GeminiKeys::from_config(&config);
-    let boot = bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let url = format!("ws://{}/", listener.local_addr().unwrap());
-    let connections = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let seen = Arc::clone(&connections);
-    let server = tokio::spawn(async move {
-        loop {
-            let (socket, _) = listener.accept().await.unwrap();
-            seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            let _ = tokio_tungstenite::accept_hdr_async(
-                socket,
-                |_: &tokio_tungstenite::tungstenite::handshake::server::Request,
-                 _: tokio_tungstenite::tungstenite::handshake::server::Response| {
-                    let mut refusal =
-                        tokio_tungstenite::tungstenite::handshake::server::ErrorResponse::new(None);
-                    *refusal.status_mut() = axum::http::StatusCode::SERVICE_UNAVAILABLE;
-                    Err(refusal)
-                },
-            )
-            .await;
-        }
-    });
-    assert!(check_live_session_at(&url, &keys, &boot).await.is_err());
-    server.abort();
-    assert_eq!(connections.load(std::sync::atomic::Ordering::SeqCst), 1);
-    assert_eq!(keys.select().unwrap(), "check-503-first");
-}
-
-#[tokio::test]
-#[expect(
-    clippy::result_large_err,
-    reason = "the handshake callback's error type is a full HTTP response"
-)]
-async fn check_moves_past_a_rejected_key_to_a_working_backup() {
-    let config = live_config(&[("GOOGLE_API_KEYS", "check-rejected,check-backup")]);
-    let keys = GeminiKeys::from_config(&config);
-    let boot = bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let url = format!("ws://{}/", listener.local_addr().unwrap());
-    let server = tokio::spawn(async move {
-        let mut seen = Vec::new();
-        loop {
-            let (socket, _) = listener.accept().await.unwrap();
-            let mut key = String::new();
-            let accepted = tokio_tungstenite::accept_hdr_async(
-                socket,
-                |request: &tokio_tungstenite::tungstenite::handshake::server::Request, response| {
-                    key = request.uri().query().unwrap_or_default().to_string();
-                    if key.ends_with("rejected") {
-                        let mut refusal =
-                            tokio_tungstenite::tungstenite::handshake::server::ErrorResponse::new(
-                                None,
-                            );
-                        *refusal.status_mut() = axum::http::StatusCode::UNAUTHORIZED;
-                        Err(refusal)
-                    } else {
-                        Ok(response)
-                    }
-                },
-            )
-            .await;
-            seen.push(key);
-            if let Ok(mut socket) = accepted {
-                socket.next().await.unwrap().unwrap();
-                socket
-                    .send(Message::Text(r#"{"setupComplete":{}}"#.into()))
-                    .await
-                    .unwrap();
-
-                // Bounded: a close that never arrives is `shutdown`'s failure
-                // to report, and this test is about which keys were tried.
-                let _ = tokio::time::timeout(Duration::from_secs(5), socket.next()).await;
-                return seen;
-            }
-        }
-    });
-    let session = check_live_session_at(&url, &keys, &boot).await.unwrap();
-    let _ = session.close().await;
-    assert_eq!(
-        server.await.unwrap(),
-        ["key=check-rejected", "key=check-backup"]
-    );
-    assert_eq!(keys.select().unwrap(), "check-backup");
-}
-
 #[tokio::test]
 async fn setup_close_preserves_the_reason_and_redacts_all_keys() {
     let config = live_config(&[("GOOGLE_API_KEYS", "close/first,close+backup")]);
@@ -1431,17 +1296,29 @@ pub(crate) async fn generate_report_at(
     problem: &crate::agent::Problem,
     run: ReportRun<'_>,
 ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
+    generate_report_for_round_at(keys, url, backoff, prompt, problem, rounds(true), run).await
+}
+
+pub(crate) async fn generate_report_for_round_at(
+    keys: &GeminiKeys,
+    url: &str,
+    backoff: Duration,
+    prompt: &str,
+    problem: &crate::agent::Problem,
+    rounds: crate::agent::ReportRounds,
+    run: ReportRun<'_>,
+) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
     let calls = ReportCalls {
         keys,
         url: url.to_string(),
         material: EDITOR,
-        communication_assessed: true,
+        communication_assessed: rounds.communication_assessed(),
         budget: ReportCallBudget::new(),
         backoff,
         observer: None,
         run,
     };
-    generate_report_with_keys_at(calls, prompt, problem, rounds(true)).await
+    generate_report_with_keys_at(calls, prompt, problem, rounds).await
 }
 
 pub(crate) fn valid_report() -> Value {

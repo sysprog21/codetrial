@@ -8,7 +8,7 @@ mod peer;
 pub(crate) use peer::generate_peer_content;
 
 use std::io;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -33,6 +33,7 @@ mod pressure;
 mod report_calls;
 mod setup;
 mod socket;
+mod startup;
 mod task_feedback;
 mod tool_ack;
 pub use credentials::GeminiKeys;
@@ -43,6 +44,8 @@ pub(crate) use lifecycle::{
 pub(crate) use pressure::SocketPressure;
 use pressure::{Pressure, ReaderEnd};
 use setup::complete_live_setup;
+pub use startup::check_live_session;
+pub(crate) use startup::{first_open_within, startup_failure_reason};
 
 /// What every image this process sends Gemini is encoded as: a camera frame, a
 /// whiteboard on the live socket, and the board attached to a report request.
@@ -54,7 +57,7 @@ pub const GEMINI_IMAGE_MIME_TYPE: &str = "image/jpeg";
 use credentials::{
     ApiFailure, ApiSurface, CredentialFailure, credential_failure, failure_from_reason,
 };
-pub(crate) use credentials::{QUOTA_COOLDOWN, exhausted_until};
+pub(crate) use credentials::{QUOTA_COOLDOWN, exhausted_until, rotation_ran_dry};
 pub(crate) use http_calls::{
     GENERATION_SEED, REGENERATION_SEED, generate_interim_review_with_keys,
     generate_phase_judgment_with_keys,
@@ -106,7 +109,7 @@ pub(crate) const CLOSE_TIMEOUT: Duration = Duration::from_secs(2);
 /// How often the room loop pings. A socket nobody is writing to cannot fail a
 /// write, so without a ping a peer that went away would not be noticed until
 /// something was finally said.
-const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
+pub(crate) const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
 /// Silence the reader accepts before it treats the peer as gone. Gemini answers
 /// a ping within milliseconds, so three missed intervals is not a slow network;
 /// it is a socket that will never deliver another event, and ending the reader
@@ -183,6 +186,11 @@ pub struct GeminiLiveSession {
     /// reported once when the socket is let go.
     pressure: Pressure,
     event_received_at: Option<std::time::Instant>,
+    pending_events: std::collections::VecDeque<(std::time::Instant, GeminiEvent)>,
+    /// The reader's first classified output, published after its preceding
+    /// events but before the output's async queue send. One timestamp lets
+    /// startup observe it without waiting for reader or queue progress.
+    first_output: Arc<OnceLock<std::time::Instant>>,
     /// When this socket was opened, which is how the caller tells Gemini's
     /// ordinary connection cap from an endpoint that will not stay up. It lives
     /// here rather than in the loop that reconnects because it is a fact about
@@ -220,6 +228,9 @@ pub struct GeminiLiveSession {
     /// room loop stalled five seconds at a time while the close waits behind
     /// it. A reader that has ended counts the same way, see [`Self::gone`].
     dead: bool,
+    /// Audio is sink-owned while its write awaits a flush. If startup cancels
+    /// it, resending the media buffer would duplicate the candidate's samples.
+    queued_audio: bool,
     last_ping: tokio::time::Instant,
     /// What asked for a reply since this socket's last completed turn, for the
     /// room's usage lines. Held on the socket, beside the sends that set it,
@@ -257,13 +268,7 @@ impl GeminiLiveSession {
 
     pub(crate) fn recovery_handle(&self, keys: &GeminiKeys) -> Option<(String, String)> {
         let key = self.credential.as_ref()?;
-        if let Some(failure) = *self
-            .failure
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-        {
-            keys.failed(key, failure, ApiSurface::Live);
-        }
+        self.record_failure(keys);
         if keys.select().ok().as_ref() != Some(key) {
             return None;
         }
@@ -309,7 +314,11 @@ impl GeminiLiveSession {
         &mut self,
         bytes: &[u8],
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        self.send_json(realtime_audio_message(bytes)).await
+        self.write(
+            Message::Text(serde_json::to_string(&realtime_audio_message(bytes))?.into()),
+            true,
+        )
+        .await
     }
 
     pub async fn end_audio_turn(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -337,8 +346,14 @@ impl GeminiLiveSession {
     }
 
     pub async fn next_event(&mut self) -> Option<GeminiEvent> {
-        let (received_at, event) = self.events.recv().await?;
-        self.pressure.consumed();
+        let (received_at, event) = match self.pending_events.pop_front() {
+            Some(event) => event,
+            None => {
+                let event = self.events.recv().await?;
+                self.pressure.consumed();
+                event
+            }
+        };
         self.event_received_at = Some(received_at);
         Some(event)
     }
@@ -441,20 +456,24 @@ impl GeminiLiveSession {
             return Ok(());
         }
         self.last_ping = tokio::time::Instant::now();
-        self.write(Message::Ping(Default::default())).await
+        self.write(Message::Ping(Default::default()), false).await
     }
 
     async fn send_json(
         &mut self,
         message: Value,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        self.write(Message::Text(serde_json::to_string(&message)?.into()))
-            .await
+        self.write(
+            Message::Text(serde_json::to_string(&message)?.into()),
+            false,
+        )
+        .await
     }
 
     async fn write(
         &mut self,
         message: Message,
+        audio: bool,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         if self.gone() {
             return Err(io::Error::new(
@@ -468,7 +487,17 @@ impl GeminiLiveSession {
                 io::Error::new(io::ErrorKind::NotConnected, "Gemini transport retired").into(),
             );
         };
-        let Ok(sent) = tokio::time::timeout(WRITE_TIMEOUT, writer.send(message)).await else {
+        let queued_audio = &mut self.queued_audio;
+        *queued_audio = false;
+        let Ok(sent) = tokio::time::timeout(WRITE_TIMEOUT, async {
+            // As with send(), feed and flush share one write budget. Retain
+            // ownership evidence if the enclosing startup future is cancelled.
+            writer.feed(message).await?;
+            *queued_audio = audio;
+            writer.flush().await
+        })
+        .await
+        else {
             // Every caller in the room loop logs a failed write and waits for
             // `next_event` to report the close, which a peer that stopped
             // answering never sends. Ending the reader drops its sender, and
@@ -478,11 +507,14 @@ impl GeminiLiveSession {
                 WRITE_TIMEOUT.as_secs()
             );
             self.dead = true;
+            self.queued_audio = false;
             if let Some(reader) = &self.reader {
                 reader.abort();
             }
             return Err(io::Error::new(io::ErrorKind::TimedOut, "Gemini write timed out").into());
         };
+
+        self.queued_audio = false;
 
         // A write that fails outright ends the session the same way. Left open,
         // the callers that log and wait would wait on the read half: a
@@ -780,57 +812,6 @@ pub(crate) fn is_billing_failure(error: &(dyn std::error::Error + 'static)) -> b
         || credentials::exhausted_by_billing(error)
 }
 
-/// Bounds `open` by `limit`, the way `FIRST_OPEN_LIMIT` bounds a first open.
-pub(crate) async fn first_open_within<T>(
-    limit: Duration,
-    open: impl Future<Output = Result<T, Box<dyn std::error::Error + Send + Sync>>>,
-) -> Result<T, Box<dyn std::error::Error + Send + Sync>> {
-    tokio::time::timeout(limit, open).await.unwrap_or_else(|_| {
-        Err(io::Error::new(
-            io::ErrorKind::TimedOut,
-            format!("Gemini did not open within {limit:?}"),
-        )
-        .into())
-    })
-}
-
-/// Opens one Live session the way an interview's first open would choose its
-/// key, moving past keys Gemini rejects while backups remain.
-///
-/// For `check-gemini`, which should pass whenever an interview could start.
-/// It makes at most one attempt per configured key, and no more than the
-/// interview's first open could: that open gets one attempt plus the restart
-/// budget, all inside `FIRST_OPEN_LIMIT`, so a key past either passes a check
-/// but never runs an interview.
-/// Marking a rejected key unavailable is not a bound on its own: a quota
-/// cooldown lasts a minute, and slow rejections from enough keys outlast it,
-/// putting the first key back in rotation. Other failures return at once: a
-/// check reports them instead of waiting them out.
-pub async fn check_live_session(
-    keys: &GeminiKeys,
-    boot: &dyn LiveSession,
-) -> Result<GeminiLiveSession, Box<dyn std::error::Error + Send + Sync>> {
-    check_live_session_at(LIVE_WEBSOCKET_ENDPOINT, keys, boot).await
-}
-
-pub(crate) async fn check_live_session_at(
-    endpoint: &str,
-    keys: &GeminiKeys,
-    boot: &dyn LiveSession,
-) -> Result<GeminiLiveSession, Box<dyn std::error::Error + Send + Sync>> {
-    let attempts = keys.count().min(crate::livekit::GEMINI_RESTART_LIMIT + 1);
-    first_open_within(FIRST_OPEN_LIMIT, async {
-        for _ in 1..attempts {
-            match live_session_with_keys_at(endpoint, keys, boot, None).await {
-                Err(error) if credential_failure(error.as_ref()).is_some() => {}
-                result => return result,
-            }
-        }
-        live_session_with_keys_at(endpoint, keys, boot, None).await
-    })
-    .await
-}
-
 pub(crate) async fn open_live_session_at(
     url: &str,
     boot: &dyn LiveSession,
@@ -855,6 +836,8 @@ async fn open_live_session_redacted_at(
         .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "Gemini connect timed out"))??;
     let setup = Message::Text(serde_json::to_string(&live_setup_message(boot, resume))?.into());
     complete_live_setup(&mut stream, setup, &api_keys, SETUP_TIMEOUT).await?;
+    #[cfg(test)]
+    tests::live_startup::constrain_startup_socket(&stream);
     let (writer, mut reader) = stream.split();
     let (sender, events) = channel(GEMINI_EVENT_QUEUE);
     let pressure = Pressure::new(GEMINI_EVENT_QUEUE);
@@ -873,6 +856,10 @@ async fn open_live_session_redacted_at(
     let closed_with = Arc::clone(&failure);
     let usage = Arc::new(Mutex::new(std::collections::VecDeque::new()));
     let ledger = Arc::clone(&usage);
+    let first_output = Arc::new(OnceLock::new());
+    let observed_output = Arc::clone(&first_output);
+    #[cfg(test)]
+    let mut pause = tests::live_startup::take_startup_output_pause();
     let reader = tokio::spawn(async move {
         loop {
             let Ok(next) = tokio::time::timeout(READ_IDLE_LIMIT, reader.next()).await else {
@@ -961,6 +948,16 @@ async fn open_live_session_redacted_at(
                     .push_back(observation);
             }
             for event in message.events {
+                // Publish only after the ordered prefix has been sent. The
+                // snapshot is nonblocking, unlike this event's queue insertion.
+                // Descheduling before publication remains unobservable to a
+                // timeout that cannot wait or extend its original deadline.
+                if observed_output.get().is_none() && startup::model_output(&event) {
+                    let _ = observed_output.set(received_at);
+                }
+                #[cfg(test)]
+                tests::live_startup::pause_startup_output(&mut pause, received_at, &event).await;
+
                 // Bounded on purpose: a stalled main loop must slow the socket
                 // down, not let inbound audio pile up without a ceiling. The
                 // wait is counted apart from the idle limit above, which only
@@ -997,6 +994,8 @@ async fn open_live_session_redacted_at(
         reader: Some(reader),
         events,
         pressure,
+        pending_events: std::collections::VecDeque::new(),
+        first_output,
         resumption,
         usage,
         checkpoint_at,
@@ -1005,6 +1004,7 @@ async fn open_live_session_redacted_at(
         failure,
         opened_at: std::time::Instant::now(),
         dead: false,
+        queued_audio: false,
         last_ping: tokio::time::Instant::now(),
         input_cause: None,
     })

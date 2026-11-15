@@ -1,0 +1,12 @@
+{
+  "topic": "control",
+  "cases": [
+    {
+      "name": "received startup failure",
+      "payload": {
+        "type": "startup_received",
+        "deliveryId": "2294ce784e0250bb254239cbf01f1cadc64d5ce20dbdeaba8ef1c6105b7b33b7"
+      }
+    }
+  ]
+}
