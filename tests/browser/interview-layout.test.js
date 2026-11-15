@@ -1097,3 +1097,64 @@ test("a stacked expanded drawing keeps the panel's available width", async (t) =
     }
   }
 });
+
+test("an expanded drawing keeps the card readable at a larger root font", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  for (const width of [1024, 1640]) {
+    const page = await openInterview(width, 800, "&exampleDrawing=1");
+    try {
+      await closeSetupCheck(page);
+      await page.evaluate(() => {
+        document.documentElement.style.fontSize = "32px";
+      });
+      await settled(page);
+      const card = page.locator("#jim-stage");
+      const original = await card.boundingBox();
+      await page
+        .locator("#example-board")
+        .evaluate((node) => (node.open = true));
+      await page.getByRole("button", { name: "Expand drawing" }).click();
+      await settled(page);
+      const expanded = await card.boundingBox();
+      assert.equal(
+        expanded.width,
+        original.width,
+        "an insufficient strip keeps the card's normal readable width",
+      );
+    } finally {
+      await page.close();
+    }
+  }
+});
+
+test("a constrained caption card keeps the self view inside its padding at a smaller root font", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const page = await openInterview(1024, 800, "&exampleDrawing=1");
+  try {
+    await closeSetupCheck(page);
+    await page.evaluate(() => {
+      document.documentElement.style.fontSize = "14px";
+      // Pin the panel at the sidebar resizer's 30rem neighbour floor.
+      document.querySelector(".editor-panel").style.width = "30rem";
+      document.querySelector("#self-view").hidden = false;
+      document.querySelector("#example-board").open = true;
+    });
+    await page.getByRole("button", { name: "Expand drawing" }).click();
+    await settled(page);
+    const layout = await page.evaluate(() => {
+      const card = document.querySelector("#jim-stage");
+      const style = getComputedStyle(card);
+      return {
+        viewRight: document.querySelector("#self-view").getBoundingClientRect()
+          .right,
+        contentRight:
+          card.getBoundingClientRect().right -
+          Number.parseFloat(style.paddingRight) -
+          Number.parseFloat(style.borderRightWidth),
+      };
+    });
+    assert.ok(layout.viewRight <= layout.contentRight, JSON.stringify(layout));
+  } finally {
+    await page.close();
+  }
+});

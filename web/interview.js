@@ -308,8 +308,11 @@ const JIM_AVATAR_PANEL_MIN_REM = 49;
 /// eats code rather than decorating it, whatever the sidebar does.
 const JIM_STAGE_NARROW_WINDOW = "(max-width: 1200px)";
 const JIM_DRAWING_DESKTOP_WINDOW = "(min-width: 1024px)";
-// Match styles.css: 17.5rem drawing, 2rem pane padding and a 1.5rem gap.
+// Match styles.css: 1rem pane padding on each side, the 17.5rem drawing and
+// `.jim-stage`'s 1.5rem right offset, which the margin-right rule repeats.
 const JIM_DRAWING_RESERVED_REM = 21;
+// Match the compact self view's fixed width in styles.css.
+const JIM_SELF_VIEW_WIDTH_PX = 120;
 /// In rem. A fixed ladder rather than a free number, so a stored value is
 /// either one of these or ignored, and every size the page can show is one the
 /// browser check has seen keep the three editor layers in line.
@@ -5390,7 +5393,8 @@ function testDrawerBounds() {
 /// the same way, so Jim's captions stay over a corner of the board. One class
 /// for all three, so the stylesheet says what compact looks like once, and
 /// the avatar's own width observer pauses and resumes its drawing from the
-/// result.
+/// result. On desktop, an expanded drawing also caps the card to the strip
+/// beside the reserved drawing, unless that strip cannot hold a readable card.
 function compactJimStageBesideNarrowPanel(panel) {
   const narrowWindow = matchMedia(JIM_STAGE_NARROW_WINDOW);
   const desktopDrawing = matchMedia(JIM_DRAWING_DESKTOP_WINDOW);
@@ -5400,9 +5404,12 @@ function compactJimStageBesideNarrowPanel(panel) {
       getComputedStyle(document.documentElement).fontSize,
     );
     const panelWidth = panel.getBoundingClientRect().width;
+    const cardWidth = panelWidth - JIM_DRAWING_RESERVED_REM * rem;
     nodes.jimStage.style.maxWidth =
-      example?.hasAttribute("data-expanded") && desktopDrawing.matches
-        ? `${Math.max(0, panelWidth - JIM_DRAWING_RESERVED_REM * rem)}px`
+      example?.hasAttribute("data-expanded") &&
+      desktopDrawing.matches &&
+      cardWidth >= JIM_SELF_VIEW_WIDTH_PX + 1.25 * rem + 2
+        ? `${cardWidth}px`
         : "";
     const compact =
       narrowWindow.matches ||
