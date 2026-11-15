@@ -18,17 +18,61 @@ degraded, and missing transcripts; every rubric score band; zero and nonzero hin
 use; and both complete and intentionally unassessable phases. Selection must not
 depend on the model's decision.
 
+Unassessable coverage requires at least one applicable session/phase pair whose
+model and human scores are all `null`, across the whole dataset. All REACTO
+phases apply to both loop types; STAR phases apply only to coding-plus-behavioral
+loops. The inapplicable STAR `null` values in coding-only sessions do not meet
+this requirement. A non-null STAR score from the model or any human reviewer
+in a coding-only session is invalid input (exit 2), even if all scores agree;
+inapplicable scores never enter phase coverage or numeric metrics.
+Human keys for these inapplicable phases may be omitted or recorded as `null`;
+no human judgments are required for them.
+Unassessable coverage is not required for every phase or stratum. The existing
+input rules still apply, including at least two distinct human reviewers per
+sample and every required model phase key.
+
 Each assessable phase is scored independently by at least two trained reviewers
 who see a random sample id, candidate evidence, the frozen rubric, and no model
 score, model decision, identity, demographic information, or other reviewer's
-rating. Reviewers use `null` when evidence cannot support a score. A phase is
-invalid when model and humans disagree about assessability. After independent
-ratings are locked, disagreements spanning two rubric bands or 20 points are
-adjudicated by a third reviewer; original ratings remain in the analysis input.
+rating. Reviewers use `null` when evidence cannot support a score. Every recorded
+human judgment in an applicable phase must agree with the model's assessability;
+a null and a numeric score disagree even when two other reviewers gave numeric
+scores. Such a mismatch is invalid input (exit 2), before coverage or metric
+results are reported. After independent ratings are locked, disagreements
+spanning two rubric bands or 20 points are adjudicated by a third reviewer;
+original ratings remain in the analysis input.
+An adjudicator who reviews only disputed phases omits the other keys from their
+`scores` object. An omitted key means no judgment was recorded; an explicit
+`null` means the reviewer judged that phase unassessable. Reviewer order does
+not assign roles. Only recorded judgments enter assessability validation and
+numeric metrics; missing judgments are never replaced with scores or `null`.
+Each human rating row must record at least one applicable phase, with a numeric
+score or an explicit `null`; inapplicable keys alone do not satisfy this minimum.
+Unknown phase keys and invalid score values remain invalid input. Each applicable
+phase needs at least two recorded human judgments from different reviewer IDs;
+an adjudicator's recorded judgment also counts. The input carries no reviewer
+roles, so the analyzer does not establish that these are two independent
+original ratings. Independence and blinding must be ensured
+by the review process.
+Consistently null phases contribute no numeric score to the metrics.
+
+Model/human comparisons use the mean of all recorded numeric judgments,
+including partial ratings. Inter-rater QWK uses only ratings whose `scores`
+contain every applicable phase key for that sample. Recorded `null` values count
+toward this completeness check; omitted inapplicable keys do not disqualify a
+rating. Partial ratings contribute no QWK pairs. Full applicable-phase ratings
+remain eligible for QWK, including those from adjudicators. This per-row
+completeness rule does not prevent session-selection bias: full ratings obtained
+only for disputed sessions can still add pairs and increase those sessions'
+weight. The review process must control how reviewers are assigned to sessions.
+Missing QWK coverage is a calibration failure (exit 1), not invalid input.
 
 The gate passes only when every condition holds:
 
 - at least 30 sessions and all required strata;
+- at least one applicable session/phase where the model and all recorded human
+  judgments are null;
+- at least one eligible human/human QWK pair for every numerically assessed phase;
 - mean per-phase quadratic-weighted inter-rater agreement at least 0.67;
 - model versus mean-human mean absolute error no more than 10 points;
 - model and rounded mean-human rubric-band agreement at least 0.80;

@@ -20,6 +20,7 @@ PHASES = (
     "Action",
     "Result",
 )
+STAR_PHASES = PHASES[6:]
 BANDS = ((0, 39), (40, 59), (60, 74), (75, 89), (90, 100))
 THRESHOLDS = {
     "sessions": 30,
@@ -118,6 +119,7 @@ def analyze(raw):
         raise ValueError("$.samples: expected array")
     ids, pairs, errors, strata = set(), [], defaultdict(list), defaultdict(set)
     assessed_phases, observed_bands, hint_strata = set(), set(), set()
+    has_unassessable = False
     pairwise = defaultdict(lambda: [[], []])
     for index, sample in enumerate(samples):
         path = f"$.samples[{index}]"
@@ -167,7 +169,10 @@ def analyze(raw):
         ratings = sample["humanRatings"]
         if not isinstance(ratings, list) or len(ratings) < 2:
             raise ValueError(f"{path}.humanRatings: need at least two blinded ratings")
-        reviewers, human = set(), defaultdict(list)
+        applicable = set(PHASES)
+        if sample["loop"] == "coding_only":
+            applicable.difference_update(STAR_PHASES)
+        reviewers, qwk_reviewers, human = set(), set(), defaultdict(list)
         for rating_index, rating in enumerate(ratings):
             rating_path = f"{path}.humanRatings[{rating_index}]"
             exact_keys(rating, ["reviewerId", "scores"], rating_path)
@@ -177,23 +182,45 @@ def analyze(raw):
                     f"{rating_path}.reviewerId: expected distinct pseudonym"
                 )
             reviewers.add(reviewer)
-            exact_keys(rating["scores"], PHASES, f"{rating_path}.scores")
-            for phase in PHASES:
-                value = score(rating["scores"][phase], f"{rating_path}.scores.{phase}")
-                if value is not None:
-                    human[phase].append((reviewer, value))
+            scores = rating["scores"]
+            if not isinstance(scores, dict):
+                raise ValueError(f"{rating_path}.scores: expected object")
+            if unknown := sorted(set(scores) - set(PHASES)):
+                raise ValueError(f"{rating_path}.scores: unknown={unknown}")
+            if not applicable & scores.keys() and all(
+                value is None for value in scores.values()
+            ):
+                raise ValueError(f"{rating_path}.scores: no applicable phase recorded")
+            if applicable <= scores.keys():
+                qwk_reviewers.add(reviewer)
+            for phase, raw_value in scores.items():
+                value = score(raw_value, f"{rating_path}.scores.{phase}")
+                human[phase].append((reviewer, value))
         for phase in PHASES:
             values = human[phase]
-            if model[phase] is None:
-                if values:
+            if phase not in applicable:
+                if model[phase] is not None:
+                    raise ValueError(
+                        f"{path}.modelScores.{phase}: not applicable to coding_only; expected null"
+                    )
+                for reviewer, value in values:
+                    if value is not None:
+                        raise ValueError(
+                            f"{path}.{phase}: not applicable to coding_only; expected null"
+                            f" ({reviewer})"
+                        )
+                continue
+            for reviewer, value in values:
+                if (model[phase] is None) != (value is None):
                     raise ValueError(
                         f"{path}.{phase}: model/human assessability mismatch"
+                        f" ({reviewer})"
                     )
-                continue
             if len(values) < 2:
-                raise ValueError(
-                    f"{path}.{phase}: assessed phase needs two human raters"
-                )
+                raise ValueError(f"{path}.{phase}: need at least two human ratings")
+            if model[phase] is None:
+                has_unassessable = True
+                continue
             assessed_phases.add(phase)
             observed_bands.add(band(model[phase]))
             human_mean = mean([value for _, value in values])
@@ -203,7 +230,12 @@ def analyze(raw):
                 group = sample[key]
                 if group is not None:
                     errors[(key, group)].append(error)
-            for left, right in itertools.combinations(sorted(values), 2):
+            qwk_values = [
+                (reviewer, value)
+                for reviewer, value in values
+                if reviewer in qwk_reviewers
+            ]
+            for left, right in itertools.combinations(sorted(qwk_values), 2):
                 pairwise[phase][0].append(left[1])
                 pairwise[phase][1].append(right[1])
         for key in ("difficulty", "language", "loop", "transcriptQuality"):
@@ -226,12 +258,16 @@ def analyze(raw):
         failures.append(
             f"phase coverage missing {sorted(set(PHASES) - assessed_phases)}"
         )
+    if not has_unassessable:
+        failures.append("unassessable phase coverage missing")
     if observed_bands != set(range(len(BANDS))):
         failures.append(
             f"score-band coverage missing {sorted(set(range(len(BANDS))) - observed_bands)}"
         )
     if hint_strata != {"zero", "nonzero"}:
         failures.append("hint coverage needs zero and nonzero use")
+    if missing := sorted(assessed_phases - set(pairwise)):
+        failures.append(f"inter-rater phase coverage missing {missing}")
     agreements = [qwk(*values) for values in pairwise.values() if values[0]]
     inter_rater = mean(agreements)
     mae = mean([abs(model - human) for model, human in pairs])

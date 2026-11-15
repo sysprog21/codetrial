@@ -60,6 +60,11 @@ def corpus():
                 ],
             }
         )
+    # Missing evidence for an applicable phase, unlike coding-only STAR nulls.
+    sample = samples[2]
+    sample["modelScores"]["Algorithm"] = None
+    for rating in sample["humanRatings"]:
+        rating["scores"]["Algorithm"] = None
     return {
         "version": 1,
         "contract": {
