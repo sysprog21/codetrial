@@ -105,6 +105,7 @@ test("candidate cases run when session storage cannot be written", async (t) => 
     await page.goto(`${base}/interview.html?problem=chargeback-pair-match`, {
       waitUntil: "domcontentloaded",
     });
+    await closeSetupCheck(page);
     await candidateCasesReady(page);
     await page.evaluate(() => {
       document.querySelector("#candidate-case-input").value = "[[2,7,11,15],9]";
@@ -148,6 +149,7 @@ test("candidate cases run when session storage cannot be reached", async (t) => 
     await page.goto(`${base}/interview.html?problem=chargeback-pair-match`, {
       waitUntil: "domcontentloaded",
     });
+    await closeSetupCheck(page);
     await candidateCasesReady(page);
     await page.locator("#language-select").selectOption("javascript");
     await page.evaluate(() => {
@@ -234,6 +236,7 @@ test("adding then running during judge load shares one addition", async (t) => {
     await page.goto(`${base}/interview.html?problem=chargeback-pair-match`, {
       waitUntil: "domcontentloaded",
     });
+    await closeSetupCheck(page);
     // `candidateCasesReady` is no use here: it waits on the judge, which this
     // test is holding. Retry the click instead and let the guard report its
     // own readiness, because `addCandidateCase` disables the button before its
@@ -307,6 +310,7 @@ test("a malformed candidate case stops the run it was typed into", async (t) => 
     await page.goto(`${base}/interview.html?problem=chargeback-pair-match`, {
       waitUntil: "domcontentloaded",
     });
+    await closeSetupCheck(page);
     await candidateCasesReady(page);
     // The opposite of the cap below. A case the cap turned away still lets the
     // run go ahead, and a case that cannot be parsed must not: running without
@@ -347,6 +351,7 @@ test("a sixth candidate case is refused without blocking the run", async (t) => 
     await page.goto(`${base}/interview.html?problem=chargeback-pair-match`, {
       waitUntil: "domcontentloaded",
     });
+    await closeSetupCheck(page);
     await candidateCasesReady(page);
     // Fill the allowance, then type one more and run. The sixth is refused on
     // its own; the judge's cases and the five already accepted still run.
@@ -537,6 +542,7 @@ test("a case cannot be removed while tests are running", async (t) => {
     await page.goto(`${base}/interview.html?problem=chargeback-pair-match`, {
       waitUntil: "domcontentloaded",
     });
+    await closeSetupCheck(page);
     // candidateCasesReady waits on the judge this test is holding, so the
     // rendered rows are the ready signal instead: bindEvents registers the
     // delegated remove listener before it calls initializeCandidateCases, so
@@ -632,6 +638,7 @@ async function withHeldRequestedC(body) {
       `${enabled.base}/interview.html?problem=chargeback-pair-match&language=c`,
       { waitUntil: "domcontentloaded" },
     );
+    await closeSetupCheck(page);
     await page.waitForFunction(
       () => document.querySelector('[data-language="c"]').disabled,
     );
@@ -652,6 +659,7 @@ test("disabled compiled runners cannot be selected while the judge loads", async
     await page.goto(`${base}/interview.html?problem=chargeback-pair-match`, {
       waitUntil: "domcontentloaded",
     });
+    await closeSetupCheck(page);
     await page.waitForFunction(
       () => document.querySelector('[data-language="c"]').disabled,
     );
@@ -711,6 +719,7 @@ test("C stays unavailable until a function-style judge has loaded", async (t) =>
         await page.goto(`${enabled.base}/interview.html?problem=${problem}`, {
           waitUntil: "domcontentloaded",
         });
+        await closeSetupCheck(page);
         await page.waitForFunction(
           () => document.querySelector('[data-language="c"]').disabled,
         );
