@@ -1,9 +1,3 @@
-#![expect(
-    clippy::panic,
-    clippy::unwrap_used,
-    reason = "a test that fails by panicking is working as intended"
-)]
-
 //! The recordings table, checked against a real SQLite file rather than
 //! against the `CREATE TABLE` string that produced it.
 //!

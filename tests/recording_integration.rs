@@ -1,8 +1,3 @@
-#![expect(
-    clippy::panic,
-    reason = "a test that fails by panicking is working as intended"
-)]
-
 //! The credentialed acceptance for recording, and the rules it applies.
 //!
 //! Two halves. The rules are Rust and run in every `cargo test`: what a good

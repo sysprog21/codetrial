@@ -1,9 +1,3 @@
-#![expect(
-    clippy::panic,
-    clippy::unwrap_used,
-    reason = "a test that fails by panicking is working as intended"
-)]
-
 //! The provider contract, checked against bytes rather than against prose.
 //!
 //! Nothing in this file exercises CodeTrial's own recording code, because

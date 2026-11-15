@@ -2,6 +2,7 @@ import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  closeSetupCheck,
   DEFAULT_RUNTIME_CONFIG,
   launchChromium,
   pauseClock,
@@ -46,9 +47,9 @@ async function openInterview(t, { clock = false } = {}) {
   await page.waitForFunction(
     () => document.querySelector("#candidate-case-input").placeholder !== "",
   );
+  await closeSetupCheck(page);
   await page.locator("#language-select").selectOption("javascript");
   await page.evaluate(() => {
-    document.querySelector("#audio-check").hidden = true;
     const post = Worker.prototype.postMessage;
     globalThis.testRuns = 0;
     Worker.prototype.postMessage = function (...args) {

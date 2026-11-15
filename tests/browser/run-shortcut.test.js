@@ -5,6 +5,7 @@ import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  closeSetupCheck,
   DEFAULT_RUNTIME_CONFIG,
   launchChromium,
   FAKE_SPEECH_CAPTURE,
@@ -98,9 +99,14 @@ async function interviewPage(
   await page.waitForFunction(
     () => document.querySelector("#candidate-case-input").placeholder !== "",
   );
-  await page.locator("#language-select").selectOption("javascript");
-  await page.evaluate((started) => {
-    if (started) document.querySelector("#audio-check").hidden = true;
+  // The media preflight makes the workspace inert, which Playwright will not
+  // act on. A started interview closes it first; one that is not started
+  // keeps it up on purpose, so its selection is forced.
+  if (started) await closeSetupCheck(page);
+  await page
+    .locator("#language-select")
+    .selectOption("javascript", { force: !started });
+  await page.evaluate(() => {
     globalThis.runs = 0;
     const run = document.querySelector("#run-tests");
     new MutationObserver((records) => {
@@ -113,7 +119,7 @@ async function interviewPage(
         globalThis.enterDefaultPrevented = event.defaultPrevented;
     });
     document.querySelector("#editor").focus();
-  }, started);
+  });
   return { page, errors };
 }
 
@@ -248,7 +254,11 @@ test("the language selector stays on the submitted language in a report", async 
     await page.evaluate(() => document.querySelector("#end").click());
     await page.locator("#report-modal").waitFor({ state: "visible" });
     const code = await page.locator("#editor").inputValue();
-    await page.locator("#language-select").selectOption("python");
+    // The report makes the workspace inert, which Playwright will not act on;
+    // the pin is that a change that gets through anyway is not applied.
+    await page
+      .locator("#language-select")
+      .selectOption("python", { force: true });
     assert.equal(
       await page.locator("#language-select").inputValue(),
       "javascript",

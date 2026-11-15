@@ -1,8 +1,3 @@
-#![expect(
-    clippy::unwrap_used,
-    reason = "a test that fails by panicking is working as intended"
-)]
-
 use codetrial::agent::{
     InterviewGrounding, InterviewLoop, InterviewMode, InterviewProfile, Seniority,
 };

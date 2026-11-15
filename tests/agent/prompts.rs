@@ -151,7 +151,7 @@ fn disabled_execution_prompts_request_traces_across_recovery_and_editor_events()
         assert!(warning.contains("code execution is disabled"));
         assert!(!warning.contains("Run button"));
 
-        let mut covered = state.clone();
+        let mut covered = state;
         for phase in ["test", "optimizations"] {
             record_framework_evidence(
                 &mut covered,
