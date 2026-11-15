@@ -6,9 +6,10 @@
 // read the page and its script as text, the same tripwire bargain the other
 // browser tests make.
 //
-// What actually proves the template works is task 7a's credentialed Egress run
-// against a real room. These keep the layout, the readiness rule and the
-// participant rules from drifting between such runs.
+// What actually proves the template works is the credentialed Egress run
+// against a real room (scripts/recording-integration.sh, phase media). These
+// keep the layout, the readiness rule and the participant rules from drifting
+// between such runs.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";

@@ -94,8 +94,8 @@ the alternative is loosening the page's script policy for a build-time
 convenience. Bundling resolves the specifiers at vendor time and leaves the CSP
 alone.
 
-The same reasoning applies to `web/recording/index.html` when recording task 8a
-builds it: import the same vendored bundle, do not add an import map.
+The same reasoning applies to `web/recording/index.html`, which renders the
+avatar too: it reaches the same vendored bundle and has no import map.
 
 ## Fallback contract
 

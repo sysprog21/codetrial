@@ -657,9 +657,10 @@ fn contract_document() -> String {
     .expect("the contract document should be readable")
 }
 
-/// The three strings that must have exactly one owner. A test asserting the
-/// document repeats the constants is the only thing standing between "fixed
-/// here and nowhere else" and a second spelling arriving in a later task.
+/// The strings that must have exactly one owner, the ones the document lists
+/// under "Fixed paths". A test asserting the document repeats the constants is
+/// the only thing standing between "fixed here and nowhere else" and a second
+/// spelling arriving in a later change.
 #[test]
 fn contract_document_pins_the_fixed_strings() {
     let contract = contract_document();

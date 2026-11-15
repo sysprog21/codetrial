@@ -194,7 +194,7 @@ material with this document.
 ### Naming, without the identifiers
 
 The identifiers stay in the private operations record, but their shape does not,
-because a later task has to recognize a wrong one:
+because later code has to recognize a wrong one:
 
 | Thing | Shape |
 |---|---|
@@ -207,7 +207,7 @@ because a later task has to recognize a wrong one:
 
 These values have exactly one owner in code, `src/recording/contract.rs`, and
 `tests/recording_contract.rs` fails if this document stops naming them. Do not
-respell them in a later task.
+respell them anywhere else.
 
 - Webhook route: `POST /api/recording/webhook`
 - Template path: `/recording/index.html`
@@ -796,9 +796,10 @@ too. Today that grants nothing, because every join token for an interview room
 belongs either to the account that owns the interview or to this server's own
 agent, and the observer route only issues one to the interview's owner. A
 credential handed to anyone else, a reviewer's viewing token among them, would
-have to narrow this check first. Task 7a's credentialed run is where to learn
-whether the Egress token carries a distinguishing grant, `hidden` or `recorder`,
-that this check could require.
+have to narrow this check first. Whether the Egress token carries a
+distinguishing grant, `hidden` or `recorder`, that this check could require is
+not known: it can only be read from a token LiveKit issues to a real Egress, and
+no check here records one.
 
 `after` chooses the shape. Absent or negative is the snapshot; a sequence number
 is everything after it, superseded frames included, because a reader carrying on
@@ -1392,7 +1393,7 @@ failure that has no symptom until it has a bad one.
 | `drive_file_id` | TEXT | yes | set by the transfer |
 | `drive_permission_id` | TEXT | yes | set when the reader permission is granted |
 | `recipient_email` | TEXT | yes | the verified address the file was shared with, copied at start; cleared when tombstoned |
-| `state` | TEXT | no | the lifecycle state; the transition table is task 4's |
+| `state` | TEXT | no | the lifecycle state; the transition table above is its authority |
 | `error` | TEXT | yes | a short machine code, never a provider message |
 | `retries` | INTEGER | no | default 0 |
 | `duration_seconds` | INTEGER | yes | from the provider, once the recording ends |
