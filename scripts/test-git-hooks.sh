@@ -14,6 +14,11 @@
 
 set -u
 
+# The commit-msg hook judges by whether git will open an editor, which git says
+# with GIT_EDITOR=:. Pre-commit runs this suite inside a commit, often a -m one,
+# so the setting is cleared here and given only to the cases about it.
+unset GIT_EDITOR
+
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 failures=0
 cases=0
@@ -301,6 +306,273 @@ expect 1 "a subject with a backtick" message 'Add the `scratch` repository'
 expect 1 "a conventional-commit prefix" message "feat: add the scratch repository"
 expect 1 "a one-word subject" message "Scratch"
 
+# The same classifying as a type prefix, in the other shapes CONTRIBUTING.md
+# names; a bracket inside the subject is text.
+for subject in "web: Recheck setup" "src/web.rs: Bound the frame" \
+    "[Bug] Recheck setup" "[WIP] Recheck setup"; do
+    expect 1 "the prefixed subject $subject" message "$subject$body"
+done
+expect 0 "a bracket that is part of the text" message "Read argv[0] once$body"
+
+# Rule 3 and 4 in full: a subject opens with a capital and ends in a word.
+for subject in "1st pass at the scratch repository" '"Add" the scratch repository' \
+    "Add the scratch repository!" "Add the scratch repository?" \
+    "Add the scratch repository:"; do
+    expect 1 "the subject $subject" message "$subject$body"
+done
+
+# Rule 5 past the named list: the word without its punctuation, the regular
+# inflections by suffix, and words that are not a verb at all.
+for subject in "Ensured the scratch repository" "Supports a second runner" \
+    "Added, the scratch repository" "Initializing the scratch repository" \
+    "Now refuse a stale token" "Also add the scratch repository" \
+    "The scratch repository for tests" "Deploys the scratch repository"; do
+    expect 1 "the non-imperative $subject" message "$subject$body"
+done
+for subject in "Focus the lobby" "Address the race" "Embed the font" \
+    "Shed the stale cache" "Pass the token on" "Feed the queue" \
+    "Spring the trap" "Need a token only once" "Reembed the font"; do
+    expect 0 "the imperative $subject" message "$subject$body"
+done
+
+# Rule 7, in the shapes a changelog body takes. Each case has words enough, so
+# the shape is the only thing to refuse, and each names the complaint it must
+# draw: a status alone would pass if the case tripped some other rule.
+why="The lobby refused the invite because the stored token had expired."
+refused_for()
+{
+    expect 1 "the body $2" message "$3
+
+$2"
+    contains "the body $2 is refused as it should be" "$work/last.out" "$1"
+}
+subject="Add the scratch repository"
+refused_for "says too little" "Fixes it." "$subject"
+refused_for "repeats the subject" "Keep the invite when the token expires." \
+    "Keep the invite when the token expires"
+refused_for "repeats the subject" "Keep the invite when the token expires!" \
+    "Keep the invite when the token expires"
+refused_for "not the commit" "This commit adds a cache so the lobby keeps its invite." "$subject"
+refused_for "not the commit" "The lobby lost the invite. This PR keeps the token." "$subject"
+refused_for "changelog line" "Added a cache to the runner. Updated main.rs as well." "$subject"
+refused_for "changelog line" "The lobby lost it. Bumped the version so the cache stays warm." "$subject"
+refused_for "changelog line" "$why
+- Updated web/app.js to recheck setup" "$subject"
+refused_for "say it in prose" "Summary:
+
+$why" "$subject"
+refused_for "say it in prose" "**Changes**
+
+$why" "$subject"
+for text in \
+    "This change prevents a silent loss of data in the lobby." \
+    "Renamed files are no longer compared by count in the walk." \
+    "A body of \"Added a cache. Updated main.rs.\" passed as a reason." \
+    "A body of \`Added a cache. Updated main.rs.\` passed as a reason." \
+    "$why
+Validation: 206 Rust tests passed on the branch." \
+    "$why
+
+It now reads:
+
+    lobby: invite kept" \
+    "$why
+An agent wrote this one.
+
+    Added the cache to main.rs." \
+    "$why
+An agent wrote this one.
+
+\`\`\`
+This commit adds a cache.
+\`\`\`"; do
+    expect 0 "the body $text" message "$subject
+
+$text"
+done
+
+# Rule 6: a trailer runs past 72 only where git reads trailers.
+long_prose=$(printf 'word %.0s' 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15)
+expect 1 "a long trailer-shaped line in the middle of the body" message "$subject
+
+Follow-up: $long_prose
+
+$why"
+
+# The same verdict from every awk the hook may meet: mawk once read a plain
+# "Refs #364" on the last line as prose. An awk this machine lacks is named, so
+# a run on fewer of them says so.
+run_awk()
+{
+    case $candidate in
+        busybox) busybox awk "$@" ;;
+        gawk) gawk --posix "$@" ;;
+        *) "$candidate" "$@" ;;
+    esac
+}
+for candidate in mawk busybox gawk; do
+    if ! command -v "$candidate" > /dev/null 2>&1; then
+        echo "  NOTE  $candidate is not installed; its verdicts were not compared"
+        continue
+    fi
+    for last in "Refs #364" "Refs #1, #2 and #3" "Refs: owner/repo#5"; do
+        cases=$((cases + 1))
+        printf '%s\n\n%s\n\n%s\n' "$subject" "$why" "$last" \
+            | LC_ALL=C run_awk -f "$ROOT/scripts/git-commit-msg.awk" > /dev/null
+        [ $? -eq 17 ] || fail "$candidate reads \"$last\" on the last line as prose"
+    done
+done
+
+# With no editor (-m, -F) git stores "#" lines as written, so the hook judges
+# them; in an editor it strips them, and so does the hook. Invoked through
+# `expect`, as message() is above.
+# shellcheck disable=SC2317,SC2329
+noeditor()
+{
+    printf '%s\n' "$1" | GIT_EDITOR=: "$hooks/commit-msg" -
+}
+heading="$subject
+
+$why
+
+## How it works"
+expect 1 "a Markdown heading git will store, with no editor" noeditor "$heading"
+expect 0 "the same heading in an editor, where git strips it" message "$heading"
+
+# A caller's own GIT_EDITOR=: still gets an editor for --amend or a rebase that
+# stops, and git strips the help and status block it wrote, tab and all. That
+# block, naming the comment character in its text, is what says so.
+amend="$subject
+
+$why
+
+# Please enter the commit message for your changes. Lines starting
+# with '#' will be ignored, and an empty message aborts the commit.
+#
+# On branch topic
+#	modified:   web/app.js"
+expect 0 "an editor git opened despite an exported GIT_EDITOR=:" noeditor "$amend"
+
+# Git cuts only at its own scissors line, and only in an editor (-v): a line
+# merely shaped like one is stored with everything below it.
+loose_cut="$subject
+
+$why
+
+-------- >8 --------
+Co-authored-by: Claude <noreply@anthropic.com>"
+expect 2 "a credit below a line shaped like scissors, in an editor" message "$loose_cut"
+expect 2 "the same, with no editor" noeditor "$loose_cut"
+
+# -v leaves its diff right below git's line, and git cuts there in any mode; the
+# same line typed without one is a comment git strips, and what follows it is
+# stored.
+cut_line="# ------------------------ >8 ------------------------"
+verbose_cut="$subject
+
+$why
+
+$cut_line
+# Do not modify or remove the line above.
+# Everything below it will be ignored.
+diff --git a/web/app.js b/web/app.js
++Co-authored-by: Claude <noreply@anthropic.com>"
+expect 0 "the diff -v writes below git's scissors line, in an editor" message "$verbose_cut"
+git config commit.cleanup verbatim
+expect 0 "the same under verbatim, which -v still cuts" message "$verbose_cut"
+git config --unset commit.cleanup
+typed_cut="$subject
+
+$why
+
+$cut_line
+Co-authored-by: Claude <noreply@anthropic.com>"
+expect 2 "git's scissors line typed with no diff below, which git keeps after" \
+    message "$typed_cut"
+git config commit.cleanup scissors
+expect 0 "the same line under the scissors mode, which cuts there" message "$typed_cut"
+git config --unset commit.cleanup
+
+# Under core.commentChar=auto git writes its block with the character it chose,
+# here ";", and its scissors line with it too; a line of the block that git
+# strips would otherwise be judged too long, and the diff's credit with it.
+auto_cut="$subject
+
+$why
+
+;
+; Please enter the commit message for your changes. Lines starting with ';' will be ignored.
+;
+; ------------------------ >8 ------------------------
+; Do not modify or remove the line above.
+; Everything below it will be ignored.
+diff --git a/web/app.js b/web/app.js
++Co-authored-by: Claude <noreply@anthropic.com>"
+git config core.commentChar auto
+expect 0 "the chosen character's block is stripped and its scissors cut, under auto" \
+    message "$auto_cut"
+expect 0 "and a message with no block of git's keeps the default, under auto" \
+    message "$subject
+
+$why"
+git config --unset core.commentChar
+
+# A comment line naming the comment character again is a message's own text
+# under -m, not git's editor block, so git stores it and it is judged.
+expect 1 "a -m comment line that repeats the comment character" noeditor "$subject
+
+$why
+
+# see #12, α"
+
+# The cleanup modes a configuration can name, against what git stores.
+git config commit.cleanup strip
+expect 0 "strip drops a comment git would drop, with no editor" noeditor "$subject
+
+$why
+
+# α"
+git config commit.cleanup whitespace
+expect 1 "whitespace keeps a comment git would keep, in an editor" message "$subject
+
+$why
+
+# α"
+git config --unset commit.cleanup
+
+# A subject that would fit any commit names none.
+for subject in "Fix bug" "Update the code" "Minor changes" "Fix tests again" \
+    "Fix : bug"; do
+    expect 1 "the vague subject $subject" message "$subject$body"
+    contains "the refusal says why" "$work/last.out" "would fit any commit"
+done
+expect 0 "a short subject that names its change" message "Fix a typo$body"
+
+# A pull request title: the subject rules alone, with no body to require.
+# Invoked through `expect`, as message() is above.
+# shellcheck disable=SC2317,SC2329
+title()
+{
+    printf '%s\n' "$1" | sh "$ROOT/scripts/git-commit-msg.sh" --subject -
+}
+expect 0 "a title that follows the subject rules" title "Recheck setup after the picker closes"
+expect 1 "a title with a bracketed tag" title "[Bug] Lobby broken"
+expect 1 "a title past 50 characters" \
+    title "Explain site data when the peer lobby cannot store an invite"
+expect 1 "a title shaped like git's merge subject is still the author's" \
+    title "Merge branch 'topic' into main."
+expect 0 "only the first line of a title is judged" title "Recheck setup
+Co-authored-by: Claude <noreply@anthropic.com>"
+
+# The refused text is still in the file, and the refusal says how to reuse it;
+# from standard input there is no file to point at.
+printf 'Added the scratch repository\n\nOne paragraph saying why.\n' > "$work/refused.msg"
+expect 1 "a refused message file" "$hooks/commit-msg" "$work/refused.msg"
+contains "the refusal says the message is kept" "$work/last.out" "git commit -v -e -F"
+contains "the refusal names the rewrap" "$work/last.out" "scripts/commit-reflow.py"
+expect 1 "a refused message on standard input" message "Added the scratch repository$body"
+absent "no file to point at on standard input" "$work/last.out" "git commit -v -e -F"
+
 # A subject that only names a file says where, not what, and the refusal says
 # so.
 for subject in \
@@ -481,8 +753,9 @@ One paragraph saying why this exists.
 Co-Authored-By: Claude <noreply@anthropic.com>"
 
 # A message a commit already holds had no scissors cut and no comments stripped
-# by git, so a line that looks like either hides nothing. In the editor the same
-# text is cut, because git cuts it before the commit exists.
+# by git, so a line that looks like either hides nothing. In the editor git cuts
+# only at its own scissors line, which the cases above cover; a line shaped like
+# one is stored.
 # shellcheck disable=SC2317,SC2329
 stored()
 {
@@ -496,7 +769,7 @@ One paragraph saying why this exists.
 Co-authored-by: Claude <noreply@anthropic.com>"
 expect 2 "a credit under a scissors-looking line, in a stored message" \
     stored "$under_scissors"
-expect 0 "the same text in the editor, where git cuts it" \
+expect 2 "the same text in the editor, which git stores as written" \
     message "$under_scissors"
 under_comment="Add the scratch repository
 

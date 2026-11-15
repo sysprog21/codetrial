@@ -2506,7 +2506,9 @@ HYGIENE = SKILLS / "codetrial-triage" / "hygiene.sh"
 # diagnosis and no CI item, which is also what a failed lookup must do.
 FAKE_GH_HYGIENE = support.stub("skill-scripts/gh-hygiene.sh")
 
-GOOD_MESSAGE = "Add a thing\n\nThe lobby needed it, and this says why in one line.\n"
+GOOD_MESSAGE = (
+    "Add a lobby notice\n\nThe lobby needed it, and this says why in one line.\n"
+)
 
 
 def commit(message, parents=1, at="2026-10-20T00:00:00Z"):

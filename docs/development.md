@@ -464,13 +464,46 @@ its own name; one git still quotes, or one with a blank, is refused by name
 rather than skipped. A file added with `--intent-to-add` carries no content
 into the commit and is not judged. A missing formatter refuses the commit; a
 missing linter is skipped and named in the closing line. The commit-msg hook
-holds the subject to 50 characters and the body to 72, imperative and ASCII,
-with a link or file name longer than a line, or a trailer, allowed past the
-limit. It refuses a subject that only names a file, an AI attribution and a
-`Refs #N` on the last line, and says why (see CONTRIBUTING.md). The rules run
+checks the seven rules of https://cbea.ms/git-commit/ deterministically, in
+the order `--rules` prints them, with no model and no network. The subject is
+at most 50 characters, opens with a capital letter and ends on a word (no
+`.!?,;:`). Its first word, stripped of quotes and punctuation, is not a named
+non-imperative form, not a regular inflection by suffix (a gerund whose stem
+has a vowel, so Bring stays a verb; a past tense other than Seed, Need, Embed
+and its compounds, Shed and Shred; a third person other than Always and words
+in -us, -is, -as and -ss) and not an opener such as The, Now or Also. The body is wrapped at 72, with a
+link or file name longer than a line, or a trailer in the last paragraph where
+git reads trailers, allowed past the limit; it holds at least six words of
+prose outside trailers and the closing line, more than the subject said again,
+no heading on a line of its own unless it leads into an indented sample or a
+fence, and no sentence opening with "This commit/PR/patch/diff" or with a
+changelog past tense followed by an article, a backtick or a file name. Each
+of those was measured against this log before it became a rule and refuses
+none of the commits that pass the rest. It also refuses a subject that only
+names a file, one whose words after the verb would fit any commit ("Fix bug",
+"Minor changes"), a type, area or bracketed prefix (`fix:`, `web:`,
+`src/web.rs:`, `[Bug]`), an AI attribution and a `Refs #N` on the last line,
+and says why (see CONTRIBUTING.md). The text judged is the text git stores:
+git sets `GIT_EDITOR=:` for its hooks when no editor will open (`-m`, `-F`),
+and then its default cleanup keeps `#` lines, so the hook keeps them too;
+in an editor it strips them. A caller may export `GIT_EDITOR=:` itself and
+still get an editor (`--amend`, a rebase that stops), so the help block git
+writes for an editor overrides it: in every translation it holds a line that is
+the comment character alone, which a `-m` message (`## Summary`,
+`## Issue #12`) does not. Git cuts at a scissors line only in an editor and
+only at its own exact line, under `-v` in any cleanup mode or under the
+`scissors` mode; a line merely shaped like one is stored, and so judged. `-v`
+on the command line is invisible to a hook, but the diff it writes below the
+line is not, so the hook cuts where that diff follows or under `scissors`.
+A `--cleanup` given on the command line is invisible too. The suite runs
+the reference rule under mawk, busybox and gawk, since mawk 1.3.4 once read a
+plain `Refs #364` as prose; over this log all three return the same verdict on
+every commit. A refusal of a message file says how to reopen it with
+`git commit -v -e -F`. The rules run
 in `scripts/git-commit-msg.awk`, one process per message, which is also what
 `scripts/check-commit-log.sh` and the PR sweep's hygiene check ask, with
-`--stored` for a message a commit already holds. The pre-push hook replays the
+`--stored` for a message a commit already holds and `--subject` for a line
+judged by the subject rules alone. The pre-push hook replays the
 same message rules over commits a rebase or an amend rewrote after
 the fact, and CI runs them over a pull request's own commits. On a topic branch
 small changes get one advisory line when the head has no `/codetrial-review`

@@ -162,7 +162,9 @@ read it from there rather than from a copy that can drift:
 ./scripts/git-commit-msg.sh --rules
 ```
 
-The `prepare-commit-msg` hook puts the same list in your editor.
+The `prepare-commit-msg` hook puts the same list in your editor. When a hook
+refuses a message, it says how to reopen it with `git commit -v -e -F`, so
+nothing has to be retyped.
 
 `python3 scripts/commit-reflow.py <file>` rewraps a body that arrived ragged:
 one long line, a paragraph broken at column 40, or the shape of a sentence you
@@ -188,9 +190,15 @@ fixes, with `git rebase -i --autosquash` for an older one. The body carries the
 premise and the trade, usually in a single paragraph. This tree keeps its
 detailed reasoning in the comment next to the code, so a body retelling the
 mechanics duplicates that comment and then goes stale on its own.
-The hook rejects the shape that does it outright: a body line opening with
-`How:`, `Step:`, `Steps:`, `Changes:` or an `Implementation:` heading. Whether
-what is left says anything is the part only a reviewer can judge.
+The hook rejects the shapes that do it outright, which are also the shapes an
+agent's changelog body takes: a body line opening with `How:`, `Step:`,
+`Steps:`, `Changes:` or an `Implementation:` heading, a heading on a line of
+its own (`Summary:`, `## Summary`, `**Changes**`), a sentence that narrates the
+commit (`This commit adds`), a sentence that opens like a changelog line
+(`Added a cache`, `Updated main.rs`), a body under six words, and one that only
+repeats the subject. A lead-in to an indented sample (`It now reads:`) is not a
+heading. Whether what is left says anything is the part only a reviewer can
+judge: a fluent paragraph that retells the diff passes every one of these.
 
 Body lines wrap at 72 characters. The one exception is a token that cannot be
 wrapped without breaking it: a link or a file name longer than a whole line may
