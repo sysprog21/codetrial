@@ -5,6 +5,7 @@ import json
 import subprocess
 import sys
 import unittest
+from fractions import Fraction
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -21,6 +22,89 @@ class CalibrationTests(unittest.TestCase):
         return json.loads(
             (ROOT / "tests" / "fixtures" / "calibration" / name).read_text()
         )
+
+    def three_reviewer_fixture(self, disputed_count=44):
+        raw = self.fixture("passing-synthetic.json")
+        numeric = 0
+        for sample in raw["samples"]:
+            disputed = set()
+            for phase, value in sample["modelScores"].items():
+                if value is not None:
+                    if numeric < disputed_count:
+                        disputed.add(phase)
+                        sample["modelScores"][phase] = 50
+                    numeric += 1
+            sample["humanRatings"] = [
+                {
+                    "reviewerId": reviewer,
+                    "scores": {
+                        phase: rating if phase in disputed else value
+                        for phase, value in sample["modelScores"].items()
+                    },
+                }
+                for reviewer, rating in (
+                    ("reviewer-a", 0),
+                    ("reviewer-b", 60),
+                    ("reviewer-c", 100),
+                )
+            ]
+        return raw
+
+    def unequal_qwk_pair_fixture(self):
+        raw = self.fixture("passing-synthetic.json")
+        judgments = ((0, 60, 100), (100, 60, 0), (40, 80), (80, 40))
+        for index, sample in enumerate(raw["samples"]):
+            values = judgments[index] if index < len(judgments) else (None, None)
+            sample["modelScores"]["Repeat"] = (
+                round(sum(values) / len(values)) if values[0] is not None else None
+            )
+            for rating, value in zip(sample["humanRatings"], values):
+                rating["scores"]["Repeat"] = value
+            if len(values) == 3:
+                third = copy.deepcopy(sample["humanRatings"][0])
+                third["reviewerId"] = "reviewer-c"
+                third["scores"]["Repeat"] = values[2]
+                sample["humanRatings"].append(third)
+        return raw
+
+    def weighted_qwk_threshold_fixture(self):
+        template = self.fixture("passing-synthetic.json")
+        raw = copy.deepcopy(template)
+        raw["samples"] = []
+        # AB has kappa 21/25, CD has kappa 1/2, with equal joint counts.
+        judgments = ((0, 0), (0, 40), (0, 40), (75, 75)) + (
+            (0, 0),
+            (0, 0),
+            (0, 40),
+            (40, 40),
+        )
+        for index in range(32):
+            sample = copy.deepcopy(
+                template["samples"][index % len(template["samples"])]
+            )
+            sample["id"] = f"weighted-threshold-{index}"
+            sample["loop"] = "coding_behavioral"
+            left, right = judgments[index % len(judgments)]
+            reviewers = (
+                ("reviewer-a", "reviewer-b")
+                if index % 8 < 4
+                else ("reviewer-c", "reviewer-d")
+            )
+            sample["modelScores"] = dict.fromkeys(CAL.PHASES, (left + right) // 2)
+            sample["humanRatings"] = [
+                {"reviewerId": reviewer, "scores": dict.fromkeys(CAL.PHASES, value)}
+                for reviewer, value in zip(reviewers, (left, right))
+            ]
+            raw["samples"].append(sample)
+        raw["samples"][0]["modelScores"]["Repeat"] = 60
+        raw["samples"][1]["modelScores"]["Repeat"] = 100
+        unassessable = copy.deepcopy(template["samples"][0])
+        unassessable["id"] = "weighted-threshold-unassessable"
+        unassessable["modelScores"] = dict.fromkeys(CAL.PHASES)
+        for rating in unassessable["humanRatings"]:
+            rating["scores"] = dict.fromkeys(CAL.PHASES)
+        raw["samples"].append(unassessable)
+        return raw
 
     def unpaired_repeat_fixture(self):
         raw = self.fixture("passing-synthetic.json")
@@ -350,6 +434,213 @@ class CalibrationTests(unittest.TestCase):
                         result["metrics"]["interRaterQwk"],
                         baseline["metrics"]["interRaterQwk"],
                     )
+
+    def test_complete_ratings_selected_by_session_still_enter_qwk(self):
+        raw = self.fixture("passing-synthetic.json")
+        for sample in raw["samples"][:6]:
+            sample["modelScores"]["Repeat"] = 60
+            sample["humanRatings"][0]["scores"]["Repeat"] = 40
+            sample["humanRatings"][1]["scores"]["Repeat"] = 80
+        baseline = CAL.analyze(raw)
+        # Repeat AB is 154/199. AC and BC are zero on the six disputed
+        # sessions, or 694/739 and 682/727 on all thirty. Other phases are 1.
+        balanced = (
+            9 + (Fraction(154, 199) + Fraction(694, 739) + Fraction(682, 727)) / 3
+        ) / 10
+        for sessions, expected in (
+            (0, Fraction(389, 398)),
+            (6, Fraction(1901, 1990)),
+            (30, balanced),
+        ):
+            with self.subTest(third_reviewer_sessions=sessions):
+                packet = copy.deepcopy(raw)
+                for sample in packet["samples"][:sessions]:
+                    sample["humanRatings"].append(
+                        {
+                            "reviewerId": "reviewer-c",
+                            "scores": copy.deepcopy(sample["modelScores"]),
+                        }
+                    )
+                result = CAL.analyze(packet)
+                self.assertEqual(result["status"], "PASS", result["failures"])
+                self.assertAlmostEqual(
+                    result["metrics"]["interRaterQwk"], float(expected), places=12
+                )
+                self.assertEqual(result["counts"], baseline["counts"])
+                self.assertEqual(
+                    {
+                        k: v
+                        for k, v in result["metrics"].items()
+                        if k != "interRaterQwk"
+                    },
+                    {
+                        k: v
+                        for k, v in baseline["metrics"].items()
+                        if k != "interRaterQwk"
+                    },
+                )
+                for index, sample in enumerate(packet["samples"]):
+                    if index % 2:
+                        sample["humanRatings"].reverse()
+                self.assertEqual(CAL.analyze(packet), result)
+
+    def test_qwk_pseudonym_renaming_does_not_change_gate(self):
+        raw = self.three_reviewer_fixture()
+        baseline = CAL.analyze(raw)
+        self.assertEqual(baseline["status"], "PASS", baseline["failures"])
+        self.assertAlmostEqual(baseline["metrics"]["interRaterQwk"], 0.6899392322473135)
+        reviewers = ("reviewer-a", "reviewer-b", "reviewer-c")
+        for names in itertools.permutations(reviewers):
+            with self.subTest(names=names):
+                renamed = copy.deepcopy(raw)
+                mapping = dict(zip(reviewers, names))
+                for sample in renamed["samples"]:
+                    for rating in sample["humanRatings"]:
+                        rating["reviewerId"] = mapping[rating["reviewerId"]]
+                self.assertEqual(CAL.analyze(renamed), baseline)
+
+    def test_qwk_averages_fixed_pairs_by_joint_observation_count(self):
+        raw = self.unequal_qwk_pair_fixture()
+        result = CAL.analyze(raw)
+        # Repeat: AB has four observations and kappa -1/3, AC has two
+        # and kappa -1, BC has two and kappa 0. The weighted phase value
+        # is -5/12; the nine other phase values are 1.
+        self.assertAlmostEqual(
+            result["metrics"]["interRaterQwk"], float(Fraction(103, 120))
+        )
+        reordered = copy.deepcopy(raw)
+        reordered["samples"].reverse()
+        for index, sample in enumerate(reordered["samples"]):
+            if index % 2:
+                sample["humanRatings"].reverse()
+        self.assertEqual(
+            CAL.analyze(reordered)["metrics"]["interRaterQwk"],
+            result["metrics"]["interRaterQwk"],
+        )
+
+    def test_finite_qwk_below_threshold_is_the_only_failed_gate(self):
+        raw = self.three_reviewer_fixture(disputed_count=64)
+        result = CAL.analyze(raw)
+        self.assertEqual(result["status"], "NOT_CALIBRATED")
+        self.assertAlmostEqual(result["metrics"]["interRaterQwk"], 0.5799877629301273)
+        self.assertEqual(
+            result["failures"],
+            [f"inter-rater QWK {result['metrics']['interRaterQwk']} < 0.67"],
+        )
+        reviewers = ("reviewer-a", "reviewer-b", "reviewer-c")
+        for names in itertools.permutations(reviewers):
+            with self.subTest(names=names):
+                renamed = copy.deepcopy(raw)
+                mapping = dict(zip(reviewers, names))
+                for sample in renamed["samples"]:
+                    for rating in sample["humanRatings"]:
+                        rating["reviewerId"] = mapping[rating["reviewerId"]]
+                self.assertEqual(CAL.analyze(renamed), result)
+
+    def test_qwk_exactly_at_threshold_passes(self):
+        template = self.fixture("passing-synthetic.json")
+        raw = copy.deepcopy(template)
+        raw["samples"] = []
+        # One rater has balanced binary bands; 33 of 200 pairs disagree.
+        # Expected disagreement is 1/2, so kappa is 1 - (33/200)/(1/2).
+        for index in range(200):
+            sample = copy.deepcopy(
+                template["samples"][index % len(template["samples"])]
+            )
+            sample["id"] = f"threshold-{index}"
+            sample["loop"] = "coding_behavioral"
+            left = 0 if index < 100 else 100
+            right = 100 - left if index < 16 or 100 <= index < 117 else left
+            sample["modelScores"] = dict.fromkeys(CAL.PHASES, (left + right) // 2)
+            sample["humanRatings"] = [
+                {"reviewerId": reviewer, "scores": dict.fromkeys(CAL.PHASES, value)}
+                for reviewer, value in (("reviewer-a", left), ("reviewer-b", right))
+            ]
+            raw["samples"].append(sample)
+        raw["samples"][0]["modelScores"]["Repeat"] = 60
+        raw["samples"][20]["modelScores"]["Repeat"] = 80
+        unassessable = copy.deepcopy(template["samples"][0])
+        unassessable["id"] = "threshold-unassessable"
+        unassessable["modelScores"] = dict.fromkeys(CAL.PHASES)
+        for rating in unassessable["humanRatings"]:
+            rating["scores"] = dict.fromkeys(CAL.PHASES)
+        raw["samples"].append(unassessable)
+        result = CAL.analyze(raw)
+        self.assertEqual(result["metrics"]["interRaterQwk"], 0.67)
+        self.assertEqual(result["status"], "PASS", result["failures"])
+
+    def test_qwk_two_fixed_reviewers_keep_the_pair_definition(self):
+        raw = self.unequal_qwk_pair_fixture()
+        for sample in raw["samples"]:
+            sample["humanRatings"] = sample["humanRatings"][:2]
+        # One fixed pair: Repeat is -1/3 and the nine other phases are 1.
+        self.assertAlmostEqual(
+            CAL.analyze(raw)["metrics"]["interRaterQwk"], float(Fraction(13, 15))
+        )
+
+    def test_weighted_qwk_at_threshold_does_not_round_below_it(self):
+        result = CAL.analyze(self.weighted_qwk_threshold_fixture())
+        self.assertEqual(result["status"], "PASS", result["failures"])
+        self.assertEqual(result["metrics"]["interRaterQwk"], 0.67)
+
+    def test_phase_qwk_average_keeps_exact_values_before_reporting(self):
+        raw = self.weighted_qwk_threshold_fixture()
+        repeat = ((0, 0), (0, 40), (0, 40), (75, 75))
+        example = ((0, 0), (0, 0), (0, 40), (40, 40))
+        for index, sample in enumerate(raw["samples"][:-1]):
+            sample["modelScores"] = dict.fromkeys(CAL.PHASES)
+            for rating in sample["humanRatings"]:
+                rating["scores"] = dict.fromkeys(CAL.PHASES)
+            for phase, (left, right) in zip(
+                ("Repeat", "Example"), (repeat[index % 4], example[index % 4])
+            ):
+                sample["modelScores"][phase] = (left + right) // 2
+                sample["humanRatings"][0]["scores"][phase] = left
+                sample["humanRatings"][1]["scores"][phase] = right
+        raw["samples"][0]["modelScores"]["Repeat"] = 60
+        raw["samples"][1]["modelScores"]["Repeat"] = 100
+        result = CAL.analyze(raw)
+        # Repeat is 21/25, Example is 1/2. Missing phases are a separate gate;
+        # their absence must not add a false QWK failure at the exact cutoff.
+        self.assertEqual(result["metrics"]["interRaterQwk"], 0.67)
+        self.assertEqual(result["status"], "NOT_CALIBRATED")
+        self.assertEqual(
+            result["failures"],
+            [
+                f"phase coverage missing {sorted(set(CAL.PHASES) - {'Repeat', 'Example'})}"
+            ],
+        )
+
+    def test_qwk_sparse_and_constant_pairs_keep_existing_conventions(self):
+        for left, right, expected in (
+            ([], [], None),
+            ([0], [], None),
+            ([60], [60], 1),
+            ([0], [39], 1),
+            ([40], [59], 1),
+            ([39], [40], 0),
+            ([0], [100], 0),
+            ([60] * 30, [60] * 30, 1),
+            ([0, 39], [1, 38], 1),
+            ([0] * 30, [100] * 30, 0),
+        ):
+            with self.subTest(left=left, right=right):
+                self.assertEqual(CAL.qwk(left, right), expected)
+        raw = self.fixture("passing-synthetic.json")
+        for sample in raw["samples"][1:]:
+            sample["modelScores"]["Repeat"] = None
+            for rating in sample["humanRatings"]:
+                rating["scores"]["Repeat"] = None
+        self.assertEqual(CAL.analyze(raw)["status"], "PASS")
+
+    def test_qwk_is_symmetric_and_uses_rubric_bands(self):
+        left, right = [0, 100, 40, 80], [60, 60, 80, 40]
+        expected = Fraction(-1, 3)
+        for order in itertools.permutations(range(len(left))):
+            a, b = [left[i] for i in order], [right[i] for i in order]
+            with self.subTest(order=order):
+                self.assertEqual(CAL.qwk(a, b), expected)
+                self.assertEqual(CAL.qwk(b, a), expected)
 
     def test_assessed_phase_without_complete_qwk_pair_fails_coverage(self):
         raw = self.unpaired_repeat_fixture()

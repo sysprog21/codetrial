@@ -67,13 +67,34 @@ only for disputed sessions can still add pairs and increase those sessions'
 weight. The review process must control how reviewers are assigned to sessions.
 Missing QWK coverage is a calibration failure (exit 1), not invalid input.
 
+For each phase, calculate QWK separately for each fixed, unordered pair of
+eligible reviewer IDs across their jointly scored sessions. Average these pair
+values within the phase, weighted by each pair's number of numeric joint
+observations, then average the phase values equally. A pair with more joint
+observations has proportionally more weight within its phase; a phase with more
+observations does not gain weight over another phase. Do not concatenate
+different reviewer pairs into two anonymous score columns: their marginal
+distributions would depend on the ordering of reviewer IDs. Renaming reviewer
+pseudonyms or reordering ratings and sessions must not change QWK.
+
+Use the same private reviewer pseudonym throughout a packet; do not generate a
+new reviewer ID for each session. The analyzer can check uniqueness within a
+session but cannot establish whether IDs across sessions belong to the same
+person. The existing QWK coverage minimum remains one eligible numeric pair
+per assessed phase, without a new minimum per reviewer pair. A pair with all
+ratings in one rubric band retains QWK 1; a singleton pair whose two ratings
+occupy different bands has QWK 0. Sparse pairs and constant ratings do not
+establish reliable agreement estimates;
+synthetic tests and a passing analyzer gate are not evidence of real calibration.
+
 The gate passes only when every condition holds:
 
 - at least 30 sessions and all required strata;
 - at least one applicable session/phase where the model and all recorded human
   judgments are null;
 - at least one eligible human/human QWK pair for every numerically assessed phase;
-- mean per-phase quadratic-weighted inter-rater agreement at least 0.67;
+- mean per-phase QWK, with observation-weighted reviewer pairs within each
+  phase, at least 0.67;
 - model versus mean-human mean absolute error no more than 10 points;
 - model and rounded mean-human rubric-band agreement at least 0.80;
 - no difference greater than 5 points between eligible subgroup MAEs.
