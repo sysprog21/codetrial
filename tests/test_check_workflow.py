@@ -109,6 +109,42 @@ class MutantsLockfileTests(unittest.TestCase):
         self.assertEqual(selection(listings[1]), selection(run))
 
 
+class MutantsLocalRunDocsTests(unittest.TestCase):
+    """docs/development.md tells a contributor to run what CI's shard step runs."""
+
+    def setUp(self):
+        self.text = (support.ROOT / "docs/development.md").read_text()
+        self.block = support.section(
+            self.text, "```sh\nSCRATCH=", "```\n", "the local mutation commands"
+        )
+
+    def test_both_documented_commands_hold_the_lockfile_like_ci(self):
+        documented = mutants_invocations(self.block)
+        self.assertEqual(2, len(documented))
+        for words in documented:
+            self.assertIn("--cargo-arg=--locked", words, words)
+
+    def test_the_run_selects_what_the_shard_step_selects(self):
+        # Only the diff's location and the shard differ between a local run and
+        # a shard of CI's plan.
+        def selection(words):
+            kept, skip = [], False
+            for word in words:
+                if skip:
+                    skip = False
+                elif word in ("--in-diff", "--shard"):
+                    skip = True
+                elif word != "--list":
+                    kept.append(word)
+            return sorted(kept)
+
+        run = next(w for w in mutants_invocations(self.block) if "--list" not in w)
+        shard = next(
+            w for w in mutants_invocations(support.job("mutants")) if "--list" not in w
+        )
+        self.assertEqual(selection(shard), selection(run))
+
+
 class AggregateStatusTests(unittest.TestCase):
     def test_check_accepts_mutants_skipped_after_a_plan(self):
         body = support.job("check")
