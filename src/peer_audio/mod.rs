@@ -41,6 +41,19 @@ pub(crate) fn mark_failed(accounts: &Accounts, id: &str, now: i64) -> rusqlite::
     })
 }
 
+/// Fails every capture still recording. Called once when the server starts: no
+/// observer survives a restart, so a row left recording has no writer, and
+/// without this it and its part file wait out the capture's whole deadline.
+/// Returns how many rows it failed.
+pub(crate) fn fail_interrupted(accounts: &Accounts, now: i64) -> rusqlite::Result<usize> {
+    accounts.with(|c| {
+        c.execute(
+            "UPDATE peer_audio_records SET status='failed',expires_at=?1 WHERE status='recording'",
+            params![now],
+        )
+    })
+}
+
 pub(crate) struct AudioRecord {
     pub status: String,
     pub bytes: u64,

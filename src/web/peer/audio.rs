@@ -136,6 +136,19 @@ fn unavailable(status_only: bool) -> Response {
     }
 }
 
+/// Fails every capture a restart interrupted. Runs once while the server is
+/// being built, before any listener, so no capture of this process can be
+/// mistaken for one a restart interrupted. It needs only the database, so it
+/// runs whether or not an audio directory is configured: a row left recording
+/// by a run that had one would otherwise keep saying so for good.
+pub(crate) fn fail_interrupted_audio(accounts: &Accounts) {
+    match peer_audio::fail_interrupted(accounts, crate::current_epoch_seconds_i64()) {
+        Ok(0) => {}
+        Ok(count) => eprintln!("peer audio: failed {count} capture(s) a restart interrupted"),
+        Err(error) => eprintln!("peer audio startup reconcile failed: {error}"),
+    }
+}
+
 pub(crate) fn spawn_audio_retention(
     accounts: Arc<Accounts>,
     dir: std::path::PathBuf,

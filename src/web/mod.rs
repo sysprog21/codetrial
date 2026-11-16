@@ -522,6 +522,7 @@ pub(crate) fn web_router(
             config.pool.clone(),
         ));
         background.absorb(peer::observer::spawn_retention(Arc::clone(accounts)));
+        peer::fail_interrupted_audio(accounts);
     }
     if let (Some(accounts), Some(dir)) = (
         &accounts,

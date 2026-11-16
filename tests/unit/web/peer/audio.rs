@@ -1,8 +1,8 @@
 use super::*;
 use crate::accounts::peer::Settings;
 
-#[tokio::test]
-async fn the_retention_task_removes_an_expired_record_without_being_asked() {
+/// A session that saves audio, with its accounts database.
+fn audio_session() -> (Accounts, String) {
     let accounts = Accounts::open(crate::accounts::GitHubLoginConfig {
         oauth: None,
         session_secret: "audio-retention".into(),
@@ -31,6 +31,12 @@ async fn the_retention_task_removes_an_expired_record_without_being_asked() {
     .unwrap()
     .unwrap();
     let id = state["sessionId"].as_str().unwrap().to_owned();
+    (accounts, id)
+}
+
+#[tokio::test]
+async fn the_retention_task_removes_an_expired_record_without_being_asked() {
+    let (accounts, id) = audio_session();
     peer_audio::mark_started(&accounts, &id, 100, 60).unwrap();
     peer_audio::mark_failed(&accounts, &id, 101).unwrap();
     let dir = std::env::temp_dir().join(format!("codetrial-retention-{}", std::process::id()));
@@ -47,4 +53,15 @@ async fn the_retention_task_removes_an_expired_record_without_being_asked() {
     })
     .await
     .expect("the retention task sweeps an expired record on its own");
+}
+
+/// The startup reconcile is what makes a capture a restart interrupted say so,
+/// and it must do that whether or not an audio directory is configured.
+#[test]
+fn startup_fails_a_capture_still_recording_from_before_the_restart() {
+    let (accounts, id) = audio_session();
+    peer_audio::mark_started(&accounts, &id, 100, 7200).unwrap();
+    fail_interrupted_audio(&accounts);
+    let record = peer_audio::record(&accounts, &id).unwrap().unwrap();
+    assert_eq!(record.status, "failed");
 }
