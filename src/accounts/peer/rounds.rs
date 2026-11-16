@@ -64,13 +64,23 @@ pub(super) fn action(
             return Ok(Ok(()));
         }
         "ready" => {
+            // A missing field means ready; a present one must be a boolean, so
+            // a malformed `"false"` is refused instead of marking the member
+            // ready.
+            let ready = match body.get("ready") {
+                None => true,
+                Some(value) => match value.as_bool() {
+                    Some(ready) => ready,
+                    None => return Ok(Err("invalid_request")),
+                },
+            };
             if s.members.len() != 2
                 || s.members.iter().any(|m| m.entered_at.is_none())
                 || s.current_round.is_some()
             {
                 Err("waiting_for_partner")
             } else {
-                s.members[slot].ready = body["ready"].as_bool().unwrap_or(true);
+                s.members[slot].ready = ready;
                 s.start_confirmed = [false; 2];
                 Ok(())
             }
