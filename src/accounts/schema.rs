@@ -249,10 +249,10 @@ const CREATE_INTERVIEWS: &str = "
 /// that a retried start must not become a second Egress job.
 ///
 /// `room_name` and `recipient_email` are nullable and guarded by a `CHECK`
-/// instead. Task 11 clears them when it tombstones, so `NOT NULL` would make
-/// the deletion write impossible and force a sentinel; the `CHECK` says the
-/// real rule, which is that a recording that has not been deleted must have
-/// both.
+/// instead. A deletion clears them when it tombstones the row, so `NOT NULL`
+/// would make the deletion write impossible and force a sentinel; the `CHECK`
+/// says the real rule, which is that a recording that has not been deleted
+/// must have both.
 ///
 /// `egress_id` is null until the provider answers, so its uniqueness is a
 /// partial index. A plain UNIQUE would be satisfied by any number of nulls in

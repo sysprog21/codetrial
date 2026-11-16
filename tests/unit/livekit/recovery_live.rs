@@ -34,7 +34,7 @@ const FINAL_ACTION_ID: &str = "end";
 /// Why no permit was granted. Every variant is a refusal to act.
 #[derive(Debug, PartialEq)]
 enum PermitError {
-    /// The B0.1 variables or the manifest are unusable.
+    /// The run-budget variables or the manifest are unusable.
     Setup(String),
     /// The launcher answered and the answer was not an exact grant.
     Denied(String),
@@ -99,8 +99,8 @@ async fn exchange(socket: &Path, request: &Value) -> Result<Value, PermitError> 
     Ok(reply)
 }
 
-/// The B0.1 variables a native worker is started with. The launcher sets them
-/// for its child; nothing else should.
+/// The run-budget variables a native worker is started with. The launcher sets
+/// them for its child; nothing else should.
 const BUDGET_VARIABLES: [&str; 4] = [
     "BROWSER_CHECK_RUN_MANIFEST",
     "BROWSER_CHECK_RUN_ID",

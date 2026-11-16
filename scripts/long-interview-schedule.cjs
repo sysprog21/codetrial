@@ -29,7 +29,7 @@ const fs = require("fs");
 const path = require("path");
 const { spawnSync } = require("child_process");
 
-const SCHEDULE_VERSION = 3;
+const SCHEDULE_VERSION = 5;
 const CYCLE_S = 300;
 /// The end and report reservation; no stimulus is scheduled inside it.
 const STOP_BEFORE_END_S = 120;
@@ -62,52 +62,53 @@ const AUTHORED = Object.freeze({
     coding: ["algorithm", "coding", "test", "optimizations"],
     whiteboard: ["repeat", "example", "algorithm", "optimizations"],
   },
+  // A reply is judged from its transcription, so these are everyday words with
+  // one spelling: the first pilot's transcript wrote "turn", "martin",
+  // "clover", "links" and "amber" for tern, marten, plover, lynx and ember.
+  // None is a word the problem itself makes likely ("simple", "table" and
+  // their kind were left out: "a simple table lookup" would say a pair by
+  // chance). The lists need not be the same length.
   nonce_words: {
     first: [
-      "amber",
-      "birch",
-      "cobalt",
-      "dune",
-      "ember",
-      "fjord",
-      "garnet",
-      "harbor",
-      "indigo",
-      "juniper",
-      "kestrel",
-      "lantern",
-      "meadow",
-      "nickel",
-      "onyx",
-      "pewter",
+      "famous",
+      "frozen",
+      "gentle",
+      "golden",
+      "green",
+      "happy",
+      "hidden",
+      "little",
+      "lucky",
+      "modern",
+      "orange",
+      "quiet",
+      "rapid",
+      "silver",
+      "yellow",
     ],
     second: [
-      "falcon",
-      "otter",
-      "badger",
-      "heron",
-      "lynx",
-      "marten",
-      "osprey",
-      "plover",
-      "quail",
-      "raven",
-      "stoat",
-      "tern",
-      "vole",
-      "weasel",
-      "yak",
-      "zebra",
+      "basket",
+      "bottle",
+      "candle",
+      "doctor",
+      "engine",
+      "farmer",
+      "garden",
+      "hammer",
+      "jacket",
+      "kitchen",
+      "pencil",
+      "pocket",
+      "village",
     ],
   },
   seeds: [
     {
       id: "seed_codename",
       cycle: 1,
-      sentence:
-        "For the record, my codename for this attempt is saffron heron.",
+      sentence: "For the record, my codename for this attempt is purple river.",
       recall_question: "What codename did I give for this attempt?",
-      match: { mode: "folded", tokens: ["saffron heron", "saffron-heron"] },
+      match: { mode: "folded", tokens: ["purple river"] },
     },
     {
       id: "seed_edge_case",
@@ -116,7 +117,14 @@ const AUTHORED = Object.freeze({
       recall_question: "Which edge case did I promise to test?",
       match: {
         mode: "folded",
-        tokens: ["pair of zeros", "two zeros", "zeros pair"],
+        tokens: [
+          "pair of zeros",
+          "pair of zeroes",
+          "two zeros",
+          "two zeroes",
+          "zeros pair",
+          "zeroes pair",
+        ],
       },
     },
   ],
@@ -124,7 +132,7 @@ const AUTHORED = Object.freeze({
     sentence:
       "My constraints are at most ten thousand numbers, exactly one valid pair, and never reuse the same element.",
     review: {
-      id: "constraints-v2",
+      id: "constraints-v3",
       reviewer: "schedule author",
       status: "reviewed",
     },
@@ -138,6 +146,10 @@ const AUTHORED = Object.freeze({
         "10,000",
         "10 000",
         "10^4",
+        "10 to the fourth",
+        "ten to the fourth",
+        "10 to the power of four",
+        "ten to the power of four",
       ],
       ["exactly one", "one valid pair", "single valid pair", "one pair"],
       [
@@ -224,7 +236,7 @@ const hashOf = (value) => sha256(canonicalize(value));
 
 /// Pinned. Edit the catalogue above, bump SCHEDULE_VERSION, and replace this.
 const AUTHORED_SHA256 =
-  "55bfd3f2315601dd598a42bb9ceb0c9e3f0d0acabcecb82d2aceeb7a20f3468b";
+  "493828eeb05bf44f14b7636a6a0d2c54b1d730e08d8ee229b3dcf4e06308c0c9";
 
 function checkAuthoredPin(expected = AUTHORED_SHA256) {
   const actual = hashOf(AUTHORED);
@@ -243,13 +255,37 @@ function pad2(n) {
   return String(n).padStart(2, "0");
 }
 
-function nonceFor(mode, checkpointId) {
-  const digest = crypto
-    .createHash("sha256")
-    .update(`${SCHEDULE_VERSION}|${mode}|${checkpointId}`)
-    .digest();
-  const { first, second } = AUTHORED.nonce_words;
-  return `${first[digest[0] % first.length]} ${second[digest[1] % second.length]}`;
+/// `list` in an order fixed by `seed`.
+function shuffled(list, seed) {
+  const bytes = crypto.createHash("sha256").update(seed).digest();
+  const out = [...list];
+  for (let i = out.length - 1; i > 0; i -= 1) {
+    const j = bytes[i % bytes.length] % (i + 1);
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
+}
+
+/// Hands the checkpoints of one schedule their code words, in the order asked.
+/// Two that shared a pair would let a reply to one pass as a reply to the
+/// other, so each list is walked in an order the version and mode fix, and the
+/// second steps on one more each time the first comes round: no pair repeats,
+/// and neighbouring checkpoints share no word. How long that walk stays fresh
+/// depends on the two lengths, so a pair that comes up again is refused here
+/// rather than counted on.
+function nonceAllocator(mode) {
+  const seed = `${SCHEDULE_VERSION}|${mode}`;
+  const first = shuffled(AUTHORED.nonce_words.first, `${seed}|first`);
+  const second = shuffled(AUTHORED.nonce_words.second, `${seed}|second`);
+  const used = new Set();
+  return () => {
+    const taken = used.size;
+    const round = Math.floor(taken / first.length);
+    const nonce = `${first[taken % first.length]} ${second[(taken + round) % second.length]}`;
+    if (used.has(nonce)) throw new Error("no unused code words left");
+    used.add(nonce);
+    return nonce;
+  };
 }
 
 /// Shapes the page controller draws per board revision, one stroke each.
@@ -359,6 +395,7 @@ function generateSchedule(mode, plan) {
   if (!TOOL_BY_MODE[mode]) {
     throw new Error(`mode must be coding or whiteboard, not ${mode}`);
   }
+  const nextNonce = nonceAllocator(mode);
   const { durationMin, observationTargetS } = plan;
   const { window, cycles, finalAt } = buildTimeline(
     durationMin,
@@ -431,7 +468,11 @@ function generateSchedule(mode, plan) {
       `phase_${c}`,
       base,
       `We are in the ${phase} stage.`,
-      { mode: "folded", tokens: [phase] },
+      // A plural stage name is heard, and said back, without its "s".
+      {
+        mode: "folded",
+        tokens: phase.endsWith("s") ? [phase, phase.slice(0, -1)] : [phase],
+      },
     );
     // A coding revision is a marker a reply states; a board's is the count
     // read_board reports, judged in what the tool read and never in a reply, so
@@ -532,8 +573,8 @@ function generateSchedule(mode, plan) {
     addClip(id("say_plan"), "seed", planParts, base);
     addClip(id("say_loop"), "seed", loopParts, base + 45);
 
-    const inspectNonce = nonceFor(mode, id("cp_inspect"));
-    const stateNonce = nonceFor(mode, id("cp_state"));
+    const inspectNonce = nextNonce();
+    const stateNonce = nextNonce();
     const withNonce = (text, nonce) =>
       `${text} Please also say the code words ${nonce}.`;
     addClip(
@@ -655,7 +696,7 @@ function generateSchedule(mode, plan) {
     AUTHORED.pending.match,
   );
   facts.push(pendingFact);
-  const finalNonce = nonceFor(mode, "cp_final");
+  const finalNonce = nextNonce();
   const finalText = `${AUTHORED.final_question[mode]} Please also say the code words ${finalNonce}.`;
   const finalSpeech = addClip(
     "final_checkpoint",
@@ -856,21 +897,49 @@ const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const fold = (s) =>
   String(s).normalize("NFKC").toLowerCase().replace(/\s+/g, " ");
 
-function containsToken(text, token, caseFolded) {
+/// Whether `text` holds `token` as whole words. `spoken` reads `text` as a
+/// transcription of speech, which writes the break between a token's words as
+/// a space, a hyphen or a comma as it likes: "rev11 2bc83e" for a marker in
+/// the first pilot. A full stop is not such a break, or two words in
+/// neighbouring sentences would pass as one phrase and "10.4" as ten to the
+/// fourth. Source text a tool read is not speech and is matched as written.
+const SPOKEN_BREAK = "[\\s,-]+";
+function containsToken(text, token, caseFolded, spoken = false) {
   const haystack = caseFolded ? fold(text) : String(text);
   const needle = caseFolded ? fold(token) : token;
+  const words = needle
+    .split(spoken ? new RegExp(SPOKEN_BREAK) : / /)
+    .map(escapeRegExp);
   const pattern = new RegExp(
-    `(?<![A-Za-z0-9])${escapeRegExp(needle).replace(/ /g, "\\s+")}(?![A-Za-z0-9])`,
+    `(?<![A-Za-z0-9])${words.join(spoken ? SPOKEN_BREAK : "\\s+")}(?![A-Za-z0-9])`,
   );
   return pattern.test(haystack);
 }
 
+/// The same matches for a transcription of speech.
+const containsSpoken = (text, token) => containsToken(text, token, true, true);
+const matchSpoken = (match, text) => matchFact(match, text, true);
+
+/// The facts only the candidate's own speech carries: the seeds and the
+/// question left open. The constraints are spoken too, but the problem's brief
+/// gives them, and the stage is in the session evidence the interviewer is
+/// shown, so an answer about either shows nothing kept from the conversation.
+const CONVERSATION_FACT_IDS = Object.freeze([
+  ...AUTHORED.seeds.map((seed) => seed.id),
+  AUTHORED.pending.id,
+]);
+
+/// How long a clip lasts in all: its speech, its internal pause and the quiet
+/// after it.
+const clipBudgetS = (clip) =>
+  clip.speech_s + clip.internal_pause_s + clip.trailing_quiet_s;
+
 /// Whether `text` satisfies a fact's match, and why not. A rubric needs every
 /// concept; a token list needs any one alternative.
-function matchFact(match, text) {
+function matchFact(match, text, spoken = false) {
   if (match.mode === "exact" || match.mode === "folded") {
     const hit = match.tokens.some((t) =>
-      containsToken(text, t, match.mode === "folded"),
+      containsToken(text, t, match.mode === "folded", spoken),
     );
     return hit ? [] : [`none of the allowed ${match.mode} tokens appear`];
   }
@@ -879,7 +948,9 @@ function matchFact(match, text) {
       return ["the rubric is not reviewed"];
     const misses = match.concepts
       .map((concept, i) =>
-        concept.some((p) => containsToken(text, p, true)) ? null : i + 1,
+        concept.some((p) => containsToken(text, p, true, spoken))
+          ? null
+          : i + 1,
       )
       .filter((i) => i !== null);
     return misses.length
@@ -950,12 +1021,12 @@ function judgeCheckpoint(bundle, evidence, options = {}) {
     );
   }
   if (!Number.isFinite(reply.started_at_s)) fail("the reply has no start time");
-  if (!containsToken(reply.text, key.nonce, true)) fail("the nonce is missing");
+  if (!containsSpoken(reply.text, key.nonce)) fail("the nonce is missing");
 
   for (const id of key.element_fact_ids) {
     const fact = factOfId(id);
     if (!fact || !factIntegrity(fact)) continue;
-    const misses = matchFact(fact.match, reply.text);
+    const misses = matchSpoken(fact.match, reply.text);
     if (misses.length) fail(`reply lacks ${id}: ${misses[0]}`);
   }
   // A reply that names an earlier revision is not about the current one. The
@@ -966,7 +1037,10 @@ function judgeCheckpoint(bundle, evidence, options = {}) {
   ]);
   for (const fact of answerKey.facts) {
     if (!/^revision_\d+$/.test(fact.id) || current.has(fact.id)) continue;
-    if (factIntegrity(fact) && matchFact(fact.match, reply.text).length === 0) {
+    if (
+      factIntegrity(fact) &&
+      matchSpoken(fact.match, reply.text).length === 0
+    ) {
       fail(`reply states the stale revision ${fact.id}`);
     }
   }
@@ -1001,7 +1075,9 @@ function judgeCheckpoint(bundle, evidence, options = {}) {
         const bad = need.result_fact_ids.flatMap((id) => {
           const fact = factOfId(id);
           if (!fact || !factIntegrity(fact)) return [`${id} is unavailable`];
-          return matchFact(fact.match, call.result_text ?? "").length
+          // The conversation is itself a transcription; source is not.
+          const spoken = need.name === TOOL_CONVERSATION;
+          return matchFact(fact.match, call.result_text ?? "", spoken).length
             ? [id]
             : [];
         });
@@ -1135,10 +1211,7 @@ function wavBytes(samples) {
 function syntheticClipBytes(clip) {
   const hue = crypto.createHash("sha256").update(clip.clip_id).digest()[0];
   const freq = 300 + (hue % 16) * 40;
-  const total = Math.round(
-    (clip.speech_s + clip.internal_pause_s + clip.trailing_quiet_s) *
-      SAMPLE_RATE,
-  );
+  const total = Math.round(clipBudgetS(clip) * SAMPLE_RATE);
   const speech = clip.speech_s * SAMPLE_RATE;
   const samples = new Array(total).fill(0);
   const burst = (from, n) => {
@@ -1230,8 +1303,7 @@ function validateClipBytes(entry, bytes) {
       `${entry.clip_id}: ${durationMs}ms is not the declared ${entry.duration_ms}ms`,
     );
   }
-  const ceilingMs =
-    (entry.speech_s + entry.internal_pause_s + entry.trailing_quiet_s) * 1000;
+  const ceilingMs = clipBudgetS(entry) * 1000;
   if (durationMs > ceilingMs + 500 || durationMs <= 0) {
     errors.push(
       `${entry.clip_id}: ${durationMs}ms is outside the clip's ${ceilingMs}ms budget`,
@@ -1553,6 +1625,8 @@ module.exports = {
   budgetFields,
   buildClipManifest,
   buildTimeline,
+  clipBudgetS,
+  CONVERSATION_FACT_IDS,
   checkAuthoredPin,
   ffmpegDecodes,
   ffmpegPreflight,

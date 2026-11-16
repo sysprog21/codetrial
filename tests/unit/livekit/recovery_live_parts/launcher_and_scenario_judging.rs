@@ -675,8 +675,8 @@ fn live_write_manifest() {
 
 /// NOT RUN against LiveKit or Gemini. Hosts the real room loop in this
 /// process, with a real SDK candidate in a real room and the configured
-/// Gemini, under the B0.1 launcher that sets the permit variables. It spends
-/// LiveKit and Gemini quota.
+/// Gemini, under the run-budget launcher that sets the permit variables. It
+/// spends LiveKit and Gemini quota.
 ///
 /// One scenario per invocation, chosen by `CODETRIAL_LIVE_SCENARIO` (a, b, c,
 /// d or e) and checked against the manifest the launcher holds. Before any
@@ -694,7 +694,7 @@ fn live_write_manifest() {
 /// page sends, built by `candidate_ack`), and the recovery trigger, which ends
 /// the first Live reader so the loop takes its own Close path.
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "NOT RUN: spends LiveKit and Gemini quota; needs the B0.1 launcher variables, CODETRIAL_LIVE_CONFIG, CODETRIAL_LIVE_SCENARIO and budget approval"]
+#[ignore = "NOT RUN: spends LiveKit and Gemini quota; needs the run-budget launcher variables, CODETRIAL_LIVE_CONFIG, CODETRIAL_LIVE_SCENARIO and budget approval"]
 async fn live_sdk_control_presence_and_report_delivery() {
     let mut permits = PermitClient::from_env()
         .await

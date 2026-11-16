@@ -156,8 +156,8 @@ fn recording_schema_columns() {
     }
 
     // Required until the recording is deleted, and clearable after. `NOT NULL`
-    // would make task 11's tombstone write impossible and force a sentinel, so
-    // the rule is a CHECK instead: see `recording_schema_constraints`.
+    // would make a deletion's tombstone write impossible and force a sentinel,
+    // so the rule is a CHECK instead: see `recording_schema_constraints`.
     for name in ["room_name", "recipient_email"] {
         assert!(
             !by_name(name).2,

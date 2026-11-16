@@ -106,6 +106,35 @@ function replacementKey(r) {
     : `id:${r.pid}:${r.session}:${r.episode}:${r.replacement}`;
 }
 
+/// What tells one replacement episode from another, on an episode and on the
+/// replacement that ended it alike.
+const episodeKey = (row) => `${row.pid}:${row.session}:${row.episode}`;
+
+// The two runtime lines that are not part of a replacement: the advisory and
+// its expiry. Matched literally, as src/livekit.rs prints them. What a
+// replacement was is read from the fields of its `replacement:` line, since
+// presence cannot tell a resumption from a rebuild: the interviewer stays in
+// the room through both.
+const HANDOVER_SIGNALS = {
+  goAway: "Gemini requested a transport restart in",
+  expired: "goaway expired:",
+};
+
+/// Keeps what `log` says about the room's handovers in `seen` and
+/// `replacements`. Called on every read rather than once at the end, and with
+/// reads that may each hold only what is new: the agent's output is a rolling
+/// window, and whatever is logged over the rest of a run can evict the lines
+/// this looks for.
+function latchHandovers(log, room, seen, replacements) {
+  for (const [name, needle] of Object.entries(HANDOVER_SIGNALS)) {
+    seen[name] ||= roomLogged(log, needle, room);
+  }
+  const known = new Set(replacements.map(replacementKey));
+  for (const r of parseReplacements(log, room)) {
+    if (!known.has(replacementKey(r))) replacements.push(r);
+  }
+}
+
 const EPISODE_RESULTS = ["installed", "failed", "no_setup", "cancelled"];
 const MILESTONES = [
   "notice_ms",
@@ -131,7 +160,6 @@ const ORDERED_MILESTONES = MILESTONES.filter((name) => name !== "setup_ms");
 function parseEpisodes(log, room) {
   const episodes = new Map();
   const unmatched = [];
-  const keyOf = (f) => `${f.pid}:${f.session}:${f.episode}`;
   // Starts are read before ends, whatever order the lines arrived in: a poller
   // that joins a rolling window and a second log can see an end first.
   const lines = completeLines(log);
@@ -154,7 +182,7 @@ function parseEpisodes(log, room) {
       episode: whole(f.episode),
     };
     if (Object.values(ids).some((id) => id === null)) continue;
-    const key = keyOf(ids);
+    const key = episodeKey(ids);
     if (kind === "start") {
       if (episodes.has(key)) continue;
       episodes.set(key, {
@@ -733,6 +761,74 @@ function judgeSoak({
   };
 }
 
+// A run that logged more replacements than this is not one whose rotations a
+// reader can count, and its report lists none.
+const REPLACEMENTS_KEPT = 64;
+
+/// What a run's replacements were, for a reader who has only the run's report:
+/// the strict verdict over them, and each one with what ties it to a socket,
+/// to the interview clock and to its episode. `episodes` carry the `class` the
+/// caller gave each against its own clock
+/// (scripts/long-interview-timing.cjs). A replacement has its episode's class
+/// only when the episode's end line names the same replacement and socket: one
+/// logged without ids, or that disagrees with its episode, has none. Episodes
+/// or unmatched end lines the caller did not keep leave their counts null,
+/// which is not the same as none.
+function rotationFacts({ replacements, goAway, expired, episodes, unmatched }) {
+  // Only a signal that was seen counts as seen.
+  const soak = judgeSoak({
+    replacements,
+    goAway: goAway === true,
+    expired: expired === true,
+    final: true,
+    mode: "strict",
+  });
+  const counted = Array.isArray(episodes);
+  const rows = counted ? episodes : [];
+  const episodeOf = new Map(rows.map((e) => [episodeKey(e), e]));
+  // The episode that ended in this replacement, or none: one logged without
+  // ids, or whose episode names another replacement or socket, has no episode.
+  const matched = (r) => {
+    const episode = r.legacy ? undefined : episodeOf.get(episodeKey(r));
+    return episode?.replacement === r.replacement &&
+      episode?.newSocket === r.newSocket
+      ? episode
+      : undefined;
+  };
+  const classed = (name) => rows.filter((e) => e.class === name).length;
+  return {
+    verdict: soak.verdict,
+    reasons: soak.reasons,
+    // An episode with no end line did not resolve on record, whatever
+    // triggered it, unless the end of the run is what preempted it.
+    episodes_unresolved:
+      counted && Array.isArray(unmatched)
+        ? rows.filter((e) => e.result === "incomplete" && !e.preemptedByEnd)
+            .length + unmatched.length
+        : null,
+    late_failed_total: counted ? classed("late_failed") : null,
+    // GoAway handovers that failed before the stimuli stopped.
+    failed_handovers_total: counted ? classed("failed") : null,
+    replacements:
+      replacements.length > REPLACEMENTS_KEPT
+        ? null
+        : replacements.map((r) => ({
+            rotation: isRotation(r),
+            episode_class: matched(r)?.class ?? null,
+            // When its episode began: what was said after this was said while
+            // the handover was under way, and may have reached the new socket
+            // directly.
+            started_interview_ms: matched(r)?.startInterviewMs ?? null,
+            session: r.session,
+            episode: r.episode,
+            replacement: r.replacement,
+            old_socket: r.oldSocket,
+            new_socket: r.newSocket,
+            interview_ms: r.interviewMs,
+          })),
+  };
+}
+
 /// The `interview clock:` lines of one room, kept as they go by for the same
 /// reason as the episode evidence.
 function clockEvidenceLines(log, room) {
@@ -1005,11 +1101,11 @@ function soakResult({ soak, replies, audio, exposure }) {
 }
 
 /// Whether `log` has a complete line of this room that holds `needle`. The
-/// advisory and its expiry are logged with the room, and a log that carries
-/// other rooms' must not read as this one's.
+/// advisory and its expiry are logged with the room last, and a log that
+/// carries other rooms' must not read as this one's: `room-1` is not `room-10`.
 function roomLogged(log, needle, room) {
   return completeLines(log).some(
-    (line) => line.includes(needle) && line.includes(`room=${room}`),
+    (line) => line.includes(needle) && line.endsWith(`room=${room}`),
   );
 }
 
@@ -1026,6 +1122,7 @@ module.exports = {
   judgeEpisodes,
   judgeSoak,
   judgeSwapAudio,
+  latchHandovers,
   MAX_SAMPLES_PER_SWAP,
   summarizeSwapAudio,
   judgeEpisodeReplies,
@@ -1037,6 +1134,7 @@ module.exports = {
   replacementKey,
   replacementsWithoutEpisode,
   roomLogged,
+  rotationFacts,
   soakExposure,
   soakResult,
   tallyReplacements,

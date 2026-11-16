@@ -194,7 +194,7 @@ material with this document.
 ### Naming, without the identifiers
 
 The identifiers stay in the private operations record, but their shape does not,
-because a later task has to recognize a wrong one:
+because later code has to recognize a wrong one:
 
 | Thing | Shape |
 |---|---|
@@ -207,7 +207,7 @@ because a later task has to recognize a wrong one:
 
 These values have exactly one owner in code, `src/recording/contract.rs`, and
 `tests/recording_contract.rs` fails if this document stops naming them. Do not
-respell them in a later task.
+respell them anywhere else.
 
 - Webhook route: `POST /api/recording/webhook`
 - Template path: `/recording/index.html`
@@ -373,7 +373,7 @@ Events this pipeline reacts to: `egress_started`, `egress_updated`,
 
 Eight states. `RecordingState::may_become` in `src/recording/provider.rs` is
 the only implementation of this table, and any transition absent from both is a
-bug.
+bug, with the one exception given after it.
 
 | From | May become | Because |
 |---|---|---|
@@ -389,6 +389,12 @@ bug.
 Every state may become itself. A duplicate webhook and a stop asked for twice
 both request a transition that has already happened, and the answer to that is a
 no-op rather than a refusal.
+
+The exception: the delivery queue moves a `failed` recording whose reason is
+`drive_failed` back to `transferring` when it claims a retry. That move is
+guarded in the queue's own statement and kept out of this table on purpose,
+because a table entry would make every failure reopenable ("The delivery queue"
+gives the guard).
 
 `starting` is written before the provider request and the egress id is
 written after it. That order is the whole point: the other one loses a recording
@@ -467,7 +473,9 @@ The sweeper runs at startup and every minute after. At startup because a process
 that died mid-interview left rows no request will ever touch again; repeatedly
 because a schedule checked less often than its own first step is a different
 schedule. A row in an active state whose `updated_at` has not moved for its own
-bound is stopped and failed with reason `abandoned`.
+bound is stopped and failed with reason `abandoned`, except a row the delivery
+queue still holds work for, which is the queue's to finish unless the kill
+switch is set.
 
 The bound is fifteen minutes for every state except `recording`, which gets
 `CODETRIAL_RECORDING_MAX_MINUTES` plus five. `recording` is the one state with
@@ -504,7 +512,7 @@ them to be recorded twice.
 | `egress_aborted` | `failed` | the provider abandoned the job | `start_again` |
 | `egress_limit_reached` | `failed` | the project ran out of its allowance | `wait_for_operator` |
 | `tombstone_failed` | `cleanup_failed` | the media was deleted and the row could not be updated | `clear_the_row_by_hand` |
-| `drive_failed` | `transferring` | the media exists and could not be delivered | `retry_delivery` |
+| `drive_failed` | `transferring`, `failed` | the media exists and could not be delivered | `retry_delivery` |
 | `consent_withdrawn` | `failed` | consent was taken back | `none` |
 | `kill_switch` | `failed` | an operator turned recording off | `wait_for_operator` |
 | `cleanup_failed` | `cleanup_failed` | the media outlived the attempt to delete it | `delete_by_hand` |
@@ -516,28 +524,29 @@ candidate. The size is parsed from a string, because `int64` crosses protojson
 that way and a numeric one is a shape this pipeline never receives.
 
 A delivery that loses its row cleans up after itself only when the winning state
-is final. The stale sweep moves a `transferring` row to `failed` while keeping
-`drive_failed` precisely so the queue can try again, and deleting the staged
+is final. A `transferring` row the sweep fails keeps a `drive_failed` it already
+carries so that its delivery can still be retried, and deleting the staged
 object out from under that would leave a recording whose recovery is "retry the
-delivery" with nothing left to deliver. Not knowing the winner is not permission
-to delete either.
+delivery" with nothing left to deliver. Not knowing the winner is not
+permission to delete either.
 
-A `transferring` row that goes stale is failed with its own reason kept:
-overwriting `drive_failed` with `abandoned` would change the recovery from
-"retry the delivery" to "record again", for a recording whose media may still
-exist.
+The sweep fails a `transferring` row only under the kill switch or when no
+queue row names it. It first queues every `transferring` row it finds without
+one, so the second case takes an insert that failed. Outside the kill
+switch a row that already says `drive_failed` keeps it, because overwriting it
+with `abandoned` would change the recovery from "retry the delivery" to "record
+again", for a recording whose media may still exist, and a row with no reason is
+failed as `abandoned`. Under the kill switch every row it fails takes
+`kill_switch`, whatever reason it held.
 
-`retry_delivery` is therefore a recovery nothing performs yet. The transfer
-queue is what claims `transferring` rows and `failed` rows carrying
-`drive_failed`, and until it exists the word describes what should happen rather
-than what does. `drive_failed` is also unreachable in the shipped path, because
-nothing calls `deliver_recording` outside its tests: the pipeline stops at
-`transferring` and the sweep fails it as `abandoned`.
-
-A delivery failure is not terminal, and that is the point. The bytes are still
-in the staging bucket, so the recording stays `transferring` with `drive_failed`
-recorded and `retries` counted. Moving it to `failed` advertised a recovery no
-transition could reach.
+`retry_delivery` is performed by the delivery queue. A delivery failure is not
+terminal at once, and that is the point: the bytes are still in the staging
+bucket, so while attempts remain the recording stays `transferring` with
+`drive_failed` recorded and `retries` counted, and the worker tries again by
+itself. After the third attempt it is `failed` with `drive_failed`, and it is
+tried again only when an operator queues it, or when a crash left its queue row
+behind. "The delivery queue" below gives the claim, the attempt budget and the
+reopen guard.
 
 The staged object path is written to the row before anything remote happens.
 It is derivable from the recording id, but the deletion path reads it from the
@@ -549,7 +558,7 @@ A retry reuses the `drive_file_id` the last attempt recorded rather than
 uploading again. It cannot make the same promise about a permission: a crash
 between Drive accepting the share and the write that records it leaves one
 nothing names. Deleting the file removes its permissions, so retention still
-reaches it, and the transfer queue's claim is what closes the window.
+reaches it, and the delivery queue's claim is what closes the window.
 
 Each Drive handle is written on its own and only while the row is still
 `transferring`. A withdrawal that wins the race leaves a file this delivery
@@ -558,8 +567,8 @@ Shared Drive.
 
 `revoke_and_delete` is one call covering three remote operations and records no
 progress between them, so a revoke that succeeded and a delete that failed
-cannot be resumed step by step. The transfer and retention tasks own that;
-until then a retry repeats all three, which is why each has to be idempotent.
+cannot be resumed step by step. A retry repeats all three, which is why each
+has to be idempotent.
 
 ### Status
 
@@ -619,14 +628,6 @@ moved nothing.
 `recording_cleanup_failed` is the one an operator has to act on: it names
 `action: delete_by_hand`, because nothing automatic is going to fix a file that
 would not delete.
-
-### Where the pipeline currently stops
-
-`transferring` has no worker yet. A recording whose `egress_ended` said
-`EGRESS_COMPLETE` reaches that state and stays there, holding the account's one
-active slot, until the sweeper fails it as `abandoned` fifteen minutes later.
-The transfer step is the next task; until it lands, recording produces a staged
-GCS object and no delivery. That is why the switch stays off.
 
 ## The replay
 
@@ -796,9 +797,10 @@ too. Today that grants nothing, because every join token for an interview room
 belongs either to the account that owns the interview or to this server's own
 agent, and the observer route only issues one to the interview's owner. A
 credential handed to anyone else, a reviewer's viewing token among them, would
-have to narrow this check first. Task 7a's credentialed run is where to learn
-whether the Egress token carries a distinguishing grant, `hidden` or `recorder`,
-that this check could require.
+have to narrow this check first. Whether the Egress token carries a
+distinguishing grant, `hidden` or `recorder`, that this check could require is
+not known: it can only be read from a token LiveKit issues to a real Egress, and
+no check here records one.
 
 `after` chooses the shape. Absent or negative is the snapshot; a sequence number
 is everything after it, superseded frames included, because a reader carrying on
@@ -992,12 +994,12 @@ and leave the loser's file in the Shared Drive with nothing naming it and
 nothing able to delete it. The claim and the attempt count move in the same
 statement as the selection, inside an `IMMEDIATE` transaction.
 
-A recording somebody is actively delivering is not stale, whatever its
-`updated_at` says: the sweeper skips rows with a live claim. An upload runs for
-up to half an hour and touches nothing while it does, so without that the
-sweeper fails it mid-transfer and the worker then deletes the file it had just
-uploaded. The kill switch still takes it, because a kill switch that waited for
-an upload is not one.
+A recording the delivery queue still owes work on is not stale, whatever its
+`updated_at` says: the sweeper skips every recording with a queue row, claimed
+or not. An upload runs for up to half an hour and touches nothing while it does,
+so without that the sweeper fails it mid-transfer and the worker then deletes
+the file it had just uploaded. The kill switch still takes it, because a kill
+switch that waited for an upload is not one.
 
 A claim older than an hour is reclaimable, because the worker holding it may
 have died with the process. An hour rather than a few minutes: a claim that
@@ -1392,7 +1394,7 @@ failure that has no symptom until it has a bad one.
 | `drive_file_id` | TEXT | yes | set by the transfer |
 | `drive_permission_id` | TEXT | yes | set when the reader permission is granted |
 | `recipient_email` | TEXT | yes | the verified address the file was shared with, copied at start; cleared when tombstoned |
-| `state` | TEXT | no | the lifecycle state; the transition table is task 4's |
+| `state` | TEXT | no | the lifecycle state; the transition table above is its authority |
 | `error` | TEXT | yes | a short machine code, never a provider message |
 | `retries` | INTEGER | no | default 0 |
 | `duration_seconds` | INTEGER | yes | from the provider, once the recording ends |

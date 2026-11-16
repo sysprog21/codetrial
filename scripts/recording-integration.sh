@@ -3,7 +3,9 @@ set -eu
 
 # The credentialed acceptance for recording. Nothing in the default test suite
 # runs this: it needs the isolated LiveKit project, staging bucket and Shared
-# Drive from task 0, and it creates and deletes real media.
+# Drive whose environment variables and naming docs/recording-contract.md gives
+# (the identifiers themselves are kept out of the repository), and it creates
+# and deletes real media.
 #
 # The judgement lives in `tests/recording_integration.rs`, not here. This script
 # gets a real recording made, measures the file with `ffprobe`, and writes what
@@ -13,9 +15,9 @@ set -eu
 #
 # Phases, comma separated:
 #
-#   media    make a recording and measure the file (task 7a)
-#   delivery let the delivery queue hand it over and time the completion (7b)
-#   cleanup  expire it and prove both artifacts are gone (7b)
+#   media    make a recording and measure the file
+#   delivery let the delivery queue hand it over and time the completion
+#   cleanup  expire it and prove both artifacts are gone
 #
 # What this script creates is a temporary directory, and its trap removes that
 # on success and on failure both. The media itself belongs to the pipeline,

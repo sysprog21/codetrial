@@ -12,8 +12,9 @@
 pub const WEBHOOK_ROUTE: &str = "/api/recording/webhook";
 
 /// Where the recording template reads the replay it is rendering. Fixed here
-/// beside the webhook route because the template is served by this repo and the
-/// path is part of what task 1 pinned.
+/// beside the webhook route because the template is served by this repo; the
+/// path is the one `docs/recording-contract.md` gives under "The template's
+/// replay read".
 pub const REPLAY_ROUTE: &str = "/api/recording/replay";
 
 /// The RoomComposite custom template, served out of `web/` like every other

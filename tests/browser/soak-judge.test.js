@@ -1300,3 +1300,215 @@ test("a swap whose reply left no record is not assessed, never read as no sample
     "verified",
   );
 });
+
+// What a long interview's report says of its replacements, for the reader
+// that decides qualification after the run. Each episode carries the class
+// its caller gave it; here every installed one is `completed`.
+const classed = (log, classes = {}, preempted = []) => {
+  const { episodes, unmatched } = judge.parseEpisodes(log, ROOM);
+  return {
+    episodes: episodes.map((e) => ({
+      ...e,
+      class:
+        classes[e.episode] ??
+        (e.result === "installed" ? "completed" : e.result),
+      preemptedByEnd: preempted.includes(e.episode),
+    })),
+    unmatched,
+  };
+};
+const rotationOf = (
+  log,
+  { goAway = true, expired = false, classes, preempted } = {},
+) =>
+  judge.rotationFacts({
+    replacements: parse(log),
+    goAway,
+    expired,
+    ...classed(log, classes, preempted),
+  });
+/// Episode `n` from its start to the line that says how its socket came up.
+const rotated = (n, handover = "resumed") =>
+  start(n) +
+  end(n, "installed") +
+  identified({ trigger: "goaway", handover }, n);
+
+test("rotation facts tie each replacement to its episode, socket and clock", () => {
+  const facts = rotationOf(rotated(1) + rotated(2, "cold_handoff"));
+  assert.equal(facts.verdict, "pass");
+  assert.equal(facts.episodes_unresolved, 0);
+  assert.equal(facts.late_failed_total, 0);
+  assert.equal(facts.failed_handovers_total, 0);
+  assert.deepEqual(facts.replacements[1], {
+    rotation: true,
+    episode_class: "completed",
+    session: 1,
+    episode: 2,
+    replacement: 2,
+    old_socket: 2,
+    new_socket: 3,
+    started_interview_ms: 2000,
+    interview_ms: 2000,
+  });
+});
+
+test("rotation facts without the episodes leave the counts unknown", () => {
+  const log = rotated(1);
+  const blind = judge.rotationFacts({
+    replacements: parse(log),
+    goAway: true,
+    expired: false,
+  });
+  assert.equal(blind.episodes_unresolved, null);
+  assert.equal(blind.late_failed_total, null);
+  assert.equal(blind.replacements[0].episode_class, null);
+  const { episodes } = classed(log);
+  const noEnds = judge.rotationFacts({
+    replacements: parse(log),
+    goAway: true,
+    expired: false,
+    episodes,
+  });
+  assert.equal(noEnds.episodes_unresolved, null);
+  assert.equal(noEnds.late_failed_total, 0);
+});
+
+test("rotation facts keep what a reader must not count as a rotation", () => {
+  // Episode 2 never ended, so nothing says its replacement line is its own; a
+  // legacy line has no ids, a degraded handover kept nothing, and an end line
+  // names an episode that never started.
+  const log =
+    rotated(1) +
+    start(2) +
+    identified({ trigger: "goaway", handover: "resumed" }, 2) +
+    line({ trigger: "goaway", handover: "resumed", at: "9:00.000" }) +
+    start(3) +
+    end(3, "installed") +
+    identified({ trigger: "goaway", handover: "degraded" }, 3) +
+    end(7, "installed");
+  const facts = rotationOf(log);
+  assert.deepEqual(
+    facts.replacements.map((r) => [r.rotation, r.episode_class]),
+    [
+      [true, "completed"],
+      [true, null],
+      [true, null],
+      [false, "completed"],
+    ],
+  );
+  assert.equal(facts.episodes_unresolved, 2);
+});
+
+test("a replacement that disagrees with its episode has no class", () => {
+  const swap = (fields) =>
+    `replacement: at=1:00.000 resumed=true trigger=goaway handover=resumed fallback=none pid=7 session=1 episode=1 ${fields} obligation=none interview_ms=1000 room=${ROOM}\n`;
+  const classOf = (fields) =>
+    rotationOf(start(1) + end(1, "installed") + swap(fields)).replacements[0]
+      .episode_class;
+  assert.equal(classOf("replacement=1 old_socket=1 new_socket=2"), "completed");
+  // The episode installed socket 2 as replacement 1; a line that says
+  // otherwise cannot borrow its class.
+  assert.equal(classOf("replacement=1 old_socket=1 new_socket=5"), null);
+  assert.equal(classOf("replacement=4 old_socket=1 new_socket=2"), null);
+});
+
+test("rotation facts follow the class a caller gave each episode", () => {
+  const log = rotated(1) + start(2) + start(3) + end(3, "failed");
+  const facts = rotationOf(log, {
+    classes: { 2: "late_terminal_preempted", 3: "late_failed" },
+    preempted: [2],
+  });
+  assert.equal(facts.replacements[0].episode_class, "completed");
+  // An episode the end of the run preempted is not one that failed to resolve.
+  assert.equal(facts.episodes_unresolved, 0);
+  assert.equal(facts.late_failed_total, 1);
+  // A handover that failed under load, before the boundary, is counted too.
+  const early = rotationOf(rotated(1) + start(2) + end(2, "failed"), {
+    classes: { 2: "failed" },
+  });
+  assert.equal(early.failed_handovers_total, 1);
+  assert.equal(early.late_failed_total, 0);
+  // One that never ended is, whatever started it and whatever its class,
+  // and the end of the run excuses any trigger alike.
+  for (const unended of ["incomplete", "not_a_goaway", "unknown_start"]) {
+    const log = rotated(1) + start(2);
+    const classes = { 2: unended };
+    assert.equal(rotationOf(log, { classes }).episodes_unresolved, 1, unended);
+    assert.equal(
+      rotationOf(log, { classes, preempted: [2] }).episodes_unresolved,
+      0,
+      unended,
+    );
+  }
+});
+
+test("rotation facts carry the strict cap and the no-GoAway verdict", () => {
+  const rebuild = (n) =>
+    identified(
+      { trigger: "watchdog", handover: "degraded", fallback: "no_handle" },
+      n,
+    );
+  const one = rotationOf(rotated(1) + rebuild(2));
+  assert.equal(one.verdict, "pass");
+  assert.equal(one.replacements[1].rotation, false);
+  const two = rotationOf(rotated(1) + rebuild(2) + rebuild(3));
+  assert.equal(two.verdict, "fail");
+  assert.match(two.reasons.join("\n"), /more than the 1/);
+  // A GoAway the server let expire before its handover is spent fails.
+  assert.equal(rotationOf(rotated(1), { expired: true }).verdict, "fail");
+  const quiet = rotationOf("", { goAway: false });
+  assert.equal(quiet.verdict, "inconclusive");
+  assert.deepEqual(quiet.replacements, []);
+  // A flag that is not a boolean is not a GoAway that was seen.
+  assert.equal(
+    rotationOf(rotated(1), { goAway: "yes" }).verdict,
+    "inconclusive",
+  );
+});
+
+test("a run with more replacements than a report holds lists none", () => {
+  const swaps = (count) =>
+    Array.from({ length: count }, (_, n) =>
+      identified({ trigger: "goaway", handover: "resumed" }, n + 1),
+    ).join("");
+  assert.equal(rotationOf(swaps(64)).replacements.length, 64);
+  assert.equal(rotationOf(swaps(65)).replacements, null);
+});
+
+// The long interview keeps what a log says of its handovers as the lines go
+// past, from reads that each hold only what is new.
+test("handovers are kept across reads that each hold only new lines", () => {
+  const room = "room-1";
+  const swap = (n) =>
+    `replacement: at=${n}:00.000 resumed=true trigger=goaway handover=resumed fallback=none pid=7 session=1 episode=${n} replacement=${n} old_socket=${n} new_socket=${n + 1} obligation=none interview_ms=${n * 60000} room=${room}\n`;
+  const seen = { goAway: false, expired: false };
+  const replacements = [];
+  const latch = (log) => judge.latchHandovers(log, room, seen, replacements);
+
+  latch("nothing about a handover\n");
+  // A room whose name only begins with this one's is another room.
+  latch(`Gemini requested a transport restart in 50s room=${room}0\n`);
+  assert.deepEqual(seen, { goAway: false, expired: false });
+  latch(`Gemini requested a transport restart in 50s room=${room}\n`);
+  assert.equal(seen.goAway, true);
+  latch(swap(1));
+  // The signal and the first swap are gone from this read, and stay kept.
+  latch(swap(2));
+  assert.equal(seen.goAway, true);
+  assert.deepEqual(
+    replacements.map((r) => r.newSocket),
+    [2, 3],
+  );
+  // The same line read again, from the agent's output and the server's log
+  // alike, is one replacement.
+  latch(swap(2) + swap(2));
+  assert.equal(replacements.length, 2);
+  // Another room's lines are not this room's.
+  latch(swap(3).replace(`room=${room}`, "room=other"));
+  latch("goaway expired: the server closed the socket room=other\n");
+  assert.equal(replacements.length, 2);
+  assert.equal(seen.expired, false);
+  latch(`goaway expired: the server closed the socket room=${room}\n`);
+  latch("a later read with nothing in it\n");
+  assert.deepEqual(seen, { goAway: true, expired: true });
+});

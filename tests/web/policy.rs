@@ -244,10 +244,12 @@ async fn production_policy_names_no_loopback_origins() {
 /// The template Egress loads, and the policy it loads under.
 ///
 /// The page is served by the same static fallback as the rest of `web/`, so
-/// what is worth pinning is that the path task 1 fixed is reachable and that
-/// the policy permits the socket the template has to open. A blocked signaling
-/// socket is a recording of a page that never joined a room, and nothing in the
-/// pipeline can tell that from an interview nobody spoke in.
+/// what is worth pinning is that the template path the recording contract lists
+/// under "Fixed paths" is reachable and that the policy permits the socket the
+/// template has to open.
+/// A blocked signaling socket is a recording of a page that never joined a
+/// room, and nothing in the pipeline can tell that from an interview nobody
+/// spoke in.
 #[tokio::test]
 async fn the_recording_template_is_reachable_under_a_policy_that_permits_its_room() {
     let mut config = WebServerConfig {

@@ -147,7 +147,8 @@ print(json.dumps({"rows": rows, "cadence": irb.RESOURCE_CADENCE_S,
   "control": irb.CONTROL_FILES_ALLOWANCE_BYTES,
   "evidence": irb.ARCHIVE_EVIDENCE_ALLOWANCE_BYTES,
   "exits": [irb.EXIT_CHILD_FAILED, irb.EXIT_INCOMPLETE_BUDGET,
-            irb.EXIT_INCOMPLETE_CLEANUP, irb.EXIT_INCOMPLETE_ARTIFACT]}))
+            irb.EXIT_INCOMPLETE_CLEANUP, irb.EXIT_INCOMPLETE_ARTIFACT,
+            irb.EXIT_CHILD_INCONCLUSIVE]}))
 `;
   const result = spawnSync("python3", ["-I", "-c", script, BUDGET], {
     encoding: "utf8",
@@ -170,6 +171,7 @@ print(json.dumps({"rows": rows, "cadence": irb.RESOURCE_CADENCE_S,
     EXIT.incompleteBudget,
     EXIT.incompleteCleanup,
     EXIT.incompleteArtifact,
+    EXIT.inconclusive,
   ]);
 });
 
@@ -298,16 +300,43 @@ test("a run with no anchor has no timestamps to judge", () => {
   assert.equal(result.exposureS, null);
 });
 
-const goaway = (startS, result, trigger = "goaway") => ({
+// An episode that began at `startS` and, when it installed, took one second.
+const goaway = (startS, result, trigger = "goaway", endS = startS + 1) => ({
   trigger,
   result,
   startInterviewMs: startS === null ? null : startS * 1000,
+  endInterviewMs: startS === null ? null : endS * 1000,
 });
 
 test("late terminal-preempted and idle rotations are classified and never count", () => {
   assert.equal(classifyRotation(goaway(1000, "installed"), t90), "completed");
-  assert.equal(classifyRotation(goaway(5279, "installed"), t90), "completed");
+  assert.equal(
+    classifyRotation(goaway(5279, "installed", "goaway", 5279.9), t90),
+    "completed",
+  );
   assert.equal(classifyRotation(goaway(5280, "installed"), t90), "late_idle");
+  // Begun under load, but its socket came up after the stimuli stopped, or at
+  // no time the log recorded.
+  assert.equal(
+    classifyRotation(goaway(5278, "installed", "goaway", 5281), t90),
+    "late_idle",
+  );
+  assert.equal(
+    classifyRotation(goaway(5278, "installed", "goaway", 5279.5), t90),
+    "completed",
+  );
+  // A socket that came up on the boundary itself is late.
+  assert.equal(
+    classifyRotation(goaway(5278, "installed", "goaway", 5280), t90),
+    "late_idle",
+  );
+  assert.equal(
+    classifyRotation(
+      { ...goaway(1000, "installed"), endInterviewMs: null },
+      t90,
+    ),
+    "late_idle",
+  );
   assert.equal(
     classifyRotation(goaway(5300, "cancelled"), t90),
     "late_terminal_preempted",
@@ -331,7 +360,41 @@ test("late terminal-preempted and idle rotations are classified and never count"
 
 test("a rotation that failed after the boundary is a failure, not a preemption", () => {
   assert.equal(classifyRotation(goaway(5300, "failed"), t90), "late_failed");
+  // A replacement that failed after the stimuli stopped failed, whatever
+  // triggered it; before the boundary a watchdog swap is not a rotation.
+  assert.equal(
+    classifyRotation(goaway(5300, "failed", "watchdog"), t90),
+    "late_failed",
+  );
+  assert.equal(
+    classifyRotation(goaway(5300, "no_setup", "watchdog"), t90),
+    "late_failed",
+  );
+  assert.equal(
+    classifyRotation(goaway(900, "failed", "watchdog"), t90),
+    "not_a_goaway",
+  );
   assert.equal(classifyRotation(goaway(5300, "no_setup"), t90), "late_failed");
+  // The failure's own time decides, not when the episode began: one begun
+  // under load that gave up after the stimuli stopped failed late too.
+  for (const trigger of ["goaway", "watchdog"]) {
+    assert.equal(
+      classifyRotation(goaway(5278, "failed", trigger, 5281), t90),
+      "late_failed",
+    );
+    assert.equal(
+      classifyRotation(goaway(5278, "no_setup", trigger, 5280), t90),
+      "late_failed",
+    );
+  }
+  assert.equal(
+    classifyRotation(goaway(5278, "failed", "goaway", 5279.5), t90),
+    "failed",
+  );
+  assert.equal(
+    classifyRotation(goaway(5278, "failed", "watchdog", 5279.5), t90),
+    "not_a_goaway",
+  );
   const result = judgeRotations(
     [
       goaway(600, "installed"),
@@ -342,6 +405,43 @@ test("a rotation that failed after the boundary is a failure, not a preemption",
   );
   assert.equal(result.verdict, "fail");
   assert.match(result.reasons.join(), /failed after the stimulus boundary/);
+});
+
+test("a GoAway handover that failed with no start on record is failed, not unknown", () => {
+  const unplaced = { ...goaway(2000, "failed"), startInterviewMs: null };
+  assert.equal(classifyRotation(unplaced, t90), "failed");
+  assert.equal(
+    classifyRotation({ ...unplaced, result: "no_setup" }, t90),
+    "failed",
+  );
+  assert.equal(
+    classifyRotation({ ...unplaced, result: "installed" }, t90),
+    "unknown_start",
+  );
+});
+
+test("a GoAway handover that failed under load fails the rotation verdict", () => {
+  const ok = [goaway(600, "installed"), goaway(1300, "installed")];
+  // Failed well before the stimuli stopped, with or without a start on record.
+  for (const failed of [
+    goaway(2000, "failed"),
+    goaway(2000, "no_setup"),
+    { ...goaway(2000, "failed"), startInterviewMs: null },
+  ]) {
+    const result = judgeRotations([...ok, failed], t90);
+    assert.equal(result.verdict, "fail", JSON.stringify(failed));
+    assert.equal(result.completed, 2);
+    assert.match(result.reasons.join(), /handover\(s\) failed/);
+  }
+  // A cancelled or unresolved one is not a failure, and a failed watchdog swap
+  // is the soak's to count against its cap, not a rotation.
+  for (const other of [
+    goaway(2000, "cancelled"),
+    goaway(2000, "incomplete"),
+    goaway(2000, "failed", "watchdog"),
+  ]) {
+    assert.equal(judgeRotations([...ok, other], t90).verdict, "pass");
+  }
 });
 
 test("two completed rotations are required and late ones do not make up the number", () => {

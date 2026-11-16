@@ -115,6 +115,9 @@ TOP_LEVEL_KEYS = frozenset(
 )
 
 EXIT_CHILD_FAILED = 1
+# The worker neither passed nor failed (a soak with no GoAway, a qualification
+# nobody could judge): kept apart so a caller is not told it failed.
+EXIT_CHILD_INCONCLUSIVE = 77
 EXIT_PREFLIGHT = 2
 EXIT_INCOMPLETE_BUDGET = 4
 EXIT_INCOMPLETE_CLEANUP = 5
@@ -1672,16 +1675,61 @@ def launch(args, command):
         status, code = "incomplete_artifact", EXIT_INCOMPLETE_ARTIFACT
     elif failure:
         status, code = "incomplete_budget", EXIT_INCOMPLETE_BUDGET
+    elif child_status == EXIT_CHILD_INCONCLUSIVE:
+        status, code = "child_inconclusive", EXIT_CHILD_INCONCLUSIVE
     elif child_status != 0:
         status, code = "child_failed", EXIT_CHILD_FAILED
     else:
         status, code = "complete", 0
     result["status"] = status
     write_json(os.path.join(artifacts, "budget-result.json"), result)
+    reconcile_capture(status, code)
     print(f"run budget: {status} ({manifest['run_id']})", file=sys.stderr)
     for signum, handler in previous_handlers.items():
         signal.signal(signum, handler)
     return code
+
+
+# What a capture's pass becomes under each exit the launcher can take after
+# the worker judged the run: a cut or lost archive leaves it unjudgeable, a
+# failed child, an overrun or an incomplete cleanup is a failure.
+RECONCILED_VERDICT = {
+    EXIT_CHILD_FAILED: "fail",
+    EXIT_INCOMPLETE_BUDGET: "fail",
+    EXIT_INCOMPLETE_CLEANUP: "fail",
+    EXIT_INCOMPLETE_ARTIFACT: "inconclusive",
+}
+
+
+def reconcile_capture(status, code):
+    """Make a capture's verdict follow the exit the controller took.
+
+    A long interview judges itself and writes that into BROWSER_CHECK_CAPTURE
+    before the controller has assessed budget, cleanup and artifacts, so a
+    capture can say pass for a run that then leaves with one of those exits.
+    Only a pass is changed (see RECONCILED_VERDICT).
+    """
+    verdict = RECONCILED_VERDICT.get(code)
+    path = os.environ.get("BROWSER_CHECK_CAPTURE")
+    if verdict is None or not path or not os.path.isfile(path):
+        return
+    try:
+        with open(path, encoding="utf-8") as handle:
+            capture = json.load(handle)
+        report = capture.get("report") if isinstance(capture, dict) else None
+        if not isinstance(report, dict) or report.get("qualification") != "pass":
+            return
+        report["qualification"] = verdict
+        reasons = report.get("qualification_reasons")
+        if not isinstance(reasons, list):
+            reasons = report["qualification_reasons"] = []
+        reasons.append(f"the run budget controller took {status} after the verdict")
+        write_json(path, capture)
+    except (OSError, ValueError) as error:
+        print(
+            f"run budget: could not reconcile {path} with {status}: {error}",
+            file=sys.stderr,
+        )
 
 
 # --------------------------------------------------------------------------
@@ -1704,6 +1752,9 @@ def command_validate(args):
         print(manifest["run_id"])
     elif args.print_field == "cleanup_reserve_s":
         print(manifest["cleanup_reserve_s"])
+    elif args.print_field == "run_kind":
+        # Empty for a manifest that names none, which is not a long interview.
+        print(manifest.get("run_kind", ""))
     else:
         print(f"ok {manifest['run_id']} {digest}")
     return 0
@@ -1732,7 +1783,9 @@ def main(argv=None):
     validate.add_argument("--manifest", required=True)
     validate.add_argument("--verify-binaries", action="store_true")
     validate.add_argument(
-        "--print", dest="print_field", choices=("sha", "run_id", "cleanup_reserve_s")
+        "--print",
+        dest="print_field",
+        choices=("sha", "run_id", "cleanup_reserve_s", "run_kind"),
     )
     validate.add_argument(
         "--min-cleanup-reserve-s", type=int, default=MIN_CLEANUP_RESERVE_S

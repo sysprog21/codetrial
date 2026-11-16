@@ -30,7 +30,7 @@ const path = require("path");
 const sched = require("./long-interview-schedule.cjs");
 const timing_ = require("./long-interview-timing.cjs");
 const { BudgetDenied } = require("./run-budget-guard.cjs");
-const { summarizeSwapAudio } = require("./soak-judge.cjs");
+const { rotationFacts, summarizeSwapAudio } = require("./soak-judge.cjs");
 
 const CLIP_DIR_ENV = "BROWSER_CHECK_LONG_CLIP_DIR";
 const TONE_FIXTURE_ENV = "BROWSER_CHECK_LONG_TONE_FIXTURE";
@@ -569,7 +569,10 @@ function finalizeLongRun(o) {
     // Run kind declares the intended workload, not the evidence this driver
     // can judge. Completion does not certify checkpoint content or signal.
     assessment_scope: "structural",
-    qualification: "not_evaluated",
+    // A qualification is decided after the fixture stops, by a reader this
+    // worker cannot wait for; until it has, the run has not qualified.
+    qualification:
+      plan.runKind === "qualification" ? "pending" : "not_evaluated",
     reply_content: "not_assessed",
     decoded_signal: signal.status,
     ...decodedSignalRows(o.audio),
@@ -593,6 +596,28 @@ function finalizeLongRun(o) {
     full_interview: passed && fullInterview,
     coverage_complete: covered,
     cleanup_assessed: cleanupAssessed,
+    // Absent when the caller kept no handover lines, which the reader that
+    // decides qualification takes as unknown.
+    ...(o.rotation
+      ? {
+          rotation: rotationFacts({
+            ...o.rotation,
+            episodes: o.episodes
+              ? timing_
+                  .judgeRotations(o.episodes, timing)
+                  .rows.map((episode) => ({
+                    ...episode,
+                    // Begun after the stimuli stopped and never ended: the end
+                    // of the run is what cut it off, whatever triggered it.
+                    preemptedByEnd:
+                      episode.result === "incomplete" &&
+                      timing_.beganLate(episode, timing),
+                  }))
+              : undefined,
+            unmatched: o.unmatchedEpisodes,
+          }),
+        }
+      : {}),
     end_permit_granted: run.endPermitGranted,
     end_clicked: run.endClicked,
     // Where the schedule's clock began, so a reader after teardown can put

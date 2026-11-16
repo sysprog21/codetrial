@@ -11,6 +11,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import driver from "../../scripts/long-interview-driver.cjs";
+import soakJudge from "../../scripts/soak-judge.cjs";
+
+const { parseReplacements } = soakJudge;
 import page_ from "../../scripts/long-interview-page.cjs";
 import sched from "../../scripts/long-interview-schedule.cjs";
 import guard_ from "../../scripts/run-budget-guard.cjs";
@@ -1285,7 +1288,12 @@ for (const plan of [
     assert.equal(finished.report.full_interview, true);
     assert.equal(finished.report.speech_run, true);
     assert.equal(finished.report.assessment_scope, "structural");
-    assert.equal(finished.report.qualification, "not_evaluated");
+    // A qualification is decided by a reader after the run; until it has,
+    // the worker says so rather than that nobody will.
+    assert.equal(
+      finished.report.qualification,
+      plan.runKind === "qualification" ? "pending" : "not_evaluated",
+    );
     assert.equal(finished.report.reply_content, "not_assessed");
     assert.equal(finished.report.decoded_signal, "not_assessed");
   });
@@ -1341,3 +1349,71 @@ for (const [name, plan, options, granted, clicked] of [
       assert.ok(finished.report.not_exercised.some((n) => /^end:/.test(n)));
   });
 }
+
+test("the report carries the rotation facts it was given and none it was not", async () => {
+  const played = await play(SMOKE);
+  const bare = finalize(played).report;
+  assert.equal("rotation" in bare, false);
+  // The worker judges structure; a smoke is never evaluated for more.
+  assert.equal(bare.qualification, "not_evaluated");
+  const room = "room-1";
+  const ids = "pid=7 session=1 episode=1";
+  const [replacement] = parseReplacements(
+    `replacement: at=1:40.000 resumed=true trigger=goaway handover=resumed fallback=none ${ids} replacement=1 old_socket=1 new_socket=2 obligation=none interview_ms=100000 room=${room}\n`,
+    room,
+  );
+  const { report } = finalize(played, {
+    episodes: [
+      {
+        ...GOAWAY[0],
+        pid: 7,
+        session: 1,
+        episode: 1,
+        replacement: 1,
+        newSocket: 2,
+      },
+      // Begun after the stimuli stopped: not a rotation under load.
+      {
+        ...GOAWAY[0],
+        pid: 7,
+        session: 1,
+        episode: 2,
+        startInterviewMs: 590000,
+      },
+    ],
+    unmatchedEpisodes: [{ pid: 7, session: 1, episode: 9 }],
+    rotation: { replacements: [replacement], goAway: true, expired: false },
+  });
+  assert.equal(report.rotation.verdict, "pass");
+  assert.equal(report.rotation.episodes_unresolved, 1);
+
+  // An episode that never ended is unresolved, whatever triggered it, unless
+  // it began after the stimuli stopped (480 s in a 10 minute smoke), when the
+  // end of the run is what cut it off.
+  const unended = (episode, startS, trigger) => ({
+    pid: 7,
+    session: 1,
+    episode,
+    trigger,
+    result: "incomplete",
+    startInterviewMs: startS * 1000,
+  });
+  const cut = finalize(played, {
+    episodes: [
+      unended(3, 100, "watchdog"),
+      unended(4, 500, "watchdog"),
+      unended(5, 520, "goaway"),
+    ],
+    unmatchedEpisodes: [],
+    rotation: { replacements: [], goAway: true, expired: false },
+  }).report.rotation;
+  assert.equal(cut.episodes_unresolved, 1);
+  assert.deepEqual(
+    report.rotation.replacements.map((r) => [
+      r.new_socket,
+      r.rotation,
+      r.episode_class,
+    ]),
+    [[2, true, "completed"]],
+  );
+});

@@ -251,6 +251,9 @@ function plan(manifest, env = {}, files = {}) {
       BROWSER_CHECK_AGENT: "rust",
       BROWSER_CHECK_RUN_MANIFEST: "/m.json",
       BROWSER_CHECK_RUN_ID: "run-1",
+      BROWSER_CHECK_CAPTURE: "/out/capture.json",
+      BROWSER_CHECK_FIXTURE_TEST:
+        "livekit::probe::serving::serve_web_with_arming",
       BROWSER_CHECK_RUN_MANIFEST_SHA256: crypto
         .createHash("sha256")
         .update(raw)
@@ -289,6 +292,39 @@ test("a valid plan carries what the flow runs on", () => {
     observationTargetS: 5400,
     runId: "run-1",
   });
+});
+
+// A qualification is decided after the run from the capture and the serving
+// fixture's report, so one that would leave neither is refused before it
+// spends anything. A pilot is judged on structure and needs neither.
+test("a qualification run is refused without a capture and a serving fixture", () => {
+  const env = { BROWSER_CHECK_DURATION_MIN: "90" };
+  for (const name of ["BROWSER_CHECK_CAPTURE", "BROWSER_CHECK_FIXTURE_TEST"]) {
+    for (const absent of [undefined, ""]) {
+      assert.deepEqual(
+        plan(manifest, { ...env, [name]: absent }).errors,
+        [`a qualification run needs ${name}`],
+        `${name} ${absent}`,
+      );
+    }
+  }
+  const pilot = {
+    ...manifest,
+    run_kind: "pilot",
+    duration_min: 60,
+    observation_target_s: 3600,
+    selected_duration_s: 3600,
+    outer_wall_cap_s: 3600 + 660,
+    max_archive_bytes: archiveBounds(3600 + 660).floor,
+  };
+  assert.deepEqual(
+    plan(pilot, {
+      BROWSER_CHECK_DURATION_MIN: "60",
+      BROWSER_CHECK_CAPTURE: undefined,
+      BROWSER_CHECK_FIXTURE_TEST: undefined,
+    }).errors,
+    [],
+  );
 });
 
 test("the recording cap is read from the config file when the environment is silent", () => {

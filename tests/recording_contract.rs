@@ -1,8 +1,11 @@
 //! The provider contract, checked against bytes rather than against prose.
 //!
-//! Nothing in this file exercises CodeTrial's own recording code, because
-//! there is none yet: these fixtures are the specification the lifecycle and
-//! transfer tasks are written against. What they pin is the part a Rust
+//! This file exercises the edge of CodeTrial's recording code that meets the
+//! provider: the request bodies it builds, the Egress calls it sends, the
+//! object path it derives and the webhook signature it verifies, each held
+//! against a pinned fixture or an expected value. It also holds
+//! `docs/recording-contract.md` to the constants and the retention window it
+//! names, and to its staging record. What the fixtures pin is the part a Rust
 //! reviewer cannot see by reading LiveKit's documentation once, which is that
 //! the same provider speaks two JSON casings depending on which side of the
 //! call you are on, and that a webhook signature covers the request body
@@ -657,9 +660,10 @@ fn contract_document() -> String {
     .expect("the contract document should be readable")
 }
 
-/// The three strings that must have exactly one owner. A test asserting the
-/// document repeats the constants is the only thing standing between "fixed
-/// here and nowhere else" and a second spelling arriving in a later task.
+/// The strings that must have exactly one owner, the ones the document lists
+/// under "Fixed paths". A test asserting the document repeats the constants is
+/// the only thing standing between "fixed here and nowhere else" and a second
+/// spelling arriving in a later change.
 #[test]
 fn contract_document_pins_the_fixed_strings() {
     let contract = contract_document();

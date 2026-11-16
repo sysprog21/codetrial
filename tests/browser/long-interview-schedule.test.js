@@ -14,6 +14,7 @@ import timing_ from "../../scripts/long-interview-timing.cjs";
 const { archiveBounds } = timing_;
 
 const {
+  AUTHORED,
   AUTHORED_SHA256,
   CYCLE_S,
   MIN_RECALL_GAP_S,
@@ -53,9 +54,9 @@ const bundles = {
 // Pinned on purpose: a change to the authored questions, the timing or the
 // answer key moves these, and the change then has to be made on purpose.
 const PINS = {
-  coding: "c8099dc2a945e42b147f431525557a481faba3373a9ee507307f9669f1b35cc9",
+  coding: "d507703bcfd2e14e64a79b1c5daadb7bd55caaaf9ee2b475c2421e803278432e",
   whiteboard:
-    "84e1a9fe28e0a0a3eced4ec2b8ba3b2551d98abc5a8291575bac4fc1e5952900",
+    "7b9d3f3f45851d9f2d2c1ee85d62ade24d2908b6975a485529217965aac24e23",
 };
 
 test("the authored catalogue is hash pinned", () => {
@@ -521,6 +522,15 @@ const NEGATIVES = [
     },
   },
   {
+    name: "one code word alone",
+    cp: CP_STATE,
+    reason: /nonce is missing/,
+    edit: (e) => {
+      const { nonce } = key("coding", CP_STATE);
+      e.reply.text = e.reply.text.replace(nonce, nonce.split(" ")[0]);
+    },
+  },
+  {
     name: "nonce missing",
     cp: CP_STATE,
     reason: /nonce is missing/,
@@ -557,7 +567,7 @@ const NEGATIVES = [
     cp: CP_STATE,
     reason: /reply lacks seed_codename/,
     edit: (e) => {
-      e.reply.text = e.reply.text.replace(/saffron heron/g, "violet crane");
+      e.reply.text = e.reply.text.replace(/purple river/g, "violet crane");
     },
   },
   {
@@ -571,7 +581,7 @@ const NEGATIVES = [
 ];
 
 test("the negative fixtures are a fixed set and every one fails", () => {
-  assert.equal(NEGATIVES.length, 23);
+  assert.equal(NEGATIVES.length, 24);
   for (const fixture of NEGATIVES) {
     const evidence = evidenceFor("coding", fixture.cp);
     // Each starts from a passing answer, so the edit alone is what fails it.
@@ -844,6 +854,167 @@ test("the final question is answered by its pending question and revision alone"
   );
 });
 
+// A reply reaches the judge as a transcription, which writes the break between
+// a token's words as it likes; what a tool read is the source's own text.
+test("a reply's marker and code words count however their words are joined", () => {
+  const written = marker("coding", 7);
+  const stateWith = (spelling) => {
+    const evidence = evidenceFor("coding", CP_STATE);
+    evidence.reply.text = evidence.reply.text.replace(written, spelling);
+    return evidence;
+  };
+  const spoken = written.replace("-", " ");
+  assert.deepEqual(judgeCheckpoint(bundles.coding, stateWith(spoken)), PASS);
+  for (const wrong of [written.replace("-", ""), `${spoken.slice(0, -1)}x`]) {
+    assert.match(
+      reasonsOf("coding", stateWith(wrong)),
+      /reply lacks revision_07/,
+      wrong,
+    );
+  }
+  const stale = stateWith(spoken);
+  stale.reply.text += ` ${marker("coding", 6).replace("-", " ")}`;
+  assert.match(reasonsOf("coding", stale), /stale revision revision_06/);
+
+  const nonce = key("coding", CP_STATE).nonce;
+  for (const between of ["-", ", ", " - "]) {
+    const joined = evidenceFor("coding", CP_STATE);
+    joined.reply.text = joined.reply.text.replace(
+      nonce,
+      nonce.replace(" ", between),
+    );
+    assert.deepEqual(judgeCheckpoint(bundles.coding, joined), PASS, between);
+  }
+  // Two words that only meet across a sentence end, or with a word between
+  // them, are not the code words.
+  for (const between of [". ", " and ", "? "]) {
+    const apart = evidenceFor("coding", CP_STATE);
+    apart.reply.text = apart.reply.text.replace(
+      nonce,
+      nonce.replace(" ", between),
+    );
+    assert.match(reasonsOf("coding", apart), /nonce is missing/, between);
+  }
+});
+
+test("a spoken number is not read out of a decimal", () => {
+  for (const [said, verdict] of [
+    ["10,000", "pass"],
+    ["10 000", "pass"],
+    ["ten-thousand", "pass"],
+    ["10 to the fourth", "pass"],
+    ["ten to the fourth power", "pass"],
+    ["10 to the power of four", "pass"],
+    ["10 to the fifth", "fail"],
+    ["10.000", "fail"],
+    ["10.4", "fail"],
+  ]) {
+    const evidence = evidenceFor("coding", CP_STATE);
+    assert.ok(evidence.reply.text.includes("ten thousand"));
+    evidence.reply.text = evidence.reply.text.replace("ten thousand", said);
+    assert.equal(
+      judgeCheckpoint(bundles.coding, evidence).verdict,
+      verdict,
+      said,
+    );
+  }
+});
+
+test("a plural stage name counts when it is said without its s", () => {
+  const { facts, checkpoints } = bundles.coding.answer_key;
+  const stage = facts.find((f) => f.match.tokens?.[0] === "optimizations");
+  const asked = checkpoints.find((k) => k.element_fact_ids.includes(stage.id));
+  const evidence = evidenceFor("coding", asked.checkpoint_id);
+  assert.ok(evidence.reply.text.includes("optimizations"));
+  evidence.reply.text = evidence.reply.text.replace(
+    "optimizations",
+    "optimization",
+  );
+  assert.deepEqual(judgeCheckpoint(bundles.coding, evidence), PASS);
+  evidence.reply.text = evidence.reply.text.replace("optimization", "testing");
+  assert.match(reasonsOf("coding", evidence), new RegExp(`lacks ${stage.id}`));
+});
+
+test("the promised edge case is recalled under either spelling of zeros", () => {
+  const recall = bundles.coding.answer_key.checkpoints.find((k) =>
+    k.element_fact_ids.includes("seed_edge_case"),
+  );
+  for (const said of ["a pair of zeroes", "two zeroes", "a pair of zeros"]) {
+    const evidence = evidenceFor("coding", recall.checkpoint_id);
+    assert.ok(evidence.reply.text.includes("pair of zeros"));
+    evidence.reply.text = evidence.reply.text.replace("pair of zeros", said);
+    assert.deepEqual(judgeCheckpoint(bundles.coding, evidence), PASS, said);
+  }
+});
+
+test("the two surfaces walk the code words in different orders", () => {
+  const order = (mode) =>
+    bundles[mode].answer_key.checkpoints.map((k) => k.nonce).join(",");
+  assert.notEqual(order("coding"), order("whiteboard"));
+  // Neither is the catalogue's own order, which would give every version and
+  // surface the same first pair.
+  const { first, second } = AUTHORED.nonce_words;
+  for (const mode of ["coding", "whiteboard"]) {
+    assert.notEqual(
+      bundles[mode].answer_key.checkpoints[0].nonce,
+      `${first[0]} ${second[0]}`,
+      mode,
+    );
+  }
+});
+
+// The conversation a tool returns is a transcription too.
+test("a conversation read counts however its words are joined", () => {
+  const evidence = evidenceFor("coding", CP_STATE);
+  const read = evidence.tool_calls.find((c) => c.name === "read_conversation");
+  assert.ok(read.result_text.includes("purple river"));
+  read.result_text = read.result_text.replace("purple river", "Purple-River");
+  assert.deepEqual(judgeCheckpoint(bundles.coding, evidence), PASS);
+});
+
+test("a schedule too long for its code words is refused", () => {
+  assert.throws(
+    () =>
+      generateSchedule("coding", {
+        durationMin: 720,
+        observationTargetS: 43200,
+      }),
+    /no unused code words left/,
+  );
+});
+
+test("a tool result must carry the marker as the source writes it", () => {
+  const evidence = evidenceFor("coding", CP_INSPECT);
+  const [call] = evidence.tool_calls;
+  const written = marker("coding", 5);
+  assert.ok(call.result_text.includes(written));
+  call.result_text = call.result_text.replace(
+    written,
+    written.replace("-", " "),
+  );
+  assert.match(reasonsOf("coding", evidence), /result lacks revision_05/);
+});
+
+test("every checkpoint of a schedule has its own code words", () => {
+  const { first, second } = AUTHORED.nonce_words;
+  assert.equal(
+    new Set([...first, ...second]).size,
+    first.length + second.length,
+  );
+  for (const mode of ["coding", "whiteboard"]) {
+    const nonces = bundles[mode].answer_key.checkpoints.map((k) => k.nonce);
+    assert.equal(new Set(nonces).size, nonces.length, mode);
+    for (let i = 1; i < nonces.length; i += 1) {
+      const before = nonces[i - 1].split(" ");
+      assert.deepEqual(
+        nonces[i].split(" ").filter((word) => before.includes(word)),
+        [],
+        `${mode} ${i}`,
+      );
+    }
+  }
+});
+
 test("exact tokens are case sensitive and folded tokens are not", () => {
   const evidence = evidenceFor("coding", CP_STATE);
   evidence.reply.text = evidence.reply.text.replace(
@@ -856,8 +1027,8 @@ test("exact tokens are case sensitive and folded tokens are not", () => {
   );
   const folded = evidenceFor("coding", CP_STATE);
   folded.reply.text = folded.reply.text.replace(
-    /saffron heron/g,
-    "SAFFRON   Heron",
+    /purple river/g,
+    "PURPLE   River",
   );
   assert.equal(judgeCheckpoint(bundles.coding, folded).verdict, "pass");
 });
@@ -1226,5 +1397,41 @@ test("the CLI writes a schedule, an answer key and labelled synthetic clips", ()
     assert.equal(bad.status, 2);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// The native speech-continuity arm (tests/unit/livekit/recovery_continuity.rs)
+// keeps its own copy of the smoke schedule's first clips as its answer key, and
+// refuses a clip set whose parts differ from it. A catalogue change that left
+// the copy behind would leave that arm with no clip set it can load.
+test("the native arm's answer key is the smoke schedule's clip text", () => {
+  const source = fs.readFileSync(
+    path.join(ROOT, "tests/unit/livekit/recovery_continuity.rs"),
+    "utf8",
+  );
+  const turns = [
+    ...source.matchAll(
+      /clip_id: "([a-z0-9_]+)",\s*part: (\d+),\s*text: "((?:[^"\\]|\\.)*)"/g,
+    ),
+  ].map(([, clip, part, text]) => ({ clip, part: Number(part), text }));
+  assert.equal(turns.length, 6, "the answer key's turns were all found");
+  // The loader wants each clip's parts exactly, in count and in order.
+  const { clips } = generateSchedule("coding", SMOKE).schedule;
+  for (const id of new Set(turns.map((turn) => turn.clip))) {
+    const key = turns
+      .filter((turn) => turn.clip === id)
+      .sort((a, b) => a.part - b.part);
+    assert.deepEqual(
+      key.map((turn) => turn.part),
+      key.map((_, i) => i),
+      `${id}: the key numbers its parts from 0`,
+    );
+    const clip = clips.find((c) => c.clip_id === id);
+    assert.ok(clip, id);
+    assert.deepEqual(
+      clip.parts,
+      key.map((turn) => turn.text),
+      id,
+    );
   }
 });

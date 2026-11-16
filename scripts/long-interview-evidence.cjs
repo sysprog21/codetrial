@@ -11,6 +11,9 @@
 const fs = require("node:fs");
 
 const sched = require("./long-interview-schedule.cjs");
+const { qualify } = require("./long-interview-qualify.cjs");
+const { EXIT } = require("./long-interview-timing.cjs");
+const { whole: isCount } = require("./replay-clock.cjs");
 
 const { generateSchedule, judgeCheckpoint } = sched;
 
@@ -20,8 +23,6 @@ const MAX_CLOCK_UNCERTAINTY_MS = 1000;
 
 // The lists a capture holds, which the judge and the acceptance check both read.
 const CAPTURE_LISTS = ["receipts", "batches", "replies", "boundaries"];
-
-const isCount = (value) => Number.isSafeInteger(value) && value >= 0;
 
 /// Why the report cannot be read at all, or an empty list.
 function reportProblems(report) {
@@ -279,9 +280,38 @@ const judge = (bundle, evidence) => ({
   ...judgeCheckpoint(bundle, evidence),
 });
 
-/// The one reply that started inside the checkpoint's window as
-/// {index, at}, null when none did, or a reason when the clock cannot say.
-function replyInWindow(capture, from, to, settings) {
+/// When the candidate had finished saying the earliest thing a checkpoint asks
+/// for that only the conversation carries, in schedule seconds, or null when it
+/// asks for none (`CONVERSATION_FACT_IDS` in scripts/long-interview-schedule.cjs
+/// says which). A fact about the source is read back from a tool, and one the
+/// problem's brief gives was never at risk, so neither shows anything kept
+/// across a handover. A checkpoint's own question is not a seed, whatever it
+/// quotes.
+function earliestSpokenFactS(bundle, key) {
+  const { clips, steps } = bundle.schedule;
+  const heard = [];
+  for (const fact of bundle.answer_key.facts) {
+    if (!key.element_fact_ids.includes(fact.id)) continue;
+    if (!sched.CONVERSATION_FACT_IDS.includes(fact.id)) continue;
+    for (const clip of clips) {
+      if (clip.role === "checkpoint") continue;
+      if (!clip.source_text.includes(fact.text)) continue;
+      for (const step of steps) {
+        if (step.clip_id !== clip.clip_id) continue;
+        // To the end of the clip's whole budget, its trailing quiet included:
+        // a clip dispatched a little late or spoken a little slowly had still
+        // ended by then.
+        heard.push(step.at_s + sched.clipBudgetS(clip));
+      }
+    }
+  }
+  return heard.length ? Math.min(...heard) : null;
+}
+
+/// The replies that started inside the checkpoint's window, as {index, at}
+/// in order, or a reason when the clock cannot say. A second one is usual: the
+/// interviewer's own nudge ("mm-hm", "just checking in") after an answer.
+function repliesInWindow(capture, from, to, settings) {
   const inside = [];
   for (const [index, reply] of capture.replies.entries()) {
     const reading = readClock(
@@ -298,10 +328,7 @@ function replyInWindow(capture, from, to, settings) {
     }
     if (start === 1 && end === -1) inside.push({ index, at: reading.s });
   }
-  if (inside.length > 1) {
-    return { why: `${inside.length} replies started in the window` };
-  }
-  return { reply: inside[0] ?? null };
+  return { replies: inside };
 }
 
 /// One checkpoint's verdict: "pass", "fail" or "not_assessed", with reasons.
@@ -328,24 +355,54 @@ function assessCheckpoint(bundle, report, checkpointId, options) {
   // recording that finished speaking sooner can be answered before that. Such
   // a reply cannot be told from one that talked over the question, so neither
   // is held against the reply as a missing answer.
-  const early = replyInWindow(capture, cp.at_s, cp.stimulus_end_s, settings);
+  const early = repliesInWindow(capture, cp.at_s, cp.stimulus_end_s, settings);
   if (early.why) return notAssessed(checkpointId, [early.why]);
-  if (early.reply) {
+  if (early.replies.length) {
     return notAssessed(checkpointId, [
       "a reply began before the question's estimated end",
     ]);
   }
 
-  const found = replyInWindow(
+  const found = repliesInWindow(
     capture,
     cp.stimulus_end_s,
     cp.stimulus_end_s + cp.response_window_s,
     settings,
   );
   if (found.why) return notAssessed(checkpointId, [found.why]);
-  if (!found.reply) return judge(bundle, { checkpoint_id: checkpointId });
+  if (!found.replies.length)
+    return judge(bundle, { checkpoint_id: checkpointId });
 
-  const { index, at } = found.reply;
+  // Each reply is judged on its own. One that answers passes the checkpoint,
+  // whatever the interviewer said before or after it; with none passing, the
+  // checkpoint fails only when every reply was assessed.
+  const results = found.replies.map((one) =>
+    assessReply(bundle, capture, { cp, key, checkpointId }, one, settings),
+  );
+  const passed = results.find((result) => result.verdict === "pass");
+  if (passed) return passed;
+  if (results.length === 1) return results[0];
+  const verdict = results.every((result) => result.verdict === "fail")
+    ? "fail"
+    : "not_assessed";
+  return {
+    checkpoint_id: checkpointId,
+    verdict,
+    reasons: results.flatMap((result, i) =>
+      result.reasons.map((reason) => `reply ${i + 1}: ${reason}`),
+    ),
+  };
+}
+
+/// One reply's verdict on a checkpoint: "pass", "fail" or "not_assessed".
+function assessReply(
+  bundle,
+  capture,
+  { cp, key, checkpointId },
+  found,
+  settings,
+) {
+  const { index, at } = found;
   const reply = capture.replies[index];
   if (reply.revised) {
     return notAssessed(checkpointId, [
@@ -365,17 +422,27 @@ function assessCheckpoint(bundle, report, checkpointId, options) {
     if (!read.call) return notAssessed(checkpointId, [read.why]);
     calls.push(read.call);
   }
-  return judge(bundle, {
-    checkpoint_id: checkpointId,
+  return {
+    ...judge(bundle, {
+      checkpoint_id: checkpointId,
+      reply: {
+        text: reply.text,
+        started_at_s: at,
+        completed: ending.kind === "complete",
+        interrupted: ending.kind === "interrupted",
+        tool_call_ids: calls.map((call) => call.call_id),
+      },
+      tool_calls: calls,
+    }),
+    // Where the judged reply was said and how far back its question reached,
+    // which is what ties a passing answer to the handover before it.
     reply: {
-      text: reply.text,
-      started_at_s: at,
-      completed: ending.kind === "complete",
-      interrupted: ending.kind === "interrupted",
-      tool_call_ids: calls.map((call) => call.call_id),
+      session: reply.identity.session,
+      socket: reply.identity.socket,
+      clock_start_unix_ms: reply.identity.clock?.start_unix_ms,
     },
-    tool_calls: calls,
-  });
+    earliest_fact_heard_s: earliestSpokenFactS(bundle, key),
+  };
 }
 
 /// "verified" only when every checkpoint was assessed and passed; "failed" when
@@ -516,15 +583,34 @@ function verdictFields(verdict) {
 }
 
 /// The capture file with its long-run report's `reply_content` filled in from
-/// the serving fixture's report. Nothing else in the report moves: the exit
-/// code and `qualification` were settled before this ran, and a verdict here
-/// does not reopen them.
-function mergeVerdict(capture, fixture) {
+/// the serving fixture's report, and with the qualification verdict that
+/// content was the last thing missing for (scripts/long-interview-qualify.cjs).
+/// The report's own exit code does not move; what the process leaves with is
+/// `main`'s to say.
+function mergeVerdict(capture, fixture, runKind, teardownFailed = false) {
   const report = capture?.report;
   if (capture?.flow !== "long-interview" || !report) return null;
+  const verdict = judgeCapture(capture, fixture);
+  const judged = { ...report, ...verdictFields(verdict) };
+  // Without a run kind this is a reader looking at the content again, not the
+  // run's own judgment: whatever qualification the capture holds is left.
+  if (!runKind) return { ...capture, report: judged };
+  const outcome = qualify({
+    runKind,
+    report: judged,
+    checkpoints: verdict.checkpoints,
+    teardownFailed,
+  });
   return {
     ...capture,
-    report: { ...report, ...verdictFields(judgeCapture(capture, fixture)) },
+    report: {
+      ...judged,
+      ...outcome,
+      assessment_scope:
+        outcome.qualification === "not_evaluated"
+          ? "structural"
+          : "qualification",
+    },
   };
 }
 
@@ -542,10 +628,24 @@ const readJson = (file) => {
   }
 };
 
-/// `--capture FILE --fixture FILE`: rewrites the capture with the verdict.
-/// Exits 0 when it merged or had nothing to judge, 2 when it could not read
-/// the capture or write it back; the caller treats either as no change to the
-/// run's own result.
+/// What a qualification run leaves with: 0 for a pass, 1 for a failure, and
+/// 77 for anything else, an inconclusive verdict or one nobody could read.
+function qualificationExit(qualification) {
+  if (qualification === "pass") return EXIT.pass;
+  if (qualification === "fail") return EXIT.failed;
+  return EXIT.inconclusive;
+}
+
+/// `--capture FILE --fixture FILE [--run-kind KIND] [--teardown-failed]`:
+/// rewrites the capture
+/// with the verdict. `--teardown-failed` says the fixture or a capture failed
+/// to stop after the worker exited, which fails a qualification.
+///
+/// For every run kind but `qualification` it exits 0 when it merged or had
+/// nothing to judge and 2 when it could not read the capture, judge it or write
+/// it back, and the caller treats either as no change to the run's own result.
+/// For a qualification the exit is the verdict: 0 pass, 1 fail, 77
+/// inconclusive, which is also what a run it could not judge comes to.
 function main(argv, { out = console.log, err = console.error } = {}) {
   if (argv[0] === "--check-fixture") {
     const problems = fixtureProblems(readJson(argv[1] ?? ""));
@@ -557,32 +657,64 @@ function main(argv, { out = console.log, err = console.error } = {}) {
     return at < 0 ? undefined : argv[at + 1];
   };
   const [captureFile, fixtureFile] = [flag("--capture"), flag("--fixture")];
+  const runKind = flag("--run-kind");
+  const qualifying = runKind === "qualification";
+  const unjudged = (message) => {
+    err(message);
+    if (!qualifying) return 2;
+    out("long-interview qualification=inconclusive: the run was not judged");
+    return EXIT.inconclusive;
+  };
   if (!captureFile || !fixtureFile) {
-    err("usage: long-interview-evidence.cjs --capture FILE --fixture FILE");
-    return 2;
+    return unjudged(
+      "usage: long-interview-evidence.cjs --capture FILE --fixture FILE [--run-kind KIND] [--teardown-failed]",
+    );
   }
+
   const capture = readJson(captureFile);
   if (!capture || capture.unreadable) {
     const why = capture?.unreadable ? `: ${capture.unreadable}` : "";
-    err(`cannot read the capture ${captureFile}${why}`);
-    return 2;
+    return unjudged(`cannot read the capture ${captureFile}${why}`);
   }
-  const merged = mergeVerdict(capture, readJson(fixtureFile));
-  if (!merged) return 0;
+  // A judgment that throws still says it was not judged, so a direct caller,
+  // who has no shell reading the printed verdict, does not see a bare 1.
+  let merged;
+  try {
+    merged = mergeVerdict(
+      capture,
+      readJson(fixtureFile),
+      runKind,
+      argv.includes("--teardown-failed"),
+    );
+  } catch (error) {
+    return unjudged(`cannot judge ${captureFile}: ${error.message}`);
+  }
+  if (!merged) {
+    // Another flow's capture is nothing to judge, and only a qualification
+    // has anything to say about that.
+    if (!qualifying) return 0;
+    return unjudged(`${captureFile} holds no long-interview report`);
+  }
   const partial = `${captureFile}.partial`;
   try {
     fs.writeFileSync(partial, `${JSON.stringify(merged, null, 2)}\n`);
     fs.renameSync(partial, captureFile);
   } catch (error) {
-    err(`cannot write ${captureFile}: ${error.message}`);
-    return 2;
+    return unjudged(`cannot write ${captureFile}: ${error.message}`);
   }
-  const { reply_content: status, reply_content_checkpoints: counts } =
-    merged.report;
+  const { report } = merged;
+  const counts = report.reply_content_checkpoints;
   out(
-    `long-interview reply_content=${status} pass=${counts.pass} fail=${counts.fail} not_assessed=${counts.not_assessed}`,
+    `long-interview reply_content=${report.reply_content} pass=${counts.pass} fail=${counts.fail} not_assessed=${counts.not_assessed}`,
   );
-  return 0;
+  if (!qualifying) return 0;
+  out(
+    `long-interview qualification=${report.qualification} rotations_completed=${report.rotations_completed} rotations_verified=${report.rotations_verified}`,
+  );
+  report.qualification_reasons.forEach((reason) =>
+    out(`long-interview qualification: ${reason}`),
+  );
+  return qualificationExit(report.qualification);
 }
 
 if (require.main === module) process.exit(main(process.argv.slice(2)));
@@ -590,10 +722,12 @@ if (require.main === module) process.exit(main(process.argv.slice(2)));
 module.exports = {
   MAX_CLOCK_UNCERTAINTY_MS,
   assessCheckpoint,
+  earliestSpokenFactS,
   fixtureProblems,
   judgeInterview,
   main,
   mergeVerdict,
+  qualificationExit,
   reportProblems,
   summarize,
   verdictFields,

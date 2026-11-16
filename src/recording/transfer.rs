@@ -500,9 +500,9 @@ fn report_cleanup(recording_id: &str, step: &str, outcome: Result<(), String>) {
 
 /// A delivery attempt that did not work, without moving the recording.
 ///
-/// The row stays in `transferring` because the bytes are still in the staging
-/// bucket and another attempt is the recovery. Moving it to `failed` advertised
-/// `retry_delivery` from a state no transition could leave.
+/// The row stays in `transferring` while attempts remain, because the bytes are
+/// still in the staging bucket and another attempt is the recovery. The queue
+/// fails it with `drive_failed` when its attempts run out.
 async fn record_delivery_failure(
     accounts: &Arc<Accounts>,
     recorder: &Recorder,

@@ -63,6 +63,7 @@ const {
   judgeSettledSwapAudio,
   startSwapMarker,
 } = require("./swap-audio-owner.cjs");
+const { createLogTail } = require("./log-tail.cjs");
 const {
   clockEvidenceLines,
   completeLines,
@@ -70,14 +71,12 @@ const {
   isRotation,
   judgeEpisodeReplies,
   judgeSoak,
+  latchHandovers,
   parseClock,
   parseEpisodes,
   parseObligations,
-  parseReplacements,
   parseVerdictMode,
-  replacementKey,
   replacementsWithoutEpisode,
-  roomLogged,
   soakExposure,
   soakResult,
 } = require("./soak-judge.cjs");
@@ -516,16 +515,6 @@ const RESUME_GRACE_MS = 45_000;
 // and where its per-episode lines go.
 const SETTLE = { graceMs: RESUME_GRACE_MS, log: console.log };
 
-/// The two runtime lines that are not part of a replacement: the advisory and
-/// its expiry. Matched literally, printed by src/livekit.rs. What a replacement
-/// was is read from the fields of its `replacement:` line by
-/// scripts/soak-judge.cjs, since presence cannot tell a resumption from a
-/// rebuild: the interviewer stays in the room through both.
-const HANDOVER_SIGNALS = {
-  goAway: "Gemini requested a transport restart in",
-  expired: "goaway expired:",
-};
-
 function redact(text) {
   let output = String(text);
   // GOOGLE_API_KEYS is the pooled spelling and holds a comma-separated list,
@@ -715,41 +704,11 @@ function readServerLog() {
 }
 
 /// The lines SERVER_LOG gained since the last call, complete ones only and
-/// redacted, so a swap can be noticed within a fraction of a second without
-/// reading the whole file each time.
+/// redacted, so a reader that polls it does not read the whole file each time.
 function serverLogTail() {
-  let offset = 0;
-  let rest = Buffer.alloc(0);
-  return () => {
-    const file = process.env.SERVER_LOG;
-    if (!file) return "";
-    let size;
-    try {
-      size = fs.statSync(file).size;
-    } catch {
-      return "";
-    }
-    if (size < offset) {
-      offset = 0;
-      rest = Buffer.alloc(0);
-    }
-    if (size > offset) {
-      const fresh = Buffer.alloc(size - offset);
-      const fd = fs.openSync(file, "r");
-      try {
-        fs.readSync(fd, fresh, 0, fresh.length, offset);
-      } finally {
-        fs.closeSync(fd);
-      }
-      offset = size;
-      rest = Buffer.concat([rest, fresh]);
-    }
-    const cut = rest.lastIndexOf(10);
-    if (cut < 0) return "";
-    const lines = rest.subarray(0, cut + 1).toString("utf8");
-    rest = rest.subarray(cut + 1);
-    return redact(lines);
-  };
+  const file = process.env.SERVER_LOG;
+  const tail = file ? createLogTail(file) : () => "";
+  return () => redact(tail());
 }
 
 /// Prints each timing line a socket replacement of this room logged, once, as
@@ -810,13 +769,19 @@ async function longInterview(
   const deadline = new Set();
   const evidence = new Map();
   const episodeLines = new Map();
+  const seen = { goAway: false, expired: false };
+  const replacements = [];
   let ended = false;
   let browserDisconnected = false;
   page.once("close", () => {
     browserDisconnected = !ended;
   });
+  // Only what the server's log gained since the last read. Everything below
+  // accumulates, and reading and redacting the whole log on every tick costs
+  // more the longer the interview has run, in the loop that times the stimuli.
+  const newServerLines = serverLogTail();
   const refresh = () => {
-    const log = `${agentOutput.join("")}\n${readServerLog()}`;
+    const log = `${agentOutput.join("")}\n${newServerLines()}`;
     for (const minutes of bootstrapMinutes(log, roomName))
       bootstrap.add(minutes);
     for (const minutes of deadlineMinutes(log, roomName)) deadline.add(minutes);
@@ -826,6 +791,7 @@ async function longInterview(
     // as they go past for the end-of-run classes.
     for (const line of episodeEvidenceLines(log, roomName))
       episodeLines.set(line, true);
+    latchHandovers(log, roomName, seen, replacements);
   };
   let nextProgress = 0;
   const observe = async () => {
@@ -946,6 +912,8 @@ async function longInterview(
     clock,
     tokenRequestsMs,
     episodes: episodes.episodes,
+    unmatchedEpisodes: episodes.unmatched,
+    rotation: { replacements, ...seen },
     audio,
     replies,
     logs: { truncated: false, evicted: false, complete: logsComplete },
@@ -1035,13 +1003,11 @@ async function soakInterview(
   // window.
   const evidence = new Map();
 
-  // One read per call rather than one per signal: this is the whole server
-  // log, and the loop runs for minutes.
+  // Only what the server's log gained since the last read: everything below
+  // accumulates.
+  const newServerLines = serverLogTail();
   const refresh = () => {
-    const log = `${agentOutput.join("")}\n${readServerLog()}`;
-    for (const [name, needle] of Object.entries(HANDOVER_SIGNALS)) {
-      seen[name] ||= roomLogged(log, needle, roomName);
-    }
+    const log = `${agentOutput.join("")}\n${newServerLines()}`;
     reportRotationLines(log, roomName, reported);
     for (const line of [
       ...episodeEvidenceLines(log, roomName),
@@ -1049,10 +1015,7 @@ async function soakInterview(
     ]) {
       evidence.set(line, true);
     }
-    const known = new Set(replacements.map(replacementKey));
-    for (const r of parseReplacements(log, roomName)) {
-      if (!known.has(replacementKey(r))) replacements.push(r);
-    }
+    latchHandovers(log, roomName, seen, replacements);
   };
   const evidenceText = () => `${[...evidence.keys()].join("\n")}\n`;
   const coverage = (final) =>
