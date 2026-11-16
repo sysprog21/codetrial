@@ -42,7 +42,7 @@ class MutantsPlanTests(unittest.TestCase):
 set -eu
 echo "$*" >>"$RUNNER_TEMP/cargo.log"
 [ "$FAKE_FAIL" = 0 ] || exit 7
-[ "$*" = "mutants --list --in-diff $RUNNER_TEMP/pr.diff" ] || exit 9
+[ "$*" = "mutants --list --cargo-arg=--locked --in-diff $RUNNER_TEMP/pr.diff" ] || exit 9
 i=0
 while [ "$i" -lt "$FAKE_COUNT" ]; do
     echo "mutant $i"
