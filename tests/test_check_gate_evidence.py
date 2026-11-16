@@ -1,11 +1,13 @@
 """Check the Rust-scope helper of scripts/check-gate-evidence.py."""
 
 import importlib.util
+import json
 from pathlib import Path
 import posixpath
 import re
 import subprocess
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
@@ -350,6 +352,305 @@ class ScopeOnly(unittest.TestCase):
         for args in ([], ["-z"], ["--needs-maintainer"]):
             with self.subTest(args=args):
                 self.assertEqual(run(args, b"").returncode, 2)
+
+
+TREE = "a" * 40
+OTHER_TREE = "b" * 40
+PINNED = '[toolchain]\nchannel = "1.100.0"\n'
+
+
+def receipt(**over):
+    one = {
+        "lane": "rust",
+        "passed": True,
+        "skipped": 0,
+        "time": "2026-11-16T12:34:56Z",
+        "rustc": "rustc 1.100.0 (abcdef123 2026-10-01)",
+        "cargo": "cargo 1.100.0 (abcdef123 2026-09-01)",
+    }
+    one.update(over)
+    return one
+
+
+def note(*receipts, **over):
+    body = {
+        "version": 1,
+        "worktree_tree": TREE,
+        "receipts": list(receipts) or [receipt()],
+    }
+    body.update(over)
+    return body
+
+
+class EvidenceCheck(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.dir = Path(tmp.name)
+
+    def put(self, name, data):
+        path = self.dir / name
+        if isinstance(data, (dict, list)):
+            data = json.dumps(data)
+        path.write_bytes(data if isinstance(data, bytes) else data.encode())
+        return str(path)
+
+    def args(self, paths=("src/main.rs",), tree=TREE, author="User", base=PINNED):
+        args = [
+            "--head-tree", tree,
+            "--changed-files-file", self.put("changed", "".join(p + "\0" for p in paths)),
+            "--author-type", author,
+        ]  # fmt: skip
+        if base is not None:
+            args += ["--base-toolchain-file", self.put("base.toml", base)]
+        return args
+
+    def check(self, body=None, head=None, **kwargs):
+        args = self.args(**kwargs)
+        if body is not None:
+            args += ["--receipt-file", self.put("receipt", body)]
+        if head is not None:
+            args += ["--head-toolchain-file", self.put("head.toml", head)]
+        return run(args, b"")
+
+    def fails(self, result, reason=None):
+        self.assertEqual(result.returncode, 1, result.stderr + result.stdout)
+        lines = result.stderr.decode().splitlines()
+        self.assertTrue(lines[0].startswith("check-gate-evidence: "), lines)
+        if reason:
+            self.assertIn(reason, lines[0])
+        text = "\n".join(lines[1:])
+        self.assertIn("./scripts/env-check.sh", text)
+        self.assertIn("./scripts/test.sh", text)
+        self.assertIn("partial commit", text)
+        return lines[0]
+
+    def test_receipt_for_the_head_tree_passes(self):
+        result = self.check(note())
+        self.assertEqual((result.returncode, result.stderr), (0, b""))
+
+    def test_skips_do_not_disqualify(self):
+        self.assertEqual(self.check(note(receipt(skipped=3))).returncode, 0)
+
+    def test_all_lane_satisfies(self):
+        self.assertEqual(self.check(note(receipt(lane="all"))).returncode, 0)
+
+    def test_one_good_receipt_among_others_passes(self):
+        body = note(receipt(lane="portable"), receipt(passed=False), receipt())
+        self.assertEqual(self.check(body).returncode, 0)
+
+    def test_unknown_keys_are_ignored(self):
+        body = note(receipt(extra=[1]), extra="x")
+        self.assertEqual(self.check(body).returncode, 0)
+
+    def test_missing_receipt_fails(self):
+        self.fails(self.check(None), "no receipt")
+
+    def test_missing_receipt_file_fails(self):
+        args = self.args() + ["--receipt-file", str(self.dir / "absent")]
+        self.fails(run(args, b""), "no receipt")
+
+    def test_unreadable_receipt_is_indeterminate(self):
+        args = self.args() + ["--receipt-file", str(self.dir)]
+        self.assertEqual(run(args, b"").returncode, 2)
+
+    def test_malformed_receipts_fail_with_a_one_line_reason(self):
+        valid = json.dumps(note()).encode()
+        cases = {
+            "not json": b"not json",
+            "empty": b"",
+            "not utf-8": b"\xff\xfe",
+            "not an object": b"[]",
+            "trailing data": valid + b" {}",
+            "over 16 KiB": valid + b" " * (16385 - len(valid)),
+            "duplicate key": b'{"version":1,"version":1}',
+            "nan": b'{"version": NaN}',
+            "deep": b"[" * 16000,
+            "wrong version": note(version=2),
+            "version bool": note(version=True),
+            "version missing": {"worktree_tree": TREE, "receipts": [receipt()]},
+            "bad tree": note(worktree_tree="A" * 40),
+            "short tree": note(worktree_tree="a" * 39),
+            "tree not str": note(worktree_tree=7),
+            "no receipts": note(receipts=[]),
+            "receipts not list": note(receipts={}),
+            "nine receipts": note(*[receipt()] * 9),
+            "receipt not object": note(receipts=[1]),
+            "unknown lane": note(receipt(lane="mutants")),
+            "lane list": note(receipt(lane=[])),
+            "lane object": note(receipt(lane={})),
+            "version float": note(version=1.0),
+            "version exponent": json.dumps(note()).replace('"version": 1,', '"version": 1e0,').encode(),
+            "passed not bool": note(receipt(passed="yes")),
+            "passed int": note(receipt(passed=1)),
+            "skipped bool": note(receipt(skipped=True)),
+            "skipped negative": note(receipt(skipped=-1)),
+            "skipped float": note(receipt(skipped=0.0)),
+            "time long": note(receipt(time="x" * 33)),
+            "time not str": note(receipt(time=5)),
+            "rustc long": note(receipt(rustc="r" * 201)),
+            "cargo long": note(receipt(cargo="c" * 201)),
+            "cargo not str": note(receipt(cargo=None)),
+            "key missing": note({"lane": "rust", "passed": True}),
+        }  # fmt: skip
+        for name, body in cases.items():
+            with self.subTest(name):
+                reason = self.fails(self.check(body))
+                self.assertIn("receipt", reason)
+
+    def test_eight_receipts_are_allowed(self):
+        self.assertEqual(self.check(note(*[receipt()] * 8)).returncode, 0)
+
+    def test_empty_strings_are_allowed(self):
+        body = note(receipt(rustc="", cargo=""), receipt())
+        self.assertEqual(self.check(body).returncode, 0)
+
+    def test_receipt_for_another_tree_fails(self):
+        self.fails(self.check(note(worktree_tree=OTHER_TREE)), "another tree")
+
+    def test_sha256_tree_ids_compare_exactly(self):
+        tree = "c" * 64
+        self.assertEqual(self.check(note(worktree_tree=tree), tree=tree).returncode, 0)
+
+    def test_bad_head_tree_is_indeterminate(self):
+        for tree in ("", "A" * 40, "a" * 41, "../x"):
+            with self.subTest(tree=tree):
+                self.assertEqual(self.check(note(), tree=tree).returncode, 2)
+
+    def test_wrong_lane_fails(self):
+        for lane in ("portable", "browser"):
+            with self.subTest(lane=lane):
+                self.fails(self.check(note(receipt(lane=lane))), "rust or all")
+
+    def test_failed_gate_fails(self):
+        self.fails(self.check(note(receipt(passed=False))), "did not pass")
+
+    def test_a_toolchain_mismatch_says_to_rebase_onto_the_base(self):
+        # A branch cut before the pin moved produces the same old rustc on every
+        # rerun, so running the gate again cannot clear the refusal.
+        old = receipt(rustc="rustc 1.99.0 (abcdef123 2026-10-01)")
+        self.fails(self.check(note(old)), "rebase")
+
+    def test_rustc_must_match_the_base_channel(self):
+        old = receipt(rustc="rustc 1.99.0 (abcdef123 2026-10-01)")
+        self.fails(self.check(note(old)), "1.100.0")
+        for bad in (
+            "",
+            "cargo 1.100.0",
+            "rustc 1.100.01 (x)",
+            "rustc 1.100.0-nightly (x)",
+            "rustc 1.100.0",
+            "rustc 1.100.0 (",
+            "rustc 1.100.0 ()",
+            "rustc 1.100.\u0660 (x)",
+        ):
+            with self.subTest(rustc=bad):
+                self.fails(self.check(note(receipt(rustc=bad))), "1.100.0")
+
+    def test_receipt_text_is_never_echoed(self):
+        result = self.check(note(receipt(rustc="rustc 9.9.9 EVIL")))
+        self.fails(result)
+        self.assertNotIn(b"EVIL", result.stderr + result.stdout)
+
+    def test_toolchain_change_compares_to_the_head(self):
+        paths = ("rust-toolchain.toml", "src/a.rs")
+        new = receipt(rustc="rustc 1.101.0 (abcdef123 2026-11-01)")
+        head = '[toolchain]\nchannel = "1.101.0"\n'
+        self.assertEqual(self.check(note(new), paths=paths, head=head).returncode, 0)
+        self.fails(self.check(note(receipt()), paths=paths, head=head), "1.101.0")
+
+    def test_head_toolchain_is_ignored_when_the_diff_leaves_it_alone(self):
+        new = receipt(rustc="rustc 1.101.0 (abcdef123 2026-11-01)")
+        head = '[toolchain]\nchannel = "1.101.0"\n'
+        self.fails(self.check(note(new), head=head), "1.100.0")
+
+    def test_toolchain_that_cannot_be_read_is_indeterminate(self):
+        bad = (
+            "",
+            "channel = ",
+            'channel = "1.100.0"\n',
+            "[toolchain]\nchannel = 7\n",
+            '[toolchain]\nchannel = "1.100"\n',
+            '[toolchain]\nchannel = "stable"\n',
+            '[toolchain]\nchannel = "1.100.٠"\n',
+            PINNED + "#" * 70000,
+        )
+        for text in bad:
+            with self.subTest(text=text[:30]):
+                self.assertEqual(self.check(note(), base=text).returncode, 2)
+        self.assertEqual(self.check(note(), base=None).returncode, 2)
+        removed = self.check(note(), paths=("rust-toolchain.toml",))
+        self.assertEqual(removed.returncode, 2)
+
+    def test_without_tomllib_the_check_is_indeterminate(self):
+        with mock.patch.object(gate_evidence, "tomllib", None):
+            with self.assertRaises(gate_evidence.Indeterminate):
+                gate_evidence.pinned_channel(b'[toolchain]\nchannel = "1.100.0"')
+
+    def test_out_of_scope_paths_pass_without_a_receipt(self):
+        paths = ("docs/a.md", "web/app.js", "tests/test_x.py")
+        result = self.check(None, paths=paths)
+        self.assertEqual((result.returncode, result.stderr), (0, b""))
+        self.assertIn(b"no Rust-scope", result.stdout)
+
+    def test_no_changed_files_pass(self):
+        self.assertEqual(self.check(None, paths=()).returncode, 0)
+
+    def test_a_github_path_owes_no_receipt_by_itself(self):
+        workflow = (".github/workflows/check.yml",)
+        self.assertEqual(self.check(None, paths=workflow).returncode, 0)
+        self.assertEqual(
+            self.check(note(), paths=workflow + ("src/a.rs",)).returncode, 0
+        )
+        self.assertEqual(self.check(None, paths=workflow + ("src/a.rs",)).returncode, 1)
+
+    def test_bot_is_exempt_and_named(self):
+        result = self.check(None, author="Bot")
+        self.assertEqual(result.returncode, 0)
+        self.assertIn(b"exempt", result.stdout)
+        self.assertIn(b"Bot", result.stdout)
+
+    def test_other_authors_are_not_exempt(self):
+        for author in ("User", "Organization", "bot", "Mannequin", "x"):
+            with self.subTest(author=author):
+                self.assertEqual(self.check(None, author=author).returncode, 1)
+
+    def test_bad_changed_path_is_indeterminate(self):
+        for paths in (("../x",), ("/etc/passwd",), ("a//b",)):
+            with self.subTest(paths=paths):
+                self.assertEqual(self.check(note(), paths=paths).returncode, 2)
+
+    def test_changed_list_without_its_final_nul_is_indeterminate(self):
+        args = self.args()
+        args[args.index("--changed-files-file") + 1] = self.put("cut", "docs/a.md")
+        result = run(args, b"")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn(b"changed-file list", result.stderr)
+
+    def test_a_refused_path_is_not_echoed_in_full(self):
+        result = self.check(note(), paths=("../" + "x" * 5000,))
+        self.assertEqual(result.returncode, 2)
+        self.assertLess(len(result.stderr), 500)
+
+    def test_changed_paths_may_hold_a_newline(self):
+        result = self.check(None, paths=("docs/a\nsrc/b.md",))
+        self.assertEqual(result.returncode, 0)
+
+    def test_bad_usage_is_indeterminate(self):
+        self.assertEqual(run([], b"").returncode, 2)
+        self.assertEqual(run(["--head-tree", TREE], b"").returncode, 2)
+        for flag in ("--head-tree", "--changed-files-file", "--author-type"):
+            args = self.args()
+            at = args.index(flag)
+            with self.subTest(flag=flag):
+                self.assertEqual(run(args[:at] + args[at + 2 :], b"").returncode, 2)
+        mixed = ["--scope-only", "--head-tree", TREE]
+        self.assertEqual(run(mixed, b"").returncode, 2)
+
+    def test_missing_changed_files_file_is_indeterminate(self):
+        args = self.args()
+        args[args.index("--changed-files-file") + 1] = str(self.dir / "absent")
+        self.assertEqual(run(args, b"").returncode, 2)
 
 
 if __name__ == "__main__":
