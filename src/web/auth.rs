@@ -937,7 +937,7 @@ fn unexpired_state(payload: &str, now: i64) -> Option<String> {
     let age = now.checked_sub(issued.parse::<i64>().ok()?)?;
     (0..=OAUTH_STATE_TTL_SECONDS)
         .contains(&age)
-        .then(|| token.to_string())
+        .then(|| String::from(token))
 }
 
 /// The payload of cookie `name`, if it is present and signed for that name.
