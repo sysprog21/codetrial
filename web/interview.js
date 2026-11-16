@@ -344,6 +344,8 @@ const params = new URLSearchParams(window.location.search);
 const audioTimingEnabled = params.get("audioTiming") === "1";
 const audioTiming = audioTimingEnabled
   ? createAudioResponseTiming({
+      diagnose: (reason) =>
+        console.debug(`[audio-timing] Turn not measured: ${reason}`),
       report: (elapsedMs) => {
         console.info(
           `[audio-timing] Browser-observed speaking-to-audio gap: ${elapsedMs.toFixed(1)} ms`,
@@ -353,6 +355,7 @@ const audioTiming = audioTimingEnabled
   : null;
 
 let audioTimingTrack = null;
+let audioTimingRoom = null;
 let stopAudioTimingMonitor = null;
 let audioTimingReady = false;
 const editorOptions = editorOptionsFromParams(params);
@@ -2416,7 +2419,7 @@ async function connectLiveKit(connection, preflight, presenting = false) {
   // on its own, so the candidate is told to wait rather than to restart.
   room.on(livekit.RoomEvent.Reconnecting, () => {
     if (state.room !== room) return;
-    releaseAudioTiming();
+    releaseAudioTiming(null, "room reconnecting");
     state.connected = false;
     if (strict) updateRunAvailability();
     setBanner("connection", providerUiState("reconnecting").message);
@@ -2458,8 +2461,8 @@ async function connectLiveKit(connection, preflight, presenting = false) {
   });
   room.on(livekit.RoomEvent.Disconnected, () => {
     audioPlayback.release(room);
-    if (state.room === room) {
-      releaseAudioTiming();
+    if (state.room === room || (!state.room && audioTimingRoom === room)) {
+      releaseAudioTiming(null, "room disconnected");
       audioTiming?.reset();
     }
     const startupCleanup = state.startupCleanupRoom === room;
@@ -3035,7 +3038,7 @@ async function receiveReport(room, payload, flushed = Promise.resolve()) {
     reportRenderFailed(error, { offlineSummary: !renderAttempted });
   }
 }
-function releaseAudioTiming(track = null) {
+function releaseAudioTiming(track = null, reason = "audio monitor released") {
   if (!audioTiming) return;
 
   // A late unsubscribe from an old track must not remove the new monitor.
@@ -3045,21 +3048,23 @@ function releaseAudioTiming(track = null) {
 
   stopAudioTimingMonitor = null;
   audioTimingTrack = null;
+  audioTimingRoom = null;
   audioTimingReady = false;
 
-  audioTiming.cancelPending();
+  audioTiming.cancelPending(reason);
 }
 function attachAudioTiming(track) {
   if (!audioTiming) return;
 
   if (audioTimingTrack === track) return;
 
-  releaseAudioTiming();
+  releaseAudioTiming(null, "audio track replaced");
 
   const mediaTrack = track.mediaStreamTrack;
   if (!mediaTrack) return;
 
   audioTimingTrack = track;
+  audioTimingRoom = state.room;
 
   try {
     stopAudioTimingMonitor = startAudioActivityMonitor(
@@ -3073,10 +3078,13 @@ function attachAudioTiming(track) {
           if (audioTimingTrack !== track) return;
           audioTimingReady = true;
         },
-        onUnavailable: () => {
+        onQuiet: () => {
+          if (audioTimingTrack === track) audioTiming.audioQuiet();
+        },
+        onUnavailable: (reason) => {
           if (audioTimingTrack !== track) return;
           audioTimingReady = false;
-          audioTiming.cancelPending();
+          audioTiming.cancelPending(reason);
         },
       },
     );
@@ -5378,7 +5386,7 @@ function updateAgentState() {
     return;
   }
   if (!agent) {
-    audioTiming?.reset();
+    audioTiming?.reset("interviewer unavailable");
     setAgentStateLabel("Waiting", false);
     // "Waiting" is honest but useless on its own: it looks identical whether
     // the interviewer has not arrived yet or arrived, greeted, and died. Once
@@ -5460,13 +5468,14 @@ function updateAgentState() {
   state.agentSpeaking = value === "speaking";
   state.agentThinking = value === "thinking";
   if (audioTiming) {
-    audioTiming.speakingChanged(published === "speaking");
-
-    // A speaking transition is measurable only if the monitor was
-    // already observing audio when the transition occurred.
-    if (!audioTimingReady || !state.connected) {
-      audioTiming.cancelPending();
-    }
+    audioTiming.speakingChanged(
+      published === "speaking",
+      !state.connected
+        ? "room disconnected"
+        : !audioTimingReady
+          ? "monitor not ready"
+          : null,
+    );
   }
   if (state.agentSpeaking || state.agentThinking) {
     drawingTurn?.reset();

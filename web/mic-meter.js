@@ -15,27 +15,60 @@ import { MIC_CONFIRM_FRAMES, peakLevel, sustainedPeak } from "./audio-check.js";
 ///
 /// Injected rather than called directly, the way `createFaceCheck` takes its
 /// detector, because a test cannot build one of these and the thing worth
-/// testing is not the analyser.
-export async function startMediaMeter(stream, onPeak, onError, shouldStop) {
+/// testing is not the analyser. The returned stop function also releases it
+/// without waiting for a frame in a hidden tab.
+export function startMediaMeter(
+  stream,
+  onPeak,
+  onError,
+  shouldStop,
+  {
+    createContext = () => new AudioContext(),
+    schedule = (callback) => requestAnimationFrame(callback),
+    cancel = (frame) => cancelAnimationFrame(frame),
+    shouldSample = () => true,
+    sampleSize = null,
+    deferFirstFrame = false,
+  } = {},
+) {
+  let context;
+  let source;
+  let frame = null;
+  let stopped = false;
+  const stop = () => {
+    if (stopped) return;
+    stopped = true;
+    if (frame !== null) cancel(frame);
+    source?.disconnect();
+    void context?.close().catch(() => {});
+  };
   try {
-    const context = new AudioContext();
+    context = createContext();
     const analyser = context.createAnalyser();
     analyser.fftSize = 1024;
-    context.createMediaStreamSource(stream).connect(analyser);
-    const samples = new Uint8Array(analyser.frequencyBinCount);
+    source = context.createMediaStreamSource(stream);
+    source.connect(analyser);
+    const samples = new Uint8Array(sampleSize ?? analyser.frequencyBinCount);
     const tick = () => {
+      frame = null;
+      if (stopped) return;
       if (shouldStop()) {
-        void context.close().catch(() => {});
+        stop();
         return;
       }
-      analyser.getByteTimeDomainData(samples);
-      onPeak(peakLevel(samples));
-      requestAnimationFrame(tick);
+      if (shouldSample()) {
+        analyser.getByteTimeDomainData(samples);
+        onPeak(peakLevel(samples));
+      }
+      if (!stopped) frame = schedule(tick);
     };
-    tick();
+    if (deferFirstFrame) frame = schedule(tick);
+    else tick();
   } catch (error) {
+    stop();
     onError(String(error?.message || error));
   }
+  return stop;
 }
 
 /// One meter at a time. The pool can hand back a replacement microphone, and

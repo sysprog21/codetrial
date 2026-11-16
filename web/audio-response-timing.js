@@ -1,27 +1,40 @@
-import { peakLevel } from "./audio-check.js";
+import { startMediaMeter } from "./mic-meter.js";
 /// Browser-observed gap between Jim entering "speaking" and the first
 /// detectable remote audio activity. This is not end-to-end latency.
 export function createAudioResponseTiming({
   now = () => performance.now(),
   report = () => {},
+  diagnose = () => {},
 } = {}) {
   let speaking = false;
   let startedAt = null;
+  let active = false;
+  let armed = false;
 
-  function speakingChanged(nextSpeaking) {
+  function speakingChanged(nextSpeaking, unavailableReason = null) {
     if (nextSpeaking === speaking) return;
 
     speaking = nextSpeaking;
 
     if (speaking) {
-      startedAt = now();
+      if (unavailableReason || active) {
+        diagnose(unavailableReason || "audio already active");
+      } else {
+        startedAt = now();
+        armed = false;
+      }
     } else {
-      startedAt = null;
+      cancelPending("speaking stopped before audio");
     }
   }
 
   function audioActivity() {
+    active = true;
     if (!speaking || startedAt === null) return;
+    if (!armed) {
+      cancelPending("audio already active before a quiet frame");
+      return;
+    }
 
     const elapsedMs = now() - startedAt;
     startedAt = null;
@@ -29,18 +42,28 @@ export function createAudioResponseTiming({
     report(elapsedMs);
   }
 
-  function cancelPending() {
-    startedAt = null;
+  function audioQuiet() {
+    active = false;
+    // A pre-transition quiet frame cannot rule out audio arriving first.
+    if (startedAt !== null) armed = true;
   }
 
-  function reset() {
+  function cancelPending(reason = "measurement canceled") {
+    if (startedAt !== null) diagnose(reason);
+    startedAt = null;
+    armed = false;
+  }
+
+  function reset(reason = "timing reset") {
     speaking = false;
-    cancelPending();
+    active = false;
+    cancelPending(reason);
   }
 
   return {
     speakingChanged,
     audioActivity,
+    audioQuiet,
     cancelPending,
     reset,
   };
@@ -54,6 +77,7 @@ export function startAudioActivityMonitor(
     threshold = 0.05,
     onAvailable = () => {},
     onUnavailable = () => {},
+    onQuiet = () => {},
     createContext = () => new AudioContext(),
     createStream = (mediaTrack) => new MediaStream([mediaTrack]),
     schedule = requestAnimationFrame,
@@ -62,82 +86,74 @@ export function startAudioActivityMonitor(
     visibilityTarget = globalThis.document,
   } = {},
 ) {
+  const stream = createStream(track);
   const context = createContext();
-  let source;
-  let analyser;
-
-  try {
-    if (context.state === "suspended") {
-      void context.resume?.().catch(() => {});
-    }
-
-    source = context.createMediaStreamSource(createStream(track));
-    analyser = context.createAnalyser();
-
-    analyser.fftSize = 1024;
-    source.connect(analyser);
-  } catch (error) {
-    source?.disconnect();
-    void context.close?.().catch(() => {});
-    throw error;
-  }
-
-  const samples = new Uint8Array(analyser.fftSize);
-
   let stopped = false;
-  let frame = null;
-  let unavailable = null;
+  let unavailable;
 
-  function notifyAvailability(available) {
-    const nextUnavailable = !available;
-
-    if (unavailable === nextUnavailable) return;
-
-    unavailable = nextUnavailable;
-
-    if (available) onAvailable();
-    else onUnavailable();
+  function notifyAvailability(reason) {
+    if (unavailable === reason) return;
+    unavailable = reason;
+    if (reason === null) onAvailable();
+    else onUnavailable(reason);
   }
 
   function visibilityChanged() {
     if (stopped) return;
 
     if (visibilityTarget?.hidden) {
-      notifyAvailability(false);
+      notifyAvailability("page hidden");
     }
   }
-
-  visibilityTarget?.addEventListener("visibilitychange", visibilityChanged);
 
   function resumeOnGesture() {
     if (stopped || context.state !== "suspended") return;
     void context.resume?.().catch(() => {});
   }
 
+  const stopMeter = startMediaMeter(
+    stream,
+    (peak) => {
+      if (peak > threshold) onActivity();
+      else onQuiet();
+    },
+    (message) => {
+      throw new Error(message);
+    },
+    () => stopped,
+    {
+      createContext: () => context,
+      schedule,
+      cancel,
+      sampleSize: 1024,
+      deferFirstFrame: true,
+      shouldSample: () => {
+        const reason = visibilityTarget?.hidden
+          ? "page hidden"
+          : context.state !== "running"
+            ? `audio context ${context.state}`
+            : track.readyState !== "live"
+              ? "track ended"
+              : track.muted
+                ? "track muted"
+                : track.enabled === false
+                  ? "track disabled"
+                  : null;
+
+        notifyAvailability(reason);
+        return reason === null;
+      },
+    },
+  );
+  try {
+    resumeOnGesture();
+  } catch (error) {
+    stopMeter();
+    throw error;
+  }
+  visibilityTarget?.addEventListener("visibilitychange", visibilityChanged);
   gestureTarget?.addEventListener("pointerdown", resumeOnGesture);
   gestureTarget?.addEventListener("keydown", resumeOnGesture);
-
-  function tick() {
-    if (stopped) return;
-
-    const available =
-      context.state === "running" &&
-      track.readyState === "live" &&
-      !visibilityTarget?.hidden;
-
-    notifyAvailability(available);
-
-    if (available) {
-      analyser.getByteTimeDomainData(samples);
-
-      if (peakLevel(samples) > threshold) {
-        onActivity();
-      }
-    }
-
-    frame = schedule(tick);
-  }
-  frame = schedule(tick);
 
   return () => {
     if (stopped) return;
@@ -152,9 +168,6 @@ export function startAudioActivityMonitor(
       visibilityChanged,
     );
 
-    cancel(frame);
-    source.disconnect();
-
-    void context.close().catch(() => {});
+    stopMeter();
   };
 }

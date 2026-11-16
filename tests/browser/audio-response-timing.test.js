@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { startMediaMeter } from "../../web/mic-meter.js";
 import {
   createAudioResponseTiming,
   startAudioActivityMonitor,
@@ -8,15 +9,18 @@ import {
 function fixture() {
   let time = 0;
   const measurements = [];
+  const diagnostics = [];
 
   const timing = createAudioResponseTiming({
     now: () => time,
     report: (elapsed) => measurements.push(elapsed),
+    diagnose: (reason) => diagnostics.push(reason),
   });
 
   return {
     timing,
     measurements,
+    diagnostics,
     advance: (ms) => {
       time += ms;
     },
@@ -27,6 +31,7 @@ test("measures speaking-to-first-audio gap", () => {
   const f = fixture();
 
   f.timing.speakingChanged(true);
+  f.timing.audioQuiet();
   f.advance(180);
   f.timing.audioActivity();
 
@@ -37,6 +42,7 @@ test("ignores repeated speaking updates", () => {
   const f = fixture();
 
   f.timing.speakingChanged(true);
+  f.timing.audioQuiet();
   f.advance(100);
 
   f.timing.speakingChanged(true);
@@ -50,6 +56,7 @@ test("reports only the first audio activity per speaking turn", () => {
   const f = fixture();
 
   f.timing.speakingChanged(true);
+  f.timing.audioQuiet();
   f.advance(120);
   f.timing.audioActivity();
 
@@ -94,140 +101,49 @@ test("reset cancels an incomplete measurement", () => {
 });
 
 test("audio monitor detects a frame above threshold", () => {
+  const m = monitorFixture();
   const callbacks = [];
-  let tick;
-
-  const analyser = {
-    fftSize: 1024,
-    getByteTimeDomainData(samples) {
-      samples.fill(128);
-      samples[0] = 192;
-    },
-  };
-
-  const source = {
-    connect() {},
-    disconnect() {},
-  };
-
-  const context = {
-    state: "running",
-
-    createMediaStreamSource() {
-      return source;
-    },
-    createAnalyser() {
-      return analyser;
-    },
-    close: async () => {},
-  };
-
   const stop = startAudioActivityMonitor(
-    { kind: "audio", readyState: "live" },
+    m.track,
     () => callbacks.push("audio"),
-    {
-      createContext: () => context,
-      createStream: (track) => ({ getTracks: () => [track] }),
-      schedule: (callback) => {
-        tick = callback;
-        return 1;
-      },
-      cancel: () => {},
-    },
+    m.options,
   );
-
-  tick();
-
+  assert.deepEqual(
+    callbacks,
+    [],
+    "remote timing waits for the first animation frame",
+  );
+  m.tick();
   assert.deepEqual(callbacks, ["audio"]);
-
+  assert.deepEqual(m.sampleLengths, [1024]);
   stop();
 });
 test("audio monitor ignores an ended track", () => {
+  const m = monitorFixture({ readyState: "ended" });
   const callbacks = [];
-  let tick;
-
-  const track = {
-    kind: "audio",
-    readyState: "ended",
-  };
-
-  const analyser = {
-    fftSize: 1024,
-    getByteTimeDomainData(samples) {
-      samples.fill(128);
-      samples[0] = 192;
-    },
-  };
-
-  const source = {
-    connect() {},
-    disconnect() {},
-  };
-
-  const context = {
-    state: "running",
-    createMediaStreamSource: () => source,
-    createAnalyser: () => analyser,
-    close: async () => {},
-  };
-
-  const stop = startAudioActivityMonitor(track, () => callbacks.push("audio"), {
-    createContext: () => context,
-    createStream: () => ({}),
-    schedule: (callback) => {
-      tick = callback;
-      return 1;
-    },
-    cancel: () => {},
-  });
-
-  tick();
-
+  const stop = startAudioActivityMonitor(
+    m.track,
+    () => callbacks.push("audio"),
+    m.options,
+  );
+  m.tick();
   assert.deepEqual(callbacks, []);
-
+  assert.deepEqual(m.sampleLengths, []);
   stop();
 });
 
 test("audio monitor reports an unavailable audio context", () => {
-  let tick;
+  const m = monitorFixture({ state: "suspended" });
   let unavailable = 0;
   let activity = 0;
-
-  const context = {
-    state: "suspended",
-    createMediaStreamSource: () => ({
-      connect() {},
-      disconnect() {},
-    }),
-    createAnalyser: () => ({
-      fftSize: 1024,
-      getByteTimeDomainData() {
-        throw new Error("Suspended context must not be sampled");
-      },
-    }),
-    close: async () => {},
-  };
-
-  const stop = startAudioActivityMonitor(
-    { kind: "audio", readyState: "live" },
-    () => activity++,
-    {
-      createContext: () => context,
-      createStream: () => ({}),
-      onUnavailable: () => unavailable++,
-      schedule: (callback) => {
-        tick = callback;
-        return 1;
-      },
-      cancel: () => {},
-    },
-  );
-
-  tick();
-
+  const stop = startAudioActivityMonitor(m.track, () => activity++, {
+    ...m.options,
+    onUnavailable: () => unavailable++,
+  });
+  m.tick();
   assert.equal(unavailable, 1);
   assert.equal(activity, 0);
-
+  assert.deepEqual(m.sampleLengths, []);
   stop();
 });
 test("cancelPending preserves speaking state without reporting stale audio", () => {
@@ -251,7 +167,9 @@ test("cancelPending preserves speaking state without reporting stale audio", () 
 
   // Only a new speaking transition can start another measurement.
   f.timing.speakingChanged(false);
+  f.timing.audioQuiet();
   f.timing.speakingChanged(true);
+  f.timing.audioQuiet();
 
   f.advance(80);
   f.timing.audioActivity();
@@ -259,189 +177,56 @@ test("cancelPending preserves speaking state without reporting stale audio", () 
   assert.deepEqual(f.measurements, [80]);
 });
 test("audio monitor notifies unavailability only on state changes", () => {
-  let tick;
+  const m = monitorFixture({ state: "suspended", peak: 0 });
   let unavailable = 0;
-
-  const context = {
-    state: "suspended",
-    createMediaStreamSource: () => ({
-      connect() {},
-      disconnect() {},
-    }),
-    createAnalyser: () => ({
-      fftSize: 1024,
-      getByteTimeDomainData(samples) {
-        samples.fill(128);
-      },
-    }),
-    close: async () => {},
-  };
-
-  const stop = startAudioActivityMonitor(
-    { kind: "audio", readyState: "live" },
-    () => {},
-    {
-      createContext: () => context,
-      createStream: () => ({}),
-      onUnavailable: () => unavailable++,
-      schedule: (callback) => {
-        tick = callback;
-        return 1;
-      },
-      cancel: () => {},
-    },
-  );
-
-  tick();
-  tick();
-
+  const stop = startAudioActivityMonitor(m.track, () => {}, {
+    ...m.options,
+    onUnavailable: () => unavailable++,
+  });
+  m.tick();
+  m.tick();
   assert.equal(unavailable, 1);
-
-  context.state = "running";
-  tick();
-
-  context.state = "suspended";
-  tick();
-
+  m.context.state = "running";
+  m.tick();
+  m.context.state = "suspended";
+  m.tick();
   assert.equal(unavailable, 2);
-
   stop();
 });
 test("audio monitor attempts to resume a suspended context", () => {
-  let resumes = 0;
-
-  const context = {
-    state: "suspended",
-
-    resume: async () => {
-      resumes++;
-    },
-
-    createMediaStreamSource: () => ({
-      connect() {},
-      disconnect() {},
-    }),
-
-    createAnalyser: () => ({
-      fftSize: 1024,
-      getByteTimeDomainData() {},
-    }),
-
-    close: async () => {},
-  };
-
-  const stop = startAudioActivityMonitor(
-    { kind: "audio", readyState: "live" },
-    () => {},
-    {
-      createContext: () => context,
-      createStream: () => ({}),
-      schedule: () => 1,
-      cancel: () => {},
-    },
-  );
-
-  assert.equal(resumes, 1);
-
+  const m = monitorFixture({ state: "suspended" });
+  const stop = startAudioActivityMonitor(m.track, () => {}, m.options);
+  assert.equal(m.resumes(), 1);
   stop();
 });
 test("audio monitor closes its context when setup fails", async () => {
-  let closes = 0;
-
-  const context = {
-    state: "running",
-
-    createMediaStreamSource() {
-      throw new Error("Cannot create media source");
-    },
-
-    close: async () => {
-      closes++;
-    },
-  };
-
+  const m = monitorFixture({ setupError: "Cannot create media source" });
   assert.throws(
-    () =>
-      startAudioActivityMonitor(
-        { kind: "audio", readyState: "live" },
-        () => {},
-        {
-          createContext: () => context,
-          createStream: () => ({}),
-          schedule: () => 1,
-          cancel: () => {},
-        },
-      ),
+    () => startAudioActivityMonitor(m.track, () => {}, m.options),
     /Cannot create media source/,
   );
-
-  // close() is asynchronous, so allow its promise to settle.
   await new Promise((resolve) => setImmediate(resolve));
-
-  assert.equal(closes, 1);
+  assert.equal(m.closes(), 1);
 });
 test("audio monitor resumes on a gesture and removes listeners on stop", async () => {
-  const gestures = new EventTarget();
-  let resumes = 0;
-  let closes = 0;
-
-  const context = {
+  const m = monitorFixture({
     state: "suspended",
-
-    resume: async () => {
-      resumes++;
-      context.state = "running";
-    },
-
-    createMediaStreamSource: () => ({
-      connect() {},
-      disconnect() {},
-    }),
-
-    createAnalyser: () => ({
-      fftSize: 1024,
-      getByteTimeDomainData(samples) {
-        samples.fill(128);
-      },
-    }),
-
-    close: async () => {
-      closes++;
-    },
-  };
-
-  const stop = startAudioActivityMonitor(
-    { kind: "audio", readyState: "live" },
-    () => {},
-    {
-      createContext: () => context,
-      createStream: () => ({}),
-      gestureTarget: gestures,
-      schedule: () => 1,
-      cancel: () => {},
-    },
-  );
-
-  // The initial resume is attempted during setup.
-  assert.equal(resumes, 1);
-
-  // Simulate the browser suspending the context again.
-  context.state = "suspended";
-
-  gestures.dispatchEvent(new Event("pointerdown"));
-
-  assert.equal(resumes, 2);
-
+    resumeState: "running",
+    peak: 0,
+  });
+  const stop = startAudioActivityMonitor(m.track, () => {}, m.options);
+  assert.equal(m.resumes(), 1);
+  m.context.state = "suspended";
+  m.gestures.dispatchEvent(new Event("pointerdown"));
+  assert.equal(m.resumes(), 2);
   stop();
-
-  // Stopped monitors must no longer react to gestures.
-  context.state = "suspended";
-  gestures.dispatchEvent(new Event("keydown"));
-
-  assert.equal(resumes, 2);
-
+  m.context.state = "suspended";
+  m.gestures.dispatchEvent(new Event("keydown"));
+  assert.equal(m.resumes(), 2);
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(closes, 1);
+  assert.equal(m.closes(), 1);
+  assert.equal(m.disconnections(), 1);
+  assert.equal(m.cancellations(), 1);
 });
 test("monitor interruption does not restart the same speaking turn", () => {
   const f = fixture();
@@ -466,7 +251,9 @@ test("monitor interruption does not restart the same speaking turn", () => {
 
   // A genuine new speaking transition may be measured.
   f.timing.speakingChanged(false);
+  f.timing.audioQuiet();
   f.timing.speakingChanged(true);
+  f.timing.audioQuiet();
 
   f.advance(120);
   f.timing.audioActivity();
@@ -475,75 +262,367 @@ test("monitor interruption does not restart the same speaking turn", () => {
 });
 
 test("hidden pages invalidate audio timing and cleanup visibility listeners", () => {
-  const visibilityTarget = new EventTarget();
-  visibilityTarget.hidden = false;
-
-  let tick;
+  const m = monitorFixture();
   let unavailable = 0;
   let available = 0;
   let activity = 0;
-
-  const context = {
-    state: "running",
-    createMediaStreamSource: () => ({
-      connect() {},
-      disconnect() {},
-    }),
-    createAnalyser: () => ({
-      fftSize: 1024,
-      getByteTimeDomainData(samples) {
-        samples.fill(128);
-        samples[0] = 192;
-      },
-    }),
-    close: async () => {},
-  };
-
-  const stop = startAudioActivityMonitor(
-    { kind: "audio", readyState: "live" },
-    () => activity++,
-    {
-      createContext: () => context,
-      createStream: () => ({}),
-      visibilityTarget,
-      onAvailable: () => available++,
-      onUnavailable: () => unavailable++,
-      schedule: (callback) => {
-        tick = callback;
-        return 1;
-      },
-      cancel: () => {},
-    },
-  );
-
-  tick();
-
+  const stop = startAudioActivityMonitor(m.track, () => activity++, {
+    ...m.options,
+    onAvailable: () => available++,
+    onUnavailable: () => unavailable++,
+  });
+  m.tick();
   assert.equal(available, 1);
   assert.equal(activity, 1);
-
-  visibilityTarget.hidden = true;
-  visibilityTarget.dispatchEvent(new Event("visibilitychange"));
-
+  m.visibility.hidden = true;
+  m.visibility.dispatchEvent(new Event("visibilitychange"));
   assert.equal(unavailable, 1);
-
-  // Even if the frame loop runs, hidden audio must not be counted.
-  tick();
-
+  m.tick();
   assert.equal(activity, 1);
   assert.equal(unavailable, 1);
-
-  visibilityTarget.hidden = false;
-  visibilityTarget.dispatchEvent(new Event("visibilitychange"));
-  tick();
-
+  m.visibility.hidden = false;
+  m.visibility.dispatchEvent(new Event("visibilitychange"));
+  m.tick();
   assert.equal(available, 2);
   assert.equal(activity, 2);
-
   stop();
-
-  // Stopped monitors must not react to later visibility changes.
-  visibilityTarget.hidden = true;
-  visibilityTarget.dispatchEvent(new Event("visibilitychange"));
-
+  m.visibility.hidden = true;
+  m.visibility.dispatchEvent(new Event("visibilitychange"));
   assert.equal(unavailable, 1);
+});
+
+function monitorFixture({
+  state = "running",
+  readyState = "live",
+  peak = 0.5,
+  resumeState = state,
+  setupError = null,
+} = {}) {
+  let frame;
+  let scheduled = 0;
+  let closes = 0;
+  let resumes = 0;
+  let disconnections = 0;
+  let cancellations = 0;
+  const sampleLengths = [];
+  const streams = [];
+  const track = { kind: "audio", readyState, muted: false, enabled: true };
+  const visibility = new EventTarget();
+  visibility.hidden = false;
+  const gestures = new EventTarget();
+  const analyser = {
+    fftSize: 1024,
+    get frequencyBinCount() {
+      return this.fftSize / 2;
+    },
+    getByteTimeDomainData(samples) {
+      assert.equal(
+        context.state,
+        "running",
+        "unavailable contexts must not be sampled",
+      );
+      sampleLengths.push(samples.length);
+      samples.fill(128);
+      samples[0] = 128 + Math.round(peak * 128);
+    },
+  };
+  const context = {
+    state,
+    createMediaStreamSource(stream) {
+      streams.push(stream);
+      if (setupError) throw new Error(setupError);
+      return {
+        connect(target) {
+          assert.equal(target, analyser);
+        },
+        disconnect() {
+          disconnections++;
+        },
+      };
+    },
+    createAnalyser: () => analyser,
+    resume: async () => {
+      resumes++;
+      context.state = resumeState;
+    },
+    close: async () => {
+      closes++;
+    },
+  };
+  const options = {
+    createContext: () => context,
+    createStream: (mediaTrack) => ({ getTracks: () => [mediaTrack] }),
+    schedule: (callback) => {
+      frame = callback;
+      return ++scheduled;
+    },
+    cancel: () => {
+      cancellations++;
+    },
+    visibilityTarget: visibility,
+    gestureTarget: gestures,
+  };
+  return {
+    track,
+    context,
+    visibility,
+    gestures,
+    options,
+    sampleLengths,
+    streams,
+    tick: () => frame(),
+    setPeak: (value) => {
+      peak = value;
+    },
+    closes: () => closes,
+    resumes: () => resumes,
+    disconnections: () => disconnections,
+    cancellations: () => cancellations,
+  };
+}
+
+test("audio already active before speaking never becomes a positive gap", () => {
+  const f = fixture();
+  f.timing.audioActivity();
+  f.timing.speakingChanged(true);
+  f.advance(16);
+  f.timing.audioActivity();
+  assert.deepEqual(f.measurements, []);
+  assert.deepEqual(f.diagnostics, ["audio already active"]);
+});
+
+test("the first active frame cannot substitute for a post-transition quiet baseline", () => {
+  const f = fixture();
+  f.timing.speakingChanged(true);
+  f.advance(16);
+  f.timing.audioActivity();
+  assert.deepEqual(f.measurements, []);
+  assert.deepEqual(f.diagnostics, [
+    "audio already active before a quiet frame",
+  ]);
+});
+
+test("only a quiet frame after speaking arms a positive measurement", () => {
+  const f = fixture();
+  assert.equal(typeof f.timing.audioQuiet, "function");
+  f.timing.audioQuiet();
+  f.timing.speakingChanged(true);
+  f.advance(16);
+  f.timing.audioActivity();
+  assert.deepEqual(f.measurements, []);
+  f.timing.audioQuiet();
+  f.timing.audioActivity();
+  assert.deepEqual(f.measurements, [], "a dropped turn stays dropped");
+  f.timing.speakingChanged(false);
+  f.timing.audioQuiet();
+  f.timing.speakingChanged(true);
+  f.advance(20);
+  f.timing.audioQuiet();
+  f.advance(80);
+  f.timing.audioActivity();
+  assert.deepEqual(
+    f.measurements,
+    [100],
+    "elapsed time still starts at the state transition",
+  );
+});
+
+for (const [property, value, reason] of [
+  ["muted", true, "track muted"],
+  ["enabled", false, "track disabled"],
+]) {
+  test(`a ${property} interruption cancels the turn instead of timing recovery`, () => {
+    const f = fixture();
+    const m = monitorFixture({ peak: 0 });
+    const unavailable = [];
+    const stop = startAudioActivityMonitor(m.track, f.timing.audioActivity, {
+      ...m.options,
+      onQuiet: f.timing.audioQuiet,
+      onUnavailable: (reason) => {
+        unavailable.push(reason);
+        f.timing.cancelPending(reason);
+      },
+    });
+    m.tick();
+    f.timing.speakingChanged(true);
+    m.tick();
+    m.track[property] = value;
+    m.tick();
+    m.tick();
+    assert.deepEqual(unavailable, [reason]);
+    assert.deepEqual(f.diagnostics, [reason]);
+    m.track[property] = !value;
+    m.setPeak(0.5);
+    f.advance(200);
+    m.tick();
+    assert.deepEqual(f.measurements, []);
+    m.setPeak(0);
+    m.tick();
+    f.timing.speakingChanged(false);
+    f.timing.speakingChanged(true);
+    m.tick();
+    f.advance(80);
+    m.setPeak(0.5);
+    m.tick();
+    assert.deepEqual(f.measurements, [80]);
+    stop();
+  });
+}
+
+test("the monitor supplies quiet frames without reporting activity", () => {
+  const m = monitorFixture({ peak: 0 });
+  let quiet = 0;
+  let activity = 0;
+  const stop = startAudioActivityMonitor(m.track, () => activity++, {
+    ...m.options,
+    onQuiet: () => quiet++,
+  });
+  m.tick();
+  m.setPeak(0.5);
+  m.tick();
+  m.setPeak(0);
+  m.tick();
+  assert.equal(quiet, 2);
+  assert.equal(activity, 1);
+  stop();
+});
+
+test("skipped transitions and canceled turns explain themselves once", () => {
+  const f = fixture();
+  f.timing.speakingChanged(true, "monitor not ready");
+  f.timing.speakingChanged(true, "monitor not ready");
+  f.timing.cancelPending("audio context suspended");
+  assert.deepEqual(f.diagnostics, ["monitor not ready"]);
+  f.timing.speakingChanged(false);
+  f.timing.speakingChanged(true);
+  f.timing.cancelPending("page hidden");
+  f.timing.cancelPending("page hidden");
+  f.timing.audioActivity();
+  assert.deepEqual(f.measurements, []);
+  assert.deepEqual(f.diagnostics, ["monitor not ready", "page hidden"]);
+});
+
+test("stopping speech and resetting explain pending measurements", () => {
+  const f = fixture();
+  f.timing.speakingChanged(true);
+  f.timing.speakingChanged(false);
+  f.timing.speakingChanged(true);
+  f.timing.reset("room disconnected");
+  assert.deepEqual(f.diagnostics, [
+    "speaking stopped before audio",
+    "room disconnected",
+  ]);
+});
+
+for (const [name, peak, expected] of [
+  ["silent", 0, []],
+  ["below threshold", 7 / 128, []],
+  ["at threshold", 8 / 128, []],
+  ["above threshold", 9 / 128, [80]],
+]) {
+  test(`${name} frames obey the strict activity threshold`, () => {
+    const f = fixture();
+    const m = monitorFixture({ peak: 0 });
+    const stop = startAudioActivityMonitor(m.track, f.timing.audioActivity, {
+      ...m.options,
+      threshold: 8 / 128,
+      onQuiet: f.timing.audioQuiet,
+    });
+    m.tick();
+    f.timing.speakingChanged(true);
+    m.tick();
+    m.setPeak(peak);
+    f.advance(80);
+    m.tick();
+    m.tick();
+    assert.deepEqual(f.measurements, expected);
+    m.setPeak(0);
+    m.tick();
+    assert.deepEqual(
+      f.measurements,
+      expected,
+      "quiet frames never add a result",
+    );
+    stop();
+  });
+}
+
+test("microphone and remote timing meters retain separate sources and lifetimes", () => {
+  const f = fixture();
+  const mic = monitorFixture();
+  const remote = monitorFixture({ peak: 0 });
+  const peaks = [];
+  const stopMic = startMediaMeter(
+    mic.options.createStream(mic.track),
+    (peak) => peaks.push(peak),
+    (error) => assert.fail(error),
+    () => false,
+    mic.options,
+  );
+  const stopRemote = startAudioActivityMonitor(
+    remote.track,
+    f.timing.audioActivity,
+    { ...remote.options, onQuiet: f.timing.audioQuiet },
+  );
+  assert.equal(mic.streams[0].getTracks()[0], mic.track);
+  assert.equal(remote.streams[0].getTracks()[0], remote.track);
+  remote.tick();
+  f.timing.speakingChanged(true);
+  remote.tick();
+  mic.tick();
+  assert.deepEqual(peaks, [0.5, 0.5]);
+  assert.deepEqual(
+    f.measurements,
+    [],
+    "microphone activity cannot satisfy remote timing",
+  );
+  f.advance(80);
+  remote.setPeak(0.5);
+  remote.tick();
+  assert.deepEqual(f.measurements, [80]);
+  stopRemote();
+  assert.equal(remote.closes(), 1);
+  assert.equal(mic.closes(), 0);
+  mic.tick();
+  assert.equal(peaks.length, 3);
+  stopMic();
+  assert.equal(mic.closes(), 1);
+});
+
+test("failed monitor setup leaves no gesture or visibility listeners", () => {
+  const m = monitorFixture({
+    state: "suspended",
+    setupError: "Cannot create media source",
+  });
+  let unavailable = 0;
+  assert.throws(
+    () =>
+      startAudioActivityMonitor(m.track, () => {}, {
+        ...m.options,
+        onUnavailable: () => unavailable++,
+      }),
+    /Cannot create media source/,
+  );
+  const resumes = m.resumes();
+  m.gestures.dispatchEvent(new Event("pointerdown"));
+  m.gestures.dispatchEvent(new Event("keydown"));
+  m.visibility.hidden = true;
+  m.visibility.dispatchEvent(new Event("visibilitychange"));
+  assert.equal(m.resumes(), resumes);
+  assert.equal(unavailable, 0);
+  assert.equal(m.closes(), 1);
+});
+
+test("a synchronous resume failure releases the shared meter before throwing", () => {
+  const m = monitorFixture({ state: "suspended" });
+  m.context.resume = () => {
+    throw new Error("Resume failed");
+  };
+  assert.throws(
+    () => startAudioActivityMonitor(m.track, () => {}, m.options),
+    /Resume failed/,
+  );
+  assert.equal(m.closes(), 1);
+  assert.equal(m.disconnections(), 1);
+  assert.equal(m.cancellations(), 1);
 });
