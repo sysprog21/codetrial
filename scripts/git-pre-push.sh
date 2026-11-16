@@ -8,6 +8,13 @@
 # It also checks the formatting of a topic branch with scripts/indent.sh, the
 # pre-commit hook's own check, for the commits that never passed through it.
 #
+# It also refuses a topic branch that changes what the Rust gate covers (the
+# scope scripts/check-gate-evidence.py names) unless a gate run on the pushed
+# content is on record, and sends that record as a note on the head. The record
+# is a local file a contributor could write by hand, and a contributor with no
+# toolchain usually has no hooks installed either, so this is a convenience: CI
+# and the maintainer's approval are what bind.
+#
 # It also refuses new work on the main branch of any other copy of this
 # repository, which in practice is a fork a pull request is about to be opened
 # from. The same rule runs in .github/workflows/check.yml for a contributor who
@@ -149,6 +156,70 @@ check_format()
     return "$status"
 }
 
+# $1 is the head of a topic branch, $2 the ref it goes to. A head whose branch
+# changes nothing the Rust gate covers is left alone. Any other must have a
+# receipt of a gate run on its own tree, which goes into a note on that head;
+# the note is sent after the loop, and $gate_sent keeps what to send. The
+# receipt names a tree, so it matches a commit holding the same content however
+# the commit was made (an amend that only rewords, a gate run on a dirty tree
+# committed unchanged) and not one holding anything else.
+check_gate_evidence()
+{
+    gate_base=
+    [ -z "$gate_main" ] || gate_base=$(git merge-base "$1" "$gate_main" 2> /dev/null || :)
+    if [ -n "$gate_base" ]; then
+        gate_paths=$(mktemp) || return 1
+
+        # A file, not a pipe, so a failed diff is not read as a change of
+        # nothing.
+        if ! git diff --name-only --no-renames -z "$gate_base" "$1" > "$gate_paths" 2> /dev/null \
+            || ! gate_scope=$(python3 "$script_dir/check-gate-evidence.py" --scope-only -z < "$gate_paths"); then
+            rm -f "$gate_paths"
+            echo "Push rejected: cannot tell whether $2 changes what the Rust gate covers." >&2
+            return 1
+        fi
+        rm -f "$gate_paths"
+        [ "$gate_scope" = in ] || return 0
+    else
+
+        # Nothing to measure from. Refusing would turn away pushes that change
+        # nothing in scope and teach people to bypass the hook, so the push goes
+        # ahead, with the evidence when there is some.
+        gate_scope=unknown
+        if [ -z "$gate_unknown_said" ]; then
+            echo "Note: could not tell whether this push changes Rust sources; run ./scripts/test.sh and fetch so the check can judge it." >&2
+            gate_unknown_said=1
+        fi
+    fi
+    gate_tree=$(git rev-parse "$1^{tree}") || return 1
+    if ! gate_body=$(python3 "$script_dir/gate-note.py" build \
+        --receipts "$gate_receipts" --tree "$gate_tree"); then
+        [ "$gate_scope" = in ] || return 0
+        echo "Push rejected: $2 changes what the Rust gate covers, and no passing gate run is on record for its content." >&2
+        if [ -x "$script_dir/env-check.sh" ]; then
+            "$script_dir/env-check.sh" --profile local-rust --will-provision >&2 || :
+        fi
+        echo "Run the gate on exactly what you are pushing, then push again:" >&2
+        echo "  ./scripts/env-check.sh" >&2
+        echo "  ./scripts/test.sh" >&2
+        echo "A run matches a commit only when the commit holds everything the run saw, so a" >&2
+        echo "partial commit (git add -p, a file left out) needs the gate re-run on what is" >&2
+        echo "committed, as does a rebase or an edit that changes the content. A run that" >&2
+        echo "changed a file of the tree while it ran leaves no receipt either." >&2
+        echo "This check reads a file on this machine. CI and the maintainer's approval, not this hook, are what bind." >&2
+        return 1
+    fi
+    if ! gate_blob=$(printf '%s' "$gate_body" | git hash-object -w --stdin) \
+        || {
+            [ "$(git notes --ref="$gate_notes" list "$1" 2> /dev/null)" != "$gate_blob" ] \
+                && ! git notes --ref="$gate_notes" add -f -C "$gate_blob" "$1"
+        }; then
+        echo "Push rejected: cannot record the gate evidence for $2." >&2
+        return 1
+    fi
+    gate_sent="$gate_sent $1:$gate_blob"
+}
+
 # For a new branch the remote has no tip to diff against, so "new" means every
 # commit not already published somewhere. Scoped to this remote when it has
 # refs, because a commit already on another remote is not this push's to judge.
@@ -189,6 +260,24 @@ test_note=
 review_notes=refs/notes/codetrial-review
 publish_review=0
 review_heads=
+gate_notes=refs/notes/codetrial-gate
+gate_receipts=$(git rev-parse --git-common-dir)/codetrial-review/gate-receipts/by-tree
+gate_sent=
+gate_unknown_said=
+
+# What a branch is measured from for the gate evidence: the first of these that
+# resolves, the same for every ref of the push. A clone whose push remote has no
+# main of its own (a fork under another name, a first push before any fetch)
+# still has one of the others.
+gate_main=
+for gate_ref in "$review_policy" refs/remotes/origin/main refs/remotes/upstream/main \
+    "${remote:+refs/remotes/$remote/HEAD}"; do
+    [ -n "$gate_ref" ] || continue
+    if git rev-parse --verify --quiet "$gate_ref^{commit}" > /dev/null 2>&1; then
+        gate_main=$gate_ref
+        break
+    fi
+done
 
 while read -r local_ref local_sha remote_ref remote_sha; do
     [ -n "${local_ref:-}" ] || continue
@@ -197,6 +286,10 @@ while read -r local_ref local_sha remote_ref remote_sha; do
     # The review record this hook sends below carries no code and no commit
     # message to judge, and judging it would loop back into this hook.
     [ "$remote_ref" != "$review_notes" ] || continue
+
+    # The gate evidence below is sent the same way, and is skipped for the same
+    # reason.
+    [ "$remote_ref" != "$gate_notes" ] || continue
     git cat-file -e "${local_sha}^{commit}" 2> /dev/null || continue
     # A published upstream policy must not be reset by the outgoing branch.
     set -- verify --tip "$local_sha"
@@ -378,6 +471,13 @@ while read -r local_ref local_sha remote_ref remote_sha; do
                     test_note="$test_note write the failing test first (codetrial-improve), or say why none fits in the PR."
                 fi
             fi
+
+            # By hand, only a record is sent and no branch goes with it, so the
+            # evidence for one is not this run's to judge.
+            if [ "$publish_only" -eq 0 ] && ! check_gate_evidence "$local_sha" "$remote_ref"; then
+                failed=1
+                continue
+            fi
             ;;
     esac
 done << EOF
@@ -418,6 +518,47 @@ if [ "$failed" -eq 0 ] && [ "$publish_review" -eq 1 ]; then
     if [ "$failed" -ne 0 ] \
         || ! GIT_TERMINAL_PROMPT=0 git push -q "$remote" "$review_notes:$review_notes"; then
         echo "Push rejected: cannot send the interactive review record to $remote." >&2
+        echo "Check that you can push to $remote, then push again." >&2
+        failed=1
+    fi
+fi
+
+# The gate evidence goes the way the review record does, to the remote the
+# branch goes to and before the branch, for the same fetch, merge and push, kept
+# apart because that block is gated by a completed review and keeps its own
+# state. The notes for other heads the remote holds are merged in, and a note
+# made here wins a conflict through its blob. A note the remote already holds
+# with the same blob is not sent again: the upload would carry nothing and is a
+# round trip that can fail. A note that cannot be sent leaves a push of in-scope
+# work without its evidence, so the push stops here.
+if [ "$failed" -eq 0 ] && [ -n "$gate_sent" ]; then
+    gate_incoming=refs/notes/codetrial-gate-incoming
+    if GIT_TERMINAL_PROMPT=0 git fetch -q --no-tags "$url" \
+        "+$gate_notes:$gate_incoming" 2> /dev/null; then
+        gate_pending=
+        for pair in $gate_sent; do
+            [ "$(git notes --ref="$gate_incoming" list "${pair%%:*}" 2> /dev/null)" = "${pair#*:}" ] \
+                || gate_pending="$gate_pending $pair"
+        done
+        gate_sent=$gate_pending
+        if [ -n "$gate_sent" ] \
+            && ! git notes --ref="$gate_notes" merge -q -s ours "$gate_incoming"; then
+            git notes --ref="$gate_notes" merge --abort 2> /dev/null
+            failed=1
+        fi
+        for pair in $gate_sent; do
+            [ "$failed" -eq 0 ] || break
+            [ "$(git notes --ref="$gate_notes" list "${pair%%:*}" 2> /dev/null)" = "${pair#*:}" ] \
+                || git notes --ref="$gate_notes" add -f -C "${pair#*:}" "${pair%%:*}" \
+                || failed=1
+        done
+        git update-ref -d "$gate_incoming"
+    fi
+    if [ "$failed" -eq 0 ] && [ -n "$gate_sent" ]; then
+        GIT_TERMINAL_PROMPT=0 git push -q "$remote" "$gate_notes:$gate_notes" || failed=1
+    fi
+    if [ "$failed" -ne 0 ]; then
+        echo "Push rejected: cannot send the gate evidence to $remote." >&2
         echo "Check that you can push to $remote, then push again." >&2
         failed=1
     fi
