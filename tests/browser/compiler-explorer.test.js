@@ -787,6 +787,33 @@ const noJava =
     ? false
     : "javac/java are not available";
 
+/// Whether cc builds and runs a program under AddressSanitizer. A write one
+/// slot past a global array lands on whatever the linker put next to it, so
+/// without the sanitizer such a write can go unseen on one platform and crash
+/// on another; under it the write itself fails the run.
+function sanitizes() {
+  const dir = mkdtempSync(join(tmpdir(), "codetrial-asan-"));
+  try {
+    const source = join(dir, "probe.c");
+    const binary = join(dir, "probe");
+    writeFileSync(source, "int main(void) { return 0; }\n");
+    execFileSync("cc", ["-fsanitize=address", source, "-o", binary], {
+      stdio: "ignore",
+    });
+    execFileSync(binary, [], {
+      stdio: "ignore",
+      env: { ...process.env, ASAN_OPTIONS: "detect_leaks=0" },
+    });
+    return true;
+  } catch {
+    return false;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+const noAsan =
+  noCc || (sanitizes() ? false : "cc cannot build with AddressSanitizer");
+
 describe("toolchain harnesses", { concurrency: 4 }, () => {
   for (const [id, solution] of [
     [
@@ -2207,7 +2234,13 @@ public:
   // the lane, and the buffer holds the output of the largest tree the bank
   // allows. `cases` replaces the judge's own when a test needs inputs of its
   // own.
-  async function runJudge(language, id, candidate, cases = judges[id].cases) {
+  async function runJudge(
+    language,
+    id,
+    candidate,
+    cases = judges[id].cases,
+    flags = [],
+  ) {
     const dir = mkdtempSync(join(tmpdir(), `codetrial-${language}-${id}-`));
     try {
       const source = join(
@@ -2223,11 +2256,22 @@ public:
       else
         await run(language === "c" ? "cc" : "g++", [
           language === "c" ? "-std=c17" : "-std=c++20",
+          ...flags,
           source,
           "-o",
           binary,
         ]);
-      const options = { encoding: "utf8", timeout: 10000, maxBuffer: 1 << 24 };
+      // The harness never frees what a case built, so the leak report
+      // AddressSanitizer prints at exit would fail every sanitized run; other
+      // runs keep the caller's environment.
+      const options = {
+        encoding: "utf8",
+        timeout: 10000,
+        maxBuffer: 1 << 24,
+        env: flags.length
+          ? { ...process.env, ASAN_OPTIONS: "detect_leaks=0" }
+          : process.env,
+      };
       const { stdout } = await (language === "java"
         ? run("java", ["-cp", dir, "Main"], options)
         : run(binary, [], options));
@@ -2497,6 +2541,21 @@ public:
 }`,
     },
     {
+      name: "a full copy whose last node links back into the input",
+      message: deepCopy,
+      candidate: `struct Node* snapshotOutline(struct Node* head) {
+    struct Node dummy = { 0 };
+    struct Node* tail = &dummy;
+    for (struct Node* p = head; p; p = p->next) {
+        tail->next = calloc(1, sizeof(*tail->next));
+        tail = tail->next;
+        tail->val = p->val;
+    }
+    tail->next = head;
+    return dummy.next;
+}`,
+    },
+    {
       name: "a random pointer into the original",
       message: strayRandom,
       candidate: `struct Node* snapshotOutline(struct Node* head) {
@@ -2536,6 +2595,166 @@ public:
       });
     });
   }
+
+  // The C harness kept the input's nodes in 10000-entry arrays, written once
+  // per node with no bound, and read a returned list only that far. A
+  // 10001-node case wrote past the array before the candidate ran, and a
+  // correct copy came back one node short. The registries are now sized from
+  // the input, as C++ and Java size theirs, and a returned list is read no
+  // further than one node past the input it copies, so that a loop or an
+  // overlong answer cannot grow it without bound. The short copy fails
+  // on any build. A shallow copy of the last node does not: the slot past the
+  // array may still hold the node written there, so the overflow shows only
+  // under AddressSanitizer, and that case runs under it.
+  const longList = Array.from({ length: 10001 }, (_, i) => [
+    i,
+    i ? i - 1 : null,
+  ]);
+  const longListCases = [
+    { label: "10001 nodes", input: [longList], expected: longList },
+  ];
+  for (const [name, candidate, check, flags] of [
+    [
+      "copies a 10001-node random list",
+      `struct Node* snapshotOutline(struct Node* head) {
+    int n = 0;
+    for (struct Node* p = head; p; p = p->next) n++;
+    if (!n) return NULL;
+    struct Node** copy = calloc(n, sizeof(*copy));
+    int i = 0;
+    for (struct Node* p = head; p; p = p->next, i++) {
+        copy[i] = calloc(1, sizeof(*copy[i]));
+        copy[i]->val = p->val;
+        copy[i]->random = p->random;
+    }
+    for (i = 0; i < n; i++) {
+        copy[i]->next = i + 1 < n ? copy[i + 1] : NULL;
+        if (copy[i]->random) copy[i]->random = copy[copy[i]->random->val];
+    }
+    return copy[0];
+}`,
+      (result) => assert.deepEqual(result.actual, longList),
+    ],
+    [
+      "refuses the last node of a 10001-node random list as a shallow copy",
+      `struct Node* snapshotOutline(struct Node* head) {
+    while (head && head->next) head = head->next;
+    return head;
+}`,
+      (result) => assert.equal(result.error, deepCopy),
+      ["-fsanitize=address"],
+    ],
+  ]) {
+    it(`c harness ${name}`, { skip: flags ? noAsan : noCc }, async () => {
+      const [result] = await runJudge(
+        "c",
+        "copy-list-with-random-pointer",
+        candidate,
+        longListCases,
+        flags,
+      );
+      check(result);
+    });
+  }
+
+  // With the 10000-node cut gone, a returned list is read no further than
+  // one node past its input, since a correct copy has exactly as many nodes
+  // as its input. Each node read is compared with every input node, so the
+  // bound is what keeps a long answer to a long input from running until the
+  // timeout. The judge's cases are too small for that cost to show, so the
+  // bound is pinned by what it never reaches: n + 1 fresh nodes in front of
+  // an n-node input fill the read exactly, so they are refused on length
+  // before the read gets to the input, at any case size, while one more node
+  // read would reach it and be refused as a deep copy. A copy with one extra
+  // node is read to that one node and refused only because it outgrew the
+  // input.
+  for (const [name, candidate] of [
+    [
+      "a 200000-node random list",
+      `struct Node* snapshotOutline(struct Node* head) {
+    (void)head;
+    struct Node* list = NULL;
+    for (int i = 0; i < 200000; i++) {
+        struct Node* node = calloc(1, sizeof(*node));
+        node->next = list;
+        list = node;
+    }
+    return list;
+}`,
+    ],
+    [
+      "n + 1 fresh nodes in front of its input",
+      `struct Node* snapshotOutline(struct Node* head) {
+    int n = 0;
+    for (struct Node* p = head; p; p = p->next) n++;
+    for (int i = 0; i <= n; i++) {
+        struct Node* node = calloc(1, sizeof(*node));
+        node->next = head;
+        head = node;
+    }
+    return head;
+}`,
+    ],
+    [
+      "a copy with one node more than its input",
+      `struct Node* snapshotOutline(struct Node* head) {
+    struct Node dummy = { 0 };
+    struct Node* tail = &dummy;
+    for (struct Node* p = head; p; p = p->next) {
+        tail->next = calloc(1, sizeof(*tail->next));
+        tail = tail->next;
+        tail->val = p->val;
+    }
+    tail->next = calloc(1, sizeof(*tail->next));
+    return dummy.next;
+}`,
+    ],
+  ]) {
+    it(`c harness refuses ${name}`, { skip: noCc }, async () => {
+      const spec = judges["copy-list-with-random-pointer"];
+      const results = await runJudge(
+        "c",
+        "copy-list-with-random-pointer",
+        candidate,
+      );
+      spec.cases.forEach((testCase, index) => {
+        assert.equal(
+          results[index].error,
+          "Returned list must not have more nodes than the input.",
+          testCase.label,
+        );
+      });
+    });
+  }
+
+  // The graph registry had the same 10000-entry bound. Returning the input's
+  // last node must be refused as a shallow copy, which the harness can say
+  // only if that node was recorded, and as above only the sanitizer is sure
+  // to see the write that recorded it past the array.
+  it(
+    "c harness refuses the last node of a 10001-node graph as a shallow copy",
+    { skip: noAsan },
+    async () => {
+      const ring = Array.from({ length: 10001 }, (_, i) => [
+        ((i + 1) % 10001) + 1,
+        ((i + 10000) % 10001) + 1,
+      ]);
+      const [result] = await runJudge(
+        "c",
+        "clone-graph",
+        `struct Node* replicateTopology(struct Node* node) {
+    return node ? node->neighbors[1] : NULL;
+}`,
+        [{ label: "10001 nodes", input: [ring], expected: ring }],
+        // The generated main declares one stack array per adjacency row, and
+        // instrumenting 10001 of them for use-after-scope takes over a
+        // minute to build under gcc; the build is clean with the check on,
+        // and the overflow this test guards is in a global or heap array.
+        ["-fsanitize=address", "-fno-sanitize-address-use-after-scope"],
+      );
+      assert.equal(result.error, "Returned graph must be a deep copy.");
+    },
+  );
 
   // n nodes take 2n + 1 queue slots. The C queue and the visited set sized
   // with it start at 64 slots and double from there, so a 2048-node chain
