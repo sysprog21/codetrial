@@ -667,6 +667,11 @@ gate agent-guard-tests unittest_gate "$ROOT/tests/test_agent_guard.py"
 gate agent-workflow-hooks-tests unittest_gate "$ROOT/tests/test_agent_workflow_hooks.py"
 gate diffmodel-tests unittest_gate "$ROOT/tests/test_diffmodel.py"
 gate --lane browser browser-tests browser_tests static
+
+# Not a browser test, so not in a browser shard: those are cut by file size, and
+# this is CPU-heavy for its size. The portable lane runs well inside the time
+# the slowest browser shard takes.
+gate c-cpp-harness-audit node --test "$ROOT/tests/harness/harness-audit.test.js"
 gate test-timing node "$ROOT/scripts/check-test-timing.mjs"
 gate test-timing-tests unittest_gate "$ROOT/tests/test_check_test_timing.py"
 gate browser-stress-tests unittest_gate "$ROOT/tests/test_browser_stress.py"

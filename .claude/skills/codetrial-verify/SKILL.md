@@ -282,6 +282,28 @@ in `docs/interview-contract-versions.md`; the prompt and report goldens in
 output changed on purpose, comes with that version bump, and is explained in
 the commit body. The other fixtures there answer to the tests that own them.
 
+The C and C++ harnesses are helpers inside a template string in
+`web/compiler-explorer.js`, so no tool reads them as source.
+`node scripts/dump-harness.mjs [--cpp] [judge-id]` prints a prelude or one
+function judge's whole program to read or compile by hand, formatted when
+`clang-format` is installed. The
+`c-cpp-harness-audit` gate (`tests/harness/harness-audit.test.js`, in the
+portable lane, not a browser shard) compiles each prelude with warnings as
+errors, then builds about 25 function judges per language, enough to show every
+parameter type, return type and special field once, with a stub candidate under
+AddressSanitizer and UBSan. C runs inputs past the sizes its helpers assume
+(4097 items, 100000 for trees and lists); C++ stops at 129, because g++ takes
+tens of seconds over a longer literal and its helpers grow vectors. It lists
+each fixed-capacity array and each judge it knows to fail, and fails when
+either is fixed, so delete the entry with the fix. Class judges are not
+audited. A change to a harness helper runs it with
+`node --test tests/harness/harness-audit.test.js`. It costs about 200 CPU
+seconds, so a four-core runner takes about a minute, which
+`taskset -c 0-3 node --test tests/harness/harness-audit.test.js` shows
+locally. On CI a missing compiler or sanitizer fails the gate; elsewhere it
+skips with its reason. Building every distinct shape instead took
+three times that, and a C++ program alone costs about five CPU seconds.
+
 A test that passes without running anything is the failure mode this tree has
 already been bitten by, hence commits like "Prove an empty test run is not a
 pass". Assert on the count as well as the content when a suite discovers its
