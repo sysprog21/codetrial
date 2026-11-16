@@ -230,6 +230,31 @@ fn subscribe(s: &Session, p: &RemoteParticipant) {
 const MAX_DATA_STREAM_BYTES: usize = 12 * 1024;
 const START_WAIT: Duration = Duration::from_secs(600);
 
+/// Opens the audio writer, or says why not and fails the audio record. Audio
+/// is the optional part of an observation: a writer that cannot be created
+/// (a full disk, a directory left too open, a part file already there) costs
+/// the member their saved audio and never the transcript and suggestions they
+/// also asked for, the same as a write that fails mid-capture.
+fn open_audio_writer(
+    accounts: &Accounts,
+    dir: &std::path::Path,
+    id: &str,
+    maximum: u64,
+) -> Option<PeerAudioWriter> {
+    match PeerAudioWriter::begin(dir, id, maximum) {
+        Ok(writer) => Some(writer),
+        Err(error) => {
+            eprintln!("peer audio writer unavailable: {error}");
+            if let Err(error) =
+                crate::peer_audio::mark_failed(accounts, id, crate::current_epoch_seconds_i64())
+            {
+                eprintln!("peer audio record not failed: {error}");
+            }
+            None
+        }
+    }
+}
+
 fn start_deadline(now: tokio::time::Instant) -> tokio::time::Instant {
     now + START_WAIT
 }
@@ -558,22 +583,24 @@ async fn run(
         let dir = config.audio_dir.as_ref().ok_or("audio_unavailable")?;
         let dir = dir.clone();
         let key = id.clone();
+        let store = Arc::clone(&accounts);
         let writer =
-            tokio::task::spawn_blocking(move || PeerAudioWriter::begin(&dir, &key, maximum))
+            tokio::task::spawn_blocking(move || open_audio_writer(&store, &dir, &key, maximum))
                 .await
-                .map_err(|_| "audio_unavailable")?
                 .map_err(|_| "audio_unavailable")?;
-        *audio.lock().unwrap_or_else(|e| e.into_inner()) = Some(writer);
+        if let Some(writer) = writer {
+            *audio.lock().unwrap_or_else(|e| e.into_inner()) = Some(writer);
 
-        // A withdrawal that arrived while the writer was being created found no
-        // writer to stop; look again now that it can be.
-        let key = id.clone();
-        let withdrawn = db(&accounts, move |a| {
-            Ok(crate::peer_audio::record(a, &key)?.is_some_and(|r| is_withdrawn(&r.status)))
-        })
-        .await?;
-        if withdrawn {
-            drop(audio.lock().unwrap_or_else(|e| e.into_inner()).take());
+            // A withdrawal that arrived while the writer was being created
+            // found no writer to stop; look again now that it can be.
+            let key = id.clone();
+            let withdrawn = db(&accounts, move |a| {
+                Ok(crate::peer_audio::record(a, &key)?.is_some_and(|r| is_withdrawn(&r.status)))
+            })
+            .await?;
+            if withdrawn {
+                drop(audio.lock().unwrap_or_else(|e| e.into_inner()).take());
+            }
         }
     }
     let key = id.clone();
