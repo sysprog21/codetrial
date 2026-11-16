@@ -88,10 +88,11 @@ mkdir -p "$work/repo/scripts" || exit 1
 cp "$ROOT"/scripts/git-*.sh "$ROOT/scripts/git-commit-msg.awk" \
     "$ROOT/scripts/check-commit-log.sh" "$ROOT/scripts/check-secrets.py" \
     "$ROOT/scripts/check-cjk.py" "$ROOT/scripts/check-interactive-review.py" \
-    "$ROOT/scripts/hashchain.py" \
+    "$ROOT/scripts/hashchain.py" "$ROOT/scripts/gate-note.py" \
+    "$ROOT/scripts/check-gate-evidence.py" "$ROOT/scripts/env-check.sh" \
     "$ROOT/scripts/install-git-hooks.sh" "$ROOT/scripts/indent.sh" \
     "$work/repo/scripts/" || exit 1
-for config in .editorconfig .shellcheckrc; do
+for config in .editorconfig .shellcheckrc rust-toolchain.toml; do
     [ -e "$ROOT/$config" ] && cp "$ROOT/$config" "$work/repo/$config"
 done
 cd "$work/repo" || exit 1
@@ -1179,6 +1180,18 @@ push_main()
         | "$hooks/pre-push" "$1" "$2"
 }
 
+# The receipt scripts/test.sh keeps for a run on the tree a commit would get:
+# the lane, whether it passed, and the tree. The fields are the ones the hook
+# reads; the tree defaults to the current head's.
+plant_receipt()
+{
+    tree=${3:-$(git rev-parse 'HEAD^{tree}')}
+    dir=$(git rev-parse --git-common-dir)/codetrial-review/gate-receipts/by-tree/$tree
+    mkdir -p "$dir" || return 1
+    printf '{"lane":"%s","passed":%s,"failed":"","skipped":0,"tree":"t","worktree_tree":"%s","rustc":"rustc 1.0.0","cargo":"cargo 1.0.0","env":null,"time":"2026-11-16T00:00:00Z"}\n' \
+        "$1" "$2" "$tree" > "$dir/$1.json"
+}
+
 # A small topic head without a recorded review is pushed with a note; one it
 # recorded is pushed without. A checkout without the skill or an upstream review
 # policy, as every push above, gets no note at all.
@@ -1206,6 +1219,7 @@ git add src/untested.rs
 if git commit -q -m "Change a source file with no test" \
     -m "The branch touches src/ and nothing under tests/ yet." > /dev/null 2>&1; then
     git rev-parse HEAD >> "$(git rev-parse --git-common-dir)/codetrial-review/reviewed"
+    plant_receipt rust true
     expect 0 "a src change without a test is pushed" git push -q fork HEAD:refs/heads/topic
     contains "the push notes the missing test" "$work/last.out" "nothing under tests/"
     printf 'a test for it\n' > tests/untested.txt
@@ -1213,6 +1227,7 @@ if git commit -q -m "Change a source file with no test" \
     git commit -q -m "Add the test for that change" \
         -m "The same branch now carries a file under tests/."
     git rev-parse HEAD >> "$(git rev-parse --git-common-dir)/codetrial-review/reviewed"
+    plant_receipt rust true
     expect 0 "the same branch with its test is pushed" git push -q fork HEAD:refs/heads/topic
     absent "a branch with a test gets no test note" "$work/last.out" "nothing under tests/"
 else
@@ -1259,6 +1274,7 @@ commit_unhooked()
 # A commit that never saw the pre-commit hook, as a rebase leaves it, still has
 # a valid Change-Id once rechained. The push is where its formatting is judged.
 if command -v ruff > /dev/null 2>&1; then
+    plant_receipt rust true
     git push -q fork HEAD:refs/heads/fmt
     printf 'x = [1,\n  2]\n' > tests/unformatted.py
     git add tests/unformatted.py
@@ -1269,12 +1285,14 @@ if command -v ruff > /dev/null 2>&1; then
     git add tests/unformatted.py
     git -c core.hooksPath=/dev/null commit -q --amend --no-edit
     python3 scripts/hashchain.py rechain > /dev/null 2>&1
+    plant_receipt rust true
     expect 0 "the same file formatted is pushed" git push -q -f fork HEAD:refs/heads/fmt
     git reset -q --hard HEAD~1
     printf 'line-length = 120\n' > ruff.toml
     printf 'value = ["first item with a long name", "second item with a long name", "third item with a long name"]\n' > tests/config_delete.py
     git add ruff.toml tests/config_delete.py
     commit_unhooked "Add formatter configuration" "Establish the branch base for the deletion test."
+    plant_receipt rust true
     git push -q fork HEAD:refs/heads/config-delete
     git rm -q ruff.toml
     commit_unhooked "Remove formatter configuration" "The remaining files must be checked against the default settings."
@@ -1302,6 +1320,7 @@ if command -v ruff > /dev/null 2>&1; then
     printf 'x = 1\n' > tests/rb_one.py
     git add tests/rb_one.py
     git commit -q -m "Add a formatted script" -m "The branch's only change, made through the hooks."
+    plant_receipt rust true
     expect 0 "the branch is pushed before main moves" git push -q rb HEAD:refs/heads/rb-topic
     git checkout -q -b rb-main "$start"
     printf 'y = [1,\n  2]\n' > tests/rb_legacy.py
@@ -1314,6 +1333,7 @@ if command -v ruff > /dev/null 2>&1; then
     git checkout -q rb-topic
     git -c core.hooksPath=/dev/null rebase -q rb-main
     python3 scripts/hashchain.py rechain > /dev/null 2>&1
+    plant_receipt rust true
     expect 0 "a rebased branch is judged by its own files" \
         git push -q -f rb HEAD:refs/heads/rb-topic
 
@@ -1365,6 +1385,241 @@ expect 0 "new work pushed to upstream's main over port 443" \
 git remote set-url upstream "$ssh443"
 expect 1 "new work on a fork's main, upstream over port 443" \
     git push -q fork HEAD:refs/heads/main
+
+# A push that changes what the Rust gate covers carries the receipt of a gate
+# run on that content, as a note on the head. The base is a commit of its own
+# that stands in for upstream's main, and the remote is a bare repository with
+# no notes yet.
+echo "  HOOKS   gate evidence"
+gate_policy=$(git rev-parse -q --verify refs/remotes/upstream/main || :)
+gate_notes=refs/notes/codetrial-gate
+git init -q --bare "$work/gate.git"
+git remote add gate "$work/gate.git"
+git switch -q --orphan gate-base
+printf 'base\n' > gate-readme.txt
+git add gate-readme.txt
+git commit -q -m "Start the gate cases" -m "A base the topic branches below are measured against."
+git update-ref refs/remotes/upstream/main HEAD
+
+# The note the remote holds for a commit.
+#
+# Invoked through `expect`, which shellcheck cannot follow.
+# shellcheck disable=SC2317,SC2329
+gate_note_of()
+{
+    git --git-dir="$work/gate.git" notes --ref="$gate_notes" show "$1"
+}
+
+# A push of the notes ref itself, as the hook's own push of a note makes it.
+# shellcheck disable=SC2317,SC2329
+push_gate_notes()
+{
+    printf '%s %s %s %040d\n' "$gate_notes" "$(git rev-parse "$gate_notes")" "$gate_notes" 0 \
+        | "$hooks/pre-push" gate "$work/gate.git"
+}
+
+git switch -q -c gate-docs
+mkdir -p docs
+printf 'text\n' > docs/gate.txt
+git add docs/gate.txt
+git commit -q -m "Describe the gate" -m "A change nothing in the Rust lane reads."
+expect 0 "a docs-only topic is pushed with no receipt" git push -q gate HEAD:refs/heads/gate-docs
+expect 1 "a docs-only push sends no note" \
+    git --git-dir="$work/gate.git" rev-parse -q --verify "$gate_notes"
+
+git switch -q -c gate-rust gate-base
+mkdir -p problem-bank
+printf 'one\n' > problem-bank/gate.txt
+git add problem-bank/gate.txt
+git commit -q -m "Change the problem bank" -m "Rust embeds this file, so the Rust lane reads it."
+expect 1 "an in-scope push with no receipt is refused" git push -q gate HEAD:refs/heads/gate-rust
+contains "the refusal names the environment check" "$work/last.out" "./scripts/env-check.sh"
+contains "the refusal names the gate" "$work/last.out" "./scripts/test.sh"
+contains "the refusal says a partial commit needs a rerun" "$work/last.out" "partial commit"
+contains "the refusal says what binds" "$work/last.out" "CI and the maintainer"
+expect 1 "a refused push sends no branch" \
+    git --git-dir="$work/gate.git" rev-parse -q --verify refs/heads/gate-rust
+plant_receipt portable true
+expect 1 "a portable receipt is not evidence for an in-scope push" \
+    git push -q gate HEAD:refs/heads/gate-rust
+plant_receipt rust false
+expect 1 "a failed rust receipt is not evidence" git push -q gate HEAD:refs/heads/gate-rust
+plant_receipt rust true "$(git hash-object -t tree /dev/null)"
+expect 1 "a receipt for another tree is not evidence" git push -q gate HEAD:refs/heads/gate-rust
+plant_receipt rust true
+gate_head=$(git rev-parse HEAD)
+expect 0 "a rust receipt for the pushed tree is accepted" git push -q gate HEAD:refs/heads/gate-rust
+expect 0 "the note is on the remote" gate_note_of "$gate_head"
+contains "the note has schema version 1" "$work/last.out" '"version":1'
+contains "the note names the tree" "$work/last.out" "\"worktree_tree\":\"$(git rev-parse 'HEAD^{tree}')\""
+contains "the note carries the receipt" "$work/last.out" '"lane":"rust"'
+
+# An amend that only rewords keeps the tree, so the receipt still matches, and
+# the note goes to the commit that is pushed.
+git commit -q --amend -m "Change the problem bank text" -m "Reworded only; the content is unchanged."
+gate_head=$(git rev-parse HEAD)
+expect 0 "a reworded commit with the same tree is accepted" \
+    git push -q -f gate HEAD:refs/heads/gate-rust
+expect 0 "the note is on the new head" gate_note_of "$gate_head"
+
+# A rebase onto a base that moved changes the tree, so the old receipt says
+# nothing about what would be pushed.
+git switch -q gate-base
+printf 'moved\n' > gate-moved.txt
+git add gate-moved.txt
+git commit -q -m "Move the base along" -m "The branch below is rebased over this."
+git update-ref refs/remotes/upstream/main HEAD
+git switch -q gate-rust
+git -c core.hooksPath=/dev/null rebase -q gate-base
+python3 scripts/hashchain.py rechain > /dev/null 2>&1
+expect 1 "a rebase to another tree is refused" git push -q -f gate HEAD:refs/heads/gate-rust
+plant_receipt rust true
+expect 0 "the rebased tree is accepted once the gate ran on it" \
+    git push -q -f gate HEAD:refs/heads/gate-rust
+
+# The gate ran on a dirty tree that was then committed unchanged: the receipt
+# names the tree the commit gets, though it was written before the commit. The
+# scratch repository tracks only part of what it holds, so the scratch index
+# stages the one folder the commit stages.
+printf 'two\n' > problem-bank/gate2.txt
+dirty_tree=$(GIT_INDEX_FILE="$work/gate-index" sh -c 'git read-tree HEAD && git add problem-bank && git write-tree')
+rm -f "$work/gate-index"
+plant_receipt rust true "$dirty_tree"
+git add problem-bank
+git commit -q -m "Add a second problem" -m "Committed exactly as the gate saw it."
+expect 0 "a dirty tree committed unchanged is accepted" git push -q gate HEAD:refs/heads/gate-rust
+
+# The record the hook sends is not judged as a branch, which would loop.
+expect 0 "a push of the notes ref does not re-enter the checks" push_gate_notes
+
+# A remote that refuses the note stops the push, because in-scope work would
+# otherwise arrive without its evidence.
+git init -q --bare "$work/gate-reject.git"
+mkdir -p "$work/gate-reject.git/hooks"
+cat > "$work/gate-reject.git/hooks/pre-receive" << 'HOOK'
+#!/bin/sh
+while read -r old new ref; do
+    [ "$ref" != refs/notes/codetrial-gate ] || exit 1
+done
+HOOK
+chmod +x "$work/gate-reject.git/hooks/pre-receive"
+git remote add gate-reject "$work/gate-reject.git"
+git switch -q -c gate-reject-branch gate-base
+mkdir -p problem-bank
+printf 'reject\n' > problem-bank/reject.txt
+git add problem-bank/reject.txt
+git commit -q -m "Change the problem bank again" -m "Pushed to a remote that refuses the note."
+plant_receipt rust true
+expect 1 "a remote that refuses the note stops the push" \
+    git push -q gate-reject HEAD:refs/heads/gate-reject-branch
+contains "the push says the evidence could not be sent" "$work/last.out" \
+    "cannot send the gate evidence"
+expect 1 "and the branch is not sent without it" \
+    git --git-dir="$work/gate-reject.git" rev-parse -q --verify refs/heads/gate-reject-branch
+git switch -q gate-rust
+
+# A head with nothing behind it, for the pushes that are not judged: a tag, a
+# deletion, and a branch that is.
+printf 'three\n' > problem-bank/gate3.txt
+git add problem-bank/gate3.txt
+git commit -q -m "Add a third problem" -m "No gate run on this one."
+git tag -a -m "A tag of a head with no receipt" gate-tag
+expect 0 "a tag is not judged for a receipt" git push -q gate refs/tags/gate-tag
+expect 0 "a deletion is not judged for a receipt" git push -q gate :refs/heads/gate-docs
+expect 1 "the branch of that head is" git push -q gate HEAD:refs/heads/gate-bare
+
+# Without a toolchain the refusal carries the environment check's own words.
+mkdir "$work/gate-bin"
+for tool in git sh python3 awk sed grep mktemp rm cat uname od date mkdir dirname tr head tail sort cut wc expr touch find ls env; do
+    found=$(command -v "$tool") || continue
+    case $found in /*) ln -s "$found" "$work/gate-bin/$tool" ;; esac
+done
+
+# shellcheck disable=SC2317,SC2329
+push_without_cargo()
+{
+    printf 'refs/heads/gate-bare %s refs/heads/gate-bare %040d\n' "$(git rev-parse HEAD)" 0 \
+        | env PATH="$work/gate-bin" "$hooks/pre-push" gate "$work/gate.git"
+}
+expect 1 "a push with no receipt and no cargo is refused" push_without_cargo
+contains "the refusal carries the environment check's report" "$work/last.out" "fail: cargo"
+
+# A clone with no main of its own to measure from, as a fork under another name
+# is before its first fetch, is not turned away: the hook says it cannot tell
+# and sends the evidence when there is some. With any of the other mains it
+# measures from the first that resolves.
+gate_origin=$(git rev-parse -q --verify refs/remotes/origin/main || :)
+gate_upstream=$(git rev-parse -q --verify refs/remotes/upstream/main || :)
+git update-ref -d refs/remotes/origin/main
+git update-ref -d refs/remotes/upstream/main
+
+# A commit on a fresh branch from the base, changing one file.
+gate_branch()
+{
+    git switch -q -c "$1" gate-base \
+        && mkdir -p "$(dirname "$2")" \
+        && printf '%s\n' "$1" > "$2" \
+        && git add "$2" \
+        && git commit -q -m "Add a file for a base case" -m "Pushed to see how the hook measures a branch with no main."
+}
+
+gate_branch gate-nobase-docs docs/nobase.txt
+expect 0 "a docs-only push with no base to measure from is accepted" \
+    git push -q gate HEAD:refs/heads/gate-nobase-docs
+contains "the push says it could not tell" "$work/last.out" \
+    "could not tell whether this push changes Rust sources"
+gate_branch gate-nobase-rust problem-bank/nobase.txt
+expect 0 "an in-scope push with no base and no receipt is accepted" \
+    git push -q gate HEAD:refs/heads/gate-nobase-rust
+expect 1 "and sends no note" gate_note_of "$(git rev-parse HEAD)"
+gate_branch gate-nobase-receipt problem-bank/nobase2.txt
+plant_receipt rust true
+expect 0 "an in-scope push with no base and a receipt is accepted" \
+    git push -q gate HEAD:refs/heads/gate-nobase-receipt
+expect 0 "and sends its note" gate_note_of "$(git rev-parse HEAD)"
+
+# origin's main stands in when the push remote has none.
+git update-ref refs/remotes/origin/main "$(git rev-parse gate-base)"
+gate_branch gate-fallback problem-bank/fallback.txt
+expect 1 "an in-scope push measured from origin's main is refused with no receipt" \
+    git push -q gate HEAD:refs/heads/gate-fallback
+contains "the refusal is the evidence's" "$work/last.out" "no passing gate run is on record"
+absent "a measured push does not say it could not tell" "$work/last.out" "could not tell"
+
+# The first main that resolves wins: upstream's here, which does not hold the
+# change, so the branch is in scope; origin's, which holds it, would say it is
+# not.
+git update-ref refs/remotes/upstream/main "$(git rev-parse gate-base)"
+git update-ref refs/remotes/origin/main "$(git rev-parse gate-fallback)"
+expect 1 "upstream's main is measured from before origin's" \
+    git push -q gate gate-fallback:refs/heads/gate-first
+
+# Then origin's before the remote's default branch.
+git update-ref -d refs/remotes/upstream/main
+git update-ref refs/remotes/origin/main "$(git rev-parse gate-base)"
+git update-ref refs/remotes/gate/HEAD "$(git rev-parse gate-fallback)"
+expect 1 "origin's main is measured from before the remote's default branch" \
+    git push -q gate gate-fallback:refs/heads/gate-first
+
+# And the remote's default branch when nothing else resolves.
+git update-ref -d refs/remotes/origin/main
+git switch -q gate-fallback
+mkdir -p docs
+printf 'more\n' > docs/fallback.txt
+git add docs/fallback.txt
+git commit -q -m "Describe the fallback" -m "A change nothing in the Rust lane reads."
+expect 0 "the remote's default branch is the last base tried" \
+    git push -q gate HEAD:refs/heads/gate-last
+absent "a push measured from it does not say it could not tell" "$work/last.out" "could not tell"
+git update-ref -d refs/remotes/gate/HEAD
+[ -z "$gate_origin" ] || git update-ref refs/remotes/origin/main "$gate_origin"
+[ -z "$gate_upstream" ] || git update-ref refs/remotes/upstream/main "$gate_upstream"
+
+if [ -n "$gate_policy" ]; then
+    git update-ref refs/remotes/upstream/main "$gate_policy"
+else
+    git update-ref -d refs/remotes/upstream/main
+fi
 git switch -q "$previous"
 
 # Linked worktrees share .git/hooks. The installed wrapper must therefore find
