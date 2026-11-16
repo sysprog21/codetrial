@@ -7,6 +7,7 @@ imports each suite from its own path.
 
 import functools
 import io
+import os
 import re
 import shutil
 import subprocess
@@ -15,6 +16,27 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/check.yml"
 STUBS = ROOT / "tests/stubs"
+
+# A scratch repository must not read the developer's git configuration, nor be
+# redirected by a GIT_DIR or GIT_INDEX_FILE inherited from a hook.
+GIT_ENV = {
+    **{k: v for k, v in os.environ.items() if not k.startswith("GIT_")},
+    "GIT_CONFIG_GLOBAL": "/dev/null",
+    "GIT_CONFIG_SYSTEM": "/dev/null",
+}
+COMMIT = "git -c user.name=t -c user.email=t@t commit -q"
+
+
+def sh(script, cwd):
+    """Run `script` under sh in `cwd` with the isolated git environment."""
+    return subprocess.run(
+        ["sh", "-c", script],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        env=GIT_ENV,
+        check=False,
+    )
 
 
 # The tools a script under test needs from the system, and nothing else: a PATH
@@ -80,6 +102,12 @@ def section(text, start, end, what):
     if start not in text:
         raise AssertionError(f"{what} is no longer in the workflow")
     return text.split(start, 1)[1].split(end, 1)[0]
+
+
+def function_source(text, name):
+    """A whole shell function of a script, as the script defines it."""
+    body = section(text, f"\n{name}()\n{{\n", "\n}\n", f"function {name}")
+    return f"{name}()\n{{\n{body}\n}}\n"
 
 
 @functools.cache

@@ -1,7 +1,6 @@
 """Exercise CI lane selection without executing the expensive gate commands."""
 
 import importlib.util
-import json
 import os
 import re
 import shlex
@@ -316,7 +315,7 @@ gate()
         with tempfile.TemporaryDirectory() as tmp:
             checker = Path(tmp) / "env-check.sh"
             support.write_executable(
-                checker, '#!/bin/sh\nprintf "%s\\n" "$*" > "$OUT"\n'
+                checker, '#!/bin/sh\nprintf "%s\\n" "$*" >> "$OUT"\n'
             )
             out = Path(tmp) / "out"
             result, _ = self.run_lane(
@@ -326,7 +325,10 @@ gate()
                 replace=(("env_check=true", f"env_check={checker}"),),
             )
             self.assertEqual(result.returncode, 0, result.stderr)
-            return out.read_text()
+            # The report the gates read, then the JSON the receipt embeds.
+            first, second = out.read_text().splitlines()
+            self.assertEqual(second, f"{first} --format json")
+            return first + "\n"
 
     def test_a_missing_optional_tool_skips_with_the_checkers_wording(self):
         report = (
@@ -1203,22 +1205,13 @@ printf 'python:%s\\n' "$*" >> "$CALLS"
 
 def function_source(name):
     """A whole shell function of scripts/test.sh, as the gate defines it."""
-    return f"{name}()\n{{\n{function_body(name)}\n}}\n"
+    return support.function_source(SCRIPT.read_text(), name)
 
 
 class GateHelperTests(unittest.TestCase):
-    """The receipt writer and the exclusion notice, run as the gate defines them."""
+    """The exclusion notice, run as the gate defines it."""
 
-    env = {
-        **os.environ,
-        "GIT_CONFIG_GLOBAL": "/dev/null",
-        "GIT_CONFIG_SYSTEM": "/dev/null",
-    }
-
-    def sh(self, script, cwd):
-        return subprocess.run(
-            ["sh", "-c", script], cwd=cwd, capture_output=True, text=True, env=self.env
-        )
+    sh = staticmethod(support.sh)
 
     def repo(self, files=None):
         tmp = tempfile.TemporaryDirectory()
@@ -1227,40 +1220,12 @@ class GateHelperTests(unittest.TestCase):
         for name, body in (files or {}).items():
             (root / name).parent.mkdir(parents=True, exist_ok=True)
             (root / name).write_text(body)
-        commit = "git -c user.name=t -c user.email=t@t commit -q"
         done = self.sh(
-            f"git init -q -b main . && git add -A && {commit} --allow-empty -m x", root
+            f"git init -q -b main . && git add -A && {support.COMMIT} --allow-empty -m x",
+            root,
         )
         self.assertEqual(done.returncode, 0, done.stderr)
         return root
-
-    def write_receipt(self, root, verdict, failed="", tree="T1", skipped=""):
-        script = (
-            f'ROOT={shlex.quote(str(root))}; lane=portable; failed="{failed}"; receipt_tree={tree}; '
-            f'skipped="{skipped}"; {function_source("write_receipt")}\nwrite_receipt {verdict}'
-        )
-        done = self.sh(script, root)
-        self.assertEqual(done.returncode, 0, done.stderr)
-        return root / ".git/codetrial-review/gate-receipts/portable.json"
-
-    def test_a_pass_and_a_failure_are_recorded_with_the_start_tree(self):
-        root = self.repo()
-        won = json.loads(
-            self.write_receipt(root, "true", skipped="\n  a\n  b").read_text()
-        )
-        self.assertEqual(
-            (won["lane"], won["passed"], won["failed"], won["skipped"], won["tree"]),
-            ("portable", True, "", 2, "T1"),
-        )
-        lost = json.loads(
-            self.write_receipt(root, "false", failed=" fmt clippy").read_text()
-        )
-        self.assertEqual((lost["passed"], lost["failed"]), (False, "fmt clippy"))
-
-    def test_no_tree_means_no_receipt(self):
-        root = self.repo()
-        path = self.write_receipt(root, "true", tree="")
-        self.assertFalse(path.exists())
 
     def exclusions(self, base, head):
         def config(entries):
