@@ -1,9 +1,9 @@
 # Task mode contract
 
 Status: draft, revised before any distribution; versions below stay at 1. Task
-mode is automatic wherever the server is reachable from this computer alone
-(see Trust model), and has no switch. The interview prompt and report
-contracts are unchanged.
+mode is off unless `codetrial web --task-mode` asks for it, and then runs only
+where the server is reachable from this computer alone (see Trust model). The
+interview prompt and report contracts are unchanged.
 
 ## Trust model
 

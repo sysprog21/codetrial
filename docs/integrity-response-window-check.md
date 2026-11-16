@@ -86,9 +86,7 @@ All six must hold. Any failure is a fail row, and the row names which one broke.
 - Clicking a window shows the code as it stood when that question ended.
 - The paragraph above the list (`#replay-window-note`) is hidden on a replay
   that produced no windows, and shown on one that did.
-- An ordinary answered question does not say it holds no transcript. This is the
-  delivery race `DONE.md` records a fix for, and a real interview is the only
-  thing that has ever exercised it.
+- An ordinary answered question does not say it holds no transcript.
 - The window covering the thinking hold from step 4 says "interview paused or
   thinking time requested during this window", and no other window does.
 
