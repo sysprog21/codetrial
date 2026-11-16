@@ -8,12 +8,30 @@ imports each suite from its own path.
 import functools
 import io
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/check.yml"
 STUBS = ROOT / "tests/stubs"
+
+
+# The tools a script under test needs from the system, and nothing else: a PATH
+# that holds only these cannot reach whatever toolchain the machine has.
+CHECKER_TOOLS = ("sh", "sed", "grep", "tr", "od", "dirname", "cat", "wc", "uname")
+
+
+def link_system_tools(directory, names=CHECKER_TOOLS):
+    """Symlink each named system tool into directory; return what is missing."""
+    missing = []
+    for name in names:
+        found = shutil.which(name)
+        if found is None:
+            missing.append(name)
+        else:
+            (Path(directory) / name).symlink_to(found)
+    return missing
 
 
 def stub(name, interpreter=None):

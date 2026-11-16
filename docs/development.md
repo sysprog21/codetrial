@@ -166,9 +166,13 @@ composite actions under `.github/actions/` as the lanes, and saves none of them,
 so the weekly job keeps no second copy. Chromium's system dependencies are still
 installed on every fresh runner.
 
-The gate picks its own compiler and Python, so running it directly builds with
-the same Clang `make` would. On Linux x86_64 with no `CXX` set, it uses the checksum-pinned
-Clang that `make` fetches into `target/clang`, fetching it just before the
+Before any gate runs, `./scripts/test.sh` asks `scripts/env-check.sh` whether
+the machine can run the lane it was given, and stops with the missing tool and
+the command that installs it when it cannot; see
+[Environment check](#environment-check). The gate picks its own compiler and
+Python, so running it directly builds with the same Clang `make` would. On
+Linux x86_64 with no `CXX` set, it uses the checksum-pinned Clang that `make`
+fetches into `target/clang`, fetching it just before the
 first lane that compiles. It runs the Python lanes with the first Python 3.11 or
 newer it finds, because the Rust style checker uses the standard-library TOML
 parser; set `PYTHON` to name one. An explicitly named older interpreter is
@@ -239,6 +243,57 @@ invalidated rather than got slower.
 Trimming debug info, which is what buys CI 40% per relink, was measured here
 and buys nothing: 7.5s against 8.1s on macOS, where the system linker rather
 than mold does the work. It stays a CI setting for that reason.
+
+## Environment check
+
+`scripts/env-check.sh` is the one place that says what a run needs. It only
+looks: it never downloads or installs anything, and it neither fetches Clang nor
+hashes `web/vendor`, because `scripts/test.sh` does both itself, once per run.
+
+```bash
+./scripts/env-check.sh                          # the local-rust profile
+./scripts/env-check.sh --profile portable       # also: ci-rust, browser
+./scripts/env-check.sh --format json            # one JSON object on stdout
+```
+
+Each profile lists what the matching lane of `scripts/test.sh` runs:
+
+| Profile | Required |
+| --- | --- |
+| `local-rust` | the pinned toolchain installed (with rustup), `cargo` and `rustc` at the `rust-toolchain.toml` version, `clippy`, `rustfmt`, no `RUSTUP_TOOLCHAIN`, Clang 21+ through `CXX` (Linux only), `web/vendor`, `node` |
+| `ci-rust` | `local-rust`, plus `mold` and `RUSTFLAGS` linking with it |
+| `portable` | the pinned toolchain installed (with rustup), `cargo` with `rustfmt` (the lane runs `cargo fmt --check`), `node` |
+| `browser` | `node` |
+
+`scripts/test.sh` picks `local-rust` for the `rust` and `all` lanes, `ci-rust`
+for those when `CI=true`, and the lane's own name otherwise. It passes
+`--will-provision`, which turns a missing Clang on Linux x86_64 into a note
+because the script fetches it after the checks; run by hand, the same state
+fails and prints `sh scripts/fetch-clang.sh target/clang`. A `rustc` found
+outside `$CARGO_HOME/bin` and `~/.cargo/bin` with the pinned version is a
+warning, since distribution and Nix toolchains are legitimate; a different
+version fails. Optional tools (`ruff`, `shellcheck`, `dash`, `actionlint`,
+`cargo-audit`, `cargo-deny`) that are absent are listed under `skipped`, and
+`scripts/test.sh` reports each as the skip it printed before this script existed,
+except `dash`, which only chooses the shell that checks syntax and has no skip.
+
+The exit status is 0 when every required check passed, 1 when one failed, and 2
+for an invalid invocation or a repository the script cannot read. The desktop
+app's system packages (the apt list in `check.yml`) are not checked: a missing
+one surfaces as that build's own error, except WebKitGTK on Linux, whose absence
+makes `scripts/test.sh` skip the desktop gate and say so; CI installs it, and a
+skip fails the run there.
+
+rustup installs the toolchain a `rust-toolchain.toml` pins the first time it
+runs in that directory, and any rustup command counts, `rustup toolchain list`
+included. So with rustup on PATH the check asks which toolchains are installed
+from `/`, where no pin applies, before any `cargo` or `rustc` runs in the
+repository. When the pinned toolchain is missing it fails with `rustup
+toolchain install <channel> --profile minimal -c clippy -c rustfmt` and runs
+neither, and a `RUSTUP_TOOLCHAIN` override likewise stops them from running.
+It also exports `RUSTUP_AUTO_INSTALL=0`, which a rustup that honours it turns
+into a refusal to install; the check does not depend on it. Without rustup (a
+distribution or Nix toolchain) the version comparison decides.
 
 ## Formatting
 
