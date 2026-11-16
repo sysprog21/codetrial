@@ -629,7 +629,8 @@ jobs:
           set -o pipefail
           count=0
           if [ -s "$RUNNER_TEMP/pr.diff" ]; then
-            cargo mutants --list --in-diff "$RUNNER_TEMP/pr.diff" >"$RUNNER_TEMP/list.txt"
+            cargo mutants --list --cargo-arg=--locked \
+              --in-diff "$RUNNER_TEMP/pr.diff" >"$RUNNER_TEMP/list.txt"
             count=$(wc -l <"$RUNNER_TEMP/list.txt" | tr -d ' ')
           fi
           width=$(( (count + 14) / 15 ))
@@ -750,7 +751,7 @@ jobs:
         run: |
           git diff "origin/$BASE_REF...HEAD" -- '*.rs' >"$RUNNER_TEMP/pr.diff"
           echo "::group::Mutants in shard $SHARD"
-          cargo mutants --list --in-diff "$RUNNER_TEMP/pr.diff" \
+          cargo mutants --list --cargo-arg=--locked --in-diff "$RUNNER_TEMP/pr.diff" \
             --shard "$SHARD" \
             | tee "$RUNNER_TEMP/shard.txt"
           echo "::endgroup::"
@@ -769,7 +770,7 @@ jobs:
           # overrun would be swallowed by the construct meant to report it.
           status=0
           timeout --signal=INT --kill-after=60s 35m \
-            cargo mutants --in-place --in-diff "$RUNNER_TEMP/pr.diff" \
+            cargo mutants --in-place --cargo-arg=--locked --in-diff "$RUNNER_TEMP/pr.diff" \
             --shard "$SHARD" \
             || status=$?
           if [ "$status" -eq 124 ]; then

@@ -3,6 +3,7 @@
 import importlib.util
 from pathlib import Path
 import re
+import shlex
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -44,6 +45,60 @@ class MutantsJobTests(unittest.TestCase):
             ],
             [term.strip() for term in condition.split("&&")],
         )
+
+
+def mutants_invocations(body):
+    """The argument words of every `cargo mutants` command.
+
+    Continuation lines are joined, comments dropped, and the words end at the
+    first redirection, pipe or `||`, so a flag only counts when the shell would
+    pass it.
+    """
+    found = []
+    for command in re.findall(
+        r"^[^#\n]*?cargo mutants\b((?:[^\n]*\\\n)*[^\n]*)", body, re.M
+    ):
+        words = []
+        for word in shlex.split(command.replace("\\\n", " "), comments=True):
+            if word[0] in "|>":
+                break
+            words.append(word)
+        found.append(words)
+    return found
+
+
+class MutantsLockfileTests(unittest.TestCase):
+    def setUp(self):
+        self.plan = mutants_invocations(support.job("plan-mutants"))
+        self.shard = mutants_invocations(support.job("mutants"))
+
+    def test_every_selecting_or_running_command_holds_the_lockfile(self):
+        # cargo-mutants forwards the flag to every cargo it runs; without it
+        # a mutant can be judged against a lockfile cargo quietly updated.
+        commands = self.plan + self.shard
+        self.assertEqual(3, len(commands))
+        for words in commands:
+            self.assertIn("--cargo-arg=--locked", words, words)
+
+    def test_plan_and_shard_select_the_same_mutants(self):
+        # The shard count comes from the plan's list, so what is listed has to
+        # match on both sides: the same flags with the same values.
+        def selection(words):
+            kept, skip = [], False
+            for word in words:
+                if skip:
+                    skip = False
+                elif word == "--shard":
+                    skip = True
+                elif word not in ("--list", "--in-place"):
+                    kept.append(word)
+            return sorted(kept)
+
+        listings = [w for w in self.plan + self.shard if "--list" in w]
+        self.assertEqual(2, len(listings))
+        self.assertEqual(selection(listings[0]), selection(listings[1]))
+        run = next(w for w in self.shard if "--list" not in w)
+        self.assertEqual(selection(listings[1]), selection(run))
 
 
 class AggregateStatusTests(unittest.TestCase):
