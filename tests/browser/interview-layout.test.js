@@ -1047,7 +1047,13 @@ test("local recording controls preserve the original problem reading space", asy
 // handlers run with an editable board, without joining a provider.
 test("expanded drawing text controls stay clear of long captions and self-view", async (t) => {
   if (!browser) return t.skip("playwright chromium unavailable");
-  for (const [width, height, wideSidebar] of [
+  for (const [
+    width,
+    height,
+    wideSidebar,
+    fontSize = 16,
+    focusDivider = false,
+  ] of [
     [1280, 800],
     [1440, 900],
     [1920, 1080],
@@ -1058,10 +1064,18 @@ test("expanded drawing text controls stay clear of long captions and self-view",
     [481, 800],
     [900, 800],
     [1023, 800],
+    [1024, 800, false, 32, true],
+    [1024, 800, true, 32, true],
+    [1640, 800, false, 32],
   ]) {
     const page = await openInterview(width, height, "&exampleDrawing=1", true);
     try {
       await closeSetupCheck(page);
+      await page.evaluate((size) => {
+        document.documentElement.style.fontSize = `${size}px`;
+      }, fontSize);
+      await settled(page);
+      const shell = page.locator(".interview-shell");
       if (wideSidebar) {
         await page.locator("#sidebar-resizer").focus();
         await page.keyboard.press("End");
@@ -1071,7 +1085,17 @@ test("expanded drawing text controls stay clear of long captions and self-view",
         .evaluate((node) => (node.open = true));
       await page.locator(".drawer-resizer").focus();
       await page.keyboard.press("End");
-      await page.getByRole("button", { name: "Expand drawing" }).click();
+      const originalColumns = await shell.evaluate(
+        (node) => getComputedStyle(node).gridTemplateColumns,
+      );
+      if (focusDivider) {
+        await page.locator("#sidebar-resizer").focus();
+        await page
+          .locator("#example-board [data-action=expand]")
+          .evaluate((node) => node.click());
+      } else {
+        await page.getByRole("button", { name: "Expand drawing" }).click();
+      }
       await page.evaluate(() => {
         document.querySelector("#self-view").hidden = false;
         document.querySelector("#captions-bar").hidden = false;
@@ -1081,8 +1105,25 @@ test("expanded drawing text controls stay clear of long captions and self-view",
           );
       });
       await settled(page);
+      if (focusDivider)
+        assert.equal(
+          await page.evaluate(() => document.activeElement.dataset.action),
+          "expand",
+          "stacking moves focus before hiding the resizer",
+        );
       const canvas = page.locator("#example-board canvas");
-      if (width === 900) {
+      if (
+        width >= 1024 &&
+        !(await shell.evaluate((node) =>
+          node.classList.contains("drawing-stack"),
+        ))
+      )
+        assert.ok(
+          (await page.locator(".editor-panel").boundingBox()).width >=
+            30 * fontSize,
+          "an unstacked editor retains its minimum width",
+        );
+      if (width === 900 && height === 800) {
         await page
           .locator(".editor-panel")
           .evaluate((node) => node.scrollIntoView({ block: "start" }));
@@ -1108,6 +1149,18 @@ test("expanded drawing text controls stay clear of long captions and self-view",
           "live captions are visible without scrolling the drawing away",
         );
       }
+      if (focusDivider) {
+        const panel = await page.locator(".editor-panel").boundingBox();
+        const drawing = await canvas.boundingBox();
+        assert.ok(
+          panel.y >= -1 && panel.y <= 1,
+          "stacking brings the editor into view",
+        );
+        assert.ok(
+          drawing.y < height && drawing.y + drawing.height > 0,
+          "the expanded drawing is visible before test scrolling",
+        );
+      }
       await canvas.scrollIntoViewIfNeeded();
       const surface = await page.locator(".example-surface").boundingBox();
       assert.ok(
@@ -1122,7 +1175,7 @@ test("expanded drawing text controls stay clear of long captions and self-view",
       assert.ok(
         surface.x + surface.width <= card.x ||
           surface.y + surface.height <= card.y,
-        `${width}px: the caption card stays outside the drawing`,
+        `${width}px/${fontSize}px: the caption card stays outside the drawing`,
       );
       if (width === 1280 && !wideSidebar) {
         await page.evaluate(() =>
@@ -1177,7 +1230,7 @@ test("expanded drawing text controls stay clear of long captions and self-view",
       assert.ok(captions.text.includes("Explain the boundary cases"));
       assert.ok(captions.scrolled, "long captions remain scrollable");
       assert.equal((await page.locator("#self-view").boundingBox()).width, 120);
-      if (wideSidebar) {
+      if (wideSidebar || fontSize === 32) {
         await page.getByRole("button", { name: "Shrink drawing" }).click();
         await settled(page);
         assert.equal(
@@ -1186,6 +1239,13 @@ test("expanded drawing text controls stay clear of long captions and self-view",
             .evaluate((node) => node.style.maxWidth),
           "",
           "shrinking restores the normal caption card width",
+        );
+        assert.equal(
+          await shell.evaluate(
+            (node) => getComputedStyle(node).gridTemplateColumns,
+          ),
+          originalColumns,
+          "shrinking restores the original columns",
         );
       }
     } finally {
@@ -1273,6 +1333,44 @@ test("a constrained caption card keeps the self view inside its padding at a sma
       };
     });
     assert.ok(layout.viewRight <= layout.contentRight, JSON.stringify(layout));
+  } finally {
+    await page.close();
+  }
+});
+
+test("resizing an expanded drawing into a stack preserves problem reading position", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const page = await openInterview(1840, 800, "&exampleDrawing=1");
+  try {
+    await closeSetupCheck(page);
+    await page.evaluate(() => {
+      document.documentElement.style.fontSize = "32px";
+      document.querySelector("#example-board").open = true;
+    });
+    await page.getByRole("button", { name: "Expand drawing" }).click();
+    await settled(page);
+    const top = await page.locator("#problem-panel").evaluate((node) => {
+      node.append(
+        "Consider each boundary case before choosing an approach. ".repeat(80),
+      );
+      node.scrollTop = 100;
+      return node.scrollTop;
+    });
+    assert.ok(top > 0, "the problem is scrolled before resizing");
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await page.setViewportSize({ width: 1500, height: 800 });
+    await settled(page);
+    assert.deepEqual(
+      await page.evaluate(() => ({
+        stacked: document
+          .querySelector(".interview-shell")
+          .classList.contains("drawing-stack"),
+        pageTop: window.scrollY,
+        problemTop: document.querySelector("#problem-panel").scrollTop,
+      })),
+      { stacked: true, pageTop: 0, problemTop: top },
+      "resizing stacks the drawing without changing the reading position",
+    );
   } finally {
     await page.close();
   }

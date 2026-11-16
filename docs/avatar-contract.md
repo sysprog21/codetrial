@@ -311,8 +311,9 @@ allowed to cover code or the drawing. Captions use a compact card in the
 bottom corner, with the constrained expanded-drawing exception below.
 
 When an expanded drawing cannot leave a readable card beside it, the card
-occupies a separate grid row below the editor. The page may scroll vertically;
-the card is capped at `40dvh` and scrolls
+occupies a separate grid row below the editor. The workspace stacks when the
+sidebar's current width and the editor's minimum width cannot fit side by side.
+The page may scroll vertically; the card is capped at `40dvh` and scrolls
 without removing captions or self-view. It stays outside the editor so ending
 and report inertness still works. Shrinking restores the original layout.
 

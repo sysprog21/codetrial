@@ -5860,12 +5860,15 @@ function testDrawerBounds() {
 /// the same way, so Jim's compact card stays clear of the drawing. One class
 /// for all three, so the stylesheet says what compact looks like once, and
 /// the avatar's own width observer pauses and resumes its drawing from the
-/// result. Expanded drawings put a cramped card in its own row.
+/// result. Expanded drawings put a cramped card in its own row, and stack the
+/// workspace when the sidebar's current width and the editor's minimum cannot
+/// fit beside each other.
 function compactJimStageBesideNarrowPanel(panel, place) {
   const narrowWindow = matchMedia(JIM_STAGE_NARROW_WINDOW);
   const desktopDrawing = matchMedia(JIM_DRAWING_DESKTOP_WINDOW);
   const example = document.querySelector("#example-board");
   const shell = panel.closest(".interview-shell");
+  let wasExpanded = example?.hasAttribute("data-expanded") === true;
   const fit = () => {
     const rem = Number.parseFloat(
       getComputedStyle(document.documentElement).fontSize,
@@ -5873,17 +5876,33 @@ function compactJimStageBesideNarrowPanel(panel, place) {
     const panelWidth = panel.getBoundingClientRect().width;
     const cardWidth = panelWidth - JIM_DRAWING_RESERVED_REM * rem;
     const drawingExpanded = example?.hasAttribute("data-expanded") === true;
+    const justExpanded = drawingExpanded && !wasExpanded;
+    wasExpanded = drawingExpanded;
     const expanded =
       drawingExpanded && nodes.ending.hidden && nodes.report.hidden;
-    const below = expanded && !desktopDrawing.matches;
-    shell.classList.toggle("drawing-captions-below", below);
-    if (below) nodes.jimStage.classList.remove("scrollable");
-    nodes.jimStage.style.maxWidth =
+    const sidebar =
+      Number.parseFloat(shell.style.getPropertyValue("--sidebar-width")) ||
+      22.5 * rem;
+    // Use the unchanged viewport budget so stacking cannot undo its own trigger.
+    const stacked =
       expanded &&
       desktopDrawing.matches &&
-      cardWidth >= JIM_SELF_VIEW_WIDTH_PX + 1.25 * rem + 2
-        ? `${cardWidth}px`
-        : "";
+      // Two 1rem shell paddings and the 1rem divider track in styles.css.
+      innerWidth < sidebar + (SIDEBAR_NEIGHBOUR_MIN_REM + 3) * rem;
+    const below =
+      expanded &&
+      (!desktopDrawing.matches ||
+        stacked ||
+        cardWidth < JIM_SELF_VIEW_WIDTH_PX + 1.25 * rem + 2);
+    if (stacked && document.activeElement === nodes.sidebarResizer)
+      example
+        .querySelector('[data-action="expand"]')
+        .focus({ preventScroll: true });
+    shell.classList.toggle("drawing-captions-below", below);
+    shell.classList.toggle("drawing-stack", stacked);
+    if (stacked && justExpanded) panel.scrollIntoView({ block: "start" });
+    if (below) nodes.jimStage.classList.remove("scrollable");
+    nodes.jimStage.style.maxWidth = expanded && !below ? `${cardWidth}px` : "";
     const compact =
       narrowWindow.matches ||
       panelWidth < JIM_AVATAR_PANEL_MIN_REM * rem ||
