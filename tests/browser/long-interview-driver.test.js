@@ -1417,3 +1417,14 @@ test("the report carries the rotation facts it was given and none it was not", a
     [[2, true, "completed"]],
   );
 });
+
+test("a clip is recorded as playing from after the page started it", async () => {
+  const played = await play(SMOKE, {
+    controllerOptions: { playDelayMs: 2000 },
+  });
+  assert.ok(played.run.transmitted.length > 0);
+  for (const t of played.run.transmitted) {
+    assert.ok(t.playing_at_s >= t.started_at_s + 2, t.clip_id);
+  }
+  assert.deepEqual(finalize(played).report.transmitted, played.run.transmitted);
+});

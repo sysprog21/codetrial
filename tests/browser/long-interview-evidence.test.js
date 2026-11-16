@@ -153,11 +153,48 @@ test("an answer that passes stands when the nudge after it cannot be assessed", 
   assert.equal(result.reply.socket, 1);
 });
 
+/// What the driver records for each clip it sent: the actual dispatch time,
+/// `late` seconds after the planned one.
+const sentAt = (bundle, late = 0) =>
+  bundle.schedule.steps
+    .filter((step) => step.clip_id)
+    .map((step) => ({
+      clip_id: step.clip_id,
+      action_id: step.action_id,
+      started_at_s: step.at_s,
+      playing_at_s: step.at_s + late,
+    }));
+
+test("a fact is heard from when its clip was sent, not when it was planned", () => {
+  const key = BUNDLE.answer_key.checkpoints.find(
+    (k) => k.checkpoint_id === "c07_cp_state",
+  );
+  const onTime = earliestSpokenFactS(BUNDLE, key, sentAt(BUNDLE));
+  assert.ok(Number.isFinite(onTime));
+  assert.equal(
+    earliestSpokenFactS(BUNDLE, key, sentAt(BUNDLE, 30)),
+    onTime + 30,
+  );
+  // A playback that began long after the dispatch is heard from when it began.
+  assert.ok(
+    earliestSpokenFactS(BUNDLE, key, sentAt(BUNDLE, 700)) > onTime + 600,
+  );
+  // A record from before playback began says nothing of when it was heard.
+  const dispatchOnly = sentAt(BUNDLE).map(({ playing_at_s, ...rest }) => rest);
+  assert.equal(earliestSpokenFactS(BUNDLE, key, dispatchOnly), null);
+  // A clip with no dispatch record may never have been sent, and no record of
+  // any says nothing was heard: unknown, never an earlier time.
+  assert.equal(earliestSpokenFactS(BUNDLE, key, []), null);
+  assert.equal(earliestSpokenFactS(BUNDLE, key, undefined), null);
+});
+
 test("only what the candidate alone said can show the conversation survived", () => {
+  const transmitted = sentAt(BUNDLE);
   const reach = (id) =>
     earliestSpokenFactS(
       BUNDLE,
       BUNDLE.answer_key.checkpoints.find((k) => k.checkpoint_id === id),
+      transmitted,
     );
   // The constraints and the stage are spoken too, but the problem's own brief
   // gives the constraints and the session evidence gives the stage, so a
@@ -204,7 +241,22 @@ test("only what the candidate alone said can show the conversation survived", ()
     }
     question.source_text += ` ${fact.text}`;
   }
-  assert.equal(earliestSpokenFactS(quoting, key), null);
+  assert.equal(earliestSpokenFactS(quoting, key, transmitted), null);
+});
+
+test("a malformed send record leaves the fact time unknown", () => {
+  const key = BUNDLE.answer_key.checkpoints.find(
+    (k) => k.checkpoint_id === "c07_cp_state",
+  );
+  for (const transmitted of [
+    "none",
+    {},
+    [null],
+    [{ playing_at_s: 1 }],
+    undefined,
+  ]) {
+    assert.equal(earliestSpokenFactS(BUNDLE, key, transmitted), null);
+  }
 });
 
 test("the raw producer report cannot place anything in time", () => {
@@ -693,12 +745,56 @@ test("judging again without a run kind leaves a qualification as it was", () => 
     qualification: "pass",
     qualification_reasons: [],
     assessment_scope: "qualification",
+    transmitted: sentAt(BUNDLE),
   });
   const after = mergeVerdict(file, servingReport());
   assert.equal(after.report.reply_content, "failed");
   assert.equal(after.report.qualification, "pass");
   assert.equal(after.report.assessment_scope, "qualification");
   assert.equal("rotations_completed" in after.report, false);
+});
+
+test("a passed qualification with an empty or malformed send record does not stay passed", () => {
+  for (const transmitted of [
+    [],
+    "none",
+    {},
+    [{ started_at_s: 1 }],
+    [{ playing_at_s: 1 }],
+  ]) {
+    const file = capture();
+    Object.assign(file.report, {
+      qualification: "pass",
+      qualification_reasons: [],
+      assessment_scope: "qualification",
+      transmitted,
+    });
+    const after = mergeVerdict(file, servingReport());
+    assert.equal(after.report.qualification, "inconclusive");
+  }
+});
+
+test("an older passed qualification with no dispatch evidence does not stay passed", () => {
+  const file = capture();
+  Object.assign(file.report, {
+    qualification: "pass",
+    qualification_reasons: [],
+    assessment_scope: "qualification",
+  });
+  assert.equal("transmitted" in file.report, false);
+  const after = mergeVerdict(file, servingReport());
+  assert.equal(after.report.qualification, "inconclusive");
+  assert.match(
+    after.report.qualification_reasons.join("\n"),
+    /when each clip was sent/,
+  );
+  // What was not a pass is not moved.
+  const failed = capture();
+  failed.report.qualification = "fail";
+  assert.equal(
+    mergeVerdict(failed, servingReport()).report.qualification,
+    "fail",
+  );
 });
 
 test("a qualification run is evaluated and says so", () => {

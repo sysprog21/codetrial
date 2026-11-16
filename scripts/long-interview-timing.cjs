@@ -308,7 +308,8 @@ function endedLate(episode, timing) {
 /// whose socket came up at or after it, or at no recorded time, is late too.
 /// A replacement that failed after the boundary failed whatever triggered it
 /// and whenever it began, since a failed watchdog swap loses as much as a
-/// failed rotation.
+/// failed rotation. A GoAway handover that failed earlier is `failed`, with or
+/// without a recorded start.
 function classifyRotation(episode, timing) {
   const startS = Number.isFinite(episode.startInterviewMs)
     ? episode.startInterviewMs / 1000
