@@ -117,6 +117,19 @@ clone only `HEAD`; the portable lane keeps full history for the commit-message
 check. The Rust lane deletes the runner's unused toolchains only when less than
 40 GB is free. Running `./scripts/test.sh` locally still runs every gate.
 
+On a pull request a `preflight` job runs first, and the lanes, the mutation plan
+and the shards wait for it. It reads the gate receipt the pushed head carries
+and fails when a non-Bot change in the Rust scope has none, so a missing
+receipt costs a minute instead of a Rust build. It fails closed: a note that cannot be fetched
+or read, or a head that moved while it was gathered, is a failure, never a pass.
+It is cost control, not a security boundary, because a pull request runs its own
+workflow and can edit the job; what binds is that a held run is approved only on
+the same check. The checker, the note fetcher and the gatherer are the base
+branch's, and the head is never checked out, so while the base has none of them
+(the pull request that adds them) the job prints one line and passes; a base
+with only some of them fails it. On a push and a merge group it is skipped, and
+the lanes still run.
+
 On a busy local host, `RUST_TEST_THREADS=4 ./scripts/test.sh rust` limits
 concurrent server launches in the Rust suites. The browser compiler fixtures
 also bound their concurrent jobs so candidate programs get CPU before their

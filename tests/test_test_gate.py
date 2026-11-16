@@ -477,7 +477,9 @@ gate()
                     self.assertIn("failed gates: skipped-gates", result.stderr)
 
     def run_status(self, command, **env):
-        passing = dict.fromkeys(("GATES", "AUDIT", "PLAN", "MUTANTS"), "success")
+        passing = dict.fromkeys(
+            ("PREFLIGHT", "GATES", "AUDIT", "PLAN", "MUTANTS"), "success"
+        )
         return subprocess.run(
             ["bash", "-e", "-c", command],
             env={**os.environ, **passing, "GITHUB_STEP_SUMMARY": os.devnull, **env},
@@ -487,7 +489,9 @@ gate()
 
     def test_check_requires_the_lanes_and_explains_every_mutation_skip(self):
         check = support.job("check")
-        self.assertIn("    needs: [gates, audit, plan-mutants, mutants]\n", check)
+        self.assertIn(
+            "    needs: [preflight, gates, audit, plan-mutants, mutants]\n", check
+        )
         self.assertIn(f"    if: ${{{{ !cancelled() && {NOT_AVATAR} }}}}\n", check)
         command = support.run_block(check)
         states = ("success", "failure", "cancelled", "skipped", "")
@@ -498,6 +502,11 @@ gate()
                 with self.subTest(lane=lane, state=state):
                     status = self.run_status(command, **{lane: state})
                     self.assertEqual(status == 0, state == "success")
+        # Preflight is skipped outside a pull request, which passes.
+        for state in states:
+            with self.subTest(lane="PREFLIGHT", state=state):
+                status = self.run_status(command, PREFLIGHT=state)
+                self.assertEqual(status == 0, state in ("success", "skipped"))
         accepted = {
             # Shards ran and passed.
             ("success", "success"),
@@ -919,7 +928,7 @@ printf 'python:%s\\n' "$*" >> "$CALLS"
         )
         # The schedule and the dispatch exist for this job alone.
         gates = gates_job()
-        self.assertIn(f"    if: {NOT_AVATAR}\n", gates)
+        self.assertIn(NOT_AVATAR, gates)
         # The avatar job reaches the cargo cache through the composite that
         # restores it last, after the compiler and toolchain its key hashes.
         wrapper = (ROOT / ".github/actions/rust-build-env/action.yml").read_text()
