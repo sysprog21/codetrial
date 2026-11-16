@@ -7,9 +7,11 @@ endpointing, interruption, hint, recovery or scoring policy. The
 what a provider observation means. Neither a PCM level nor transcript text
 establishes provider activity or physical audibility.
 
-The offline loader is implemented. The browser and socket observational
-adapters and trial judge described below are implementation requirements, not
-claims of working live replay. The existing `barge` browser smoke is separate:
+The offline loader is implemented, and so is the browser adapter in
+`scripts/named-replay.cjs`, run by `BROWSER_CHECK_FLOW=named-replay` (see
+[Browser adapter](#browser-adapter)). The socket adapter and the trial judge
+described below are implementation requirements, and no live replay has been
+run, so none of this is a claim of working live replay. The existing `barge` browser smoke is separate:
 it still requires Speaking followed by a measured interrupted overlap.
 
 ## Existing entry points and missing observations
@@ -176,6 +178,89 @@ caps use the existing [run-budget controller](development.md#run-budget-for-live
 where its protocol applies. Report provider usage as observed or unknown, not
 as an enforced invoice ceiling. One clip/manifest is not a trial-count budget.
 No live acceptance is implied by the offline validator or local doubles.
+
+## Browser adapter
+
+`scripts/named-replay.cjs` runs one validated WAV through a page. It injects
+only where the gate holds and records what it saw; it never scores an outcome.
+Its page half replaces each microphone track with a silent output, as the
+existing smoke does, and plays the clip once into every output. Its Node half
+takes the loaded fixture and three supplied pieces: a `page` with `evaluate`,
+an `admit` that spends the run budget, and, for a hint or tool gate, a
+`recheck` that reports `{ ok, age_ms }`.
+
+The order is fixed: wait for the gate, decode and resume, check again, admit,
+check again, inject. The second check keeps a decode from spending budget on a
+closed gate, and the final one runs after the only remaining asynchronous step.
+Decode and resume are bounded in the page, so a context that never resumes or a
+clip that will not decode is `decode-or-resume-failed` and not a hung run. For
+`speaking` and `listening` the final check reads the page text in the same
+synchronous turn as `source.start()`, so no other script on the page runs
+between them; the age of that observation is 0 by construction. A hint or tool
+gate has no page observable: with no `recheck` the trial is refused as
+`unsupported_gate` before the page is touched, and with one the final check is
+a fresh `recheck` whose age must not exceed `gate.max_age_ms`. The Node-to-page
+hop after that check is not bounded here, so the record keeps it as
+`recheck_to_ack_ms` for the judge, which decides alignment from finalized
+evidence.
+
+The returned record holds the fixture identity and digests, the gate state,
+source, observed state, age and wait, the decoded sample rate, duration, frames
+and channels, and the injection times on the page clock (`page.performance`:
+start, planned end and actual end, which is null until the harness calls
+`settleNamedReplay` after the observation window) and the Node clock
+(`node.performance`: request and acknowledgement). `trial.admitted` says whether
+the `replay_inject` permit was spent, so an exclusion after the spend is not
+read as one before it: 1 once the launcher acknowledged the permit, 0 while no
+permit call has been made, and null when the call failed, since a lost reply can
+follow a permit the launcher already counted. The caller is handed the record as soon as it exists, and
+the same object is returned, so a failure anywhere leaves the attempt it was in.
+A trial that is refused or excluded carries a code from the list under
+[Trial identity](#trial-identity-evidence-and-verdict-requirements) and a null
+injection, and still counts as attempted. A throw from the page or the observer
+is recorded the same way as `unavailable` with its message, and a failure of the
+injection call itself leaves `injected` null, since whether the clip played is
+then unknown. An observer age that is missing, null or negative is unknown,
+never fresh.
+
+This record is not the trial result. It does not carry the room, session and
+socket identity, the opening watermark, the clock-sample brackets, the executable
+and config digests or the aggregate counts that
+[Trial identity](#trial-identity-evidence-and-verdict-requirements) requires;
+those belong to the common judge, which is not implemented.
+
+`BROWSER_CHECK_FLOW=named-replay` runs the adapter in `scripts/browser-check.sh`
+and `scripts/browser-check.cjs`. It takes the manifest from the absolute path in
+`BROWSER_CHECK_REPLAY_MANIFEST` and refuses, before anything is built or
+started: an invalid fixture; a hint or tool gate, since `browser-check` supplies
+no observer for one and the run would otherwise join the room and spend the join
+before it could refuse; an agent other than `rust` or `dispatch` (whose floor
+records it retains); `BROWSER_CHECK_BARGE_AUDIO_FILE` (the clip is in the
+manifest); a run with no `BROWSER_CHECK_CAPTURE`, where the record is kept; a run
+with no budget, or whose budget manifest does not list both `candidate_join` and
+`replay_inject`; and a run without an explicit `CODETRIAL_CONFIG_ENV` naming an
+existing file, judged before any default config could be sourced or one
+assembled from the environment. The same manifest variable is refused for every
+other flow.
+
+The join is permitted as `candidate_join` and the injection as `replay_inject`,
+so the injection spends one counted action. A refused permit is recorded as
+`unavailable` (with `admitted` null) and the flow exits 4 like any other refused
+permit, after the record is written. After the injection the flow waits for the
+clip's duration plus the manifest's `observation_ms`, so the window starts at the
+final frame, then calls `settleNamedReplay` and writes the record as
+`namedReplay` in the capture beside the retained `floorRecords`; it also waits
+when the injection's acknowledgement was lost, since the clip may have played.
+The recorded reason is redacted like any other error text. The flow asserts no
+interruption: that a `continued` fixture passes is the judge's property, not this
+flow's. It exits 77 when the trial was excluded, meaning it observed nothing that
+can be judged, which is neither a pass nor a failure of the model.
+
+The tests drive a local page double with a generated tone WAV, the flow's exit
+rules through the same function the flow calls, and the environment checks in
+validate-only mode. They establish the ordering and refusal logic, not provider
+behavior and not what a real Chromium does with the page half, and the flow
+itself has not been run against a browser.
 
 ## Offline validation
 

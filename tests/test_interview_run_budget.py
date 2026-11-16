@@ -13,6 +13,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import math
 import os
 import shutil
 import signal
@@ -1192,6 +1193,172 @@ class BrowserCheckValidationTests(Scratch):
         )
         self.assertEqual(result.returncode, 2, result.stderr)
         self.assertIn("live BROWSER_CHECK_BUDGET_SOCKET", result.stderr)
+
+    def replay_fixture(self, name="replay.json", **gate):
+        """A valid named-replay manifest over a short generated tone WAV."""
+        rate, frames = 48000, 9600
+        pcm = b"".join(
+            int(6000 * math.sin(i / 8)).to_bytes(2, "little", signed=True)
+            for i in range(frames)
+        )
+        header = (
+            b"RIFF"
+            + (36 + len(pcm)).to_bytes(4, "little")
+            + b"WAVEfmt "
+            + (16).to_bytes(4, "little")
+            + (1).to_bytes(2, "little")
+            + (1).to_bytes(2, "little")
+            + rate.to_bytes(4, "little")
+            + (rate * 2).to_bytes(4, "little")
+            + (2).to_bytes(2, "little")
+            + (16).to_bytes(2, "little")
+            + b"data"
+            + len(pcm).to_bytes(4, "little")
+        )
+        clip = header + pcm
+        (self.root / "clip.wav").write_bytes(clip)
+        manifest = {
+            "version": 1,
+            "id": "short-backchannel",
+            "origin": "synthetic-tone",
+            "audio": {
+                "file": "clip.wav",
+                "sha256": hashlib.sha256(clip).hexdigest(),
+                "format": "wav_pcm_s16le",
+                "sample_rate_hz": rate,
+                "channels": 1,
+                "pause": None,
+            },
+            "gate": {
+                "state": "speaking",
+                "tool": None,
+                "timeout_ms": 10000,
+                "max_age_ms": 250,
+                **gate,
+            },
+            "observation_ms": 5000,
+            "expected": {"kind": "overlap", "outcome": "continued"},
+        }
+        path = self.root / name
+        path.write_text(json.dumps(manifest))
+        return path
+
+    def replay_env(self, **env):
+        actions = ["candidate_join", "replay_inject"]
+        budget = self.write_manifest(
+            outer_wall_cap_s=3600,
+            cleanup_reserve_s=60,
+            selected_duration_s=600,
+            actions=actions,
+            action_ceiling=len(actions) + 1,
+        )
+        base = {
+            "BROWSER_CHECK_FLOW": "named-replay",
+            "BROWSER_CHECK_AGENT": "rust",
+            "BROWSER_CHECK_REPLAY_MANIFEST": str(self.replay_fixture()),
+            "BROWSER_CHECK_CAPTURE": str(self.root / "capture.json"),
+            "CODETRIAL_CONFIG_ENV": str(self.dummy_config()),
+            "BROWSER_CHECK_RUN_MANIFEST": str(budget),
+            "BROWSER_CHECK_RUN_MANIFEST_SHA256": sha256(budget),
+        }
+        base.update(env)
+        return base
+
+    def test_a_named_replay_with_every_input_passes_validation(self):
+        result = self.check(**self.replay_env())
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_each_named_replay_refusal_comes_before_anything_is_built(self):
+        invalid = self.root / "invalid.json"
+        invalid.write_text("{}")
+        # Beside the budget manifest each row rewrites, not in place of it.
+        short = self.root / "short-run.json"
+        short.write_text(
+            json.dumps(
+                self.manifest(
+                    outer_wall_cap_s=3600,
+                    cleanup_reserve_s=60,
+                    selected_duration_s=600,
+                    actions=["candidate_join"],
+                    action_ceiling=2,
+                )
+            )
+        )
+        hint = self.replay_fixture(
+            name="replay-hint.json", state="hint", tool="log_hint"
+        )
+        rows = [
+            (
+                {"BROWSER_CHECK_REPLAY_MANIFEST": None},
+                "requires BROWSER_CHECK_REPLAY_MANIFEST",
+            ),
+            ({"BROWSER_CHECK_REPLAY_MANIFEST": "replay.json"}, "an absolute path"),
+            ({"BROWSER_CHECK_REPLAY_MANIFEST": str(invalid)}, "replay fixture"),
+            ({"BROWSER_CHECK_AGENT": "home"}, "AGENT=rust or dispatch"),
+            ({"BROWSER_CHECK_CAPTURE": None}, "requires BROWSER_CHECK_CAPTURE"),
+            (
+                {"BROWSER_CHECK_REPLAY_MANIFEST": str(hint)},
+                "needs an observer",
+            ),
+            (
+                {
+                    "BROWSER_CHECK_RUN_MANIFEST": str(short),
+                    "BROWSER_CHECK_RUN_MANIFEST_SHA256": sha256(short),
+                },
+                "must list the replay_inject action",
+            ),
+            (
+                {"BROWSER_CHECK_BARGE_AUDIO_FILE": str(self.root / "clip.wav")},
+                "does not apply to named-replay",
+            ),
+            (
+                {
+                    "BROWSER_CHECK_RUN_MANIFEST": None,
+                    "BROWSER_CHECK_RUN_ID": None,
+                    "BROWSER_CHECK_RUN_MANIFEST_SHA256": None,
+                    "BROWSER_CHECK_BUDGET_SOCKET": None,
+                },
+                "needs a budgeted run",
+            ),
+        ]
+        for env, expected in rows:
+            with self.subTest(env=env):
+                result = self.check(**self.replay_env(**env))
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn(expected, result.stderr)
+
+    def test_a_named_replay_never_borrows_a_default_or_assembled_config(self):
+        credentials = dict(
+            LIVEKIT_URL="wss://primary.example",
+            LIVEKIT_API_KEY="k",
+            LIVEKIT_API_SECRET="s",
+            GOOGLE_API_KEY="g",
+        )
+        none = dict.fromkeys(credentials)
+        rows = [
+            # Credentials from the environment and no usable named file.
+            (None, credentials),
+            (str(self.root / "no-such.env"), credentials),
+            # No credentials at all: the credentialed check's own refusal
+            # (and the default config sourced just before it) would come first
+            # unless the named-config rule is judged ahead of both.
+            (None, none),
+        ]
+        for config, extra in rows:
+            with self.subTest(config=config, credentials=bool(extra["LIVEKIT_URL"])):
+                result = self.check(
+                    **self.replay_env(CODETRIAL_CONFIG_ENV=config, **extra)
+                )
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn("requires CODETRIAL_CONFIG_ENV", result.stderr)
+
+    def test_a_replay_manifest_is_refused_for_any_other_flow(self):
+        result = self.check(
+            BROWSER_CHECK_FLOW="voice",
+            BROWSER_CHECK_REPLAY_MANIFEST=str(self.replay_fixture()),
+        )
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("applies to BROWSER_CHECK_FLOW=named-replay", result.stderr)
 
     def dummy_config(self):
         """The credentials a dispatch run asks for, from a throwaway config
