@@ -6,11 +6,12 @@ ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 . "$ROOT/scripts/wait-for-server.sh"
 BROWSER_CHECK_AGENT=${BROWSER_CHECK_AGENT:-home}
 
-# Flows: voice (default), report, barge, avatar, soak. `avatar` is dispatched
-# before the agent mode, so it needs no credentials and runs the same under any
-# valid BROWSER_CHECK_AGENT. `soak` is the long-conversation acceptance: it
-# holds one interview past the Live API's connection cap and judges the handover
-# onto a new socket, so it is the one flow whose duration is worth naming.
+# Flows: voice (default), report, barge, avatar, soak, long-interview,
+# named-replay. `avatar` is dispatched before the agent mode, so it needs no
+# credentials and runs the same under any valid BROWSER_CHECK_AGENT. `soak` is
+# the long-conversation acceptance: it holds one interview past the Live API's
+# connection cap and judges the handover onto a new socket, so it is the one
+# flow whose duration is worth naming.
 #
 # When BROWSER_CHECK_BARGE_AUDIO_FILE is the fake microphone for a flow other
 # than barge, the clip is looped, and Gemini ends an utterance only after
@@ -47,11 +48,19 @@ BROWSER_CHECK_AGENT=${BROWSER_CHECK_AGENT:-home}
 # defaults to a directory beside BROWSER_CHECK_CAPTURE. The exit code is the
 # failure class's: 4 budget, 5 cleanup, 6 artifact, 77 no GoAway, 1 other; a
 # qualification run's verdict codes are in docs/development.md.
+#
+# named-replay plays the validated WAV that BROWSER_CHECK_REPLAY_MANIFEST (an
+# absolute path) names at the gate its manifest states, and records what it saw
+# in the capture's namedReplay. It judges nothing, so it does not require an
+# interruption. It needs a budgeted run whose manifest lists candidate_join and
+# replay_inject, an explicit CODETRIAL_CONFIG_ENV, and BROWSER_CHECK_AGENT=rust
+# or dispatch. It exits 77 when the trial was excluded, which is neither a pass
+# nor a failure of the model. docs/observational-replay.md has the contract.
 BROWSER_CHECK_FLOW=${BROWSER_CHECK_FLOW:-voice}
 case $BROWSER_CHECK_FLOW in
-    voice | report | barge | avatar | soak | long-interview) ;;
+    voice | report | barge | avatar | soak | long-interview | named-replay) ;;
     *)
-        echo "BROWSER_CHECK_FLOW must be voice, report, barge, avatar, soak, or long-interview." >&2
+        echo "BROWSER_CHECK_FLOW must be voice, report, barge, avatar, soak, long-interview, or named-replay." >&2
         exit 2
         ;;
 esac
@@ -258,6 +267,17 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# A named replay is judged on the isolated config the operator names, so it is
+# refused here, before the default config below could be sourced or a fallback
+# assembled from the environment.
+if [ "$BROWSER_CHECK_FLOW" = named-replay ] \
+    && {
+        [ -z "${CODETRIAL_CONFIG_ENV:-}" ] || [ ! -f "$CODETRIAL_CONFIG_ENV" ]
+    }; then
+    echo "BROWSER_CHECK_FLOW=named-replay requires CODETRIAL_CONFIG_ENV to name an existing config file." >&2
+    exit 2
+fi
+
 if [ "$BROWSER_CHECK_AGENT" = "rust" ] || [ "$BROWSER_CHECK_AGENT" = "dispatch" ]; then
     CONFIG_ENV=${CODETRIAL_CONFIG_ENV:-}
     if [ -z "$CONFIG_ENV" ]; then
@@ -463,10 +483,12 @@ if [ -n "$FIXTURE_TEST" ]; then
     esac
 fi
 
-# The duration, run kind, end mode and observation target of a long interview
-# are judged before anything is built or started. The same module answers when
-# browser-check.cjs is run directly.
-if [ "$BROWSER_CHECK_FLOW" = long-interview ]; then
+# The duration, run kind, end mode and observation target of a long interview,
+# and the fixture, config, agent and budget of a named replay, are judged before
+# anything is built or started. The same module answers when browser-check.cjs
+# is run directly. A replay manifest named for any other flow is refused there.
+if [ "$BROWSER_CHECK_FLOW" = long-interview ] || [ "$BROWSER_CHECK_FLOW" = named-replay ] \
+    || [ "${BROWSER_CHECK_REPLAY_MANIFEST+x}" ]; then
     BROWSER_CHECK_AGENT="$BROWSER_CHECK_AGENT" \
         BROWSER_CHECK_FLOW="$BROWSER_CHECK_FLOW" \
         BROWSER_CHECK_CONFIG_PATH="$CONFIG_PATH" \

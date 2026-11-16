@@ -1312,6 +1312,19 @@ under `BROWSER_CHECK_VALIDATE_ENV_ONLY=1`, before anything is built or started:
   nothing, and so does a clock whose origin is missing, moves or lies outside
   the time the run was alive.
 
+`BROWSER_CHECK_FLOW=named-replay` plays one validated clip at the gate its
+manifest states and records what it saw in the capture, without asserting an
+outcome. It needs a budgeted run whose manifest lists `candidate_join` and
+`replay_inject` (so `action_ceiling` is three for that minimal list), a
+`CODETRIAL_CONFIG_ENV` naming an existing file, `BROWSER_CHECK_AGENT=rust` or
+`dispatch`, `BROWSER_CHECK_CAPTURE`, and `BROWSER_CHECK_REPLAY_MANIFEST`, the
+absolute path of a replay fixture manifest (its format is in
+`docs/observational-replay.md`). Only `speaking` and `listening` gates run,
+since `browser-check` supplies no observer for a hint or tool. All of that is
+judged before anything is built or started, so `BROWSER_CHECK_VALIDATE_ENV_ONLY=1`
+exercises it without a browser. An excluded trial exits 77; a refused budget
+permit exits 4, as in every flow. Nothing has run it live.
+
 A long interview's wall windows are separate and sit outside the selected
 duration: 300 seconds of setup, 300 of end and report, 60 of teardown, so
 `outer_wall_cap_s` is `selected_duration_s` plus 660 and `cleanup_reserve_s` is

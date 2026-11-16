@@ -14,6 +14,7 @@
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
+const { validateReplayEnvironment } = require("./named-replay.cjs");
 const {
   STIMULUS_RESERVE_S,
   isInt,
@@ -356,7 +357,15 @@ function pageDurationMin(env) {
   return duration.value;
 }
 
-const FLOWS = ["voice", "report", "barge", "avatar", "soak", "long-interview"];
+const FLOWS = [
+  "voice",
+  "report",
+  "barge",
+  "avatar",
+  "soak",
+  "long-interview",
+  "named-replay",
+];
 
 /// The validation both entry points share, and all either does under
 /// BROWSER_CHECK_VALIDATE_ENV_ONLY. Returns the reasons the environment is
@@ -366,6 +375,8 @@ function validateEnvironment(env, io) {
   if (!FLOWS.includes(flow)) {
     return [`BROWSER_CHECK_FLOW must be ${FLOWS.join(", ")}`];
   }
+  const replay = validateReplayEnvironment(env);
+  if (replay.length) return replay;
   if (flow === "long-interview") {
     return planFromEnv({ ...env, BROWSER_CHECK_FLOW: flow }, io).errors;
   }

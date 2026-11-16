@@ -18,6 +18,12 @@ const assert = require("node:assert/strict");
 const fs = require("fs");
 const { mediaProbeSource, assertJimAudio } = require("./media-probe.cjs");
 const { installBargeReplay } = require("./barge-replay.cjs");
+const { loadFixture } = require("./replay-fixture.cjs");
+const {
+  installNamedReplay,
+  namedReplayFlow,
+  requireNamedReplayInputs,
+} = require("./named-replay.cjs");
 const {
   captureDiagnosticStream,
   drainDiagnosticStreams,
@@ -1293,6 +1299,23 @@ async function isolateRustAgent(
     );
   }
 
+  // The clip, the isolated config and the budget's replay action are judged
+  // here, with nothing spent and no browser open, so a run that cannot replay
+  // stops before it joins a room.
+  let replayFixture = null;
+  if (process.env.BROWSER_CHECK_FLOW === "named-replay") {
+    try {
+      replayFixture = loadFixture(
+        process.env.BROWSER_CHECK_REPLAY_MANIFEST,
+        "browser",
+      );
+      requireNamedReplayInputs({ env: process.env, runBudget });
+    } catch (error) {
+      console.error(redact(error.message));
+      process.exit(2);
+    }
+  }
+
   try {
     browser = await chromium.launch({
       args: [
@@ -1324,6 +1347,7 @@ async function isolateRustAgent(
   try {
     const page = await browser.newPage();
     let bargeReplay = null;
+    let namedReplay = null;
     let jimAudio = null;
     let probingAudio = false;
     let probingSwapAudio = false;
@@ -1333,6 +1357,12 @@ async function isolateRustAgent(
         fs
           .readFileSync(process.env.BROWSER_CHECK_BARGE_AUDIO_FILE)
           .toString("base64"),
+      );
+    }
+    if (replayFixture) {
+      await page.addInitScript(
+        installNamedReplay,
+        replayFixture.bytes.toString("base64"),
       );
     }
     // Playwright defaults both of these to 30s, which is generous until the
@@ -3009,7 +3039,9 @@ PatternLexicon.prototype.search = function(word) {
               await silenceGateTone(page);
               joinGuarded = true;
             })
-        : undefined,
+        : flow === "named-replay"
+          ? (dispatch) => runBudget.guarded("candidate_join", dispatch)
+          : undefined,
     );
     if (credentialed && !rustAgentIdentity) {
       roomName = await page
@@ -3154,6 +3186,22 @@ PatternLexicon.prototype.search = function(word) {
           await page
             .getByRole("heading", { name: "Your performance packet" })
             .waitFor({ timeout: 240000 });
+        } else if (flow === "named-replay") {
+          // Observation only: the outcome is judged from the retained floor
+          // records, so nothing here asserts an interruption.
+          const replayed = await namedReplayFlow({
+            page,
+            fixture: replayFixture,
+            runBudget,
+            redact,
+            keep: (record) => {
+              namedReplay = record;
+              if (process.env.BROWSER_CHECK_CAPTURE)
+                writeIncompleteCapture({ namedReplay });
+            },
+            wait: (ms) => page.waitForTimeout(ms),
+          });
+          if (replayed.exitCode) process.exitCode = replayed.exitCode;
         } else if (flow === "barge") {
           await page
             .locator("#agent-state")
@@ -3277,6 +3325,7 @@ PatternLexicon.prototype.search = function(word) {
                   ? readFloorRecords(floorLogPath)
                   : [],
                 bargeReplay,
+                namedReplay,
                 jimAudio,
                 soak: soakSummary,
                 latencyLog: (agentOutput.join("") + "\n" + readServerLog())
@@ -3312,6 +3361,7 @@ PatternLexicon.prototype.search = function(word) {
         writeIncompleteCapture({
           floorRecords: floorLogPath ? readFloorRecords(floorLogPath) : [],
           bargeReplay,
+          namedReplay,
           jimAudio,
         });
       console.error(
