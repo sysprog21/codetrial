@@ -3,7 +3,7 @@
 The gate, the formatters, the hooks, the generated files, and where a slow run's
 time actually goes. `make` targets and the one-line summary of each are in
 [README.md](../README.md#development); everything here is the detail behind
-them.
+them. This sentence is a scratch edit for CI verification.
 
 Selection admission and refresh behavior are specified in
 [interview selection](interview-selection.md). The Strict browser regression tests use
