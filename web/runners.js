@@ -781,14 +781,16 @@ const JS_RUNNER_SOURCE = `
         if (!node) return [];
         const byValue = new Map(), queue = [node];
         for (const current of queue) {
-          if (!current) continue;
           if (originalGraphNodes.has(current)) throw new TypeError("Returned graph must be a deep copy.");
           if (byValue.has(current.val)) {
             if (byValue.get(current.val) !== current) throw new TypeError("Returned graph must not contain distinct nodes with the same ID.");
             continue;
           }
           byValue.set(current.val, current);
-          for (const neighbor of current.neighbors || []) queue.push(neighbor);
+          for (const neighbor of current.neighbors || []) {
+            if (neighbor == null) throw new TypeError("Returned graph has a NULL neighbor.");
+            queue.push(neighbor);
+          }
         }
         // graphFromAdjacency always supplies node 1; sorting below loses the entry node.
         if (node.val !== 1) throw new TypeError("Returned graph must start at node 1.");
@@ -1137,8 +1139,6 @@ def _graph_to_adjacency(node):
     by_value = {}
     queue = [node]
     for current in queue:
-        if current is None:
-            continue
         if id(current) in _original_graph_nodes:
             raise TypeError("Returned graph must be a deep copy.")
         if current.val in by_value:
@@ -1146,7 +1146,10 @@ def _graph_to_adjacency(node):
                 raise TypeError("Returned graph must not contain distinct nodes with the same ID.")
             continue
         by_value[current.val] = current
-        queue.extend(getattr(current, "neighbors", []) or [])
+        for neighbor in getattr(current, "neighbors", []) or []:
+            if neighbor is None:
+                raise TypeError("Returned graph has a NULL neighbor.")
+            queue.append(neighbor)
     if node.val != 1:
         raise TypeError("Returned graph must start at node 1.")
     return [sorted(neighbor.val for neighbor in by_value[value].neighbors) for value in sorted(by_value)]

@@ -49,17 +49,23 @@ function candidate(
     duplicate,
     invalidId,
     invalidRoot,
+    mixed,
     nullNeighbor,
     originalNeighbors,
     root = "a",
   } = {},
 ) {
   const id = duplicate || 1;
+  // "nonRoot" nulls a neighbor of b, reached from the root, so a check that
+  // looked only at the root's own list would not pass it.
+  const holder = nullNeighbor === "nonRoot" ? "b" : "a";
   if (language === "javascript")
     return `function replicateTopology(node) {
     const a = new Node(1), b = new Node(2), c = new Node(3);
     a.neighbors = [c, b]; b.neighbors = [c, a]; c.neighbors = [b, a];
     ${duplicate ? `const d = new Node(${id}, ${id === 1 ? "a" : "b"}.neighbors.slice()); ${id === 1 ? "b.neighbors = [c, d]" : "c.neighbors = [d, a]"};` : ""}
+    ${nullNeighbor ? `${holder}.neighbors[0] = ${nullNeighbor === "undefined" ? "undefined" : "null"};` : ""}
+    ${mixed ? "a.neighbors = [node, null];" : ""}
     return ${root};
   }`;
   if (language === "python")
@@ -67,6 +73,8 @@ function candidate(
     a, b, c = Node(1), Node(2), Node(3)
     a.neighbors, b.neighbors, c.neighbors = [c, b], [c, a], [b, a]
     ${duplicate ? `d = Node(${id})\n    d.neighbors = list(${id === 1 ? "a" : "b"}.neighbors)\n    ${id === 1 ? "b.neighbors = [c, d]" : "c.neighbors = [d, a]"}` : ""}
+    ${nullNeighbor ? `${holder}.neighbors[0] = None` : ""}
+    ${mixed ? "a.neighbors = [node, None]" : ""}
     return ${root}
 `;
   if (language === "cpp")
@@ -74,6 +82,8 @@ function candidate(
     auto* a = new Node(1); auto* b = new Node(2); auto* c = new Node(3);
     a->neighbors = {c, b}; b->neighbors = {c, a}; c->neighbors = {b, a};
     ${duplicate ? `auto* d = new Node(${id}); d->neighbors = ${id === 1 ? "a" : "b"}->neighbors; ${id === 1 ? "b->neighbors = {c, d}" : "c->neighbors = {d, a}"};` : ""}
+    ${nullNeighbor ? `${holder}->neighbors[0] = nullptr;` : ""}
+    ${mixed ? "a->neighbors = {node, nullptr};" : ""}
     return ${root};
   }};`;
   if (language === "java")
@@ -81,6 +91,8 @@ function candidate(
     Node a = new Node(1), b = new Node(2), c = new Node(3);
     a.neighbors.addAll(Arrays.asList(c, b)); b.neighbors.addAll(Arrays.asList(c, a)); c.neighbors.addAll(Arrays.asList(b, a));
     ${duplicate ? `Node d = new Node(${id}); d.neighbors.addAll(${id === 1 ? "a" : "b"}.neighbors); ${id === 1 ? "b.neighbors.set(1, d)" : "c.neighbors.set(0, d)"};` : ""}
+    ${nullNeighbor ? `${holder}.neighbors.set(0, null);` : ""}
+    ${mixed ? "a.neighbors.set(0, node); a.neighbors.set(1, null);" : ""}
     return ${root};
   }}`;
   return `struct Node* replicateTopology(struct Node* node) {
@@ -96,10 +108,46 @@ function candidate(
         : `struct Node* extra = calloc(1, sizeof(*extra)); extra->val = ${invalidId};
     ${invalidRoot ? `struct Node* root = calloc(1, sizeof(*root)); root->val = ${invalidId}; root->numNeighbors = 2; root->neighbors = calloc(2, sizeof(*root->neighbors)); root->neighbors[0] = a; root->neighbors[1] = extra; return root;` : "a->neighbors = realloc(a->neighbors, 3 * sizeof(*a->neighbors)); a->neighbors[2] = extra; a->numNeighbors = 3;"}`
     }
-    ${nullNeighbor ? "a->neighbors[0] = NULL;" : ""}
+    ${nullNeighbor ? `${holder}->neighbors[0] = NULL;` : ""}
+    ${mixed ? "a->neighbors[0] = node; a->neighbors[1] = NULL;" : ""}
     ${originalNeighbors ? "b->neighbors = node->neighbors[0]->neighbors;" : ""}
     return ${root};
   }`;
+}
+
+const nullNeighborName = (kind, word) =>
+  kind === "undefined"
+    ? "an undefined neighbor"
+    : `a ${word} neighbor${kind === "nonRoot" ? " of a non-root node" : ""}`;
+
+// A scenario sets one kind at most, and is named for it in the order the
+// toolchain suite checks its refusals: entry node, input nodes, null
+// neighbor, mixed violation, out-of-range ID, duplicate ID.
+function title(language, scenario) {
+  const {
+    duplicate,
+    invalidId,
+    invalidRoot,
+    mixed,
+    nullNeighbor,
+    originalNeighbors,
+    root = "a",
+  } = scenario;
+  const browserRun = language === "javascript" || language === "python";
+  const nullWord = browserRun ? "null" : "NULL";
+  let what;
+  if (root !== "a") what = `rejects entry node ${root}`;
+  else if (originalNeighbors) what = "reports input nodes before duplicate IDs";
+  else if (nullNeighbor)
+    what = `rejects ${nullNeighborName(nullNeighbor, nullWord)}`;
+  else if (mixed)
+    what = `names the ${language === "c" ? "input node" : `${nullWord} neighbor`} in a mixed violation`;
+  else if (invalidId !== undefined)
+    what = `rejects out-of-range ${invalidRoot ? "root" : "neighbor"} ID ${invalidId}`;
+  else if (duplicate) what = `rejects duplicate ID ${duplicate}`;
+  else if (language === "c") what = "accepts shared nodes";
+  else what = "accepts shared nodes and reordered neighbors";
+  return `${language} graph clone ${what}`;
 }
 
 let browser, server, base;
@@ -121,14 +169,19 @@ after(async () => {
 });
 
 for (const language of ["javascript", "python"]) {
-  for (const [duplicate, root] of [
-    [0, "a"],
-    [1, "a"],
-    [2, "a"],
-    [0, "b"],
-    [0, "c"],
+  for (const scenario of [
+    {},
+    { duplicate: 1 },
+    { duplicate: 2 },
+    { root: "b" },
+    { root: "c" },
+    { nullNeighbor: true },
+    { nullNeighbor: "nonRoot" },
+    ...(language === "javascript" ? [{ nullNeighbor: "undefined" }] : []),
+    { mixed: true },
   ]) {
-    test(`${language} graph clone ${root !== "a" ? `rejects entry node ${root}` : duplicate ? `rejects duplicate ID ${duplicate}` : "accepts shared nodes and reordered neighbors"}`, async (t) => {
+    const { duplicate, root = "a", nullNeighbor, mixed } = scenario;
+    test(title(language, scenario), async (t) => {
       if (!browser) return t.skip("playwright chromium unavailable");
       const page = await browser.newPage();
       try {
@@ -140,19 +193,27 @@ for (const language of ["javascript", "python"]) {
           },
           {
             language,
-            code: candidate(language, { duplicate, root }),
+            code: candidate(language, scenario),
           },
         );
         assert.equal(summary.setupError, undefined);
         assert.equal(summary.total, 1);
         assert.equal(summary.cases.length, 1);
-        assert.equal(summary.passed, duplicate || root !== "a" ? 0 : 1);
+        assert.equal(
+          summary.passed,
+          duplicate || root !== "a" || nullNeighbor || mixed ? 0 : 1,
+        );
         if (root !== "a")
           assert.match(summary.cases[0].error, /must start at node 1/);
         if (duplicate)
           assert.match(
             summary.cases[0].error,
             /distinct nodes with the same ID/,
+          );
+        if (nullNeighbor || mixed)
+          assert.match(
+            summary.cases[0].error,
+            /Returned graph has a NULL neighbor\./,
           );
       } finally {
         await page.close();
@@ -178,26 +239,36 @@ describe("graph clone toolchain harnesses", { concurrency: 4 }, () => {
     } catch {
       available = false;
     }
-    const scenarios = [0, 1, 2].map((duplicate) => ({ duplicate }));
-    scenarios.push({ duplicate: 0, root: "b" }, { duplicate: 0, root: "c" });
+    const scenarios = [{}, { duplicate: 1 }, { duplicate: 2 }];
+    scenarios.push({ root: "b" }, { root: "c" });
     if (language === "c")
       for (const invalidId of [0, 1024])
         for (const invalidRoot of [true, false])
-          scenarios.push({ duplicate: 0, invalidId, invalidRoot });
-    if (language === "c") scenarios.push({ duplicate: 0, nullNeighbor: true });
-    if (language === "c")
-      scenarios.push({ duplicate: 0, originalNeighbors: true });
+          scenarios.push({ invalidId, invalidRoot });
+    // A copied node whose neighbors are [an input node, null] breaks two
+    // rules at once, and which one is named depends on the walk: C checks
+    // each edge in order and meets the input node first, while C++, Java,
+    // JavaScript and Python refuse a null while queueing every neighbor of
+    // the node before any of them is visited. Only a single violation reads
+    // the same in all five; these scenarios pin C, C++ and Java, and the
+    // browser suite above pins JavaScript and Python.
+    scenarios.push(
+      { nullNeighbor: true },
+      { nullNeighbor: "nonRoot" },
+      { mixed: true },
+    );
+    if (language === "c") scenarios.push({ originalNeighbors: true });
     for (const scenario of scenarios) {
       const {
         duplicate,
         invalidId,
-        invalidRoot,
+        mixed,
         nullNeighbor,
         originalNeighbors,
         root = "a",
       } = scenario;
       test(
-        `${language} graph clone ${root !== "a" ? `rejects entry node ${root}` : originalNeighbors ? "reports input nodes before duplicate IDs" : nullNeighbor ? "rejects a NULL neighbor" : invalidId !== undefined ? `rejects out-of-range ${invalidRoot ? "root" : "neighbor"} ID ${invalidId}` : duplicate ? `rejects duplicate ID ${duplicate}` : language === "c" ? "accepts shared nodes" : "accepts shared nodes and reordered neighbors"}`,
+        title(language, scenario),
         {
           skip: available
             ? false
@@ -229,15 +300,17 @@ describe("graph clone toolchain harnesses", { concurrency: 4 }, () => {
             assert.equal(results.length, 1);
             if (root !== "a")
               assert.match(results[0].error, /must start at node 1/);
-            else if (originalNeighbors)
+            else if (originalNeighbors || (mixed && language === "c"))
               assert.equal(
                 results[0].error,
                 "Returned graph must be a deep copy.",
               );
-            else if (nullNeighbor)
-              assert.equal(
+            else if (nullNeighbor || mixed)
+              assert.ok(
+                results[0].error.endsWith(
+                  "Returned graph has a NULL neighbor.",
+                ),
                 results[0].error,
-                "Returned graph has a NULL neighbor.",
               );
             else if (invalidId !== undefined)
               assert.equal(
