@@ -1015,7 +1015,7 @@ async function init() {
       const paintDrawer = mountInterviewDrawer(nodes.editorPanel);
     }
   }
-  placeJimStageBelowToolbar(
+  const placeJimStage = placeJimStageBelowToolbar(
     whiteboard ? nodes.boardToolbar : nodes.editorToolbar,
   );
   // After initWhiteboard, so the bounds measure the panel that stayed.
@@ -1047,6 +1047,7 @@ async function init() {
   }
   const fitJimStage = compactJimStageBesideNarrowPanel(
     whiteboard ? nodes.boardPanel : nodes.editorPanel,
+    placeJimStage,
   );
   // No enumeration here. Before the preflight grant the browser reports only a
   // blank placeholder, so the list is discarded and repainted a few lines down;
@@ -5856,23 +5857,29 @@ function testDrawerBounds() {
 /// the captions. The window's width alone stopped being enough to tell once
 /// the sidebar could be widened: at 1280px the editor can be 592px with the
 /// avatar still over it. An expanded Example drawing takes the panel's room
-/// the same way, so Jim's captions stay over a corner of the board. One class
+/// the same way, so Jim's compact card stays clear of the drawing. One class
 /// for all three, so the stylesheet says what compact looks like once, and
 /// the avatar's own width observer pauses and resumes its drawing from the
-/// result. On desktop, an expanded drawing also caps the card to the strip
-/// beside the reserved drawing, unless that strip cannot hold a readable card.
-function compactJimStageBesideNarrowPanel(panel) {
+/// result. Expanded drawings put a cramped card in its own row.
+function compactJimStageBesideNarrowPanel(panel, place) {
   const narrowWindow = matchMedia(JIM_STAGE_NARROW_WINDOW);
   const desktopDrawing = matchMedia(JIM_DRAWING_DESKTOP_WINDOW);
   const example = document.querySelector("#example-board");
+  const shell = panel.closest(".interview-shell");
   const fit = () => {
     const rem = Number.parseFloat(
       getComputedStyle(document.documentElement).fontSize,
     );
     const panelWidth = panel.getBoundingClientRect().width;
     const cardWidth = panelWidth - JIM_DRAWING_RESERVED_REM * rem;
+    const drawingExpanded = example?.hasAttribute("data-expanded") === true;
+    const expanded =
+      drawingExpanded && nodes.ending.hidden && nodes.report.hidden;
+    const below = expanded && !desktopDrawing.matches;
+    shell.classList.toggle("drawing-captions-below", below);
+    if (below) nodes.jimStage.classList.remove("scrollable");
     nodes.jimStage.style.maxWidth =
-      example?.hasAttribute("data-expanded") &&
+      expanded &&
       desktopDrawing.matches &&
       cardWidth >= JIM_SELF_VIEW_WIDTH_PX + 1.25 * rem + 2
         ? `${cardWidth}px`
@@ -5886,11 +5893,19 @@ function compactJimStageBesideNarrowPanel(panel) {
     // stage, as when an automatic turn-off hides the button.
     if (compact && document.activeElement === nodes.hideAvatar)
       nodes.jimStage.focus({ preventScroll: true });
+    place();
   };
   if (window.ResizeObserver) new window.ResizeObserver(fit).observe(panel);
   else window.addEventListener("resize", fit);
   narrowWindow.addEventListener("change", fit);
   desktopDrawing.addEventListener("change", fit);
+  // Expanding or shrinking the drawing refits through `onExpandedChange`; the
+  // ending and report overlays reveal or hide themselves with no callback.
+  for (const target of [nodes.ending, nodes.report])
+    new MutationObserver(fit).observe(target, {
+      attributes: true,
+      attributeFilter: ["hidden"],
+    });
   fit();
   return fit;
 }
@@ -5925,7 +5940,8 @@ function placeJimStageBelowToolbar(toolbar) {
     );
     nodes.jimStage.classList.toggle(
       "scrollable",
-      stage.top < 0 || stage.bottom > window.innerHeight,
+      !nodes.jimStage.closest(".drawing-captions-below") &&
+        (stage.top < 0 || stage.bottom > window.innerHeight),
     );
   };
   const observer = new window.ResizeObserver(place);
@@ -5933,6 +5949,7 @@ function placeJimStageBelowToolbar(toolbar) {
   observer.observe(nodes.jimStage);
   window.addEventListener("resize", place);
   place();
+  return place;
 }
 
 function editorFontSize() {

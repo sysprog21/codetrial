@@ -494,10 +494,10 @@ test("an expanded Example drawing stays under the setup check, the ending wait a
 });
 
 // On the real page, wide and narrow: expanding makes Jim's stage the compact
-// card a narrow window already has, so the captions stay on top of the board
+// card a narrow window already has, keeping its captions accessible
 // while the avatar and Hide avatar go; shrinking gives the wide window its full
 // stage back.
-test("an expanded Example drawing turns Jim's stage into the compact card over the board", async (t) => {
+test("an expanded Example drawing keeps Jim's compact card accessible", async (t) => {
   if (!browser) return t.skip("playwright chromium unavailable");
   for (const [width, height, docked] of [
     [1440, 900, false],
@@ -515,8 +515,9 @@ test("an expanded Example drawing turns Jim's stage into the compact card over t
           .locator("#jim-stage")
           .evaluate((node) => node.classList.contains("compact"));
       // Whether the element at the centre of `selector` is inside it.
-      const onTop = (selector) =>
-        page.evaluate((selector) => {
+      const onTop = async (selector) => {
+        await page.locator(selector).scrollIntoViewIfNeeded();
+        return page.evaluate((selector) => {
           const node = document.querySelector(selector);
           const box = node.getBoundingClientRect();
           return node.contains(
@@ -526,6 +527,7 @@ test("an expanded Example drawing turns Jim's stage into the compact card over t
             ),
           );
         }, selector);
+      };
       assert.equal(await compact(), docked, size);
       // The avatar's mount has no width, which is what stops its drawing, and
       // Hide avatar goes with it; a wide window has both before expanding.
@@ -576,6 +578,38 @@ test("an expanded Example drawing turns Jim's stage into the compact card over t
       await page.evaluate(
         () => (document.querySelector("#audio-playback-notice").hidden = true),
       );
+      for (const [selector, inert] of [
+        ["#ending-overlay", false],
+        ["#report-modal", true],
+      ]) {
+        await page.locator(selector).evaluate((node) => (node.hidden = false));
+        await settled(page);
+        assert.deepEqual(
+          await page
+            .locator("#jim-stage")
+            .evaluate((node) => [
+              getComputedStyle(node).position,
+              node.inert,
+              node
+                .closest(".interview-shell")
+                .classList.contains("drawing-captions-below"),
+            ]),
+          ["fixed", inert, false],
+          selector,
+        );
+        if (!inert)
+          assert.ok(
+            await onTop("#captions-bar"),
+            "closing captions stay above the ending overlay",
+          );
+        await page.locator(selector).evaluate((node) => (node.hidden = true));
+        await settled(page);
+        assert.equal(
+          await page.locator("#jim-stage").evaluate((node) => node.inert),
+          false,
+          "closing the overlay restores caption controls",
+        );
+      }
       assert.equal(
         await page
           .getByRole("button", { name: "Shrink drawing" })
@@ -587,6 +621,14 @@ test("an expanded Example drawing turns Jim's stage into the compact card over t
           }),
         docked,
         "the stage is restored before the shrink handler returns",
+      );
+      await settled(page);
+      assert.equal(
+        await page
+          .locator("#jim-stage")
+          .evaluate((node) => getComputedStyle(node).position),
+        "fixed",
+        "shrinking restores the floating card",
       );
     } finally {
       await page.close();
@@ -1003,7 +1045,7 @@ test("local recording controls preserve the original problem reading space", asy
 
 // Room admission is outside this layout check; the real page and drawing
 // handlers run with an editable board, without joining a provider.
-test("expanded drawing text controls stay reachable beside long captions and self-view", async (t) => {
+test("expanded drawing text controls stay clear of long captions and self-view", async (t) => {
   if (!browser) return t.skip("playwright chromium unavailable");
   for (const [width, height, wideSidebar] of [
     [1280, 800],
@@ -1013,6 +1055,9 @@ test("expanded drawing text controls stay reachable beside long captions and sel
     [1024, 768],
     [1024, 768, true],
     [1280, 800, true],
+    [481, 800],
+    [900, 800],
+    [1023, 800],
   ]) {
     const page = await openInterview(width, height, "&exampleDrawing=1", true);
     try {
@@ -1036,15 +1081,48 @@ test("expanded drawing text controls stay reachable beside long captions and sel
           );
       });
       await settled(page);
+      const canvas = page.locator("#example-board canvas");
+      if (width === 900) {
+        await page
+          .locator(".editor-panel")
+          .evaluate((node) => node.scrollIntoView({ block: "start" }));
+        const drawing = await canvas.boundingBox();
+        const captions = await page.locator("#captions-bar").boundingBox();
+        const card = await page.locator("#jim-stage").boundingBox();
+        assert.ok(
+          await page
+            .locator("#jim-stage")
+            .evaluate((node) => node.scrollHeight <= node.clientHeight + 1),
+          "only the captions bar needs scrolling",
+        );
+        assert.ok(
+          captions.y + captions.height <= card.y + card.height,
+          "the latest caption words remain inside the visible card",
+        );
+        assert.ok(
+          drawing.y >= 0 && drawing.y + drawing.height <= height,
+          "the full canvas is visible beside live captions",
+        );
+        assert.ok(
+          captions.y >= 0 && captions.y < height - 20,
+          "live captions are visible without scrolling the drawing away",
+        );
+      }
+      await canvas.scrollIntoViewIfNeeded();
       const surface = await page.locator(".example-surface").boundingBox();
+      assert.ok(
+        (await canvas.boundingBox()).width >= 280,
+        "the canvas stays usable",
+      );
       assert.ok(
         surface.width >= 280,
         `${width}px: text controls fit at full width`,
       );
       const card = await page.locator("#jim-stage").boundingBox();
       assert.ok(
-        surface.x + surface.width <= card.x,
-        `${width}px: the caption card stays beside the drawing`,
+        surface.x + surface.width <= card.x ||
+          surface.y + surface.height <= card.y,
+        `${width}px: the caption card stays outside the drawing`,
       );
       if (width === 1280 && !wideSidebar) {
         await page.evaluate(() =>
@@ -1063,7 +1141,6 @@ test("expanded drawing text controls stay reachable beside long captions and sel
         );
       }
       await page.getByRole("button", { name: "Text", exact: true }).click();
-      const canvas = page.locator("#example-board canvas");
       for (const [x, y] of [
         [0.05, 0.05],
         [0.5, 0.5],
@@ -1075,6 +1152,7 @@ test("expanded drawing text controls stay reachable beside long captions and sel
           await canvas.evaluate((node) => {
             node.parentElement.scrollTop = 0;
           });
+          await canvas.scrollIntoViewIfNeeded();
           const rect = await canvas.boundingBox();
           await page.mouse.click(
             rect.x + rect.width * x,
@@ -1091,6 +1169,14 @@ test("expanded drawing text controls stay reachable beside long captions and sel
           await page.locator(".board-text-draft").waitFor({ state: "hidden" });
         }
       }
+      await page.locator(".captions-head").scrollIntoViewIfNeeded();
+      const captions = await page.locator("#captions-bar").evaluate((node) => {
+        node.scrollTop = node.scrollHeight;
+        return { text: node.textContent, scrolled: node.scrollTop > 0 };
+      });
+      assert.ok(captions.text.includes("Explain the boundary cases"));
+      assert.ok(captions.scrolled, "long captions remain scrollable");
+      assert.equal((await page.locator("#self-view").boundingBox()).width, 120);
       if (wideSidebar) {
         await page.getByRole("button", { name: "Shrink drawing" }).click();
         await settled(page);

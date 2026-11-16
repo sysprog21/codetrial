@@ -2355,6 +2355,42 @@ table.phase-scores {
   }
 }
 
+/* Constrained expanded drawings share no pixels with the caption card.
+   Keep its DOM position outside the editor so ending/report inertness works. */
+.interview-shell.drawing-captions-below {
+  height: auto;
+}
+
+.drawing-captions-below .jim-stage.compact {
+  position: static;
+  display: flex;
+  flex-direction: column;
+  justify-self: end;
+  width: min(var(--jim-card-width), 100%);
+  max-height: 40dvh;
+  overflow: auto;
+  pointer-events: auto;
+}
+
+.drawing-captions-below .jim-stage > :not(.captions-bar) {
+  flex-shrink: 0;
+}
+
+.drawing-captions-below .jim-stage .captions-bar {
+  min-height: 0;
+  flex: 0 1 auto;
+}
+
+.drawing-captions-below .example-board[data-expanded] .example-surface {
+  margin-right: 0;
+}
+
+@media (max-width: 1023px) {
+  .drawing-captions-below .editor-panel[data-example-drawing="true"] {
+    height: max(34rem, calc(100dvh - 3rem - var(--jim-stage-height, 0px)));
+  }
+}
+
 /* The whiteboard, in place of the editor. The surface scrolls inside the
    panel rather than fitting itself to the window: the board is a fixed size in
    its own coordinates, so what the candidate draws is where the interviewer
