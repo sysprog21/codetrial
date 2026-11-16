@@ -65,6 +65,18 @@ for (const expired of [false, true]) {
         json: { availabilityId: "mine", url: "wss://example", token: "token" },
       });
     });
+    // A load state cannot say whether a tick's request is done: networkidle
+    // stays reached once the document got there. Count the page's own fetches.
+    await page.addInitScript(() => {
+      const send = window.fetch;
+      window.fetching = 0;
+      window.fetch = (...args) => {
+        window.fetching++;
+        return send(...args).finally(() => window.fetching--);
+      };
+    });
+    const requestsDone = () =>
+      page.waitForFunction(() => window.fetching === 0);
     await page.clock.install();
     await page.goto(`${base}/peer-lobby.html`);
     await page.locator("#peer-content").waitFor({ state: "visible" });
@@ -98,7 +110,7 @@ for (const expired of [false, true]) {
     );
     // The restoring refresh is not the timer: wait for it to settle, then count
     // only reads that the polling interval makes afterwards.
-    await page.waitForLoadState("networkidle");
+    await requestsDone();
     await page.clock.runFor(1000);
     const settled = reads;
     // One interval per probe, three at most: the 15 s the old single advance
@@ -111,7 +123,7 @@ for (const expired of [false, true]) {
         if (ticks++ === 3)
           throw new Error(`${what} did not happen within 15 s of page time`);
         await page.clock.runFor(5000);
-        await page.waitForLoadState("networkidle");
+        await requestsDone();
         return done();
       }, what);
     };
