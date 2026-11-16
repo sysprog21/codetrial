@@ -19,6 +19,31 @@ esac
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 
+# What this machine can run is settled before anything else. `gate` only records
+# a failure and carries on, so this is a plain step: a missing toolchain stops
+# the run here, naming the tool and the command that installs it, instead of
+# failing every gate that needs it. It runs before the Python lookup below,
+# which can set up an environment, and before the Clang fetch, which is why it
+# is told that fetch will happen. The report it prints for a passing machine
+# also carries the optional tools that are absent; the gates below read their
+# skip lines from it.
+case "$lane" in
+    rust | all)
+        env_profile=local-rust
+        [ "${CI:-}" != true ] || env_profile=ci-rust
+        ;;
+    portable) env_profile=portable ;;
+    browser) env_profile=browser ;;
+esac
+env_check=$ROOT/scripts/env-check.sh
+env_report=$("$env_check" --profile "$env_profile" --will-provision) || {
+    env_status=$?
+    printf '%s\n' "$env_report" >&2
+    exit "$env_status"
+}
+# A passing report is otherwise discarded, and with it the warnings and notes.
+printf '%s\n' "$env_report" | grep -E '^(warning|note): ' >&2
+
 # The tree this run judges, taken before any gate runs: an edit made while a
 # long run is in progress then fails to match the receipt, instead of being
 # stamped as what the run saw. Empty outside a git work tree.
@@ -101,6 +126,21 @@ skip()
     echo "skipping $1" >&2
     skipped="$skipped
   $1"
+}
+
+# env_absent TOOL: whether scripts/env-check.sh found TOOL missing.
+env_absent()
+{
+    printf '%s\n' "$env_report" | grep -q "^skipped: $1: "
+}
+
+# env_skip TOOL: record the skip with the reason scripts/env-check.sh gave, and
+# succeed only when TOOL was missing.
+env_skip()
+{
+    reason=$(printf '%s\n' "$env_report" | sed -n "s/^skipped: $1: //p")
+    [ -n "$reason" ] || return 1
+    skip "$1: $reason"
 }
 
 # Run a command that reports its own skips on stderr, and add each one the sed
@@ -305,6 +345,10 @@ eslint_gate()
 # Both absent is still a skip, on the same contract as eslint above.
 actionlint_gate()
 {
+    if env_skip actionlint; then
+        return 0
+    fi
+
     if command -v actionlint > /dev/null 2>&1; then
         (cd "$ROOT" && actionlint)
         return "$?"
@@ -340,8 +384,7 @@ release_msrv_matches()
 
 cargo_audit_gate()
 {
-    if ! command -v cargo-audit > /dev/null 2>&1; then
-        skip "cargo-audit: \`cargo install cargo-audit\` audits the dependency tree"
+    if env_skip cargo-audit; then
         return 0
     fi
 
@@ -352,8 +395,7 @@ cargo_audit_gate()
 
 cargo_deny_gate()
 {
-    if ! command -v cargo-deny > /dev/null 2>&1; then
-        skip "cargo-deny: \`cargo install cargo-deny\` checks dependency licenses and sources"
+    if env_skip cargo-deny; then
         return 0
     fi
 
@@ -409,8 +451,7 @@ vendor_patches_gate()
 # until the script runs. Optional the way shellcheck is, for the same reason.
 ruff_gate()
 {
-    if ! command -v ruff > /dev/null 2>&1; then
-        skip "ruff: installing it lints the Python under scripts/, tests/ and the skills"
+    if env_skip ruff; then
         return 0
     fi
 
@@ -435,20 +476,16 @@ ruff_gate()
 shell_syntax()
 {
     status=0
-    scripts=0
     posix_sh="sh"
-    if command -v dash > /dev/null 2>&1; then
+    if ! env_absent dash; then
         posix_sh=dash
     fi
     for script in "$ROOT"/scripts/*.sh "$ROOT"/.claude/skills/*/*.sh "$ROOT"/tests/stubs/*/*.sh; do
-        scripts=$((scripts + 1))
         "$posix_sh" -n "$script" || status=1
     done
 
-    if command -v shellcheck > /dev/null 2>&1; then
+    if ! env_skip shellcheck; then
         (cd "$ROOT" && shellcheck scripts/*.sh .claude/skills/*/*.sh tests/stubs/*/*.sh) || status=1
-    else
-        skip "shellcheck: installing it checks what $scripts shell scripts mean, not just that they parse"
     fi
 
     return "$status"
@@ -626,6 +663,7 @@ gate audit-tests unittest_gate "$ROOT/tests/test_audit.py"
 gate rust-style-tests unittest_gate "$ROOT/tests/test_check_rust_style.py"
 gate ceiling-hotspots-tests unittest_gate "$ROOT/tests/test_ceiling_hotspots.py"
 gate test-gate-tests unittest_gate "$ROOT/tests/test_test_gate.py"
+gate env-check-tests unittest_gate "$ROOT/tests/test_env_check.py"
 gate mutants-plan-tests unittest_gate "$ROOT/tests/test_mutants_plan.py"
 gate mutants-install-tests unittest_gate "$ROOT/tests/test_mutants_install.py"
 gate latency-tests unittest_gate "$ROOT/tests/test_analyze_latency.py"
