@@ -17,6 +17,9 @@ approval included, are in the GitHub section of
 [codetrial-conventions](../codetrial-conventions/SKILL.md). Keep technical
 identifiers and quoted errors exact.
 
+Before any push, an agent follows the [Before you push](../../../CONTRIBUTING.md#before-you-push)
+section of CONTRIBUTING.md.
+
 Example requests: "Turn these notes into an issue", "Help me make my first
 CodeTrial contribution", or "Write a PR description from this diff". Produce
 the artifact the user asked for.
