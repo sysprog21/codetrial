@@ -206,7 +206,7 @@ def thread(kind="User", login="maint"):
     }
 
 
-def run_fake(script, args, fake_gh, files, cwd=None, env=()):
+def run_fake(script, args, fake_gh, files, cwd=None, env=(), path=None):
     """Run a skill script against a fake gh, with files it or the fake reads."""
     with tempfile.TemporaryDirectory() as scratch:
         scratch = Path(scratch)
@@ -224,7 +224,9 @@ def run_fake(script, args, fake_gh, files, cwd=None, env=()):
             capture_output=True,
             text=True,
             env=os.environ
-            | {"PATH": f"{scratch / 'bin'}:{os.environ['PATH']}"}
+            | {
+                "PATH": f"{scratch / 'bin'}:{path + ':' if path else ''}{os.environ['PATH']}"
+            }
             | {k: str(v) for k, v in paths.items()}
             | dict(env),
         )
@@ -2137,7 +2139,16 @@ BUNDLE_FILES = [
 
 @unittest.skipUnless(shutil.which("jq"), "jq is not installed")
 class ReviewBundleTests(unittest.TestCase):
-    def bundle(self, *args, env=(), files=BUNDLE_FILES, out=None, pr=BUNDLE_PR):
+    def bundle(
+        self,
+        *args,
+        env=(),
+        files=BUNDLE_FILES,
+        out=None,
+        pr=BUNDLE_PR,
+        cwd=None,
+        path=None,
+    ):
         with tempfile.TemporaryDirectory() as scratch:
             out = out or scratch
             result = run_fake(
@@ -2149,7 +2160,9 @@ class ReviewBundleTests(unittest.TestCase):
                     "FAKE_DIFF": DIFF,
                     "FAKE_FILES": "".join(json.dumps(f) + "\n" for f in files),
                 },
+                cwd=cwd,
                 env=env,
+                path=path,
             )
             written = {
                 str(p.relative_to(out)): p.read_text()
@@ -2273,8 +2286,776 @@ class ReviewBundleTests(unittest.TestCase):
         )
         since = json.loads(result.stdout)["since"]
         self.assertEqual(since["status"], "merged")
-        self.assertIn("whole diff", since["why"])
+        self.assertEqual(
+            since["why"],
+            "a merge since then brings in other work, so the whole diff is reviewed",
+        )
         self.assertNotIn("since.diff", written)
+
+    def rewritten_bundle(
+        self,
+        repo,
+        since,
+        head,
+        base,
+        *args,
+        compare="diverged",
+        out=None,
+        env=(),
+        path=None,
+    ):
+        # Real commits in a real repository; only the PR metadata is fake. The
+        # one listed file is removed, so nothing is read from the fake at head.
+        return self.bundle(
+            "--since",
+            since,
+            *args,
+            files=[BUNDLE_FILES[2]],
+            pr=dict(BUNDLE_PR, headRefOid=head, baseRefOid=base),
+            cwd=repo,
+            out=out,
+            path=path,
+            env={
+                "FAKE_COMPARE": compare,
+                "FAKE_AFTER": f"{head} {base}",
+                "FAKE_SINCE": since,
+                "FAKE_HEAD": head,
+            }
+            | dict(env),
+        )
+
+    def history(self, repo):
+        """A branch at old on main0; main1 adds a file, main2 changes its line."""
+
+        def git(*args):
+            return subprocess.run(
+                ["git", "-c", "user.name=t", "-c", "user.email=t@t", *args],
+                cwd=repo,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+
+        def commit(text, subject, change_id=None, path="a.js", body="Why it changes."):
+            Path(repo, path).write_text(text)
+            git("add", ".")
+            trailer = f"\n\nChange-Id: I{change_id * 40}" if change_id else ""
+            git("commit", "-qm", f"{subject}\n\n{body}{trailer}")
+            return git("rev-parse", "HEAD")
+
+        git("init", "-q", "-b", "main")
+        git("config", "core.autocrlf", "false")
+        main0 = commit("one\ntwo\nthree\n", "Start")
+        git("checkout", "-qb", "work")
+        old = commit("one\nTWO\nthree\n", "Change two", "a")
+        git("checkout", "-q", "main")
+        main1 = commit("other\n", "Add another file", path="b.js")
+        main2 = commit("one\n2\nthree\n", "Change the line too")
+        return git, commit, {"main0": main0, "main1": main1, "main2": main2, "old": old}
+
+    def test_a_rewrite_on_one_base_gives_the_tree_diff(self):
+        with tempfile.TemporaryDirectory() as repo:
+            git, commit, at = self.history(repo)
+            git("checkout", "-qb", "new", at["main0"])
+            head = commit("one\nTWO\nthree\nfour\n", "Change two", "b")
+            for compare in ("diverged", "behind"):
+                with self.subTest(compare=compare):
+                    result, written = self.rewritten_bundle(
+                        repo, at["old"], head, at["main0"], compare=compare
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    since = json.loads(result.stdout)["since"]
+                    self.assertEqual(since["status"], "rewritten")
+                    self.assertEqual(since["old_base"], at["main0"])
+                    self.assertEqual(since["new_base"], at["main0"])
+                    self.assertIn("+four", written["since.diff"])
+                    self.assertNotIn("+TWO", written["since.diff"])
+                    self.assertIn("+four", written["since.txt"])
+                    self.assertIn("since.range-diff.txt", written)
+
+    def test_a_conflict_free_rebase_shows_every_commit_unchanged(self):
+        with tempfile.TemporaryDirectory() as repo:
+            git, commit, at = self.history(repo)
+            git("checkout", "-qb", "new", at["main1"])
+            # A hook-driven rechain gives the same commit a new Change-Id.
+            head = commit("one\nTWO\nthree\n", "Change two", "b")
+            result, written = self.rewritten_bundle(repo, at["old"], head, at["main1"])
+            self.assertEqual(result.returncode, 0, result.stderr)
+            since = json.loads(result.stdout)["since"]
+            self.assertEqual(since["status"], "rebased")
+            self.assertEqual(since["old_base"], at["main0"])
+            self.assertEqual(since["new_base"], at["main1"])
+            lines = written["since.range-diff.txt"].splitlines()
+            self.assertEqual(len(lines), 1, lines)
+            self.assertIn(" = ", lines[0])
+            self.assertNotIn("since.diff", written)
+
+    def test_a_rebase_with_a_merge_in_either_range_is_not_compared(self):
+        # range-diff skips merge commits, so a resolution made in one would
+        # be left out, and a moved base leaves no tree diff to catch it.
+        for where in ("new", "old"):
+            with self.subTest(merge_in=where), tempfile.TemporaryDirectory() as repo:
+                git, commit, at = self.history(repo)
+
+                def with_merge(start, name, path):
+                    git("checkout", "-qb", name, start)
+                    commit("a\n", "Add a", path=path)
+                    git("checkout", "-qb", name + "-side", start)
+                    commit("s\n", "Add s", path="s" + path)
+                    git("checkout", "-q", name)
+                    git("merge", "-q", "--no-ff", "-m", "Merge side", name + "-side")
+                    return git("rev-parse", "HEAD")
+
+                if where == "new":
+                    old = at["old"]
+                    head = with_merge(at["main1"], "newm", "m.js")
+                else:
+                    old = with_merge(at["main0"], "oldm", "m.js")
+                    git("checkout", "-qb", "plain", at["main1"])
+                    head = commit("a\n", "Add a", "b", path="m.js")
+                result, written = self.rewritten_bundle(repo, old, head, at["main1"])
+                self.assertEqual(result.returncode, 0, result.stderr)
+                since = json.loads(result.stdout)["since"]
+                self.assertEqual(since["status"], "diverged")
+                self.assertEqual(
+                    since["why"],
+                    "a merge in the rewritten commits cannot be compared, "
+                    "so the whole diff is reviewed",
+                )
+                self.assertFalse(
+                    [name for name in written if name.startswith("since.")], written
+                )
+
+    def test_a_rebase_whose_merges_cannot_be_listed_is_not_compared(self):
+        # A failed listing is not an empty one, whichever range fails.
+        real = shutil.which("git")
+        for failing in ("old", "new"):
+            with (
+                self.subTest(failing=failing),
+                tempfile.TemporaryDirectory() as repo,
+                tempfile.TemporaryDirectory() as wrapper,
+            ):
+                git, commit, at = self.history(repo)
+                git("checkout", "-qb", "new", at["main1"])
+                head = commit("one\nTWO\nthree\nfour\n", "Change two", "b")
+                end = at["old"] if failing == "old" else head
+                stub = Path(wrapper, "git")
+                stub.write_text(
+                    f'#!/bin/sh\ncase "$1 $*" in rev-list*"..{end}") exit 1 ;; esac\n'
+                    f'exec {real} "$@"\n'
+                )
+                stub.chmod(0o755)
+                result, written = self.rewritten_bundle(
+                    repo, at["old"], head, at["main1"], path=wrapper
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                since = json.loads(result.stdout)["since"]
+                self.assertEqual(since["status"], "diverged")
+                self.assertEqual(
+                    since["why"],
+                    "the commits to compare could not be listed, "
+                    "so the whole diff is reviewed",
+                )
+                self.assertFalse(
+                    [name for name in written if name.startswith("since.")], written
+                )
+
+    def test_a_rebase_that_only_rewords_a_commit_still_shows_it_changed(self):
+        with tempfile.TemporaryDirectory() as repo:
+            git, commit, at = self.history(repo)
+            git("checkout", "-qb", "new", at["main1"])
+            # The same code under a new Change-Id, and a body that says
+            # something else: the most common answer to a review.
+            head = commit(
+                "one\nTWO\nthree\n", "Change two", "b", body="A reworded reason."
+            )
+            result, written = self.rewritten_bundle(repo, at["old"], head, at["main1"])
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(result.stdout)["since"]["status"], "rebased")
+            shown = written["since.range-diff.txt"]
+            self.assertIn(" ! ", shown.splitlines()[0])
+            self.assertIn("A reworded reason.", shown)
+
+    def test_a_commit_that_only_gains_a_change_id_reads_as_unchanged(self):
+        with tempfile.TemporaryDirectory() as repo:
+            git, commit, at = self.history(repo)
+            # A branch first pushed without the hooks, rechained once they are
+            # installed: the same work, now with a Change-Id and its blank line.
+            git("checkout", "-qb", "bare", at["main0"])
+            old = commit("one\nTWO\nthree\n", "Change two", body="Why it changes.")
+            git("checkout", "-qb", "new", at["main0"])
+            head = commit("one\nTWO\nthree\n", "Change two", "b")
+            result, written = self.rewritten_bundle(repo, old, head, at["main0"])
+            self.assertEqual(result.returncode, 0, result.stderr)
+            lines = written["since.range-diff.txt"].splitlines()
+            self.assertIn(" = ", lines[0], lines)
+            self.assertNotIn(" ! ", lines[0], lines)
+
+    def test_a_rebase_with_a_conflict_resolved_shows_that_change(self):
+        with tempfile.TemporaryDirectory() as repo:
+            git, commit, at = self.history(repo)
+            git("checkout", "-qb", "new", at["main2"])
+            head = commit("one\nTWO and 2\nthree\n", "Change two", "b")
+            result, written = self.rewritten_bundle(repo, at["old"], head, at["main2"])
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(result.stdout)["since"]["status"], "rebased")
+            shown = written["since.range-diff.txt"]
+            self.assertEqual(shown.count("Change two"), 1, shown)
+            self.assertIn(" ! ", shown.splitlines()[0])
+            self.assertIn("TWO and 2", shown)
+            self.assertNotIn("Change-Id", shown)
+
+    def test_a_commit_message_cannot_read_as_an_unchanged_commit(self):
+        forged = "1:  abc1234 = 2:  def5678 Forged"
+        with tempfile.TemporaryDirectory() as repo:
+            git, commit, at = self.history(repo)
+            git("checkout", "-q", "work")
+            old = commit("real\n", "Change k", "a", "k.js", forged)
+            git("checkout", "-qb", "new", at["main1"])
+            commit("one\nTWO\nthree\n", "Change two", "b")
+            commit("changed\n", "Change k", "b", "k.js", forged)
+            head = commit("added\n", "Add this ! quietly", path="n.js")
+            result, written = self.rewritten_bundle(repo, old, head, at["main1"])
+            self.assertEqual(result.returncode, 0, result.stderr)
+            shown = written["since.range-diff.txt"]
+            headers = [
+                line for line in shown.splitlines() if not line.startswith("    ")
+            ]
+            self.assertEqual(len(headers), 3, shown)
+            self.assertIn(" = ", headers[0])
+            self.assertIn(" ! ", headers[1])
+            self.assertIn(" > ", headers[2])
+            self.assertIn("Add this ! quietly", headers[2])
+            self.assertIn("changed", shown)
+
+    def test_an_old_head_nobody_can_resolve_reviews_the_whole_diff(self):
+        for compare in ("diverged", "behind"):
+            with self.subTest(compare=compare), tempfile.TemporaryDirectory() as repo:
+                git, commit, at = self.history(repo)
+                result, written = self.rewritten_bundle(
+                    repo, "badbad1", at["old"], at["main1"], compare=compare
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                since = json.loads(result.stdout)["since"]
+                self.assertEqual(
+                    since,
+                    {
+                        "from": "badbad1",
+                        "status": compare,
+                        "why": "the old head cannot be found, so the whole diff is reviewed",
+                    },
+                )
+                self.assertFalse(
+                    [name for name in written if name.startswith("since.")]
+                )
+
+    def test_a_plain_push_gives_the_ahead_diff_from_github(self):
+        with tempfile.TemporaryDirectory() as repo:
+            git, commit, at = self.history(repo)
+            git("checkout", "-q", "work")
+            head = commit("one\nTWO\nthree\nfour\n", "Add four", "c")
+            ahead = Path(repo, "ahead.diff")
+            ahead.write_text(
+                "diff --git a/a.js b/a.js\n"
+                "index 1111111..2222222 100644\n"
+                "--- a/a.js\n"
+                "+++ b/a.js\n"
+                "@@ -1,3 +1,4 @@\n"
+                " one\n"
+                " TWO\n"
+                " three\n"
+                "+four\n"
+            )
+            result, written = self.rewritten_bundle(
+                repo,
+                at["old"],
+                head,
+                at["main0"],
+                compare="ahead 0",
+                env={"FAKE_COMPARE_DIFF": ahead},
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(result.stdout)["since"]["status"], "ahead")
+            self.assertIn("+four", written["since.diff"])
+            self.assertNotIn("+TWO", written["since.diff"])
+            self.assertNotIn("since.range-diff.txt", written)
+
+    def test_a_short_old_head_is_expanded_by_github(self):
+        # The short SHA is not in the clone, so it is read from GitHub.
+        with tempfile.TemporaryDirectory() as repo:
+            git, commit, at = self.history(repo)
+            result, written = self.rewritten_bundle(
+                repo,
+                "abcdef1",
+                at["main1"],
+                at["main0"],
+                env={"FAKE_EXPAND": f"abcdef1={at['old']}"},
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            since = json.loads(result.stdout)["since"]
+            self.assertEqual(since["status"], "rewritten")
+            self.assertEqual(since["from"], "abcdef1")
+            self.assertTrue(written["since.diff"])
+
+    def test_a_short_sha_means_what_github_says_not_a_clone_prefix_match(self):
+        # The clone holds main1 under this prefix, but GitHub says it is old.
+        with tempfile.TemporaryDirectory() as repo:
+            git, commit, at = self.history(repo)
+            git("checkout", "-qb", "new", at["main0"])
+            head = commit("one\nTWO\nthree\nfour\n", "Change two", "b")
+            short = at["main1"][:7]
+            result, written = self.rewritten_bundle(
+                repo,
+                short,
+                head,
+                at["main0"],
+                env={"FAKE_EXPAND": f"{short}={at['old']}"},
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(result.stdout)["since"]["status"], "rewritten")
+            self.assertIn("+four", written["since.diff"])
+            self.assertNotIn("other", written["since.diff"])
+
+    def test_a_short_sha_github_refuses_is_read_from_the_clone(self):
+        # GitHub refuses with an error body on stdout, and the clone holds it.
+        with tempfile.TemporaryDirectory() as repo:
+            git, commit, at = self.history(repo)
+            git("checkout", "-qb", "new", at["main0"])
+            head = commit("one\nTWO\nthree\nfour\n", "Change two", "b")
+            result, written = self.rewritten_bundle(
+                repo, at["old"][:7], head, at["main0"]
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(result.stdout)["since"]["status"], "rewritten")
+            self.assertIn("+four", written["since.diff"])
+
+    def test_a_since_that_is_the_head_asks_for_no_comparison(self):
+        with tempfile.TemporaryDirectory() as repo:
+            git, commit, at = self.history(repo)
+            result, written = self.rewritten_bundle(
+                repo, at["old"], at["old"], at["main0"]
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIsNone(json.loads(result.stdout)["since"])
+            self.assertFalse([name for name in written if name.startswith("since.")])
+
+    def test_a_compare_that_fails_still_compares_the_commits_the_clone_holds(self):
+        with tempfile.TemporaryDirectory() as repo:
+            git, commit, at = self.history(repo)
+            git("checkout", "-qb", "new", at["main0"])
+            head = commit("one\nTWO\nthree\nfour\n", "Change two", "b")
+            result, written = self.rewritten_bundle(
+                repo, at["old"], head, at["main0"], compare="fail"
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(result.stdout)["since"]["status"], "rewritten")
+            self.assertIn("+four", written["since.diff"])
+            # Nothing to compare when the commits are not in the clone either.
+            result, written = self.rewritten_bundle(
+                repo, "badbad1", head, at["main0"], compare="fail"
+            )
+            since = json.loads(result.stdout)["since"]
+            self.assertEqual(since["status"], "unknown")
+            self.assertIn("old head cannot be found", since["why"])
+            self.assertFalse([name for name in written if name.startswith("since.")])
+
+    def test_a_failed_compare_for_a_plain_push_keeps_the_full_review(self):
+        with tempfile.TemporaryDirectory() as repo:
+            git, commit, at = self.history(repo)
+            git("checkout", "-q", "work")
+            head = commit("one\nTWO\nthree\nfour\n", "Add four", "c")
+            result, written = self.rewritten_bundle(
+                repo, at["old"], head, at["main0"], compare="fail"
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            since = json.loads(result.stdout)["since"]
+            # The old head is below this one: a push, which is no rewrite.
+            self.assertEqual(since["status"], "unknown")
+            self.assertEqual(
+                since["why"],
+                "the comparison with that head failed, so the whole diff is reviewed",
+            )
+            self.assertFalse([name for name in written if name.startswith("since.")])
+
+    def test_a_context_line_shaped_like_a_trailer_is_not_a_message_line(self):
+        # Three spaces make the printed line match the message rule too, and a
+        # file line that reads like the section header must not turn it back on.
+        for lead in ("", "   ", "## Commit message ##\n   "):
+            with self.subTest(lead=lead), tempfile.TemporaryDirectory() as repo:
+                git, commit, at = self.history(repo)
+
+                def body(letter, tail=""):
+                    return f"a\n{lead}Change-Id: I{letter * 40}\nb\n{tail}"
+
+                # The target holds both bases, so each head's merge base with
+                # it is its own: the old head's is the first, the new one's the second.
+                git("checkout", "-q", "-b", "oldx", at["main0"])
+                old_base = commit(body("a"), "Add the file", path="ctx.txt")
+                old = commit(body("a", "c\n"), "Append c", path="ctx.txt")
+                git("checkout", "-q", "-b", "newx", old_base)
+                new_base = commit(body("b"), "Change the ids", path="ctx.txt")
+                head = commit(body("b", "c\n"), "Append c", path="ctx.txt")
+                result, written = self.rewritten_bundle(repo, old, head, new_base)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(
+                    json.loads(result.stdout)["since"]["status"], "rebased"
+                )
+                shown = written["since.range-diff.txt"]
+                # Only the patch's context line changed, and it is not the message.
+                self.assertIn(" ! ", shown.splitlines()[0], shown)
+
+    def test_a_blank_line_dropped_before_a_rechained_change_id_reads_changed(self):
+        # With a Change-Id on both sides, a blank line that went with one of
+        # them is no longer noise: the Change-Id is no longer a trailer.
+        with tempfile.TemporaryDirectory() as repo:
+            git, commit, at = self.history(repo)
+            git("checkout", "-qb", "oldblank", at["main0"])
+            old = commit("one\nTWO\nthree\n", "Change two", "a", body="Why.")
+            git("checkout", "-qb", "newblank", at["main1"])
+            head = commit(
+                "one\nTWO\nthree\n",
+                "Change two",
+                body=f"Why.\nChange-Id: I{'b' * 40}",
+            )
+            result, written = self.rewritten_bundle(repo, old, head, at["main1"])
+            self.assertEqual(result.returncode, 0, result.stderr)
+            shown = written["since.range-diff.txt"]
+            self.assertIn(" ! ", shown.splitlines()[0], shown)
+
+    def test_a_rechained_commit_with_only_a_subject_reads_unchanged(self):
+        # With no body, range-diff opens the hunk at Metadata, so only the
+        # Commit message header line says the message section has started.
+        with tempfile.TemporaryDirectory() as repo:
+            git, commit, at = self.history(repo)
+            git("checkout", "-qb", "oldsub", at["main0"])
+            old = commit("one\nTWO\nthree\n", "Change two", "a", body="")
+            git("checkout", "-qb", "newsub", at["main1"])
+            head = commit("one\nTWO\nthree\n", "Change two", "b", body="")
+            result, written = self.rewritten_bundle(repo, old, head, at["main1"])
+            self.assertEqual(result.returncode, 0, result.stderr)
+            lines = written["since.range-diff.txt"].splitlines()
+            self.assertEqual(len(lines), 1, lines)
+            self.assertIn(" = ", lines[0])
+
+    def test_an_amend_that_only_rewords_a_commit_on_one_base_shows_the_reword(self):
+        with tempfile.TemporaryDirectory() as repo:
+            git, commit, at = self.history(repo)
+            git("checkout", "-qb", "new", at["main0"])
+            # The same code under a new Change-Id and a reworded body: the
+            # tree diff of the two heads is empty.
+            head = commit(
+                "one\nTWO\nthree\n", "Change two", "b", body="A reworded reason."
+            )
+            result, written = self.rewritten_bundle(repo, at["old"], head, at["main0"])
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(result.stdout)["since"]["status"], "rewritten")
+            self.assertEqual(written["since.diff"], "")
+            shown = written["since.range-diff.txt"]
+            self.assertIn(" ! ", shown.splitlines()[0], shown)
+            self.assertIn("A reworded reason.", shown)
+
+    def test_an_amend_that_only_joins_two_paragraphs_shows_the_reword(self):
+        # A blank message line has no text of its own, but dropping one is a
+        # change, unlike the blank line that goes with a Change-Id.
+        with tempfile.TemporaryDirectory() as repo:
+            git, commit, at = self.history(repo)
+            git("checkout", "-qb", "split", at["main0"])
+            old = commit("one\nTWO\nthree\n", "Change two", "a", body="One.\n\nTwo.")
+            git("checkout", "-qb", "joined", at["main0"])
+            head = commit("one\nTWO\nthree\n", "Change two", "b", body="One.\nTwo.")
+            result, written = self.rewritten_bundle(repo, old, head, at["main0"])
+            self.assertEqual(result.returncode, 0, result.stderr)
+            shown = written["since.range-diff.txt"]
+            self.assertIn(" ! ", shown.splitlines()[0], shown)
+
+    def test_a_bad_value_is_named_alone(self):
+        result = run_fake(BUNDLE, [5, "out", "--since", "not-a-sha"], FAKE_GH_FAILS, {})
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("not-a-sha is not a commit", result.stderr)
+
+    def test_a_fetch_that_fails_is_named_as_the_reason(self):
+        with tempfile.TemporaryDirectory() as repo:
+            git, commit, at = self.history(repo)
+            result, written = self.rewritten_bundle(
+                repo,
+                at["old"],
+                "ab" * 20,
+                at["main0"],
+                env={
+                    "GIT_CONFIG_COUNT": "1",
+                    "GIT_CONFIG_KEY_0": f"url.{repo}/nowhere.insteadOf",
+                    "GIT_CONFIG_VALUE_0": "https://github.com/sysprog21/codetrial.git",
+                },
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            since = json.loads(result.stdout)["since"]
+            self.assertEqual(since["status"], "diverged")
+            self.assertEqual(
+                since["why"],
+                "the commits to compare could not be fetched, so the whole diff is reviewed",
+            )
+            self.assertFalse([name for name in written if name.startswith("since.")])
+
+    def test_a_run_outside_a_repository_is_named_as_the_reason(self):
+        with tempfile.TemporaryDirectory() as nowhere:
+            result, written = self.rewritten_bundle(
+                nowhere, "ab" * 20, "cd" * 20, "ef" * 20
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            since = json.loads(result.stdout)["since"]
+            self.assertEqual(since["status"], "diverged")
+            self.assertEqual(
+                since["why"],
+                "no repository at the working directory to compare in, so the whole diff is reviewed",
+            )
+            self.assertFalse([name for name in written if name.startswith("since.")])
+
+    def test_a_comparison_that_fails_midway_leaves_no_pointer_file(self):
+        real = shutil.which("git")
+        for command, base_name in (
+            ("range-diff", "main0"),
+            ("range-diff", "main1"),
+            ("diff", "main0"),
+        ):
+            with (
+                self.subTest(command=command, base=base_name),
+                tempfile.TemporaryDirectory() as repo,
+                tempfile.TemporaryDirectory() as wrapper,
+            ):
+                git, commit, at = self.history(repo)
+                git("checkout", "-qb", "new", at[base_name])
+                head = commit("one\nTWO\nthree\nfour\n", "Change two", "b")
+                # git runs as before except for the one command that fails.
+                stub = Path(wrapper, "git")
+                stub.write_text(
+                    f'#!/bin/sh\ncase "$1" in {command}) exit 1 ;; esac\nexec {real} "$@"\n'
+                )
+                stub.chmod(0o755)
+                result, written = self.rewritten_bundle(
+                    repo, at["old"], head, at[base_name], path=wrapper
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                since = json.loads(result.stdout)["since"]
+                self.assertEqual(since["status"], "diverged")
+                self.assertEqual(
+                    since["why"],
+                    "the rewrite could not be compared, so the whole diff is reviewed",
+                )
+                self.assertFalse(
+                    [name for name in written if name.startswith("since.")], written
+                )
+
+    def test_a_range_diff_that_fails_under_an_unknown_status_says_so(self):
+        # The compare call failed too, but the reason is the failed comparison
+        # of the rewrite, not the call.
+        real = shutil.which("git")
+        with (
+            tempfile.TemporaryDirectory() as repo,
+            tempfile.TemporaryDirectory() as wrapper,
+        ):
+            git, commit, at = self.history(repo)
+            git("checkout", "-qb", "new", at["main0"])
+            head = commit("one\nTWO\nthree\nfour\n", "Change two", "b")
+            stub = Path(wrapper, "git")
+            stub.write_text(
+                f'#!/bin/sh\ncase "$1" in range-diff) exit 1 ;; esac\nexec {real} "$@"\n'
+            )
+            stub.chmod(0o755)
+            result, written = self.rewritten_bundle(
+                repo, at["old"], head, at["main0"], compare="fail", path=wrapper
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            since = json.loads(result.stdout)["since"]
+            self.assertEqual(since["status"], "unknown")
+            self.assertEqual(
+                since["why"],
+                "the rewrite could not be compared, so the whole diff is reviewed",
+            )
+
+    def test_a_shallow_clone_is_refused_with_its_own_reason(self):
+        # The fetch stops at the shallow boundary, so a merge base would be
+        # missing or wrong, and the manifest must not blame the pull request.
+        with (
+            tempfile.TemporaryDirectory() as repo,
+            tempfile.TemporaryDirectory() as clones,
+        ):
+            git, commit, at = self.history(repo)
+            git("checkout", "-qb", "new", at["main0"])
+            head = commit("one\nTWO\nthree\nfour\n", "Change two", "b")
+            shallow = str(Path(clones, "shallow"))
+            git("clone", "-q", "--depth", "1", "--no-local", f"file://{repo}", shallow)
+            result, written = self.rewritten_bundle(
+                shallow, at["old"], head, at["main0"]
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            since = json.loads(result.stdout)["since"]
+            self.assertEqual(since["status"], "diverged")
+            self.assertEqual(
+                since["why"],
+                "a shallow clone cuts the history the comparison walks, "
+                "so the whole diff is reviewed",
+            )
+            self.assertFalse(
+                [name for name in written if name.startswith("since.")], written
+            )
+
+    def test_a_partial_clone_is_refused_with_its_own_reason(self):
+        # git diff and git range-diff would fetch each blob they read from the
+        # promisor remote, a second network write that can also stall on a
+        # prompt, so the comparison is not attempted. Current git marks the
+        # remote a promisor; older git set extensions.partialClone.
+        for how in ("filter", "extension"):
+            with (
+                self.subTest(how=how),
+                tempfile.TemporaryDirectory() as repo,
+                tempfile.TemporaryDirectory() as clones,
+            ):
+                git, commit, at = self.history(repo)
+                git("config", "uploadpack.allowFilter", "true")
+                git("checkout", "-qb", "new", at["main0"])
+                head = commit("one\nTWO\nthree\nfour\n", "Change two", "b")
+                clone = str(Path(clones, "clone"))
+                git("clone", "-q", "--no-local", f"file://{repo}", clone)
+                if how == "filter":
+                    shutil.rmtree(clone)
+                    git(
+                        "clone",
+                        "-q",
+                        "--no-local",
+                        "--filter=blob:none",
+                        f"file://{repo}",
+                        clone,
+                    )
+                else:
+                    subprocess.run(
+                        ["git", "config", "extensions.partialClone", "origin"],
+                        cwd=clone,
+                        check=True,
+                    )
+                result, written = self.rewritten_bundle(
+                    clone, at["old"], head, at["main0"]
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                since = json.loads(result.stdout)["since"]
+                self.assertEqual(since["status"], "diverged")
+                self.assertEqual(
+                    since["why"],
+                    "a partial clone fetches the blobs the comparison reads, "
+                    "so the whole diff is reviewed",
+                )
+                self.assertFalse(
+                    [name for name in written if name.startswith("since.")], written
+                )
+
+    def test_a_run_cut_short_leaves_nothing_for_the_next_one(self):
+        with (
+            tempfile.TemporaryDirectory() as repo,
+            tempfile.TemporaryDirectory() as out,
+        ):
+            git, commit, at = self.history(repo)
+            git("checkout", "-qb", "new", at["main0"])
+            head = commit("one\nTWO\nthree\nfour\n", "Change two", "b")
+            Path(out, "since.range-diff.raw").write_text("left by an interrupted run\n")
+            result, written = self.rewritten_bundle(
+                repo, at["old"], head, at["main0"], out=out
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("since.diff", written)
+            self.assertNotIn("since.range-diff.raw", written)
+
+    def test_only_the_commits_the_clone_lacks_are_fetched(self):
+        with (
+            tempfile.TemporaryDirectory() as repo,
+            tempfile.TemporaryDirectory() as other,
+        ):
+            remote = Path(other, "remote.git")
+            git, commit, at = self.history(repo)
+            subprocess.run(["git", "init", "-q", "--bare", str(remote)], check=True)
+            subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(remote),
+                    "config",
+                    "uploadpack.allowAnySHA1InWant",
+                    "true",
+                ],
+                check=True,
+            )
+            # The remote serves the new head and its base, and no longer serves
+            # the old head, which the clone already holds.
+            clone = str(Path(other, "clone"))
+            subprocess.run(["git", "clone", "-q", repo, clone], check=True)
+
+            def clone_git(*args):
+                return subprocess.run(
+                    [
+                        "git",
+                        "-c",
+                        "user.name=t",
+                        "-c",
+                        "user.email=t@t",
+                        "-C",
+                        clone,
+                        *args,
+                    ],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                ).stdout.strip()
+
+            clone_git("checkout", "-qb", "new", at["main0"])
+            Path(clone, "a.js").write_text("one\nTWO\nthree\nfour\n")
+            clone_git("commit", "-qam", "Change two\n\nWhy it changes.")
+            head = clone_git("rev-parse", "HEAD")
+            clone_git("push", "-q", str(remote), "new")
+            result, written = self.rewritten_bundle(
+                repo,
+                at["old"],
+                head,
+                at["main0"],
+                env={
+                    "GIT_CONFIG_COUNT": "1",
+                    "GIT_CONFIG_KEY_0": f"url.{remote}.insteadOf",
+                    "GIT_CONFIG_VALUE_0": "https://github.com/sysprog21/codetrial.git",
+                    "GIT_TRACE": str(Path(other, "trace.txt")),
+                },
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(result.stdout)["since"]["status"], "rewritten")
+            # A fetch that may repack the reviewer's clone is not a read-only one.
+            trace = Path(other, "trace.txt").read_text()
+            self.assertIn("fetch", trace)
+            self.assertNotIn("maintenance", trace)
+            self.assertIn("+four", written["since.diff"])
+
+    def test_a_rewrite_without_shared_history_names_the_side_that_lacks_it(self):
+        with tempfile.TemporaryDirectory() as repo:
+            git, commit, at = self.history(repo)
+            git("checkout", "-q", "--orphan", "unrelated")
+            orphan = commit("elsewhere\n", "Start over")
+            for since, head, named in (
+                (
+                    at["old"],
+                    orphan,
+                    "the head shares no history with the base in this clone",
+                ),
+                (
+                    orphan,
+                    at["main1"],
+                    "the old head shares no history with the base in this clone",
+                ),
+            ):
+                with self.subTest(named=named):
+                    result, written = self.rewritten_bundle(
+                        repo, since, head, at["main1"]
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    found = json.loads(result.stdout)["since"]
+                    self.assertEqual(found["status"], "diverged")
+                    self.assertEqual(
+                        found["why"], f"{named}, so the whole diff is reviewed"
+                    )
 
     def test_a_refused_comment_read_fails_the_bundle(self):
         # An empty list would read as a PR nobody has commented on.
@@ -2298,6 +3079,12 @@ class ReviewBundleTests(unittest.TestCase):
         self.assertEqual(json.loads(result.stdout)["not_at_head"], ["web/old.js"])
         self.assertFalse([name for name in written if name.startswith("head/")])
         self.assertNotIn("since.txt", written)
+        with tempfile.TemporaryDirectory() as stale:
+            Path(stale, "since.range-diff.txt").write_text("stale\n")
+            Path(stale, "since.range-diff.raw").write_text("stale\n")
+            _, kept = self.bundle(out=stale)
+        self.assertNotIn("since.range-diff.txt", kept)
+        self.assertNotIn("since.range-diff.raw", kept)
         # A PR that only deletes runs no read at all, and says nothing.
         self.assertEqual(result.stderr, "")
 
@@ -3736,6 +4523,33 @@ class ReviewQueueTests(unittest.TestCase):
             "T1 (a.js)",
         ):
             self.assertIn(want.lower(), result.stdout.lower())
+
+    def test_both_briefs_allow_the_one_write_the_bundle_makes(self):
+        # The bundle may fetch commits by SHA into the clone's object store, so a
+        # brief that says only "write under <scratch>" contradicts the step.
+        (self.repo / "pick.json").write_text(
+            json.dumps({"pr": 1, "head": "abc", "title": "T", "why": []})
+        )
+        (self.repo / "status.json").write_text(json.dumps({"outcome": "ready"}))
+        generated = subprocess.run(
+            [
+                "sh",
+                str(REVIEW_BRIEF),
+                str(self.repo / "pick.json"),
+                "/s",
+                str(self.repo / "status.json"),
+                "0",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(generated.returncode, 0, generated.stderr)
+        template = (SKILLS / "codetrial-triage/review-prs.md").read_text()
+        for name, brief in (("generated", generated.stdout), ("template", template)):
+            flat = " ".join(brief.split())
+            with self.subTest(brief=name):
+                self.assertIn("fetched by SHA into its object store", flat)
+                self.assertIn("(no ref, no working tree)", flat)
 
     def test_pick_skips_graded_up_prs_the_viewers_and_reviewed_heads(self):
         def row(pr, grade, head, author="someone"):

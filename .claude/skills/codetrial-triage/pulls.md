@@ -580,12 +580,14 @@ whole of [codetrial-review](../codetrial-review/SKILL.md) through its step
 5, and they are independent, so run one read-only agent per PR in parallel
 rather than reading them in turn. Each agent gets the PR number, its head, the
 issue it closes, the scratch directory, the files it may write there
-(`review-$pr/` and `pr-$pr-*`), and four rules: read-only, no posting, cite
-rather than repeat a finding already in a thread, and return the checklist,
-the verified findings by level with `file:line` at the head, the questions,
-the commit series, and the coverage. A PR whose earlier review by this account
-is on an older head gets that head as the bundle's `--since`. Name what is particular to each PR in its prompt: the docs/
-owner it likely touches, a sibling PR on the same code, an issue that will
+(`review-$pr/` and `pr-$pr-*`), the one write the bundle may make (commits the
+clone lacks, fetched by SHA into its object store), and four rules: read-only
+apart from that fetch, no posting, cite rather than repeat a finding already in
+a thread, and return the checklist, the verified findings by level with
+`file:line` at the head, the questions, the commit series, and the coverage. A
+PR whose earlier review by this account is on an older head gets that head as
+the bundle's `--since`. Name what is particular to each PR in its prompt: the
+docs/ owner it likely touches, a sibling PR on the same code, an issue that will
 conflict with it. Verify each finding the report leans on in the code before
 drafting it; an agent's summary is a lead, not evidence.
 
