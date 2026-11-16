@@ -1,5 +1,6 @@
 """Check the Rust-scope helper of scripts/check-gate-evidence.py."""
 
+import functools
 import importlib.util
 import json
 from pathlib import Path
@@ -214,6 +215,64 @@ class ScopeFunction(unittest.TestCase):
         self.assertTrue(rust)
         missed = [p for p in rust if not gate_evidence.in_rust_scope(p)]
         self.assertEqual(missed, [], "Rust files outside the scope list")
+
+
+@functools.cache
+def scope_passage(name):
+    """What `name` says is the Rust scope: from "Rust sources, tests" to "a Rust test names"."""
+    text = " ".join((ROOT / name).read_text().split())
+    found = re.search(r"Rust sources, tests.*?a Rust test names", text)
+    if found is None:
+        raise AssertionError(f"{name} has no passage naming the Rust scope")
+    return found.group(0)
+
+
+def named_paths(passage):
+    return re.findall(r"`([^`\s]+)`", passage)
+
+
+class ScopeText(unittest.TestCase):
+    """CONTRIBUTING.md states the scope the function decides."""
+
+    NAME = "CONTRIBUTING.md"
+
+    def declared(self):
+        """Every directory or file the function lists as a whole, as the text spells it."""
+        names = set(gate_evidence.RUST_PREFIXES) | set(gate_evidence.RUST_FILES)
+        names |= {"tests/", *gate_evidence.TESTS_OUT_PREFIXES}
+        if gate_evidence.WEB_IN_RUST_SCOPE:
+            names.add("web/")
+        return names
+
+    def test_the_text_says_which_web_files_are_in(self):
+        # RUST_READ_FILES holds web/ files a Rust source or test names, so a
+        # JavaScript-only contributor can owe a receipt; the text must say so.
+        reads_web = any(p.startswith("web/") for p in gate_evidence.RUST_READ_FILES)
+        self.assertEqual("web/ file" in scope_passage(self.NAME), reads_web)
+
+    def test_the_text_names_everything_the_function_lists(self):
+        # The files a Rust source names by literal are the text's "a doc or
+        # script a Rust test names", and the generic phrase stands for them.
+        named = set(named_paths(scope_passage(self.NAME)))
+        self.assertEqual(sorted(self.declared() - named), [])
+        # The exclusions are part of the statement: dropping "not" or
+        # "apart from" would put them in scope.
+        self.assertRegex(
+            scope_passage(self.NAME),
+            r"`tests/` \(?(?:not|apart from) `tests/browser/`, "
+            r"`tests/stubs/` (?:or|and)(?: the)? top-level Python files",
+        )
+
+    def test_every_path_the_text_names_is_classified(self):
+        out = set(gate_evidence.TESTS_OUT_PREFIXES)
+        for path in named_paths(scope_passage(self.NAME)):
+            probe = path + "x" if path.endswith("/") else path
+            with self.subTest(path=path):
+                self.assertEqual(
+                    gate_evidence.in_rust_scope(probe),
+                    path not in out,
+                    "the text names a path the function does not classify so",
+                )
 
 
 class RustReferences(unittest.TestCase):
