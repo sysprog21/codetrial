@@ -67,7 +67,12 @@ async function openShapeBoard(t, source) {
       connected: () => window.online,
       record: (ops) => window.ops.push(...ops),
       publish: async (blob, count) => {
-        window.uploads.push({ blob, count });
+        const image = await new Promise((resolve) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.readAsDataURL(blob);
+        });
+        window.uploads.push({ image, count });
         return true;
       },
     });
@@ -88,6 +93,20 @@ async function openShapeBoard(t, source) {
     };
   }, base);
   return page;
+}
+
+async function moveBoardPointer(page, x, y) {
+  const point = await page.locator("canvas").evaluate(
+    (canvas, { x, y }) => {
+      const bounds = canvas.getBoundingClientRect();
+      return {
+        x: bounds.x + (x * bounds.width) / canvas.width,
+        y: bounds.y + (y * bounds.height) / canvas.height,
+      };
+    },
+    { x, y },
+  );
+  await page.mouse.move(point.x, point.y);
 }
 
 // Publication tests keep real JPEG encoding, but do not benchmark its wall time.
@@ -181,11 +200,9 @@ for (const [start, end, bounds] of [
         });
     });
     await page.getByRole("button", { name: "Ellipse", exact: true }).click();
-    const box = await page.locator("canvas").boundingBox();
-    const move = ([x, y]) => page.mouse.move(box.x + x * 0.4, box.y + y * 0.4);
-    await move(start);
+    await moveBoardPointer(page, ...start);
     await page.mouse.down();
-    await move(end);
+    await moveBoardPointer(page, ...end);
     await page.mouse.up();
     const { ops, events } = await page.evaluate(() => ({
       ops: window.ops,
@@ -312,7 +329,11 @@ for (const [tool, content] of [
   });
 }
 
-for (const tool of ["Line", "Rectangle", "Ellipse"]) {
+for (const [tool, pointCount] of [
+  ["Line", 4],
+  ["Rectangle", 10],
+  ["Ellipse", 258],
+]) {
   test(
     `${tool} presses leave existing ink unchanged until the first move`,
     { timeout: 30000 },
@@ -345,13 +366,7 @@ for (const tool of ["Line", "Rectangle", "Ellipse"]) {
         const uploaded = await page.evaluate(async () => {
           if ((await window.example.flush()) !== true)
             throw new Error("flush() did not complete the held-press upload");
-          const { blob, count } = window.uploads.at(-1);
-          const image = await new Promise((resolve) => {
-            const reader = new FileReader();
-            reader.onload = () => resolve(reader.result);
-            reader.readAsDataURL(blob);
-          });
-          return { count, image };
+          return window.uploads.at(-1);
         });
         assert.equal(uploaded.count, count);
         assert.equal(uploaded.image, before);
@@ -419,14 +434,7 @@ for (const tool of ["Line", "Rectangle", "Ellipse"]) {
         assert.equal(await page.evaluate(() => window.uploads.length), 2);
         assert.equal(await page.evaluate(() => window.uploads[1].count), 0);
         assert.equal(
-          await page.evaluate(
-            () =>
-              new Promise((resolve) => {
-                const reader = new FileReader();
-                reader.onload = () => resolve(reader.result);
-                reader.readAsDataURL(window.uploads[1].blob);
-              }),
-          ),
+          await page.evaluate(() => window.uploads.at(-1).image),
           blank,
         );
       },
@@ -529,10 +537,7 @@ for (const tool of ["Line", "Rectangle", "Ellipse"]) {
         const released = await page.evaluate(() => window.ops);
         assert.equal(released.length, 2);
         assert.equal(released[1].op, "stroke");
-        assert.equal(
-          released[1].points.length,
-          tool === "Line" ? 4 : tool === "Rectangle" ? 10 : 258,
-        );
+        assert.equal(released[1].points.length, pointCount);
         assert.notEqual(
           await canvas.evaluate((node) => node.toDataURL()),
           before,
@@ -542,9 +547,7 @@ for (const tool of ["Line", "Rectangle", "Ellipse"]) {
       },
     );
   });
-}
 
-for (const tool of ["Line", "Rectangle", "Ellipse"]) {
   test(`${tool} previews and records one stroke in all four directions`, async (t) => {
     if (!browser) return t.skip("playwright chromium unavailable");
     const page = await openShapeBoard(t);
@@ -564,8 +567,6 @@ for (const tool of ["Line", "Rectangle", "Ellipse"]) {
     );
     await page.getByRole("button", { name: "Red", exact: true }).click();
     assert.equal(await button.getAttribute("aria-pressed"), "true");
-    const box = await canvas.boundingBox();
-    const move = (x, y) => page.mouse.move(box.x + x * 0.4, box.y + y * 0.4);
     for (const [dx, dy] of [
       [240, 160],
       [-240, 160],
@@ -574,13 +575,13 @@ for (const tool of ["Line", "Rectangle", "Ellipse"]) {
     ]) {
       await t.test(`drag (${dx}, ${dy})`, async () => {
         const opCount = await page.evaluate(() => window.ops.length);
-        await move(400, 300);
+        await moveBoardPointer(page, 400, 300);
         await page.mouse.down();
-        await move(400 + dx / 2, 300 + dy / 2);
+        await moveBoardPointer(page, 400 + dx / 2, 300 + dy / 2);
         const preview = await image();
         assert.notEqual(preview, blank);
         assert.equal(await page.evaluate(() => window.ops.length), opCount);
-        await move(400 + dx, 300 + dy);
+        await moveBoardPointer(page, 400 + dx, 300 + dy);
         await page.mouse.up();
         const final = await image();
         assert.notEqual(final, preview);
@@ -621,10 +622,7 @@ for (const tool of ["Line", "Rectangle", "Ellipse"]) {
           [Math.max(...ys), Math.max(300, 300 + dy)],
         ])
           assert.ok(Math.abs(actual - expected) < 1);
-        assert.equal(
-          stroke.points.length,
-          tool === "Line" ? 4 : tool === "Rectangle" ? 10 : 258,
-        );
+        assert.equal(stroke.points.length, pointCount);
         if (tool !== "Line")
           assert.deepEqual(stroke.points.slice(-2), stroke.points.slice(0, 2));
         await page.getByRole("button", { name: "Undo", exact: true }).click();
@@ -643,13 +641,11 @@ for (const tool of ["Line", "Rectangle", "Ellipse"]) {
       const image = () => canvas.evaluate((node) => node.toDataURL());
       const blank = await image();
       await page.getByRole("button", { name: tool, exact: true }).click();
-      const box = await canvas.boundingBox();
-      const move = (x, y) => page.mouse.move(box.x + x * 0.4, box.y + y * 0.4);
       const dx = 240;
       const dy = 160;
-      await move(400, 300);
+      await moveBoardPointer(page, 400, 300);
       await page.mouse.down();
-      await move(400 + dx, 300 + dy);
+      await moveBoardPointer(page, 400 + dx, 300 + dy);
       await page.mouse.up();
       const final = await image();
       assert.notEqual(final, blank);
@@ -679,18 +675,18 @@ for (const tool of ["Line", "Rectangle", "Ellipse"]) {
       assert.equal(await page.evaluate(() => window.uploads.at(-1).count), 1);
       await page.getByRole("button", { name: "Undo", exact: true }).click();
       assert.equal(await image(), blank);
-      await move(400, 300);
+      await moveBoardPointer(page, 400, 300);
       await page.mouse.down();
-      await move(400 + dx, 300 + dy);
+      await moveBoardPointer(page, 400 + dx, 300 + dy);
       await page.mouse.up();
       await page.getByRole("button", { name: "Clear", exact: true }).click();
       assert.equal(await image(), blank);
       await page.getByRole("button", { name: "Undo", exact: true }).click();
       assert.equal(await image(), final);
       const count = await page.evaluate(() => window.ops.length);
-      await move(700, 500);
+      await moveBoardPointer(page, 700, 500);
       await page.mouse.down();
-      await move(800, 600);
+      await moveBoardPointer(page, 800, 600);
       await canvas.evaluate((node) => {
         node.dispatchEvent(
           new PointerEvent("pointercancel", {
