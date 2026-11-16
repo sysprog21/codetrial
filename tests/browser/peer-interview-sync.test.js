@@ -225,6 +225,33 @@ test("persisted page restoration resumes polling and preserves unsaved candidate
   );
 });
 
+test("persisted page restoration restarts its timers even when the first refresh fails", async (t) => {
+  const f = await fixture(t, "candidate");
+  if (!f) return;
+  await f.page.evaluate(() =>
+    window.dispatchEvent(
+      new PageTransitionEvent("pagehide", { persisted: true }),
+    ),
+  );
+  const before = await f.page.evaluate(() => window.peerTicks.length);
+  let failures = 1;
+  await f.page.route("**/api/peer/sessions/s", (r) =>
+    failures-- > 0
+      ? r.fulfill({ status: 503, json: { code: "database_unavailable" } })
+      : r.fallback(),
+  );
+  await f.page.evaluate(() =>
+    window.dispatchEvent(
+      new PageTransitionEvent("pageshow", { persisted: true }),
+    ),
+  );
+  await f.page.waitForFunction(
+    (count) => window.peerTicks.length === count + 2,
+    before,
+    { timeout: 3000 },
+  );
+});
+
 test("sealed round loads final empty code and clears prior test results", async (t) => {
   const f = await fixture(t, "interviewer");
   if (!f) return;

@@ -865,7 +865,7 @@ window.addEventListener("pagehide", (event) => {
 window.addEventListener("pageshow", (event) => {
   if (!event.persisted || stopped) return;
   paused = false;
-  void refresh(true).then(startTimers).catch(error);
+  void refresh(true).catch(error).finally(startTimers);
 });
 window.addEventListener("beforeunload", (event) => {
   if (dirty) {
