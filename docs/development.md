@@ -1809,3 +1809,5 @@ read and a transcript can lack words that were sent. The local recording-peer
 test (`the_recording_peer_sees_nothing_while_held_and_the_retained_frames_after`)
 runs the same gate against a fake Gemini socket offline and asserts the wire:
 nothing during the hold, then one message per retained frame, in order.
+
+This paragraph is a temporary scratch line for CI verification and is never merged.
