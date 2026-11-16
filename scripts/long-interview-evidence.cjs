@@ -280,15 +280,31 @@ const judge = (bundle, evidence) => ({
   ...judgeCheckpoint(bundle, evidence),
 });
 
+/// The driver's send records that say which action was played and when its
+/// playback had begun. A record missing either may never have been played, or
+/// belongs to no clip, so it is not one.
+const timedSends = (transmitted) =>
+  Array.isArray(transmitted)
+    ? transmitted.filter(
+        (t) => t?.action_id && Number.isFinite(t?.playing_at_s),
+      )
+    : [];
+
 /// When the candidate had finished saying the earliest thing a checkpoint asks
 /// for that only the conversation carries, in schedule seconds, or null when it
 /// asks for none (`CONVERSATION_FACT_IDS` in scripts/long-interview-schedule.cjs
 /// says which). A fact about the source is read back from a tool, and one the
 /// problem's brief gives was never at risk, so neither shows anything kept
 /// across a handover. A checkpoint's own question is not a seed, whatever it
-/// quotes.
-function earliestSpokenFactS(bundle, key) {
+/// quotes. `transmitted` is what the driver recorded for each clip it sent
+/// ({action_id, playing_at_s}), the time its playback had started by; a clip
+/// with no such time may never have been sent, so it is not counted, and with
+/// none the answer is unknown, never a time taken from the plan.
+function earliestSpokenFactS(bundle, key, transmitted) {
   const { clips, steps } = bundle.schedule;
+  const playingAt = new Map(
+    timedSends(transmitted).map((t) => [t.action_id, t.playing_at_s]),
+  );
   const heard = [];
   for (const fact of bundle.answer_key.facts) {
     if (!key.element_fact_ids.includes(fact.id)) continue;
@@ -298,10 +314,12 @@ function earliestSpokenFactS(bundle, key) {
       if (!clip.source_text.includes(fact.text)) continue;
       for (const step of steps) {
         if (step.clip_id !== clip.clip_id) continue;
-        // To the end of the clip's whole budget, its trailing quiet included:
-        // a clip dispatched a little late or spoken a little slowly had still
-        // ended by then.
-        heard.push(step.at_s + sched.clipBudgetS(clip));
+        const playingAtS = playingAt.get(step.action_id);
+        if (playingAtS === undefined) continue;
+        // From when its playback had begun, after the page's resume and
+        // decode, to the end of the clip's whole budget, its trailing quiet
+        // included: a clip spoken a little slowly had still ended by then.
+        heard.push(playingAtS + sched.clipBudgetS(clip));
       }
     }
   }
@@ -441,7 +459,11 @@ function assessReply(
       socket: reply.identity.socket,
       clock_start_unix_ms: reply.identity.clock?.start_unix_ms,
     },
-    earliest_fact_heard_s: earliestSpokenFactS(bundle, key),
+    earliest_fact_heard_s: earliestSpokenFactS(
+      bundle,
+      key,
+      settings.transmitted,
+    ),
   };
 }
 
@@ -561,6 +583,7 @@ function judgeCapture(capture, fixture) {
   }
   return judgeInterview(bundle, fixture, {
     scheduleStartUnixMs: report.schedule_origin_unix_ms,
+    transmitted: report.transmitted,
   });
 }
 
@@ -594,7 +617,19 @@ function mergeVerdict(capture, fixture, runKind, teardownFailed = false) {
   const judged = { ...report, ...verdictFields(verdict) };
   // Without a run kind this is a reader looking at the content again, not the
   // run's own judgment: whatever qualification the capture holds is left.
-  if (!runKind) return { ...capture, report: judged };
+  if (!runKind) {
+    // A pass that rested on when each clip was heard cannot stand on a report
+    // that never recorded when each began playing; the rest is left as it was.
+    const sent = timedSends(report.transmitted);
+    const timed = sent.length > 0 && sent.length === report.transmitted.length;
+    if (report.qualification === "pass" && !timed) {
+      judged.qualification = "inconclusive";
+      judged.qualification_reasons = [
+        "the report does not record when each clip was sent",
+      ];
+    }
+    return { ...capture, report: judged };
+  }
   const outcome = qualify({
     runKind,
     report: judged,

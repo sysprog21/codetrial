@@ -332,6 +332,10 @@ async function runLongInterview(o) {
           clip_id: entry.clip_id,
           action_id: step.action_id,
           started_at_s: sinceJoin(sentMs),
+          // After the page resumed the audio context, decoded the clip and
+          // started it, so never before the clip began to be heard. A wall
+          // clock that stepped back meanwhile cannot put it before the send.
+          playing_at_s: Math.max(sinceJoin(sentMs), sinceJoin(clock.now())),
         });
       } else if (step.kind === "thinking_start") {
         await controller.setThinking(true);
@@ -639,6 +643,9 @@ function finalizeLongRun(o) {
       dispatched: run.dispatched.length,
       uncovered: run.uncovered,
     },
+    // When each clip was actually sent, from the join: what the judge reads to
+    // say when a fact was heard, instead of the plan's time.
+    transmitted: run.transmitted,
     failures,
     failure_classes: resolved.artifacts.map((a) => a.class),
     not_exercised: [
