@@ -471,6 +471,43 @@ test("a candidate page opened while the round is finishing takes a writer lease 
   assert.equal(f.writes, 1);
 });
 
+test("finishing a round reads the session again even when the final save is refused", async (t) => {
+  const f = await fixture(t, "candidate");
+  if (!f) return;
+  await f.page.route("**/api/peer/sessions/s/rounds/0/finish", (r) =>
+    r.fulfill({ json: {} }),
+  );
+  let reads = 0;
+  f.page.on("request", (request) => {
+    if (request.url().endsWith("/api/peer/sessions/s")) reads++;
+  });
+  // The fixture refuses every snapshot write with lease_lost.
+  await f.page.locator("#peer-finish").click();
+  await f.page.waitForFunction(() =>
+    document.getElementById("peer-save-status").textContent.includes("expired"),
+  );
+  await until(() => reads > 0, "a session read after the refused save");
+});
+
+test("a snapshot reload that fails after a save conflict is shown, not swallowed", async (t) => {
+  const f = await fixture(t, "candidate", false, {
+    finishing: true,
+    cas: true,
+  });
+  if (!f) return;
+  // The server moved on, so the final save conflicts, and then the reload fails.
+  f.snapshot.revision++;
+  await f.page.route("**/api/peer/sessions/s/rounds/0/snapshot", (r) =>
+    r.request().method() === "GET"
+      ? r.fulfill({ status: 503, json: { code: "database_unavailable" } })
+      : r.fallback(),
+  );
+  await f.page.evaluate(() => window.peerTicks[0]());
+  await f.page.waitForFunction(() =>
+    document.getElementById("peer-error").textContent.includes("busy"),
+  );
+});
+
 test("a message from an action survives the next poll", async (t) => {
   const f = await fixture(t, "interviewer");
   if (!f) return;
