@@ -673,10 +673,21 @@ jobs:
   # asks is what a change failed to test, and that is worth answering while the
   # change can still be edited.
   mutants:
-    needs: plan-mutants
-    # No mutants means no runners. A docs-only or JS-only pull request should
+    needs: [plan-mutants, gates]
+    # A shard rebuilds and runs the whole suite in an unmutated tree, so it
+    # fails the same way the Rust lane does, and pays several minutes of setup
+    # per shard to learn it. Waiting for the gates avoids that; the trade-off
+    # is that shards start after the slowest gates lane rather than beside it.
+    #
+    # `plan-mutants.result` is explicit because the plan is skipped on a push
+    # or a merge group, where its count is empty and `'' != '0'` would pass.
+    # No mutants means no runners: a docs-only or JS-only pull request should
     # not start a job to discover it has nothing to do.
-    if: needs.plan-mutants.outputs.count != '0'
+    if: >-
+      ${{ !cancelled()
+      && needs.plan-mutants.result == 'success'
+      && needs.gates.result == 'success'
+      && needs.plan-mutants.outputs.count != '0' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     strategy:
