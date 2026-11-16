@@ -1007,6 +1007,29 @@ count and `scripts/tree-fingerprint.sh` of the tree, live under
 `.git/codetrial-review/gate-receipts/`. A receipt shows that a run happened on
 this tree, not that it was complete; CI recomputes the verdict.
 
+A receipt is one JSON line: `lane`, `passed`, `failed`, `skipped`, `tree` (the
+fingerprint above, which changes on every rebase or amend), `worktree_tree`,
+`rustc` and `cargo` (their `-V` output, empty for the browser lane, which needs
+no Rust), `env` (the report of `scripts/env-check.sh`, captured once at the
+start; `null` when it could not be) and `time`.
+
+`worktree_tree` is the id a commit of the same content gets. It is computed in
+a scratch index (the real one, and any partial staging in it, is never read):
+`HEAD` plus everything not ignored, as `git add -A` would stage it, with the
+repository's attributes and the contributor's filters applied as a commit
+applies them. A run on a dirty tree therefore matches the commit made from it
+afterwards, provided that commit stages everything the run saw; a commit of
+part of the tree has another id. The value is taken when the run starts and
+again when it ends and is written only when both agree, so a tree edited during
+the run claims nothing and the field is empty (it is empty too outside a git
+work tree or on an unborn `HEAD`). An edit made and then undone during the run
+cannot be seen. When it is set, the receipt is also kept as
+`gate-receipts/by-tree/<worktree_tree>/<lane>.json`, because the lane file is
+overwritten by the next run, possibly on another branch; the 20 most recently
+written trees are kept and older ones are removed, except that a tree written
+within the last hour is never removed, because another run in the same clone may
+have just written it and nothing locks the folder.
+
 ## Review memory and the review skill
 
 `/codetrial-review` in Claude Code, and `$codetrial-review` in Codex (which
