@@ -126,9 +126,10 @@ before moving selected text.
 
 `check` is the only status a branch rule for main should require. It needs every
 lane and the independent security audit to succeed, and on a pull request the
-mutation plan and every shard too; shards may be skipped only when the plan
-found no mutants. A push to main or a merge queue entry plans no mutants, so
-`check` reports as soon as the lanes finish. The workflow also runs on
+mutation plan and every shard too; shards wait for the gate lanes and may be
+skipped only when the plan found no mutants or a lane failed, in which case
+`check` fails on the lane. A push to main or a merge queue entry plans no
+mutants, so `check` reports as soon as the lanes finish. The workflow also runs on
 `merge_group`, so once main has a merge queue, it tests each pull request on top
 of the main it will land on; two pull requests that pass against their own bases
 can still break main together. A merge group saves no caches, since its queue

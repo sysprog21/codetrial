@@ -5,6 +5,7 @@ test, because `tests/` is not a package and `scripts/run-python-tests.py`
 imports each suite from its own path.
 """
 
+import functools
 import io
 import re
 import subprocess
@@ -63,9 +64,14 @@ def section(text, start, end, what):
     return text.split(start, 1)[1].split(end, 1)[0]
 
 
+@functools.cache
+def workflow_text():
+    return WORKFLOW.read_text()
+
+
 def job(name, text=None):
     """The body of one job, up to the next job."""
-    text = WORKFLOW.read_text() if text is None else text
+    text = workflow_text() if text is None else text
     body = section(text, f"\n  {name}:\n", "\0", f"job {name}")
     following = re.search(r"\n  [a-z][a-z0-9_-]*:\n", body)
     return body[: following.start()] if following else body
