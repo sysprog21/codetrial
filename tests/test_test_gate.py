@@ -110,6 +110,19 @@ class TestGateLanes(unittest.TestCase):
         env=None,
     ):
         source = SCRIPT.read_text()
+        named = env or {}
+        env = {**os.environ, "CXX": "unused", **named}
+        # Stand in a ready Python for the lookup, which would otherwise build the
+        # instructor venv on a first run, and answer the packaging probe the
+        # portable lane asks. A test naming PYTHON or CODETRIAL_TASK_TOOLS
+        # (empty included) keeps the real lookup.
+        if (
+            "PYTHON" not in named
+            and "CODETRIAL_TASK_TOOLS" not in named
+            and sys.version_info >= (3, 11)
+        ):
+            env["PYTHON"] = sys.executable
+            replace = (("\"$1\" -c 'import cryptography'", "true"), *replace)
         for old, new in replace:
             self.assertEqual(source.count(old), 1, old)
             source = source.replace(old, new)
@@ -141,7 +154,6 @@ gate()
         )
         if extra_gate:
             source = source.replace("gate fmt ", "gate future-check true\ngate fmt ", 1)
-        env = {**os.environ, "CXX": "unused", **(env or {})}
         if unset_cxx:
             del env["CXX"]
         result = subprocess.run(
@@ -862,7 +874,9 @@ printf 'python:%s\\n' "$*" >> "$CALLS"
             ("browser", False),
         ):
             with self.subTest(lane=lane):
-                result, _ = self.run_lane(lane, replace=replace)
+                # An empty name keeps the lookup this test is about.
+                env = {"CODETRIAL_TASK_TOOLS": ""}
+                result, _ = self.run_lane(lane, replace=replace, env=env)
                 self.assertEqual("setup:task-tools" in result.stderr, setup)
         self.assertEqual(
             condition(gates_job(), "Place the instructor packaging environment"),
