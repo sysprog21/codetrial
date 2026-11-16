@@ -216,6 +216,42 @@ Member-only `sessions/{id}/advice` and `transcript` expose observation results;
 availability/state, `GET audio` downloads a private WAV, and `DELETE audio`
 stops/deletes it. These are separate from agent reports and recording history.
 
+## Trying it with a partner before staging
+
+Before a staging deployment exists, two people on different machines can try
+reciprocal practice against a server one of them runs locally. Three things
+stop it from working by default:
+
+1. `127.0.0.1:3000` is reachable only from the machine running the server. A
+   partner who opens the same address reaches their own machine.
+2. Binding to a LAN address and opening `http://192.168.x.x:3000` loads the
+   page, but browsers expose the microphone only in a secure context (HTTPS or
+   localhost), so the room has no audio.
+3. Two people each running their own server, even with the same LiveKit
+   credentials, do not see each other in **Available partners**. Pairing lives
+   in each server's SQLite database, so sharing a LiveKit project does not share
+   the lobby.
+
+Both people therefore have to use one server, through one HTTPS origin. The
+person running it exposes the server over HTTPS, registers that origin's
+`/api/callback` as the app's single callback URL (see
+[The GitHub OAuth App](#the-github-oauth-app)) and sends the partner the
+origin's `/peer-lobby`. Each person signs in with a different GitHub account.
+A server that sets `CODETRIAL_ALLOWED_HOSTS` answers any `Host` it does not
+list with 421, so the tunnel's host must be added there and the server
+restarted; without that setting nothing changes on the server.
+
+A quick tunnel is one way to get the origin, for example
+`cloudflared tunnel --url http://127.0.0.1:3000`; any HTTPS reverse proxy does
+the same. A tunnel exposes the server, and through it the LiveKit and Google
+quota it spends, to anyone holding the URL, so share it only with the partner
+and stop the tunnel afterwards. A quick tunnel's origin changes on each start,
+which means updating the callback URL, and the host list when it is set,
+each time.
+
+This is a manual trial, not a staging pass: the check below still needs a
+deployment.
+
 ## Staging acceptance check
 
 Use two real GitHub accounts in separate browser profiles, headphones and a
