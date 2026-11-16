@@ -8,7 +8,7 @@
 //! effect behind a permit, one scenario per run. It compiles and refuses
 //! without the budget variables, and no run of it has taken a permit. What
 //! does run is local: the permit client against the budget launcher's
-//! protocol, the four declared action lists and their ceilings, the manifest
+//! protocol, the declared action lists and their ceilings, the manifest
 //! duration rules, the hard-deadline arithmetic, the candidate's report receipt
 //! over a recorded room, the prepared-write gate seam, the reader-ending
 //! trigger on a local socket, the observer, the receipt count and the verdict.
