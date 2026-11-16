@@ -915,6 +915,30 @@ async fn a_failed_audio_write_marks_the_capture_incomplete_and_drops_the_writer(
     server.abort();
 }
 
+/// Audio is the optional part of an observation. A writer that cannot be
+/// created (a full disk, a directory left too open, a part file already there)
+/// fails the audio record and leaves the transcript and suggestions running.
+#[test]
+fn a_writer_that_cannot_be_created_fails_the_audio_and_not_the_observation() {
+    let (accounts, session) = fixture();
+    let dir = std::env::temp_dir().join(format!("codetrial-open-writer-{}", std::process::id()));
+    crate::peer_audio::ensure_private_directory(&dir).unwrap();
+    crate::peer_audio::mark_started(&accounts, &session.id, 100, 60).unwrap();
+    let first = open_audio_writer(&accounts, &dir, &session.id, 60);
+    assert!(first.is_some());
+    // The first writer still holds its part file, so a second cannot begin.
+    assert!(open_audio_writer(&accounts, &dir, &session.id, 60).is_none());
+    assert_eq!(
+        crate::peer_audio::record(&accounts, &session.id)
+            .unwrap()
+            .unwrap()
+            .status,
+        "failed"
+    );
+    drop(first);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 #[tokio::test]
 async fn a_transcription_may_be_at_most_sixteen_kibibytes() {
     let (mut observation, reply, server) = observation_with_provider().await;

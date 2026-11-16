@@ -19,7 +19,7 @@ use std::sync::{Arc, atomic::Ordering};
 mod audio;
 mod auth;
 pub(crate) mod observer;
-pub(crate) use audio::spawn_audio_retention;
+pub(crate) use audio::{fail_interrupted_audio, spawn_audio_retention};
 mod discovery;
 mod guide;
 

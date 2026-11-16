@@ -196,7 +196,13 @@ async function save(final) {
     if (stopped || round !== savingRound || lease !== savingLease) return;
     if (["lease_lost", "round_sealed"].includes(failure.code)) leaseLost();
     else if (failure.code === "version_conflict") {
-      await loadSnapshot();
+      try {
+        await loadSnapshot();
+      } catch (reload) {
+        // Callers that ignore the rethrow rely on this one being reported.
+        error(reload);
+        throw reload;
+      }
       if (stopped || round !== savingRound || lease !== savingLease) return;
       byId("peer-save-status").textContent = dirty
         ? "Unsaved changes retained; saving will retry."
@@ -438,8 +444,10 @@ async function refresh(reconnect = false) {
           ? "Confirm swap"
           : "Complete practice";
     if (feedback) await loadFeedback();
+    // save() has already said why it failed; the rest of this refresh still
+    // has to paint what the server reports.
     if (next.currentRound?.status === "finishing" && lease && !saveBusy)
-      await save(true);
+      await save(true).catch(() => {});
     const stateNotice =
       !next.currentRound &&
       !["complete", "cancelled", "finalizing"].includes(next.status)
@@ -796,7 +804,7 @@ byId("peer-device").addEventListener(
 byId("peer-finish").addEventListener("click", () => {
   void peerApi(`${roundPath()}/finish`, { expectedVersion: state.version })
     .then(async () => {
-      if (lease) await save(true);
+      if (lease) await save(true).catch(() => {});
       await refresh();
     })
     .catch(error);
@@ -865,7 +873,7 @@ window.addEventListener("pagehide", (event) => {
 window.addEventListener("pageshow", (event) => {
   if (!event.persisted || stopped) return;
   paused = false;
-  void refresh(true).then(startTimers).catch(error);
+  void refresh(true).catch(error).finally(startTimers);
 });
 window.addEventListener("beforeunload", (event) => {
   if (dirty) {

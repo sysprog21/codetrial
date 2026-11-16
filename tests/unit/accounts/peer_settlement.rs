@@ -359,6 +359,33 @@ fn leaving_a_closed_session_is_harmless() {
 }
 
 #[test]
+fn a_ready_that_is_not_a_boolean_is_refused_and_a_missing_one_means_ready() {
+    let (accounts, mut session) = fixture();
+    session.members[0].entered_at = Some(100);
+    session.members[1].entered_at = Some(100);
+    accounts
+        .with(|c| {
+            save(c, &session)?;
+            for bad in [json!("false"), json!(0), json!(null)] {
+                let body = json!({"expectedVersion": session.version, "ready": bad});
+                assert_eq!(
+                    action(c, &mut session, 0, "ready", &body, 131)?.unwrap_err(),
+                    "invalid_request"
+                );
+                assert!(!session.members[0].ready);
+            }
+            let body = json!({"expectedVersion": session.version});
+            assert!(action(c, &mut session, 0, "ready", &body, 132)?.is_ok());
+            assert!(session.members[0].ready);
+            let body = json!({"expectedVersion": session.version, "ready": false});
+            assert!(action(c, &mut session, 0, "ready", &body, 133)?.is_ok());
+            assert!(!session.members[0].ready);
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
 fn the_swap_waits_for_the_members_own_round_zero_feedback() {
     let (accounts, mut session) = fixture();
     activate(&mut session);

@@ -225,6 +225,33 @@ test("persisted page restoration resumes polling and preserves unsaved candidate
   );
 });
 
+test("persisted page restoration restarts its timers even when the first refresh fails", async (t) => {
+  const f = await fixture(t, "candidate");
+  if (!f) return;
+  await f.page.evaluate(() =>
+    window.dispatchEvent(
+      new PageTransitionEvent("pagehide", { persisted: true }),
+    ),
+  );
+  const before = await f.page.evaluate(() => window.peerTicks.length);
+  let failures = 1;
+  await f.page.route("**/api/peer/sessions/s", (r) =>
+    failures-- > 0
+      ? r.fulfill({ status: 503, json: { code: "database_unavailable" } })
+      : r.fallback(),
+  );
+  await f.page.evaluate(() =>
+    window.dispatchEvent(
+      new PageTransitionEvent("pageshow", { persisted: true }),
+    ),
+  );
+  await f.page.waitForFunction(
+    (count) => window.peerTicks.length === count + 2,
+    before,
+    { timeout: 3000 },
+  );
+});
+
 test("sealed round loads final empty code and clears prior test results", async (t) => {
   const f = await fixture(t, "interviewer");
   if (!f) return;
@@ -442,6 +469,43 @@ test("a candidate page opened while the round is finishing takes a writer lease 
   await new Promise((resolve) => setTimeout(resolve, 500));
   assert.deepEqual(f.writerRequests, [{}]);
   assert.equal(f.writes, 1);
+});
+
+test("finishing a round reads the session again even when the final save is refused", async (t) => {
+  const f = await fixture(t, "candidate");
+  if (!f) return;
+  await f.page.route("**/api/peer/sessions/s/rounds/0/finish", (r) =>
+    r.fulfill({ json: {} }),
+  );
+  let reads = 0;
+  f.page.on("request", (request) => {
+    if (request.url().endsWith("/api/peer/sessions/s")) reads++;
+  });
+  // The fixture refuses every snapshot write with lease_lost.
+  await f.page.locator("#peer-finish").click();
+  await f.page.waitForFunction(() =>
+    document.getElementById("peer-save-status").textContent.includes("expired"),
+  );
+  await until(() => reads > 0, "a session read after the refused save");
+});
+
+test("a snapshot reload that fails after a save conflict is shown, not swallowed", async (t) => {
+  const f = await fixture(t, "candidate", false, {
+    finishing: true,
+    cas: true,
+  });
+  if (!f) return;
+  // The server moved on, so the final save conflicts, and then the reload fails.
+  f.snapshot.revision++;
+  await f.page.route("**/api/peer/sessions/s/rounds/0/snapshot", (r) =>
+    r.request().method() === "GET"
+      ? r.fulfill({ status: 503, json: { code: "database_unavailable" } })
+      : r.fallback(),
+  );
+  await f.page.evaluate(() => window.peerTicks[0]());
+  await f.page.waitForFunction(() =>
+    document.getElementById("peer-error").textContent.includes("busy"),
+  );
 });
 
 test("a message from an action survives the next poll", async (t) => {

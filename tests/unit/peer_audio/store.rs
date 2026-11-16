@@ -186,6 +186,23 @@ fn the_sweep_removes_the_part_file_a_killed_process_left() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// No capture survives a restart, so a row still recording when the server
+/// starts belongs to a dead writer. It fails at once and the next sweep removes
+/// its part file, instead of both waiting out the capture's whole deadline.
+#[test]
+fn a_capture_recording_at_startup_failed_with_the_process_that_wrote_it() {
+    let (accounts, id, dir) = fixture();
+    mark_started(&accounts, &id, 100, 7200).unwrap();
+    let part = audio_path(&dir, &id).unwrap().with_extension("wav.part");
+    let _leaked = std::mem::ManuallyDrop::new(PeerAudioWriter::begin(&dir, &id, 7200).unwrap());
+    assert_eq!(fail_interrupted(&accounts, 150).unwrap(), 1);
+    assert_eq!(record(&accounts, &id).unwrap().unwrap().status, "failed");
+    sweep(&accounts, &dir, 150).unwrap();
+    assert!(!part.exists(), "the part file went with the dead capture");
+    assert_eq!(fail_interrupted(&accounts, 151).unwrap(), 0);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// The sweep reads which rows are expired and removes their files afterwards,
 /// and a capture can start again in between. A row that is no longer expired
 /// when the sweep reaches it is left alone, with its file, and a row it does
