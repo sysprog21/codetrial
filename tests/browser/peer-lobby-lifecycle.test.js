@@ -1,6 +1,7 @@
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import { launchChromium, startStaticServer } from "./source.js";
+import { until } from "./wait.js";
 let browser, server, base;
 before(async () => {
   browser = await launchChromium();
@@ -80,8 +81,13 @@ for (const expired of [false, true]) {
       "persisted suspension must leave the TTL to expire availability",
     );
     if (expired) active = false;
+    const readsBeforeRestore = reads;
     await page.evaluate(() =>
       dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true })),
+    );
+    await until(
+      () => reads > readsBeforeRestore,
+      "the restoring refresh to reach the server",
     );
     await page.waitForFunction(
       () =>
@@ -92,12 +98,26 @@ for (const expired of [false, true]) {
     );
     // The restoring refresh is not the timer: wait for it to settle, then count
     // only reads that the polling interval makes afterwards.
+    await page.waitForLoadState("networkidle");
     await page.clock.runFor(1000);
     const settled = reads;
-    await page.clock.runFor(15000);
-    assert.ok(
-      reads > settled,
-      "restoration must resume authoritative roster polling",
+    // One interval per probe, three at most: the 15 s the old single advance
+    // covered. A refresh in flight swallows the ticks that fire with it, and the
+    // route handler counts in real time, so each tick waits for its requests.
+    const advanceUntil = (done, what) => {
+      let ticks = 0;
+      return until(async () => {
+        if (done()) return true;
+        if (ticks++ === 3)
+          throw new Error(`${what} did not happen within 15 s of page time`);
+        await page.clock.runFor(5000);
+        await page.waitForLoadState("networkidle");
+        return done();
+      }, what);
+    };
+    await advanceUntil(
+      () => reads > settled,
+      "restoration to resume authoritative roster polling",
     );
     if (expired) {
       assert.equal(await page.locator("#peer-opt-in").isChecked(), false);
@@ -105,7 +125,10 @@ for (const expired of [false, true]) {
       assert.equal(beats, 0);
     } else {
       await page.waitForFunction(() => window.connections === 2);
-      assert.ok(beats > 0, "restoration must resume availability heartbeats");
+      await advanceUntil(
+        () => beats > 0,
+        "restoration to resume availability heartbeats",
+      );
     }
   });
 }
