@@ -485,7 +485,8 @@ function boundedReviews(reviews) {
   const texts = [];
   // The brackets the array itself serializes to, before any element.
   let bytes = 2;
-  for (const row of reviews.slice(0, REVIEW_HISTORY_CAP)) {
+  for (const row of reviews) {
+    if (retained.length === REVIEW_HISTORY_CAP) break;
     const review = withoutCode(row);
     const text = JSON.stringify(review);
     // A separator for every element after the first.

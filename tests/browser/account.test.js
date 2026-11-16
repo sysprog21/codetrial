@@ -30,6 +30,10 @@ import {
 
 const web = join(root, "web");
 const read = (name) => readFileSync(join(web, name), "utf8");
+// Written out, not imported from `web/history.js`: the tests pin the limits
+// rather than follow them, so changing either one has to fail here.
+const REVIEW_HISTORY_CAP = 500;
+const REVIEW_HISTORY_BYTES = 164 * 1024;
 
 test("lobby exposes signed in and signed out account hooks", () => {
   const page = read("index.html");
@@ -553,7 +557,7 @@ test("a rebuilt review history keeps the local-storage budget", () => {
   );
   assert.ok(
     new TextEncoder().encode(storage.getItem(reviewHistoryKey)).length <=
-      164 * 1024,
+      REVIEW_HISTORY_BYTES,
   );
 });
 
@@ -635,7 +639,6 @@ test("legacy attempts receive distinct stable ids across both stores", () => {
 });
 
 test("legacy id migration leaves a full review store intact", () => {
-  const budget = 164 * 1024;
   const reviews = Array.from({ length: 30 }, (_, index) => ({
     problemId: `problem-${index}`,
     report: { summary: "" },
@@ -643,7 +646,7 @@ test("legacy id migration leaves a full review store intact", () => {
   const encoder = new TextEncoder();
   const serialized = () => JSON.stringify(reviews);
   reviews[0].report.summary = "x".repeat(
-    budget - encoder.encode(serialized()).length - 1,
+    REVIEW_HISTORY_BYTES - encoder.encode(serialized()).length - 1,
   );
 
   const memory = memoryStorage();
@@ -873,7 +876,7 @@ test("an oversized newest review does not erase older review history", async () 
   await saveReportHistory(
     {
       problemId: "too-large",
-      report: { summary: "x".repeat(200_000) },
+      report: { summary: "x".repeat(REVIEW_HISTORY_BYTES + 1) },
     },
     { storage, fetcher: async () => response({ signedIn: false }) },
   );
@@ -881,6 +884,114 @@ test("an oversized newest review does not erase older review history", async () 
     readReviewHistory(storage).map((entry) => entry.problemId),
     ["kept"],
   );
+});
+
+test("review history fills retained slots after byte-budget rejections", async () => {
+  const storage = memoryStorage();
+  const older = Array.from({ length: REVIEW_HISTORY_CAP }, (_, index) => ({
+    id: `old-${index}`,
+    problemId: "two-sum",
+    report: { decision: "HIRE", summary: "small" },
+  }));
+  storage.setItem(reviewHistoryKey, JSON.stringify(older));
+  storage.setItem(historyKey, JSON.stringify(older.slice(0, 20)));
+  const newest = [];
+  for (let index = 0; index < 3; index += 1) {
+    const entry = {
+      id: `new-${index}`,
+      problemId: "two-sum",
+      report: { summary: "x".repeat(Math.floor(REVIEW_HISTORY_BYTES / 3)) },
+    };
+    newest.unshift(entry);
+    assert.deepEqual(
+      await saveReportHistory(entry, {
+        storage,
+        fetcher: async () => response({ signedIn: false }),
+      }),
+      { local: "saved", account: "skipped" },
+    );
+    const serialized = storage.getItem(reviewHistoryKey);
+    const reviews = JSON.parse(serialized);
+    assert.ok(
+      new TextEncoder().encode(serialized).length <= REVIEW_HISTORY_BYTES,
+    );
+    assert.deepEqual(
+      reviews,
+      [...newest.slice(0, 2), ...older].slice(0, REVIEW_HISTORY_CAP),
+    );
+    assert.deepEqual(
+      readLocalHistory(storage),
+      [...newest, ...older].slice(0, 20),
+    );
+  }
+});
+
+test("rebuilt review history caps retained reports after multiple oversized candidates", () => {
+  for (const count of [
+    0,
+    19,
+    REVIEW_HISTORY_CAP - 1,
+    REVIEW_HISTORY_CAP,
+    REVIEW_HISTORY_CAP + 1,
+  ]) {
+    const storage = memoryStorage();
+    const eligible = Array.from({ length: count }, (_, index) => ({
+      id: `old-${index}`,
+      report: { summary: "small" },
+    }));
+    const candidates = [
+      {
+        id: "large-0",
+        report: { summary: "x".repeat(REVIEW_HISTORY_BYTES + 1) },
+      },
+      {
+        id: "large-1",
+        report: { summary: "x".repeat(REVIEW_HISTORY_BYTES + 1) },
+      },
+      ...eligible,
+    ];
+    storage.setItem(historyKey, JSON.stringify(candidates));
+    const expected = eligible.slice(0, REVIEW_HISTORY_CAP);
+    assert.deepEqual(readReviewHistory(storage), expected, `count ${count}`);
+    assert.equal(storage.getItem(reviewHistoryKey), JSON.stringify(expected));
+    assert.deepEqual(readLocalHistory(storage), candidates);
+  }
+});
+
+test("review history accepts the exact UTF-8 byte budget and skips one byte over", () => {
+  const encoder = new TextEncoder();
+  for (const extra of [0, 1]) {
+    const storage = memoryStorage();
+    const lead = {
+      id: "lead",
+      report: { summary: "x".repeat(REVIEW_HISTORY_BYTES - 8 * 1024) },
+    };
+    // Accented Latin makes the byte width differ from the string length.
+    const entry = { id: "limit", report: { summary: "é".repeat(1_000) } };
+    const first = { id: "newest" };
+    const bytes = encoder.encode(JSON.stringify([lead, first, entry])).length;
+    entry.report.summary += "x".repeat(REVIEW_HISTORY_BYTES - bytes + extra);
+    const older = { id: "older" };
+    const candidates = [
+      lead,
+      ...Array.from({ length: REVIEW_HISTORY_CAP + 1 }, (_, index) => ({
+        id: `oversized-${index}`,
+        report: { summary: "x".repeat(16 * 1024) },
+      })),
+      first,
+      entry,
+      older,
+    ];
+    storage.setItem(historyKey, JSON.stringify(candidates));
+    const expected = extra ? [lead, first, older] : [lead, first, entry];
+    assert.deepEqual(readReviewHistory(storage), expected);
+    const serialized = storage.getItem(reviewHistoryKey);
+    assert.equal(serialized, JSON.stringify(expected));
+    assert.ok(encoder.encode(serialized).length <= REVIEW_HISTORY_BYTES);
+    if (!extra)
+      assert.equal(encoder.encode(serialized).length, REVIEW_HISTORY_BYTES);
+    assert.deepEqual(readLocalHistory(storage), candidates);
+  }
 });
 
 test("report history keeps anonymous and failed account saves local", async () => {
