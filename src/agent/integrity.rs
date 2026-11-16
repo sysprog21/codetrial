@@ -150,11 +150,13 @@ pub fn sanitize_test_run(payload: &serde_json::Value) -> serde_json::Value {
     // A category is useful deterministic metadata only when the runner named it
     // from structured execution state. Free-form compiler prose never gets
     // classified here, and a string outside the list is dropped rather than
-    // passed on. That still counts as `other` in the evidence reducer whenever
-    // the run carries a setup error, which is the only way the browser ever
-    // attaches a category. An unknown string on a run that did not fail to
-    // start is counted as nothing: recording it would put a runner failure on a
-    // run that reported no failure at all.
+    // passed on. The evidence reducer counts a listed category even when the
+    // run carries no setup error, taking the setup error's text as its material
+    // when there is one and `structured:<Category>` otherwise. A missing or
+    // dropped category counts as `other` only on a run with a setup error,
+    // which is also the only run the browser ever attaches a category to.
+    // Recording one on any other run would put a runner failure on a run that
+    // reported no failure at all.
     let diagnostic = payload
         .get("diagnostic")
         .and_then(|value| value.get("category"))
