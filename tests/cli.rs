@@ -3169,3 +3169,8 @@ fn a_server_told_to_follow_its_stdin_exits_when_it_closes() {
 
 #[path = "cli/setup_save.rs"]
 mod setup_save;
+
+#[test]
+fn scratch_fails() {
+    assert!(false);
+}
