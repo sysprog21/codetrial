@@ -277,6 +277,41 @@ test("an ellipse held beyond the same edge does not repaint or signal new activi
   assert.equal(result.ops[0].points.length, 258);
 });
 
+for (const [tool, content] of [
+  ["Line", "empty"],
+  ["Rectangle", "empty"],
+  ["Ellipse", "empty"],
+  ["Line", "text"],
+]) {
+  test(`${tool} finish drops an unmoved press with ${content} content`, async (t) => {
+    if (!browser) return t.skip("playwright chromium unavailable");
+    const page = await openShapeBoard(t);
+    const canvas = page.locator("canvas");
+    if (content === "text") {
+      await page.getByRole("button", { name: "Text", exact: true }).click();
+      await page.evaluate(() => {
+        window.pointer("pointerdown", 20, 500);
+        window.pointer("pointerup", 20, 500);
+      });
+      await page
+        .getByRole("textbox", { name: "Label text" })
+        .fill("Existing label");
+      await page.getByRole("button", { name: "Confirm", exact: true }).click();
+      assert.equal(await page.evaluate(() => window.ops[0].op), "text");
+    }
+    const before = await canvas.evaluate((node) => node.toDataURL());
+    const journal = await page.evaluate(() => window.ops);
+    await page.getByRole("button", { name: tool, exact: true }).click();
+    await page.evaluate(async () => {
+      window.pointer("pointerdown", 200, 100);
+      // End (or the timer) can finish while the pointer is still held down.
+      await window.example.finish();
+    });
+    assert.deepEqual(await page.evaluate(() => window.ops), journal);
+    assert.equal(await canvas.evaluate((node) => node.toDataURL()), before);
+  });
+}
+
 for (const tool of ["Line", "Rectangle", "Ellipse"]) {
   test(
     `${tool} presses leave existing ink unchanged until the first move`,
