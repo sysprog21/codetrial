@@ -108,11 +108,79 @@ test("a zero divisor is refused wherever it appears", () => {
   for (const text of ["0 / 5", "0 // 5", "0 % 5"])
     assert.equal(evaluate(text), 0, text);
 });
+test("an invalid result is refused before a later step hides it", () => {
+  const message = "A step of the expression is undefined";
+  for (const invalid of [
+    "sqrt(-1)",
+    "asin(2)",
+    "asin(-2)",
+    "acos(2)",
+    "acos(-2)",
+    "ln(-1)",
+    "log(-1)",
+    "log2(-1)",
+    "pow(-1, 0.5)",
+    "((-1)^0.5)",
+    "(1e999 - 1e999)",
+    "(0 * 1e999)",
+    "(1e999 / 1e999)",
+    "(1e999 % 3)",
+  ]) {
+    for (const text of [
+      invalid,
+      `${invalid}^0`,
+      `${invalid}^-0`,
+      `${invalid}**0`,
+      `pow(${invalid}, 0)`,
+      `atan(hypot(${invalid}, 1e999))`,
+      `atan(hypot(1e999, ${invalid}))`,
+    ])
+      assert.throws(() => evaluate(text), { message }, text);
+  }
+});
+
+test("valid function boundaries and supported infinite results still work", () => {
+  for (const [text, value] of [
+    ["sqrt(0)", 0],
+    ["sqrt(16)^0", 1],
+    ["asin(1)", Math.PI / 2],
+    ["asin(-1)", -Math.PI / 2],
+    ["acos(1)", 0],
+    ["acos(-1)", Math.PI],
+    ["ln(1)", 0],
+    ["log(1)", 0],
+    ["log2(1)", 0],
+    ["pow(-2, 3)", -8],
+    ["atan(ln(0))", -Math.PI / 2],
+    ["ln(0)^0", 1],
+    ["5 % exp(1000)", 5],
+    ["1 // exp(1000)", 0],
+    ["atan(1e999)", Math.PI / 2],
+    ["atan(hypot(1e999, 3))", Math.PI / 2],
+    ["5 % 1e999", 5],
+  ])
+    assert.equal(evaluate(text), value, text);
+});
 
 test("an infinite dividend is refused", () => {
-  const message = "The result is not a finite number";
+  const message = "A step of the expression is undefined";
   for (const text of ["10^400 % 3", "10^400 // 10^400"])
     assert.throws(() => evaluate(text), { message }, text);
+});
+
+test("an undefined step and an overflow are refused with different messages", () => {
+  for (const text of ["sqrt(-1)", "sqrt(-1)^0", "(1e999 - 1e999)^0"])
+    assert.throws(
+      () => evaluate(text),
+      { message: "A step of the expression is undefined" },
+      text,
+    );
+  for (const text of ["2^1024", "1e999"])
+    assert.throws(
+      () => evaluate(text),
+      { message: "The result is not a finite number" },
+      text,
+    );
 });
 
 test("bad input names its problem and never runs code", () => {

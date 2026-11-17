@@ -780,6 +780,16 @@ return radians or degrees, and in degrees the multiples of 90 are exact. A
 result shows fifteen significant digits, except an integer up to 2^53, which
 is shown whole. A zero divisor of `/`, `//` or `%` is refused wherever it
 appears, so `min(1/0, 3)` is refused rather than 3.
+An invalid result, such as `sqrt(-1)` or an infinity minus an infinity, is
+refused wherever it appears, so `sqrt(-1)^0` is refused rather than 1.
+A NaN result reports "A step of the expression is undefined"; an
+infinite final result reports "The result is not a finite number".
+An infinite intermediate is allowed, so `atan(ln(0))` is -pi/2.
+A power with exponent 0 is 1 even for an infinite base, so `ln(0)^0`
+is 1; a NaN base is still refused. An overflow is kept as an infinity
+too, so a later step can still turn it into a wrong finite result:
+`1 / sqrt(10^400)` is 0, not 1e-200. Distinguishing overflow from an
+exact infinite limit is left to a follow-up issue.
 
 The calculator's `//` rounds down and `%` takes the sign of the divisor, so
 `-7 // 3` is -3, `-7 % 3` is 2, and `a == (a // b) * b + a % b` holds for
