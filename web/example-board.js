@@ -5,6 +5,7 @@ import {
   MAX_STROKES,
   MAX_STROKES_MESSAGE,
   boardPoint,
+  clamp,
   createBoard,
   createPointerGate,
   drawBoard,
@@ -241,8 +242,8 @@ export function mountExampleBoard(
   function boundedPoint(event) {
     const point = boardPoint(canvas, event);
     return {
-      x: Math.min(Math.max(point.x, 0), BOARD_WIDTH),
-      y: Math.min(Math.max(point.y, 0), BOARD_HEIGHT),
+      x: clamp(point.x, BOARD_WIDTH),
+      y: clamp(point.y, BOARD_HEIGHT),
     };
   }
 

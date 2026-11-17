@@ -260,39 +260,68 @@ for (const source of ["web/interview.html", "web/task.html"]) {
   });
 }
 
-test("an ellipse held beyond the same edge does not repaint or signal new activity", async (t) => {
-  if (!browser) return t.skip("playwright chromium unavailable");
-  const page = await openShapeBoard(t);
-  await page.getByRole("button", { name: "Ellipse", exact: true }).click();
-  const result = await page.evaluate(() => {
-    const canvas = document.querySelector("canvas");
-    const context = canvas.getContext("2d");
-    window.pointer("pointerdown", 800, 400);
-    window.pointer("pointermove", 2000, 700);
-    const preview = canvas.toDataURL();
-    const activity = window.turnActivity;
-    let paints = 0;
-    const stroke = context.stroke.bind(context);
-    context.stroke = (...args) => {
-      paints++;
-      return stroke(...args);
-    };
-    window.pointer("pointermove", 2200, 700);
-    window.pointer("pointermove", 2400, 700);
-    const held = {
-      activity: window.turnActivity,
-      paints,
-      image: canvas.toDataURL(),
-    };
-    window.pointer("pointerup", 2600, 700);
-    return { activity, preview, held, ops: window.ops };
+for (const [end, moves] of [
+  [
+    [1000, 700],
+    [
+      [1000.2, 700.2],
+      [1000.4, 700.4],
+    ],
+  ],
+  [
+    [2000, 700],
+    [
+      [2200, 700.2],
+      [2400, 700.4],
+    ],
+  ],
+]) {
+  test(`an ellipse held in the same pixel at (${end}) does not repaint or signal new activity`, async (t) => {
+    if (!browser) return t.skip("playwright chromium unavailable");
+    const page = await openShapeBoard(t);
+    await page.getByRole("button", { name: "Ellipse", exact: true }).click();
+    const result = await page.evaluate(
+      ({ end, moves }) => {
+        const canvas = document.querySelector("canvas");
+        const context = canvas.getContext("2d");
+        window.pointer("pointerdown", 800, 400);
+        window.pointer("pointermove", ...end);
+        const preview = canvas.toDataURL();
+        const activity = window.turnActivity;
+        let paints = 0;
+        const stroke = context.stroke.bind(context);
+        context.stroke = (...args) => {
+          paints++;
+          return stroke(...args);
+        };
+        for (const point of moves) window.pointer("pointermove", ...point);
+        const held = {
+          activity: window.turnActivity,
+          paints,
+          image: canvas.toDataURL(),
+        };
+        const next = [moves.at(-1)[0], 700.6];
+        window.pointer("pointermove", ...next);
+        const advanced = {
+          activity: window.turnActivity,
+          paints,
+          image: canvas.toDataURL(),
+        };
+        window.pointer("pointerup", ...next);
+        return { activity, preview, held, advanced, ops: window.ops };
+      },
+      { end, moves },
+    );
+    assert.equal(result.held.activity, result.activity);
+    assert.equal(result.held.paints, 0);
+    assert.equal(result.held.image, result.preview);
+    assert.equal(result.advanced.activity, result.activity + 1);
+    assert.ok(result.advanced.paints > 0);
+    assert.notEqual(result.advanced.image, result.preview);
+    assert.equal(result.ops.length, 1);
+    assert.equal(result.ops[0].points.length, 258);
   });
-  assert.equal(result.held.activity, result.activity);
-  assert.equal(result.held.paints, 0);
-  assert.equal(result.held.image, result.preview);
-  assert.equal(result.ops.length, 1);
-  assert.equal(result.ops[0].points.length, 258);
-});
+}
 
 for (const [tool, content] of [
   ["Line", "empty"],
@@ -666,13 +695,19 @@ for (const [tool, pointCount] of [
         }, base),
         true,
       );
-      await page.evaluate(async () => {
+      const flushed = await page.evaluate(async () => {
         window.online = true;
         await window.example.reconnect();
-        await window.example.flush();
+        return window.example.flush();
       });
+      assert.equal(flushed, true);
       assert.equal(await image(), final);
-      assert.equal(await page.evaluate(() => window.uploads.at(-1).count), 1);
+      const uploaded = await page.evaluate(() => window.uploads.at(-1));
+      assert.equal(uploaded.count, 1);
+      assert.equal(
+        uploaded.image,
+        await canvas.evaluate((node) => node.toDataURL("image/jpeg", 0.72)),
+      );
       await page.getByRole("button", { name: "Undo", exact: true }).click();
       assert.equal(await image(), blank);
       await moveBoardPointer(page, 400, 300);
