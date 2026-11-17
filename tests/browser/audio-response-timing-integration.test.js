@@ -4,12 +4,20 @@ import { runInNewContext } from "node:vm";
 import { createAudioResponseTiming } from "../../web/audio-response-timing.js";
 import { functionBody, loadInterview, read } from "./source.js";
 
-async function fixture({ enabled = true, failFirstMonitor = false } = {}) {
+async function fixture({
+  enabled = true,
+  failFirstMonitor = false,
+  deferPublication = false,
+} = {}) {
   const page = read("web/interview.js");
   const monitors = [];
   const measurements = [];
   const diagnostics = [];
   const playbackReleases = [];
+  const forgotten = [];
+  const disconnects = [];
+  const publication = Promise.withResolvers();
+  const publishing = Promise.withResolvers();
   let cancellations = 0;
   let time = 0;
   let monitorAttempts = 0;
@@ -31,6 +39,10 @@ async function fixture({ enabled = true, failFirstMonitor = false } = {}) {
       for (const callback of this.handlers.get(event) || []) callback(...args);
     }
     async connect() {}
+    async disconnect(stopTracks) {
+      disconnects.push(stopTracks);
+      this.emit("Disconnected");
+    }
     registerTextStreamHandler() {}
   }
   const state = { phase: "live", connected: false, sawAgent: true };
@@ -51,6 +63,7 @@ async function fixture({ enabled = true, failFirstMonitor = false } = {}) {
     },
     audioPlayback: {
       setRoom() {},
+      forget: (element) => forgotten.push(element),
       release: (room) => playbackReleases.push(room),
     },
     audioTiming: enabled
@@ -80,11 +93,17 @@ async function fixture({ enabled = true, failFirstMonitor = false } = {}) {
     mutedSpeech: { stop() {} },
     localRecording: { needsMicrophone: false },
     stopPreflight() {},
-    dropRemoteAudio() {},
+    isAvatarAnalyserTrack: () => false,
+    releaseStart() {},
+    stopIntegrityMonitoring() {},
+    stopLocalMedia() {},
     playRemoteAudio(track) {
       context.timingApi.setRemoteTrack(track);
     },
-    publishPreflightTracks: async () => {},
+    publishPreflightTracks: async () => {
+      publishing.resolve();
+      if (deferPublication) await publication.promise;
+    },
     paintMicrophoneState() {},
     monitorIntegrityTracks() {},
     followMicrophoneLoss() {},
@@ -104,9 +123,10 @@ async function fixture({ enabled = true, failFirstMonitor = false } = {}) {
     let stopAudioTimingMonitor = null;
     let audioTimingReady = false;
     let jimTrack = null;
-    ${["releaseAudioTiming", "attachAudioTiming", "connectLiveKit"].map((name) => functionBody(page, name) + "\n}").join("\n")}
+    let jimAudio = null;
+    ${["releaseAudioTiming", "attachAudioTiming", "dropRemoteAudio", "abandonStart", "connectLiveKit"].map((name) => functionBody(page, name) + "\n}").join("\n")}
     globalThis.timingApi = {
-      attachAudioTiming, releaseAudioTiming, connectLiveKit,
+      attachAudioTiming, releaseAudioTiming, connectLiveKit, abandonStart,
       setRemoteTrack: (track) => { jimTrack = track; attachAudioTiming(track); },
       currentTrack: () => audioTimingTrack,
       owner: () => audioTimingRoom,
@@ -129,10 +149,9 @@ async function fixture({ enabled = true, failFirstMonitor = false } = {}) {
     stubMissing: true,
   });
   context.updateAgentState = updateAgentState;
-  assert.equal(
-    await context.timingApi.connectLiveKit({}, { cameraSkipped: true }),
-    "joined",
-  );
+  const joining = context.timingApi.connectLiveKit({}, { cameraSkipped: true });
+  await publishing.promise;
+  if (!deferPublication) assert.equal(await joining, "joined");
   const room = state.room;
   for (const event of ["Reconnecting", "Reconnected", "Disconnected"]) {
     assert.equal(
@@ -150,6 +169,10 @@ async function fixture({ enabled = true, failFirstMonitor = false } = {}) {
     diagnostics,
     measurements,
     playbackReleases,
+    forgotten,
+    disconnects,
+    joining,
+    finishPublication: publication.resolve,
     advance: (ms) => {
       time += ms;
     },
@@ -168,6 +191,7 @@ async function fixture({ enabled = true, failFirstMonitor = false } = {}) {
 function remoteTrack(id) {
   return {
     id,
+    kind: "audio",
     mediaStreamTrack: {
       kind: "audio",
       readyState: "live",
@@ -510,5 +534,143 @@ test("an unavailable interviewer cancels a pending turn and can speak again", as
   monitor.onActivity();
   assert.deepEqual(f.measurements, [60]);
   assert.deepEqual(f.diagnostics, ["interviewer unavailable"]);
+  f.disconnect();
+});
+
+test("registered unsubscribe releases only the current audio monitor", async () => {
+  const f = await fixture();
+  f.agent.attributes["lk.agent.state"] = "listening";
+  const oldTrack = remoteTrack("A");
+  const currentTrack = remoteTrack("B");
+  const removed = [];
+  const element = { remove: () => removed.push(element) };
+  oldTrack.detach = () => [];
+  currentTrack.detach = () => [element];
+  f.room.emit("TrackSubscribed", oldTrack, {}, f.agent);
+  f.room.emit("TrackSubscribed", currentTrack, {}, f.agent);
+  const current = f.monitors[1];
+  current.options.onAvailable();
+  f.agent.attributes["lk.agent.state"] = "speaking";
+  f.room.emit("ParticipantAttributesChanged");
+  current.options.onQuiet();
+  const cancellations = f.cancellations();
+
+  f.room.emit("TrackUnsubscribed", oldTrack);
+  assert.equal(f.monitors[0].stopped, true);
+  assert.equal(current.stopped, false);
+  assert.equal(f.api.currentTrack(), currentTrack);
+  assert.equal(f.api.owner(), f.room);
+  assert.equal(f.api.ready(), true);
+  assert.equal(f.cancellations(), cancellations);
+  f.room.emit("TrackUnsubscribed", currentTrack);
+  assert.equal(current.stopped, true);
+  assert.equal(f.api.currentTrack(), null);
+  assert.equal(f.api.owner(), null);
+  assert.equal(f.api.ready(), false);
+  assert.deepEqual(f.forgotten, [element]);
+  assert.deepEqual(removed, [element]);
+  current.options.onAvailable();
+  current.options.onQuiet();
+  f.advance(80);
+  current.onActivity();
+  assert.equal(f.api.ready(), false);
+  assert.deepEqual(f.measurements, []);
+  assert.deepEqual(f.diagnostics, ["audio monitor released"]);
+  f.disconnect();
+});
+
+test("speaking during initial publication reports room disconnected", async () => {
+  const f = await fixture({ deferPublication: true });
+  assert.equal(f.state.joinedRoom, true);
+  assert.equal(f.state.connected, false);
+  assert.equal(f.state.initialMediaPublished, false);
+  f.agent.attributes["lk.agent.state"] = "listening";
+  f.room.emit("TrackSubscribed", remoteTrack("A"), {}, f.agent);
+  const monitor = f.monitors[0];
+  monitor.options.onAvailable();
+  assert.equal(f.api.ready(), true);
+  f.agent.attributes["lk.agent.state"] = "speaking";
+  f.room.emit("ParticipantAttributesChanged");
+  assert.deepEqual(f.diagnostics, ["room disconnected"]);
+  monitor.options.onQuiet();
+  f.advance(80);
+  monitor.onActivity();
+  assert.deepEqual(f.measurements, []);
+  f.finishPublication();
+  assert.equal(await f.joining, "joined");
+  assert.equal(f.state.connected, true);
+  assert.deepEqual(f.measurements, []);
+  f.disconnect();
+});
+
+for (const preserveMicrophone of [false, true]) {
+  test(`abandonStart releases the monitor before deferred disconnect (preserveMicrophone=${preserveMicrophone})`, async () => {
+    const f = await fixture();
+    f.agent.attributes["lk.agent.state"] = "listening";
+    f.room.emit("TrackSubscribed", remoteTrack("A"), {}, f.agent);
+    const monitor = f.monitors[0];
+    monitor.options.onAvailable();
+    f.agent.attributes["lk.agent.state"] = "speaking";
+    f.room.emit("ParticipantAttributesChanged");
+    monitor.options.onQuiet();
+    const flushed = Promise.withResolvers();
+    const leaving = f.api.abandonStart(
+      {},
+      {
+        preserveMicrophone,
+        flushed: flushed.promise,
+      },
+    );
+    assert.deepEqual(f.disconnects, []);
+    assert.equal(
+      monitor.stopped,
+      true,
+      "startup failure stops the monitor before disconnect",
+    );
+    assert.equal(f.api.currentTrack(), null);
+    assert.equal(f.api.owner(), null);
+    assert.equal(f.api.ready(), false);
+    assert.equal(f.state.room, null);
+    assert.equal(f.state.connected, false);
+    monitor.options.onAvailable();
+    monitor.options.onQuiet();
+    f.advance(80);
+    monitor.onActivity();
+    assert.equal(f.api.ready(), false);
+    assert.deepEqual(f.measurements, []);
+    assert.deepEqual(f.diagnostics, ["audio monitor released"]);
+    flushed.resolve();
+    await leaving;
+    assert.deepEqual(f.disconnects, [!preserveMicrophone]);
+    assert.equal(f.state.startupCleanupRoom, null);
+  });
+}
+
+test("reconnected preserves a monitor attached by TrackSubscribed", async () => {
+  const f = await fixture();
+  f.agent.attributes["lk.agent.state"] = "listening";
+  f.room.emit("TrackSubscribed", remoteTrack("A"), {}, f.agent);
+  f.monitors[0].options.onAvailable();
+  f.room.emit("Reconnecting");
+  const track = remoteTrack("B");
+  f.room.emit("TrackSubscribed", track, {}, f.agent);
+  const current = f.monitors[1];
+  current.options.onAvailable();
+  current.options.onQuiet();
+  const cancellations = f.cancellations();
+  f.room.emit("Reconnected");
+  assert.equal(f.monitors.length, 2);
+  assert.equal(f.monitorAttempts(), 2);
+  assert.equal(current.stopped, false);
+  assert.equal(f.api.currentTrack(), track);
+  assert.equal(f.api.owner(), f.room);
+  assert.equal(f.api.ready(), true);
+  assert.equal(f.cancellations(), cancellations);
+  f.agent.attributes["lk.agent.state"] = "speaking";
+  f.room.emit("ParticipantAttributesChanged");
+  current.options.onQuiet();
+  f.advance(80);
+  current.onActivity();
+  assert.deepEqual(f.measurements, [80]);
   f.disconnect();
 });
