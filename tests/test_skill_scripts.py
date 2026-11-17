@@ -1951,6 +1951,8 @@ POST_INLINE = REVIEW / "post-inline.sh"
 # as "posted path:line" in place of its URL.
 FAKE_GH_INLINE = support.stub("skill-scripts/gh-inline.sh")
 FAKE_GH_APPLY = support.stub("skill-scripts/gh-apply.sh")
+FAKE_EVIDENCE = support.stub("gate-approve/evidence.sh")
+HEAD_SHA = "a" * 40
 FAKE_GH_SIMILAR = support.stub("skill-scripts/gh-similar.sh")
 FAKE_GH_FEEDBACK = support.stub("skill-scripts/gh-feedback.sh")
 FAKE_GH_CACHED = support.stub("skill-scripts/gh-cached.sh")
@@ -4858,6 +4860,9 @@ class ApplyPrActionsTests(unittest.TestCase):
             support.write_executable(scratch / "bin" / "gh", self.FAKE)
             (scratch / "sweep.json").write_text(sweep)
             (scratch / "log").write_text("")
+            # The evidence check has its own suite (test_gate_approve.py).
+            support.write_executable(scratch / "evidence.sh", FAKE_EVIDENCE)
+            env.setdefault("APPLY_GATE_EVIDENCE", str(scratch / "evidence.sh"))
             # A workflow directory the guard reads; None leaves the real one.
             if workflows is not None:
                 (scratch / "wf").mkdir()
@@ -4889,6 +4894,7 @@ class ApplyPrActionsTests(unittest.TestCase):
         entry = {
             "pr": 1,
             "run": 11,
+            "head": HEAD_SHA,
             "first_time": True,
             "touches_workflows": False,
             "files_truncated": False,
@@ -5316,6 +5322,9 @@ class ApplyPrActionsTests(unittest.TestCase):
         bad = (
             self.approval(first_time="false"),
             {"approve": [{"pr": 1, "run": 11, "first_time": True}]},
+            self.approval(head="h1"),
+            self.approval(head="A" * 40),
+            self.approval(head=None),
             {"rebase": None},
             {"rebase": [{"pr": 3}]},
             {"rebase": [{"pr": 3, "reason": "confict"}]},
