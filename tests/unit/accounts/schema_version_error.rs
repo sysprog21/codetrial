@@ -26,7 +26,11 @@ fn a_database_from_a_newer_build_says_its_schema_is_newer() {
         .to_string();
 
     assert!(
-        error.contains("is newer than this build supports"),
+        error.contains(&format!(
+            "database schema version {} is newer than this build supports ({})",
+            ACCOUNT_SCHEMA_VERSION + 1,
+            ACCOUNT_SCHEMA_VERSION
+        )),
         "{error}"
     );
     assert!(!error.contains("not read-only"), "{error}");
