@@ -588,6 +588,15 @@ p {
   border-color: var(--accent);
   color: var(--ink);
 }
+
+/* Format JS acts rather than toggles, so it shows the press itself, and keeps
+   that look while the formatter works (.busy); the first time, Prettier is
+   still loading. A disabled button shows neither. */
+#editor-format:not(:disabled):active,
+#editor-format.busy:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--ink);
+}
 .history {
   margin-top: 1rem;
   padding: 1rem;
@@ -1563,6 +1572,31 @@ p {
   background: var(--surface);
   color: var(--sub);
   font-size: var(--text-xs);
+}
+
+/* What Format JS did, between the toolbar and the code. Collapsed rather
+   than hidden while empty: a live region has to be in the accessibility tree
+   before its message arrives to announce it. */
+.editor-format-status {
+  flex: none;
+  margin: 0;
+  padding: 0.375rem 0.75rem;
+  border-bottom: 1px solid var(--hairline);
+  background: var(--surface);
+  color: var(--sub);
+  font-size: var(--text-xs);
+}
+
+.editor-format-status:empty:not(.held) {
+  padding-block: 0;
+  border-bottom: 0;
+}
+
+/* A result the candidate's typing outdated is emptied, not hidden: the row
+   keeps one line so the editor does not move under the caret. */
+.editor-format-status.held {
+  /* One line, the padding and the border: what the row measures with text. */
+  min-block-size: calc(1lh + 0.75rem + 1px);
 }
 
 .sync-state span {

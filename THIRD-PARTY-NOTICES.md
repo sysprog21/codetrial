@@ -18,8 +18,9 @@ pinned files with `make verify-vendor`.
 | [Tree-sitter Python](https://github.com/tree-sitter/tree-sitter-python) | 0.25.0 | MIT | Python grammar |
 | [Three.js](https://threejs.org/) | 0.185.1 | MIT | Avatar renderer |
 | [@pixiv/three-vrm](https://github.com/pixiv/three-vrm) | 3.5.5 | MIT | VRM support |
+| [Prettier](https://github.com/prettier/prettier) | 3.10.1 | MIT | Editor's Format JS, `standalone.mjs` with the estree and acorn plugins |
 
-The MediaPipe binaries, the Pyodide binaries, pdf.js and Tree-sitter are fetched at build time from
+The MediaPipe binaries, the Pyodide binaries, pdf.js, Tree-sitter and Prettier are fetched at build time from
 the version or commit named in their `FETCH` manifests, and accepted only when
 they match the adjacent `SHA256SUMS`. The LiveKit client and the three-vrm
 bundle are committed and pinned in place.
@@ -34,6 +35,9 @@ License texts and source details are shipped with the relevant assets:
 - `web/vendor/avatar/README.md`
 - `web/vendor/pyodide/README.md`
 - `web/vendor/pdfjs/README.md`
+- `web/vendor/prettier/LICENSE`, `web/vendor/prettier/THIRD-PARTY-NOTICES.md`
+  (Prettier and what its bundles include, such as acorn and acorn-jsx) and
+  `web/vendor/prettier/README.md`
 
 The build also patches two Rust crates, kept in source form with their licenses:
 

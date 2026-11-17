@@ -142,6 +142,41 @@ for (const [requested, expected] of [
   });
 }
 
+// Strict locks the editor until readiness and opens it once the interview
+// starts. Format JS follows the editor, so it has to be read after the editor
+// opens, not before.
+test("Strict opens Format JS with the editor once the interview starts", async (t) => {
+  const page = await interview(
+    t,
+    new URLSearchParams({ selection: "strict", language: "javascript" }),
+    (route) =>
+      route.fulfill({
+        json: grant("chargeback-pair-match", "format-after-readiness"),
+      }),
+  );
+  if (!page) return;
+  assert.equal(await page.locator("#editor-format").isDisabled(), true);
+  // Read the button in the same task that opens the editor, before anything
+  // later in the start could set it again.
+  await page.evaluate(() => {
+    const editor = document.querySelector("#editor");
+    new MutationObserver((records, observer) => {
+      if (editor.disabled) return;
+      globalThis.formatWhenOpened =
+        document.querySelector("#editor-format").disabled;
+      observer.disconnect();
+    }).observe(editor, { attributeFilter: ["disabled"] });
+  });
+  await preflight(page);
+  await page.locator("#editor:not([disabled])").waitFor();
+  assert.equal(
+    await page.locator("#language-select").inputValue(),
+    "javascript",
+  );
+  assert.equal(await page.evaluate(() => globalThis.formatWhenOpened), false);
+  assert.equal(await page.locator("#editor-format").isDisabled(), false);
+});
+
 /// A context with compiled runs on, so C is withheld only for want of a judge,
 /// and judges held until `release` is called.
 async function heldJudgeContext(t) {

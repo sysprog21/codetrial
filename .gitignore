@@ -62,6 +62,10 @@ web/vendor/tree-sitter-*/*.wasm
 # And pdf.js, pinned in web/vendor/pdfjs/SHA256SUMS: 1.7 MB of minified API
 # and worker, the same argument at a smaller size.
 web/vendor/pdfjs/*.mjs
+# And Prettier, which formats JavaScript in the editor on request.
+web/vendor/prettier/*.mjs
+web/vendor/prettier/THIRD-PARTY-NOTICES.md
+web/vendor/prettier-plugins/*.mjs
 # And the temp file a download in progress writes, which carries none of those
 # suffixes: a run killed outright leaves one, and it is the same megabytes.
 web/vendor/*/.*.part

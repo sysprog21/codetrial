@@ -1,0 +1,5 @@
+# Downloaded by scripts/fetch-vendor.sh; bump this URL, the plugins' URL in
+# ../prettier-plugins/FETCH and both SHA256SUMS together.
+https://cdn.jsdelivr.net/npm/prettier@3.10.1/
+standalone.mjs
+THIRD-PARTY-NOTICES.md

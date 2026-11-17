@@ -382,6 +382,32 @@ export function isToggleCommentKeystroke(event) {
   );
 }
 
+/// The key a shortcut means, lowercased: the character when it is printable
+/// ASCII, else the letter of the key's position for a single character an
+/// Option or Alt chord composed (Option+Shift+F types U+00CF on a Mac), else the
+/// key's name ("Enter", "Tab").
+export function shortcutKey(event) {
+  if (/^[\x20-\x7e]$/.test(event.key)) return event.key.toLowerCase();
+  if (event.key.length === 1)
+    return event.code?.replace(/^Key/, "").toLowerCase();
+  return event.key;
+}
+
+// Shift+Alt+F, the chord VS Code formats with. Ctrl and Meta are refused
+// because AltGr reports as Ctrl+Alt on Windows and types a character of its
+// own; a composition is the input method's.
+export function isFormatKeystroke(event) {
+  return (
+    shortcutKey(event) === "f" &&
+    event.shiftKey &&
+    event.altKey &&
+    !event.ctrlKey &&
+    !event.metaKey &&
+    !event.isComposing &&
+    event.keyCode !== 229
+  );
+}
+
 // Comments the lines the selection touches, or uncomments them when every one
 // that has text already is a comment, so a second press undoes the first and
 // a block with one commented line in it gains a level rather than losing that

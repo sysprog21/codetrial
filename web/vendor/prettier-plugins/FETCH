@@ -1,0 +1,4 @@
+# Downloaded by scripts/fetch-vendor.sh; bump this URL with ../prettier/FETCH.
+https://cdn.jsdelivr.net/npm/prettier@3.10.1/plugins/
+estree.mjs
+acorn.mjs
