@@ -899,6 +899,10 @@ pub fn finish(
         values.clone(),
         bound,
         change_keys_code(&launched_by)?,
+        match launched_by {
+            LaunchedBy::Parent(_) => crate::web::AfterSave::Launcher,
+            LaunchedBy::Operator => crate::web::AfterSave::Operator,
+        },
         config.trusted_proxy_hops,
     );
     // Same reason `serve_setup` prints this: say where to go.
