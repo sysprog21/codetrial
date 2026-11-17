@@ -204,6 +204,9 @@ The description should cover:
 - the essential implementation choice or tradeoff a reviewer needs to assess;
 - validation evidence and material limitations; include screenshots or sanitized
   logs only when they help verify the result;
+- where the change differs from what the issue's accepted comment described (a
+  different file, a narrower fix, an added test), in one sentence with the
+  reason; leave it out when the two match;
 - relevant compatibility or follow-up work, then the issue reference line.
 
 For a simple PR, one or two paragraphs plus validation is enough. Rewrite the
@@ -228,6 +231,10 @@ the user with the draft rather than being acted on alone:
   differ, the description says how, linking the other PR.
 - `issues[].others_hold`: the issue is assigned to someone else, so the work is
   theirs until a maintainer reassigns it. Ask in the issue before opening.
+- a comment on the issue saying someone is working on it, or a pull request
+  URL in the thread that the script did not list: neither is an assignment, but
+  read it before opening, and name the pull request in the draft when the work
+  overlaps.
 - `issues[].state` closed, or merged when the number is a pull request: the
   work may already be done or declined; read the closing comment and say which
   in the draft.

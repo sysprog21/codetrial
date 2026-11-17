@@ -1,11 +1,11 @@
 # Rules for every change
 
-Two rules every area breaks the same way, so every reviewer loads them whatever
-the files. Each rule here and in the files beside it was distilled from this
-repository's own review threads: a defect class maintainers raised on at least
-three PRs, worded as what breaks, with the near-miss that was pushed back on.
-`Seen` is how many PRs raised it, which is how often to expect it, not how bad
-it is.
+Three rules every area breaks the same way, so every reviewer loads them
+whatever the files. Each rule here and in the files beside it was distilled from
+this repository's own review threads: a defect class maintainers raised on at
+least three PRs, worded as what breaks, with the near-miss that was pushed back
+on. `Seen` is how many PRs raised it, which is how often to expect it, not how
+bad it is.
 
 ## One source of truth for anything both sides spell
 
@@ -32,6 +32,29 @@ drops `interviewerAccent` from every saved report.
 
 Not a finding: a deliberate split already recorded in `.cargo/mutants.toml` or
 a README that explains why two sides differ.
+
+## Use the helper, rule or test the module already has
+
+Applies to: `web/*.js`, `web/*.css`, `tests/browser/*.js`, `src/**`
+
+A change that writes a second copy of something the file or its neighbors
+already do. Flag it when the copies can drift: `clamp(value, min, max)` is
+exported by `web/lib.js`, yet a new module spells `Math.min(Math.max(...))`; a
+copy button re-spells the pending guard, `aria-disabled` and reset of
+`mountFinalCodeCopy` in `web/render.js`; the container unwrap in
+`candidateTypeMatches` in `web/runners.js` repeats the one in `compilerType`
+and `nativeLiteral` in `web/compiler-explorer.js`; a rule repeats the
+`display`, `align-items` and `gap` of a shared selector in `web/styles.css`; a
+test declares the same locators in every case, or adds an assertion that an
+earlier one in the loop already proves. Ask for the existing export, a helper
+beside the code, or one fewer assertion, and name the copy a later edit would
+miss.
+
+Seen: over 20 PRs. A predicate added in a second file that disagrees with the
+exported one about a disabled track.
+
+Not a finding: a second use that needs a branch the helper cannot take without
+a flag, when the diff says so.
 
 ## Change docs/ and nearby comments with the behavior
 

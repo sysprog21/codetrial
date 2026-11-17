@@ -194,8 +194,12 @@ what and why, so a reply that re-summarizes the diff is telling the reviewer
 what git is showing them. A reply opens with the fact. It carries no greeting,
 thanks, apology ("Sorry for the delay"), self-introduction ("my first issue"),
 or list of what the last push changed; maintainers called out each of those on
-#60, #83, #94, #123, #185, #271 and #285. A counterexample to a review finding
-is a correction in CONTRIBUTING.md's sense and belongs in its thread.
+#60, #83, #94, #123, #185, #271 and #285. A request states its intent instead of
+asking a question, and a review is asked for with GitHub's request-review
+control, not a comment
+([collaboration.md](../codetrial-contribute/collaboration.md#what-the-one-line-review-requests-mean)
+has the wording). A counterexample to a review finding is a correction in
+CONTRIBUTING.md's sense and belongs in its thread.
 [collaboration.md](../codetrial-contribute/collaboration.md#review-evidence-including-bot-findings)
 has how to answer a bot finding.
 

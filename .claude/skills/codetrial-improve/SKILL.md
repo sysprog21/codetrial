@@ -71,6 +71,11 @@ read [rust.md](rust.md) first. Touching `web/*.js`: read
   "Refactor and quality batches" below.
 - **Finish one unit and check it** with the narrowest gate lane before starting
   the next; run `./scripts/test.sh` once before calling the work done.
+- **Stop and ask the user, with the facts,** before adding a crate or npm
+  dependency, touching a file the accepted slice does not name, moving a public
+  contract (the list under [Refactor and quality
+  batches](#refactor-and-quality-batches)), or choosing between two designs that
+  cost callers differently.
 
 ## Refactor and quality batches
 

@@ -80,8 +80,11 @@ lens decides what is looked for, not how bad it is.
 - **scope**: the checklist from step 1 against the diff, line by line: met,
   partly met, missing, or needs a live check (a page, a provider, a voice turn
   the tests cannot drive). Then everything the diff does beyond it, and
-  behavior the PR body does not mention. Output the checklist as well as the
-  findings.
+  behavior the PR body does not mention. Also each behavioral claim in the body
+  ("fixes", "prevents", "reduces"): restate it with its trigger and find the
+  test or measurement in the PR that shows it. When none exists it is a question
+  naming the missing evidence, never a statement that the claim is false. Output
+  the checklist as well as the findings.
 - **contracts**: each changed area against its owner in
   [SKILL.md](SKILL.md#2-contracts), reading the owner's text at the base, not a
   summary and not the PR's own edit of it. A prompt, report schema or golden
