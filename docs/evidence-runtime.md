@@ -20,6 +20,9 @@ unchanged code after one is not progress. An edit followed by a run is one
 edit/test cycle; further runs over an untouched buffer are retries and are not
 counted again.
 
+The first executed run, or one changing the last executed language, is a baseline.
+Progress, its timestamp and latency require a preceding comparable execution.
+
 Parsing reuses one parser per grammar and keeps the last buffer's tree, so an
 update parses only the new buffer, incrementally from the previous tree edited to
 match it. A test holds the incremental tree to the fresh one node by node,

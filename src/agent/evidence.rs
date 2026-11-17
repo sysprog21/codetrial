@@ -14,6 +14,7 @@ use node_kinds::{
     closure_kind, control_kind, data_structure_kind, interface_kind, loop_kind, unnest,
 };
 pub(super) use run_signals::DiagnosticCategory;
+use run_signals::TestState;
 pub(crate) use run_signals::run_failed_to_start;
 
 const LEDGER_VERSION: u32 = 1;
@@ -163,22 +164,6 @@ pub struct CodeState {
     pub last_analysis: Option<CodeAnalysis>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub struct TestState {
-    pub total: u32,
-    pub passed: u32,
-    pub failed: u32,
-    pub newly_passed: i32,
-    pub newly_failed: i32,
-    /// Whether an executed run came before this one, without which the two
-    /// differences above are measured against nothing.
-    pub follows_executed_run: bool,
-    pub regression: bool,
-    pub consecutive_identical_failures: u32,
-    pub failure_signature: Option<String>,
-    pub source_timestamp_ms: Option<u64>,
-}
-
 /// # Why a zero is not written down
 ///
 /// A category is counted only when a runner named it from structured execution
@@ -217,16 +202,20 @@ fn is_zero(count: &u32) -> bool {
     *count == 0
 }
 
+/// Milestones, each latching once reached: this struct answers what has
+/// happened at some point in the interview, never what is true of the
+/// buffer or the last run right now. `tests` is where the current state
+/// lives, and a reader that takes a mark here for the present will read a
+/// solution that passed once and has since regressed as passing.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct InterviewProgress {
-    /// Milestones, each latching once reached: this struct answers what has
-    /// happened at some point in the interview, never what is true of the
-    /// buffer or the last run right now. `tests` is where the current state
-    /// lives, and a reader that takes a mark here for the present will read a
-    /// solution that passed once and has since regressed as passing.
     pub first_edit_ms: Option<u64>,
     pub runner_attempted: bool,
     pub tested: bool,
+    /// Latches when an executed run passes more cases than the previous
+    /// executed run. The first executed run, and one that names a different
+    /// language than the last executed run that named one, establishes the
+    /// baseline, even if it sets `all_tests_passed_once`.
     pub test_progress: bool,
     pub all_tests_passed_once: bool,
 }
@@ -238,7 +227,9 @@ pub struct StuckSignals {
     pub edit_test_cycles: u32,
     pub undo_redo_cycles: u32,
     pub last_meaningful_change_ms: Option<u64>,
+    /// Receipt time of the latest test progress, or `None` before progress.
     pub last_test_progress_ms: Option<u64>,
+    /// Delay to that progress from the last meaningful edit before it, if any.
     pub test_progress_latency_ms: Option<u64>,
 }
 
