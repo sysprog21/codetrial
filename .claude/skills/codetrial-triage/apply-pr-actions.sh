@@ -19,12 +19,16 @@
 #
 # confirm means the action is not one a sweep takes alone (a held run that is
 # not a first-time contributor's, one that touches workflows or whose file list
-# was cut, or any approval while a workflow runs on pull_request_target or
-# workflow_run): it goes on the confirmed list. A rebase request is skipped
-# unless the head still matches the sweep and, for a conflict, GitHub still says
-# CONFLICTING. A PR in `rebase` whose request was not posted keeps all of its
-# earlier requests visible (hide needs the new one to have landed), and hide_ask
-# is never touched: it is the maintainer's list.
+# was cut, one whose head carries no gate evidence, or any approval while a
+# workflow other than the reviewed pr-description.yml runs on
+# pull_request_target or workflow_run): it goes on the confirmed list. An
+# approval also needs gate-evidence.sh to pass for the head the sweep read,
+# checked again right before the call; when the answer cannot be given (the head
+# moved, the fork is gone, a fetch failed) the result is skipped. A rebase
+# request is skipped unless the head still matches the sweep and, for a
+# conflict, GitHub still says CONFLICTING. A PR in `rebase` whose request was
+# not posted keeps all of its earlier requests visible (hide needs the new one
+# to have landed), and hide_ask is never touched: it is the maintainer's list.
 
 set -eu
 
@@ -55,6 +59,7 @@ done
 jq -e '(.prs | arrays) and (.maintainers_known | type == "boolean")
     and all(.prs[]; (.number | type == "number") and (.head | type == "string"))
     and all(.approve[]; (.pr | type == "number") and (.run | type == "number")
+        and (.head | type == "string" and test("^([0-9a-f]{40}|[0-9a-f]{64})$"))
         and (.first_time | type == "boolean")
         and (.touches_workflows | type == "boolean")
         and (.files_truncated | type == "boolean"))
@@ -153,25 +158,47 @@ else
         risky="pr-description.yml runs on workflow_run"
     fi
 fi
-# One row per held run: the PR, the run, and whether every guard holds exactly.
-jq -r '.approve[] | [.pr, .run, (.first_time == true and .touches_workflows == false
-    and .files_truncated == false)] | @tsv' "$sweep" | while read -r pr id guards; do
+# Approve one run and say what happened.
+approve_run()
+{
+    if err=$(gh api -X POST "repos/$repo/actions/runs/$2/approve" 2>&1); then
+        receipt approve "$1" applied "run $2"
+    elif printf '%s\n' "$err" | grep -q 'not waiting for approval'; then
+        status=$(gh run view "$2" --repo "$repo" --json status --jq .status) || status=unread
+        case $status in
+            queued | in_progress)
+                receipt approve "$1" already "run $2 is $status after approval"
+                ;;
+            *) receipt approve "$1" failed "run $2 is not waiting, but approval could not be verified (status: $status)" ;;
+        esac
+    else
+        receipt approve "$1" failed "$err"
+    fi
+}
+
+# One row per held run: the PR, the run, the head the sweep read, and whether
+# every guard holds exactly. The evidence is read again here, for the head the
+# sweep saw, immediately before the approval call: a verdict saved in the sweep
+# would be about a head a push may have replaced. Only a pass approves; ask goes
+# on the confirmed list as the comment to draft, and an indeterminate answer (a
+# moved head, an unreadable fork, a failed fetch) approves nothing.
+evidence_check=${APPLY_GATE_EVIDENCE:-$here/gate-evidence.sh}
+jq -r '.approve[] | [.pr, .run, .head, (.first_time == true and .touches_workflows == false
+    and .files_truncated == false)] | @tsv' "$sweep" | while read -r pr id head guards; do
     if [ -n "$risky" ]; then
         receipt approve "$pr" confirm "$risky"
     elif [ "$guards" != true ]; then
         receipt approve "$pr" confirm "not a first-time contributor, touches workflows, or the file list was cut"
-    elif err=$(gh api -X POST "repos/$repo/actions/runs/$id/approve" 2>&1); then
-        receipt approve "$pr" applied "run $id"
-    elif printf '%s\n' "$err" | grep -q 'not waiting for approval'; then
-        status=$(gh run view "$id" --repo "$repo" --json status --jq .status) || status=unread
-        case $status in
-            queued | in_progress)
-                receipt approve "$pr" already "run $id is $status after approval"
-                ;;
-            *) receipt approve "$pr" failed "run $id is not waiting, but approval could not be verified (status: $status)" ;;
-        esac
     else
-        receipt approve "$pr" failed "$err"
+        code=0
+        verdict=$(sh "$evidence_check" "$repo" "$pr" "$head" < /dev/null 2> /dev/null) || code=$?
+        reason=$(printf '%s\n' "$verdict" | jq -r '.reason // empty' 2> /dev/null) || reason=
+        : "${reason:=the evidence check printed no reason}"
+        case $code in
+            0) approve_run "$pr" "$id" ;;
+            1) receipt approve "$pr" confirm "no gate evidence, draft the toolchain comment: $reason" ;;
+            *) receipt approve "$pr" skipped "gate evidence is indeterminate, not approved: $reason" ;;
+        esac
     fi
 done > "$work/approve.out"
 

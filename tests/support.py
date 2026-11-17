@@ -5,14 +5,55 @@ test, because `tests/` is not a package and `scripts/run-python-tests.py`
 imports each suite from its own path.
 """
 
+import functools
 import io
+import os
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/check.yml"
 STUBS = ROOT / "tests/stubs"
+
+# A scratch repository must not read the developer's git configuration, nor be
+# redirected by a GIT_DIR or GIT_INDEX_FILE inherited from a hook.
+GIT_ENV = {
+    **{k: v for k, v in os.environ.items() if not k.startswith("GIT_")},
+    "GIT_CONFIG_GLOBAL": "/dev/null",
+    "GIT_CONFIG_SYSTEM": "/dev/null",
+}
+COMMIT = "git -c user.name=t -c user.email=t@t commit -q"
+
+
+def sh(script, cwd):
+    """Run `script` under sh in `cwd` with the isolated git environment."""
+    return subprocess.run(
+        ["sh", "-c", script],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        env=GIT_ENV,
+        check=False,
+    )
+
+
+# The tools a script under test needs from the system, and nothing else: a PATH
+# that holds only these cannot reach whatever toolchain the machine has.
+CHECKER_TOOLS = ("sh", "sed", "grep", "tr", "od", "dirname", "cat", "wc", "uname")
+
+
+def link_system_tools(directory, names=CHECKER_TOOLS):
+    """Symlink each named system tool into directory; return what is missing."""
+    missing = []
+    for name in names:
+        found = shutil.which(name)
+        if found is None:
+            missing.append(name)
+        else:
+            (Path(directory) / name).symlink_to(found)
+    return missing
 
 
 def stub(name, interpreter=None):
@@ -63,9 +104,20 @@ def section(text, start, end, what):
     return text.split(start, 1)[1].split(end, 1)[0]
 
 
+def function_source(text, name):
+    """A whole shell function of a script, as the script defines it."""
+    body = section(text, f"\n{name}()\n{{\n", "\n}\n", f"function {name}")
+    return f"{name}()\n{{\n{body}\n}}\n"
+
+
+@functools.cache
+def workflow_text():
+    return WORKFLOW.read_text()
+
+
 def job(name, text=None):
     """The body of one job, up to the next job."""
-    text = WORKFLOW.read_text() if text is None else text
+    text = workflow_text() if text is None else text
     body = section(text, f"\n  {name}:\n", "\0", f"job {name}")
     following = re.search(r"\n  [a-z][a-z0-9_-]*:\n", body)
     return body[: following.start()] if following else body

@@ -9,6 +9,8 @@ before/after example when it helps. -->
 
 ## Validation
 
-<!-- What you ran and saw, and what you did not check. -->
+<!-- The command you ran (for a Rust change, ./scripts/test.sh rust or
+./scripts/test.sh) and the last lines of its output, then what you did not run
+or check. -->
 
 Close #

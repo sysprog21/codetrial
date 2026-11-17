@@ -117,6 +117,19 @@ clone only `HEAD`; the portable lane keeps full history for the commit-message
 check. The Rust lane deletes the runner's unused toolchains only when less than
 40 GB is free. Running `./scripts/test.sh` locally still runs every gate.
 
+On a pull request a `preflight` job runs first, and the lanes, the mutation plan
+and the shards wait for it. It reads the gate receipt the pushed head carries
+and fails when a non-Bot change in the Rust scope has none, so a missing
+receipt costs a minute instead of a Rust build. It fails closed: a note that cannot be fetched
+or read, or a head that moved while it was gathered, is a failure, never a pass.
+It is cost control, not a security boundary, because a pull request runs its own
+workflow and can edit the job; what binds is that a held run is approved only on
+the same check. The checker, the note fetcher and the gatherer are the base
+branch's, and the head is never checked out, so while the base has none of them
+(the pull request that adds them) the job prints one line and passes; a base
+with only some of them fails it. On a push and a merge group it is skipped, and
+the lanes still run.
+
 On a busy local host, `RUST_TEST_THREADS=4 ./scripts/test.sh rust` limits
 concurrent server launches in the Rust suites. The browser compiler fixtures
 also bound their concurrent jobs so candidate programs get CPU before their
@@ -126,9 +139,10 @@ before moving selected text.
 
 `check` is the only status a branch rule for main should require. It needs every
 lane and the independent security audit to succeed, and on a pull request the
-mutation plan and every shard too; shards may be skipped only when the plan
-found no mutants. A push to main or a merge queue entry plans no mutants, so
-`check` reports as soon as the lanes finish. The workflow also runs on
+mutation plan and every shard too; shards wait for the gate lanes and may be
+skipped only when the plan found no mutants or a lane failed, in which case
+`check` fails on the lane. A push to main or a merge queue entry plans no
+mutants, so `check` reports as soon as the lanes finish. The workflow also runs on
 `merge_group`, so once main has a merge queue, it tests each pull request on top
 of the main it will land on; two pull requests that pass against their own bases
 can still break main together. A merge group saves no caches, since its queue
@@ -138,6 +152,45 @@ repository's 10 GB limit was full of them. Mutation planning checks the Rust dif
 installing its tools, so a PR with no Rust changes starts no mutation shards and
 pays no mutation-tool setup cost. Rust diffs still use the complete
 diff-selected mutant set and the existing exclusions.
+
+To reproduce a failed mutation shard, or to answer a reviewer who asks for a
+mutation run, run the same diff-scoped check CI runs. `make mutants` is not
+that: it audits a fixed set of files with `-j 6 --timeout 900`, whatever your
+branch changed, so it can pass while your diff has a surviving mutant and fail
+on code you never touched. The CI check mutates only the functions the diff
+touches:
+
+```sh
+SCRATCH=$(mktemp -d)
+./scripts/fetch-vendor.sh   # the baseline tests serve the vendored web bytes
+if [ "$(uname -sm)" = "Linux x86_64" ]; then
+    sh scripts/fetch-clang.sh target/clang
+    export CXX=$PWD/target/clang/bin/clang++
+else
+    : "${CXX:?set CXX to Clang 21 or later}"
+fi
+git diff origin/main...HEAD -- '*.rs' > "$SCRATCH/pr.diff"
+cargo mutants --list --cargo-arg=--locked --in-diff "$SCRATCH/pr.diff"   # optional preview
+cargo mutants --in-place --in-diff "$SCRATCH/pr.diff" --cargo-arg=--locked
+```
+
+Add `--shard N/K` (`N` counts from 0) to both cargo-mutants commands to run one
+shard of a plan that CI split into `K`; the shard step's log names its `N/K`.
+Both commands carry `--cargo-arg=--locked`, as CI's plan and shard steps do: it
+keeps a mutant from being judged against a lockfile cargo quietly updated, which
+is the reason the Makefile gives. `--in-place` mutates your working tree
+and restores it, so run it in a clean checkout or a worktree you can stop
+touching for the duration. For a pull request with another base, replace
+`origin/main`. `make mutants` sets up Clang the same way; off x86-64 Linux, set
+`CXX` to Clang 21 or later instead.
+
+The cost is the reason this is not a per-change requirement. The unmutated
+baseline builds and runs the whole `cargo test` once, and every mutant builds
+and runs it again, so a run costs the number of mutants times the suite's time.
+It is for reproducing a failure or answering a reviewer's request. cargo-mutants
+derives each mutant's test timeout from the baseline's test time (a multiple you
+can change with `--timeout-multiplier`) and reports `TIMEOUT` past it, which is
+neither caught nor missed.
 
 Every skip the gate sees joins its `not checked by this run:` summary: a gate's
 own skip, a Node browser test's skip or todo, a missing formatter in
@@ -165,9 +218,13 @@ composite actions under `.github/actions/` as the lanes, and saves none of them,
 so the weekly job keeps no second copy. Chromium's system dependencies are still
 installed on every fresh runner.
 
-The gate picks its own compiler and Python, so running it directly builds with
-the same Clang `make` would. On Linux x86_64 with no `CXX` set, it uses the checksum-pinned
-Clang that `make` fetches into `target/clang`, fetching it just before the
+Before any gate runs, `./scripts/test.sh` asks `scripts/env-check.sh` whether
+the machine can run the lane it was given, and stops with the missing tool and
+the command that installs it when it cannot; see
+[Environment check](#environment-check). The gate picks its own compiler and
+Python, so running it directly builds with the same Clang `make` would. On
+Linux x86_64 with no `CXX` set, it uses the checksum-pinned Clang that `make`
+fetches into `target/clang`, fetching it just before the
 first lane that compiles. It runs the Python lanes with the first Python 3.11 or
 newer it finds, because the Rust style checker uses the standard-library TOML
 parser; set `PYTHON` to name one. An explicitly named older interpreter is
@@ -238,6 +295,57 @@ invalidated rather than got slower.
 Trimming debug info, which is what buys CI 40% per relink, was measured here
 and buys nothing: 7.5s against 8.1s on macOS, where the system linker rather
 than mold does the work. It stays a CI setting for that reason.
+
+## Environment check
+
+`scripts/env-check.sh` is the one place that says what a run needs. It only
+looks: it never downloads or installs anything, and it neither fetches Clang nor
+hashes `web/vendor`, because `scripts/test.sh` does both itself, once per run.
+
+```bash
+./scripts/env-check.sh                          # the local-rust profile
+./scripts/env-check.sh --profile portable       # also: ci-rust, browser
+./scripts/env-check.sh --format json            # one JSON object on stdout
+```
+
+Each profile lists what the matching lane of `scripts/test.sh` runs:
+
+| Profile | Required |
+| --- | --- |
+| `local-rust` | the pinned toolchain installed (with rustup), `cargo` and `rustc` at the `rust-toolchain.toml` version, `clippy`, `rustfmt`, no `RUSTUP_TOOLCHAIN`, Clang 21+ through `CXX` (Linux only), `web/vendor`, `node` |
+| `ci-rust` | `local-rust`, plus `mold` and `RUSTFLAGS` linking with it |
+| `portable` | the pinned toolchain installed (with rustup), `cargo` with `rustfmt` (the lane runs `cargo fmt --check`), `node` |
+| `browser` | `node` |
+
+`scripts/test.sh` picks `local-rust` for the `rust` and `all` lanes, `ci-rust`
+for those when `CI=true`, and the lane's own name otherwise. It passes
+`--will-provision`, which turns a missing Clang on Linux x86_64 into a note
+because the script fetches it after the checks; run by hand, the same state
+fails and prints `sh scripts/fetch-clang.sh target/clang`. A `rustc` found
+outside `$CARGO_HOME/bin` and `~/.cargo/bin` with the pinned version is a
+warning, since distribution and Nix toolchains are legitimate; a different
+version fails. Optional tools (`ruff`, `shellcheck`, `dash`, `actionlint`,
+`cargo-audit`, `cargo-deny`) that are absent are listed under `skipped`, and
+`scripts/test.sh` reports each as the skip it printed before this script existed,
+except `dash`, which only chooses the shell that checks syntax and has no skip.
+
+The exit status is 0 when every required check passed, 1 when one failed, and 2
+for an invalid invocation or a repository the script cannot read. The desktop
+app's system packages (the apt list in `check.yml`) are not checked: a missing
+one surfaces as that build's own error, except WebKitGTK on Linux, whose absence
+makes `scripts/test.sh` skip the desktop gate and say so; CI installs it, and a
+skip fails the run there.
+
+rustup installs the toolchain a `rust-toolchain.toml` pins the first time it
+runs in that directory, and any rustup command counts, `rustup toolchain list`
+included. So with rustup on PATH the check asks which toolchains are installed
+from `/`, where no pin applies, before any `cargo` or `rustc` runs in the
+repository. When the pinned toolchain is missing it fails with `rustup
+toolchain install <channel> --profile minimal -c clippy -c rustfmt` and runs
+neither, and a `RUSTUP_TOOLCHAIN` override likewise stops them from running.
+It also exports `RUSTUP_AUTO_INSTALL=0`, which a rustup that honours it turns
+into a refusal to install; the check does not depend on it. Without rustup (a
+distribution or Nix toolchain) the version comparison decides.
 
 ## Formatting
 
@@ -354,6 +462,54 @@ error there; the glob also takes any other tag ending in `latest` from `origin`.
 does not fetch `origin`. Git has no pre-pull hook. Installing replaces
 the exact refspecs an earlier installer wrote. Uninstalling removes the refspec;
 other fetch settings stay in place.
+
+### Gate evidence on a push
+
+The pre-push hook asks of each topic branch it is about to publish whether the
+change is one the Rust gate covers, and if so for a gate run on the content
+being pushed. The scope is `scripts/check-gate-evidence.py --scope-only` over
+the paths the branch changes since it left main. The main it is measured from is
+the first that resolves of the push remote's (or upstream's), `origin`'s,
+`upstream`'s, and the push remote's default branch, so a clone whose fork has
+another name is still judged. When none resolves the hook cannot tell whether
+the change is in scope: it says so, refuses nothing, and still sends the note
+when a matching receipt exists, because turning away pushes that change nothing
+in scope only teaches people to bypass the hook. The hook keeps no list of its
+own. A branch outside the scope, such as a change to a workflow or to prose no
+Rust source reads, sends nothing and is never refused. Pushes of `main`, of
+tags, of a deletion, and of the notes refs themselves are not judged for
+evidence, and neither is `--publish-review`, which sends only a record.
+
+For a branch in scope the hook reads the receipts of the tree of the pushed head
+(`gate-receipts/by-tree/<tree>/`, written by `scripts/test.sh`) and accepts the
+push when one of them is a `rust` or `all` run that passed. A `portable` or
+`browser` receipt does not vouch for Rust, and an optional-tool skip does not
+disqualify a run. Because the receipt names a tree and not a commit, an amend
+that only rewords, and a gate run on a dirty tree that is then committed
+unchanged, both match. A commit that holds anything else does not: a rebase
+that changes the tree, an edit, or a partial commit (`git add -p`, a file left
+out), which needs the gate re-run on what is committed.
+
+With no matching receipt the push is refused with the `scripts/env-check.sh`
+report, which names a missing `cargo` or toolchain and the command that
+installs it, and the steps: `./scripts/env-check.sh`, `./scripts/test.sh`, push
+again.
+
+A matching receipt is sent as a note on `refs/notes/codetrial-gate`, attached
+to the head commit of the branch, before the branch itself and to the same
+remote. `scripts/gate-note.py` builds it: a JSON object of at most 16 KiB with
+the tree and, per receipt, only the lane, verdict, skip count, time and
+toolchain lines. The receipt files are treated as data: a malformed one is
+ignored, and nothing from one is passed to a shell. The notes the remote already
+holds are fetched and merged first, so other heads' notes are kept, and the push
+stops if the note cannot be sent. A head whose identical note the remote already
+holds sends nothing, so pushing the same head again is not a second upload.
+Notes for heads a contributor later amends away stay on their own fork.
+
+The receipt is a file on the contributor's machine and can be written by hand,
+and a hook can be skipped or never installed; an agent with no toolchain
+usually has none installed. The note narrows who is asked for CI time. CI and
+the maintainer's approval, not this hook, are what bind.
 
 ### Offline credential checks and message guidance
 
@@ -950,6 +1106,29 @@ what each cannot see. Gate receipts, one file per lane with the verdict, skipped
 count and `scripts/tree-fingerprint.sh` of the tree, live under
 `.git/codetrial-review/gate-receipts/`. A receipt shows that a run happened on
 this tree, not that it was complete; CI recomputes the verdict.
+
+A receipt is one JSON line: `lane`, `passed`, `failed`, `skipped`, `tree` (the
+fingerprint above, which changes on every rebase or amend), `worktree_tree`,
+`rustc` and `cargo` (their `-V` output, empty for the browser lane, which needs
+no Rust), `env` (the report of `scripts/env-check.sh`, captured once at the
+start; `null` when it could not be) and `time`.
+
+`worktree_tree` is the id a commit of the same content gets. It is computed in
+a scratch index (the real one, and any partial staging in it, is never read):
+`HEAD` plus everything not ignored, as `git add -A` would stage it, with the
+repository's attributes and the contributor's filters applied as a commit
+applies them. A run on a dirty tree therefore matches the commit made from it
+afterwards, provided that commit stages everything the run saw; a commit of
+part of the tree has another id. The value is taken when the run starts and
+again when it ends and is written only when both agree, so a tree edited during
+the run claims nothing and the field is empty (it is empty too outside a git
+work tree or on an unborn `HEAD`). An edit made and then undone during the run
+cannot be seen. When it is set, the receipt is also kept as
+`gate-receipts/by-tree/<worktree_tree>/<lane>.json`, because the lane file is
+overwritten by the next run, possibly on another branch; the 20 most recently
+written trees are kept and older ones are removed, except that a tree written
+within the last hour is never removed, because another run in the same clone may
+have just written it and nothing locks the folder.
 
 ## Review memory and the review skill
 

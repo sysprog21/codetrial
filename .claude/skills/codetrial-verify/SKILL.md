@@ -16,6 +16,14 @@ One gate needs no credentials and is the thing to run:
 make check                # every gate, plus a live Gemini credential check
 ```
 
+`scripts/env-check.sh` says whether this machine has what a lane needs, naming
+each missing tool with the command that installs it, without starting a build.
+`scripts/test.sh` runs it first and stops there, before any gate, when a
+required tool is missing.
+
+The [Before you push](../../../CONTRIBUTING.md#before-you-push) section of
+CONTRIBUTING.md has the order an agent runs it in before a push.
+
 CI runs one `gates (<lane>)` job per lane in parallel: `gates (rust)`,
 `gates (portable)` and, in three slices, `gates (browser 1/3)`,
 `gates (browser 2/3)` and `gates (browser 3/3)`
@@ -47,7 +55,8 @@ It is not offline. The `fetch-vendor` gate downloads missing assets named by a
 `actionlint` publishes itself as a container, so that lane may reach for docker.
 Both are checksum-pinned or version-pinned; neither needs a credential.
 
-A lane whose tool is absent skips instead of failing. Every skip the gate can
+A lane whose optional tool is absent skips instead of failing; a missing
+required tool stops the run before any gate, as above. Every skip the gate can
 see, its own, a formatter's in `scripts/indent.sh`, a Node browser test's and
 a Python case's, appears under the final `not checked by this run:` summary.
 Read it before claiming coverage; never treat the skip set or its size as

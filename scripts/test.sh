@@ -19,10 +19,79 @@ esac
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 
+# What this machine can run is settled before anything else. `gate` only records
+# a failure and carries on, so this is a plain step: a missing toolchain stops
+# the run here, naming the tool and the command that installs it, instead of
+# failing every gate that needs it. It runs before the Python lookup below,
+# which can set up an environment, and before the Clang fetch, which is why it
+# is told that fetch will happen. The report it prints for a passing machine
+# also carries the optional tools that are absent; the gates below read their
+# skip lines from it.
+case "$lane" in
+    rust | all)
+        env_profile=local-rust
+        [ "${CI:-}" != true ] || env_profile=ci-rust
+        ;;
+    portable) env_profile=portable ;;
+    browser) env_profile=browser ;;
+esac
+env_check=$ROOT/scripts/env-check.sh
+env_report=$("$env_check" --profile "$env_profile" --will-provision) || {
+    env_status=$?
+    printf '%s\n' "$env_report" >&2
+    exit "$env_status"
+}
+# A passing report is otherwise discarded, and with it the warnings and notes.
+printf '%s\n' "$env_report" | grep -E '^(warning|note): ' >&2
+
 # The tree this run judges, taken before any gate runs: an edit made while a
 # long run is in progress then fails to match the receipt, instead of being
 # stamped as what the run saw. Empty outside a git work tree.
 receipt_tree=$("$ROOT/scripts/tree-fingerprint.sh" 2> /dev/null) || receipt_tree=
+
+# worktree_tree: the id of the tree a commit would get if everything the work
+# tree holds that git does not ignore were staged, which is what lets evidence
+# keyed by tree id be matched to a commit. It is built in a scratch index so the
+# real one, and with it any partial staging, is never read or changed. The index
+# path is exported once, absolute: an assignment in front of `a && b` applies to
+# `a` alone. Prints nothing and fails outside a git work tree, on an unborn
+# HEAD, or when any step fails.
+worktree_tree()
+{
+    (
+        cd "$ROOT" || exit 1
+
+        # A relative TMPDIR would resolve under ROOT, inside the tree being
+        # named.
+        tmp=${TMPDIR:-/tmp}
+        case $tmp in /*) ;; *) tmp=/tmp ;; esac
+        scratch=$(mktemp -d "$tmp/codetrial-index.XXXXXX") || exit 1
+        trap 'rm -f "$scratch"/*; rmdir "$scratch"' EXIT
+        trap 'exit 1' HUP INT TERM
+        GIT_INDEX_FILE=$scratch/index
+        export GIT_INDEX_FILE
+        git -c core.fsmonitor=false read-tree HEAD > /dev/null 2>&1 \
+            && git -c core.fsmonitor=false add -A > /dev/null 2>&1 \
+            && git write-tree 2> /dev/null
+    )
+}
+
+# What a receipt records about the run, taken once here and not at the end: the
+# tree id (compared with the one at the end), the toolchain and the environment
+# report. The browser lane needs no Rust, and rustup would install a pinned
+# toolchain on the first rustc it runs, so that lane asks for neither.
+worktree_start=
+env_json=
+rustc_version=
+cargo_version=
+if [ -n "$receipt_tree" ]; then
+    worktree_start=$(worktree_tree) || worktree_start=
+    env_json=$("$env_check" --profile "$env_profile" --will-provision --format json 2> /dev/null) || env_json=
+    if [ "$env_profile" != browser ]; then
+        rustc_version=$(cd "$ROOT" && RUSTUP_AUTO_INSTALL=0 rustc -V 2> /dev/null) || rustc_version=
+        cargo_version=$(cd "$ROOT" && RUSTUP_AUTO_INSTALL=0 cargo -V 2> /dev/null) || cargo_version=
+    fi
+fi
 
 # The gate needs Python 3.11 for the Rust checker's standard-library TOML
 # parser. A distribution's python3 can be older than that while a newer one sits
@@ -101,6 +170,21 @@ skip()
     echo "skipping $1" >&2
     skipped="$skipped
   $1"
+}
+
+# env_absent TOOL: whether scripts/env-check.sh found TOOL missing.
+env_absent()
+{
+    printf '%s\n' "$env_report" | grep -q "^skipped: $1: "
+}
+
+# env_skip TOOL: record the skip with the reason scripts/env-check.sh gave, and
+# succeed only when TOOL was missing.
+env_skip()
+{
+    reason=$(printf '%s\n' "$env_report" | sed -n "s/^skipped: $1: //p")
+    [ -n "$reason" ] || return 1
+    skip "$1: $reason"
 }
 
 # Run a command that reports its own skips on stderr, and add each one the sed
@@ -305,6 +389,10 @@ eslint_gate()
 # Both absent is still a skip, on the same contract as eslint above.
 actionlint_gate()
 {
+    if env_skip actionlint; then
+        return 0
+    fi
+
     if command -v actionlint > /dev/null 2>&1; then
         (cd "$ROOT" && actionlint)
         return "$?"
@@ -340,8 +428,7 @@ release_msrv_matches()
 
 cargo_audit_gate()
 {
-    if ! command -v cargo-audit > /dev/null 2>&1; then
-        skip "cargo-audit: \`cargo install cargo-audit\` audits the dependency tree"
+    if env_skip cargo-audit; then
         return 0
     fi
 
@@ -352,8 +439,7 @@ cargo_audit_gate()
 
 cargo_deny_gate()
 {
-    if ! command -v cargo-deny > /dev/null 2>&1; then
-        skip "cargo-deny: \`cargo install cargo-deny\` checks dependency licenses and sources"
+    if env_skip cargo-deny; then
         return 0
     fi
 
@@ -409,8 +495,7 @@ vendor_patches_gate()
 # until the script runs. Optional the way shellcheck is, for the same reason.
 ruff_gate()
 {
-    if ! command -v ruff > /dev/null 2>&1; then
-        skip "ruff: installing it lints the Python under scripts/, tests/ and the skills"
+    if env_skip ruff; then
         return 0
     fi
 
@@ -435,20 +520,16 @@ ruff_gate()
 shell_syntax()
 {
     status=0
-    scripts=0
     posix_sh="sh"
-    if command -v dash > /dev/null 2>&1; then
+    if ! env_absent dash; then
         posix_sh=dash
     fi
     for script in "$ROOT"/scripts/*.sh "$ROOT"/.claude/skills/*/*.sh "$ROOT"/tests/stubs/*/*.sh; do
-        scripts=$((scripts + 1))
         "$posix_sh" -n "$script" || status=1
     done
 
-    if command -v shellcheck > /dev/null 2>&1; then
+    if ! env_skip shellcheck; then
         (cd "$ROOT" && shellcheck scripts/*.sh .claude/skills/*/*.sh tests/stubs/*/*.sh) || status=1
-    else
-        skip "shellcheck: installing it checks what $scripts shell scripts mean, not just that they parse"
     fi
 
     return "$status"
@@ -623,9 +704,16 @@ gate calibration-fixtures "$PYTHON" "$ROOT/scripts/gen-calibration-fixtures.py" 
 gate calibration-tests unittest_gate "$ROOT/tests/test_calibrate_framework.py"
 gate gemini-usage-tests unittest_gate "$ROOT/tests/test_analyze_gemini_usage.py"
 gate audit-tests unittest_gate "$ROOT/tests/test_audit.py"
+gate gate-evidence-tests unittest_gate "$ROOT/tests/test_check_gate_evidence.py"
+gate fetch-gate-note-tests unittest_gate "$ROOT/tests/test_fetch_gate_note.py"
+gate gate-approve-tests unittest_gate "$ROOT/tests/test_gate_approve.py"
 gate rust-style-tests unittest_gate "$ROOT/tests/test_check_rust_style.py"
 gate ceiling-hotspots-tests unittest_gate "$ROOT/tests/test_ceiling_hotspots.py"
 gate test-gate-tests unittest_gate "$ROOT/tests/test_test_gate.py"
+gate env-check-tests unittest_gate "$ROOT/tests/test_env_check.py"
+gate gate-receipt-tests unittest_gate "$ROOT/tests/test_gate_receipt.py"
+gate gate-note-tests unittest_gate "$ROOT/tests/test_gate_note.py"
+gate gate-roundtrip-tests unittest_gate "$ROOT/tests/test_gate_roundtrip.py"
 gate mutants-plan-tests unittest_gate "$ROOT/tests/test_mutants_plan.py"
 gate mutants-install-tests unittest_gate "$ROOT/tests/test_mutants_install.py"
 gate latency-tests unittest_gate "$ROOT/tests/test_analyze_latency.py"
@@ -752,6 +840,7 @@ gate git-hooks "$ROOT/scripts/test-git-hooks.sh"
 gate commit-reflow-tests unittest_gate "$ROOT/tests/test_commit_reflow.py"
 gate commit-draft-tests unittest_gate "$ROOT/tests/test_commit_draft.py"
 gate pr-text-tests unittest_gate "$ROOT/tests/test_check_pr_text.py"
+gate check-workflow-tests unittest_gate "$ROOT/tests/test_check_workflow.py"
 gate shell-syntax shell_syntax
 gate browser-check-env env BROWSER_CHECK_VALIDATE_ENV_ONLY=1 sh "$ROOT/scripts/browser-check.sh"
 
@@ -771,6 +860,42 @@ gate report-parity-fixtures env REPORT_PARITY_CHECK_VALIDATE_FIXTURES_ONLY=1 sh 
     fi
 }
 
+# json_escape TEXT: TEXT as the inside of a JSON string. Control characters go
+# and the quote and the backslash are escaped; a version string comes from a
+# tool the receipt does not control.
+json_escape()
+{
+    printf '%s' "$1" | tr -d '[:cntrl:]' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
+}
+
+# prune_by_tree DIR CURRENT: keeps the 20 newest tree folders of DIR. CURRENT is
+# never removed, whatever the clock says, and neither is a folder written within
+# the last hour: another run in this clone may have just written it, and there
+# is no lock to tell. Fresh folders still count toward the 20. Only a name that
+# is a hex object id is counted or removed, so nothing else that sits there is
+# touched, and only the receipt files inside are deleted.
+prune_by_tree()
+{
+    kept=1
+
+    # Newest first needs the modification time, which a glob cannot order by;
+    # each name is checked below before it is used.
+    # shellcheck disable=SC2045
+    for name in $(ls -t "$1" 2> /dev/null); do
+        case $name in *[!0-9a-f]*) continue ;; esac
+        [ "$name" != "$2" ] || continue
+        [ "${#name}" -eq 40 ] || [ "${#name}" -eq 64 ] || continue
+        # A link is never followed: its target is not ours to empty.
+        [ -d "$1/$name" ] || continue
+        [ ! -L "$1/$name" ] || continue
+        kept=$((kept + 1))
+        [ "$kept" -gt 20 ] || continue
+        [ -z "$(find "$1/$name" -prune -mmin -60 2> /dev/null)" ] || continue
+        rm -f "$1/$name"/*.json 2> /dev/null
+        rmdir "$1/$name" 2> /dev/null || true
+    done
+}
+
 # A receipt names the lane, the verdict and the tree it was run on, so a claim
 # that "the gate passed" can be matched to the tree it is about instead of being
 # taken on trust: a closeout (experience-close.sh) and the Stop hook
@@ -778,6 +903,12 @@ gate report-parity-fixtures env REPORT_PARITY_CHECK_VALIDATE_FIXTURES_ONLY=1 sh 
 # the next run, kept in the clone's git directory where it is never committed. A
 # tree that cannot be fingerprinted writes none. Skipped checks are counted, not
 # hidden: a run that skipped something is a weaker receipt.
+#
+# `worktree_tree` is the id a commit of the same content gets. It is taken at
+# the start and again here and kept only when the two agree, so a tree edited
+# during the run claims nothing; an edit made and reverted in between is not
+# seen. A copy is kept per tree, because the lane file is overwritten by the
+# next run, possibly on another branch.
 write_receipt()
 {
     [ -n "$receipt_tree" ] || return 0
@@ -786,9 +917,30 @@ write_receipt()
     dir=$dir/codetrial-review/gate-receipts
     mkdir -p "$dir" 2> /dev/null || return 0
     skips=$(printf '%s\n' "$skipped" | grep -c '[^[:space:]]')
-    printf '{"lane":"%s","passed":%s,"failed":"%s","skipped":%s,"tree":"%s","time":"%s"}\n' \
-        "$lane" "$1" "${failed# }" "$skips" "$receipt_tree" \
-        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$dir/$lane.json" 2> /dev/null || true
+    tree_now=$(worktree_tree) || tree_now=
+    case $tree_now in *[!0-9a-f]*) tree_now= ;; esac
+    [ "$tree_now" = "$worktree_start" ] || tree_now=
+    case $env_json in
+        *[[:cntrl:]]*) env_json=null ;;
+        '{'*'}') ;;
+        *) env_json=null ;;
+    esac
+    # A byte that is not UTF-8 would make the whole line unreadable as JSON.
+    printf '%s' "$env_json" | iconv -f UTF-8 -t UTF-8 > /dev/null 2>&1 || env_json=null
+    line=$(printf '{"lane":"%s","passed":%s,"failed":"%s","skipped":%s,"tree":"%s","worktree_tree":"%s","rustc":"%s","cargo":"%s","env":%s,"time":"%s"}' \
+        "$lane" "$1" "$(json_escape "${failed# }")" "$skips" "$receipt_tree" \
+        "$tree_now" "$(json_escape "$rustc_version")" "$(json_escape "$cargo_version")" \
+        "$env_json" "$(date -u +%Y-%m-%dT%H:%M:%SZ)")
+    printf '%s\n' "$line" > "$dir/$lane.json" 2> /dev/null || true
+    [ -n "$tree_now" ] || return 0
+    by_tree=$dir/by-tree
+    mkdir -p "$by_tree/$tree_now" 2> /dev/null || return 0
+    printf '%s\n' "$line" > "$by_tree/$tree_now/$lane.json" 2> /dev/null || true
+
+    # Rewriting a file in place leaves the folder's age alone, and the age is
+    # what decides which trees are the newest.
+    touch "$by_tree/$tree_now" 2> /dev/null || true
+    prune_by_tree "$by_tree" "$tree_now"
 }
 
 [ -z "$failed" ] || {

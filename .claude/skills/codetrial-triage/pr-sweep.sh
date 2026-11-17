@@ -10,7 +10,10 @@
 #   maintainers_known  false when the push listing failed and the COLLABORATOR
 #             badge, which read-only collaborators also carry, stood in for it
 #   approve   runs waiting for approval on the current head of an open PR, and
-#             whether its author is a first-time contributor
+#             whether its author is a first-time contributor; head is the sha
+#             the sweep read, and evidence is gate-evidence.sh's verdict for it
+#             (pass, ask or indeterminate, with its reason). PR_SWEEP_EVIDENCE
+#             names another gate-evidence.sh, for tests
 #   outdated  unresolved review threads whose lines the PR no longer touches,
 #             to recheck at the head before resolving
 #   overlap   PR pairs that close the same issue
@@ -494,7 +497,7 @@ def refs: (ref_prefix + "[0-9]+\\b") as $one
 ([$prs[] | status] | sort_by(.size.total)) as $status |
 {
   approve: [$prs[] as $p | runs_of($p)
-    | {pr: $p.number, run: .id, workflow: .name, actor,
+    | {pr: $p.number, run: .id, workflow: .name, actor, head: $p.headRefOid,
        touches_workflows: any($p.files.nodes[].path; startswith(".github/")),
        files_truncated: ($p.files.totalCount > 100),
        first_time: ($p.authorAssociation
@@ -742,9 +745,24 @@ collide=$(find "$work" -name '*.diff' -exec awk \
          context: (map(.context | select(length > 0)) | unique)}]
     | unique_by([.a, .b, .path])')
 
+# The evidence verdict of each PR with a held run, read at the head the sweep
+# saw. A PR whose check printed nothing is indeterminate, never a pass.
+evidence_check=${PR_SWEEP_EVIDENCE:-$(dirname "$0")/gate-evidence.sh}
+evidence=$(printf '%s\n' "$out" | jq -r '[.approve[] | [.pr, .head]] | unique[] | @tsv' \
+    | while read -r n head; do
+        found=$(sh "$evidence_check" "$repo" "$n" "$head" < /dev/null 2> /dev/null) || true
+        printf '%s\n' "$found" | jq -c --argjson n "$n" \
+            'select(type == "object" and (.verdict | IN("pass", "ask", "indeterminate")))
+              | {pr: $n, evidence: {verdict, reason, head}}' 2> /dev/null || true
+    done | jq -s .)
+
 printf '%s\n' "$out" | jq --argjson states "$states" --argjson stale "$stale" \
     --argjson collide "$collide" --argjson unread "$unread" \
+    --argjson evidence "$evidence" \
     '.collide = $collide | .collide_unread = $unread
+     | .approve |= map(. as $a | . + {evidence: (first($evidence[]
+         | select(.pr == $a.pr) | .evidence) // {verdict: "indeterminate",
+           head: $a.head, reason: "the evidence check printed nothing"})})
      | if .gone == null then . else .gone = $states end
      | .rebase += [.stale_candidates[] | select(.pr | IN($stale[]))
          | del(.head)]

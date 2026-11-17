@@ -109,10 +109,63 @@ rewriting it. The pre-push hook runs the same check over the files a topic
 branch changes, since a rebase, `hashchain.py rechain` or `--no-verify`
 publishes commits the pre-commit hook never saw.
 
+A change that touches Rust sources, tests, build files or the directories they
+read (`src/`, `desktop/`, `vendor/`, `problem-bank/`, `scripts/hook-check/`,
+`.cargo/`, `tests/` apart from `tests/browser/`, `tests/stubs/` and the
+top-level Python files, `Cargo.toml`, `Cargo.lock`, `build.rs`,
+`rust-toolchain.toml`, `clippy.toml`, `rustfmt.toml` or `deny.toml`, and the few
+docs, scripts and web/ files a Rust test names; most of web/ is not in this
+list) needs a local `./scripts/test.sh` pass before it is pushed, because CI is
+not the place to find out that the build fails. `./scripts/test.sh rust` is the
+least that covers the Rust code; the Python and browser suites need their own
+lanes. `rust-toolchain.toml` is the pin, and `./scripts/env-check.sh` says
+whether this machine has that toolchain and names what is missing, with the
+install command where one exists. A change that touches none of those is
+exempt.
+
+The pre-push hook enforces this for the push of a topic branch (not `main`). It
+measures the branch from where it left the first of these that exists: the
+upstream's `main` (the push remote's own when there is no `upstream` remote),
+`origin/main`, `upstream/main` and the push remote's default branch. A branch
+with no path in the scope above is not judged, and neither is a deleted ref, a
+tag or a record sent by hand. Any other branch needs the receipt
+`./scripts/test.sh` writes when the `rust` or `all` lane passes. The receipt
+names a tree, so it matches a commit of the same content however the commit was
+made: a reworded amend still matches, and a rebase, an edit after the run, a
+partial commit (`git add -p`) or a run that changed a file while it ran needs
+the gate again unless the commit ends up holding what the run saw. With a
+receipt the hook records a note on the pushed head and sends it to the remote
+the branch goes to before the branch, so evidence can be checked without running
+anything; a note that cannot be sent stops the push. Without one it refuses and
+prints the commands to run. When there is no base to measure from, the push goes
+ahead with the note if a receipt exists, and the hook says so; fetch the base so
+it can judge. The receipt is a file on the contributor's machine, so it is a
+hint and not proof: the maintainer's approval of a held run and CI's first job,
+which fails a pull request in this scope that carries no note before the Rust
+lane starts, are what bind.
+
 The gate ends by naming any lane it skipped; read that rather than assuming
 green means covered. [docs/development.md](docs/development.md) has
 what each hook and lane does, which generated files have to be regenerated
 first, and the checks that need credentials or a browser.
+
+## Before you push
+
+This is the order for anyone sending a change, a person or an automated agent;
+an agent reports each step to the person it works for.
+
+1. Run `./scripts/env-check.sh` first (`--profile portable` or `browser` for a
+   change in that lane only). When it exits non-zero, stop, show what it
+   printed, ask for what it names to be fixed, and do not push.
+2. Pass the gate here before CI sees the change: CI is not a verifier.
+3. Run `./scripts/test.sh` and push once it passes. When not every lane can run,
+   run at least `./scripts/test.sh rust` for a change in the Rust scope above,
+   and say which lanes were not run. A failing check is fixed, not skipped or
+   loosened.
+4. Never use `--no-verify` or `git commit -n`, set `core.hooksPath` or edit a
+   hook to get past one; when a hook refuses, fix what it names.
+5. Report the command run, the last lines of its output and what was not run.
+   Do not say the gate passed when it did not run to the end.
 
 ## Commit messages
 Clear and descriptive commit messages are crucial for maintaining a transparent

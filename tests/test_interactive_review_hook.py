@@ -77,6 +77,8 @@ class InteractiveHookTests(unittest.TestCase):
             "check-secrets.py",
             "check-cjk.py",
             "check-interactive-review.py",
+            "check-gate-evidence.py",
+            "gate-note.py",
             "hashchain.py",
             "indent.sh",
         ]:
@@ -507,6 +509,23 @@ print(json.dumps(seen))
         self.git("push", "-q", "fork", "HEAD:refs/heads/topic")
         self.assertIsNone(self.fork_note(head))
         return head
+
+    def test_publish_review_does_not_judge_gate_evidence(self):
+        # Only a record is sent by hand and no branch goes with it, so a branch
+        # that changes what the Rust gate covers is not refused for lacking a
+        # receipt here.
+        self.large()
+        (self.repo / "problem-bank").mkdir()
+        (self.repo / "problem-bank/fixture.txt").write_text("fixture\n")
+        self.git("add", "problem-bank/fixture.txt")
+        self.git("commit", "-qm", "Add a problem fixture", "-m", "Exercise the scope.")
+        self.prepare()
+        head = self.git("rev-parse", "HEAD").stdout.strip()
+        self.git("push", "-q", "fork", "HEAD:refs/heads/topic")
+        result = self.publish("topic")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("no passing gate run", result.stderr)
+        self.assertEqual(self.fork_note(head)["status"], "complete")
 
     def test_publish_review_sends_the_record_a_pushed_branch_lacks(self):
         head = self.pushed_without_record()

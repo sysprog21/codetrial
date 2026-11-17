@@ -83,6 +83,100 @@ env:
   CARGO_DENY_VERSION: 0.20.2
 
 jobs:
+  # Gate evidence, judged before the expensive lanes start: a pull request that
+  # changes Rust and carries no gate receipt would otherwise spend a full Rust
+  # build to learn what a quick read of the receipt says. See
+  # docs/development.md for what is checked.
+  #
+  # Cost control, not a security boundary. A pull request runs the merge of its
+  # own tree, workflow included, so it can delete or edit this job. What binds is
+  # that a maintainer approves a held run only on this same evidence
+  # (.claude/skills/codetrial-triage/gate-evidence.sh, the script run here).
+  #
+  # Nothing from the head runs. The checker, the note fetcher and the gatherer
+  # are the base branch's, so a pull request cannot pass itself by editing them;
+  # while the base has none (the pull request that adds them) there is nothing to
+  # judge with. The head's tree, its changed paths, the author type and the gate
+  # note arrive as data from the API and the head repository's notes ref, found
+  # by the owner, name and sha the API reports for the head, never by PR text.
+  # The token is read-only: `pull-requests` because the pulls API serves the
+  # pull request and its file list to that scope in a private repository.
+  preflight:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          path: base
+      - name: Check the gate evidence
+        env:
+          REPOSITORY: ${{ github.repository }}
+          PULL_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GH_TOKEN: ${{ github.token }}
+          # The checker needs tomllib, which the runner's python3.12 has.
+          GATE_EVIDENCE_PYTHON: python3.12
+        run: |
+          set -eu
+          gatherer=base/.claude/skills/codetrial-triage/gate-evidence.sh
+          present=0
+          for file in "$gatherer" base/scripts/check-gate-evidence.py base/scripts/fetch-gate-note.sh; do
+              if [ -f "$file" ]; then
+                  present=$((present + 1))
+              fi
+          done
+          # Only the base that has none of them is the pull request that adds
+          # them. A base with some is a broken installation, which must not
+          # pass every pull request unjudged.
+          if [ "$present" -eq 0 ]; then
+              echo "The base branch has no gate evidence check yet; nothing to judge with."
+              exit 0
+          fi
+          if [ "$present" -ne 3 ]; then
+              echo "::error::the base branch has only part of the gate evidence check, so it fails closed"
+              exit 1
+          fi
+          # What the gatherer says is built from data a pull request writes, so
+          # it is never printed as it came: a line that starts with `::` is a
+          # workflow command. A message is one line of printable ASCII, cut to
+          # 300 characters, behind a prefix of this step's own, and written with
+          # printf because some shells' echo expands a backslash in it.
+          plain()
+          {
+              LC_ALL=C tr -cd ' -~' | cut -c1-300
+          }
+          errors=$(mktemp)
+          trap 'rm -f "$errors"' EXIT
+          # Exit 0 passes, 1 asks for a receipt, 2 could not judge.
+          status=0
+          verdict=$(sh "$gatherer" "$REPOSITORY" "$PULL_NUMBER" "$HEAD_SHA" 2> "$errors") || status=$?
+          reason=
+          if [ "$status" -ne 0 ]; then
+              reason=$(printf '%s\n' "$verdict" | jq -r '.reason // empty' 2> /dev/null | plain || true)
+              if [ -z "$reason" ]; then
+                  reason=$(head -n 1 "$errors" | plain || true)
+              fi
+          fi
+          case $status in
+              0) echo "The gate evidence holds." ;;
+              1)
+                  printf '%s\n' "::error::gate evidence: ${reason:-no reason was given}"
+                  echo "Run ./scripts/env-check.sh, then ./scripts/test.sh, then push again."
+                  exit 1
+                  ;;
+              *)
+                  printf '%s\n' "::error::gate evidence could not be judged, so it fails closed: ${reason:-no reason was given}"
+                  exit 1
+                  ;;
+          esac
+
   audit:
     if: github.event_name != 'schedule' && github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-24.04
@@ -114,7 +208,14 @@ jobs:
 
   gates:
     name: gates (${{ matrix.lane }}${{ matrix.shard && format(' {0}', matrix.shard) || '' }})
-    if: github.event_name != 'schedule' && github.event_name != 'workflow_dispatch'
+    needs: [preflight]
+    # Preflight is skipped on a push, a merge group and a schedule, so a skipped
+    # result passes here; a failed one stops the lanes. `!cancelled()` replaces
+    # the implicit success(), which a skipped dependency would fail.
+    if: >-
+      ${{ !cancelled()
+      && (needs.preflight.result == 'success' || needs.preflight.result == 'skipped')
+      && github.event_name != 'schedule' && github.event_name != 'workflow_dispatch' }}
     strategy:
       fail-fast: false
       matrix:
@@ -525,13 +626,14 @@ jobs:
   # reaches this job and fails it. Not on a schedule or a dispatch, which run
   # no gates.
   check:
-    needs: [gates, audit, plan-mutants, mutants]
+    needs: [preflight, gates, audit, plan-mutants, mutants]
     if: ${{ !cancelled() && github.event_name != 'schedule' && github.event_name != 'workflow_dispatch' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: Require every gate lane and mutation shard
         env:
+          PREFLIGHT: ${{ needs.preflight.result }}
           GATES: ${{ needs.gates.result }}
           AUDIT: ${{ needs.audit.result }}
           PLAN: ${{ needs.plan-mutants.result }}
@@ -540,11 +642,19 @@ jobs:
           {
             echo "| job | result |"
             echo "| --- | --- |"
+            echo "| preflight | $PREFLIGHT |"
             echo "| gates | $GATES |"
             echo "| audit | $AUDIT |"
             echo "| plan-mutants | $PLAN |"
             echo "| mutants | $MUTANTS |"
           } >> "$GITHUB_STEP_SUMMARY"
+          # First: a failed preflight skips the gates, which would otherwise be
+          # reported as the cause. It is skipped, and passes, outside a pull
+          # request.
+          if [ "$PREFLIGHT" != success ] && [ "$PREFLIGHT" != skipped ]; then
+            echo "::error::gate evidence check: $PREFLIGHT. The pull request needs a gate receipt for its head; the preflight job says what is missing."
+            exit 1
+          fi
           if [ "$GATES" != success ]; then
             echo "::error::gate lanes: $GATES. This job only collects them; the failed gates lane has the cause."
             exit 1
@@ -573,6 +683,9 @@ jobs:
   # not wait on that one, so it repeats the condition rather than plan and fan
   # out shards for a pull request that has already failed.
   plan-mutants:
+    # The implicit success() is wanted: this job only runs on a pull request,
+    # where a preflight that failed should plan nothing.
+    needs: [preflight]
     if: >-
       github.event_name == 'pull_request'
       && (github.event.pull_request.head.repo.full_name == github.repository
@@ -629,7 +742,8 @@ jobs:
           set -o pipefail
           count=0
           if [ -s "$RUNNER_TEMP/pr.diff" ]; then
-            cargo mutants --list --in-diff "$RUNNER_TEMP/pr.diff" >"$RUNNER_TEMP/list.txt"
+            cargo mutants --list --cargo-arg=--locked \
+              --in-diff "$RUNNER_TEMP/pr.diff" >"$RUNNER_TEMP/list.txt"
             count=$(wc -l <"$RUNNER_TEMP/list.txt" | tr -d ' ')
           fi
           width=$(( (count + 14) / 15 ))
@@ -673,10 +787,21 @@ jobs:
   # asks is what a change failed to test, and that is worth answering while the
   # change can still be edited.
   mutants:
-    needs: plan-mutants
-    # No mutants means no runners. A docs-only or JS-only pull request should
+    needs: [plan-mutants, gates]
+    # A shard rebuilds and runs the whole suite in an unmutated tree, so it
+    # fails the same way the Rust lane does, and pays the whole setup per shard
+    # to learn it. Waiting for the gates avoids that; the trade-off
+    # is that shards start after the slowest gates lane rather than beside it.
+    #
+    # `plan-mutants.result` is explicit because the plan is skipped on a push
+    # or a merge group, where its count is empty and `'' != '0'` would pass.
+    # No mutants means no runners: a docs-only or JS-only pull request should
     # not start a job to discover it has nothing to do.
-    if: needs.plan-mutants.outputs.count != '0'
+    if: >-
+      ${{ !cancelled()
+      && needs.plan-mutants.result == 'success'
+      && needs.gates.result == 'success'
+      && needs.plan-mutants.outputs.count != '0' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     strategy:
@@ -739,7 +864,7 @@ jobs:
         run: |
           git diff "origin/$BASE_REF...HEAD" -- '*.rs' >"$RUNNER_TEMP/pr.diff"
           echo "::group::Mutants in shard $SHARD"
-          cargo mutants --list --in-diff "$RUNNER_TEMP/pr.diff" \
+          cargo mutants --list --cargo-arg=--locked --in-diff "$RUNNER_TEMP/pr.diff" \
             --shard "$SHARD" \
             | tee "$RUNNER_TEMP/shard.txt"
           echo "::endgroup::"
@@ -758,7 +883,7 @@ jobs:
           # overrun would be swallowed by the construct meant to report it.
           status=0
           timeout --signal=INT --kill-after=60s 35m \
-            cargo mutants --in-place --in-diff "$RUNNER_TEMP/pr.diff" \
+            cargo mutants --in-place --cargo-arg=--locked --in-diff "$RUNNER_TEMP/pr.diff" \
             --shard "$SHARD" \
             || status=$?
           if [ "$status" -eq 124 ]; then
