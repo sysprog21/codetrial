@@ -27,11 +27,10 @@ for what it covers. A node test covers a module it imports; a file the real-page
 tests drive is covered only where Chromium runs them.
 
 Read the lane's "not checked by this run" lines. Without a usable Chromium the
-browser lane still exits 0 and skips the real-page tests (973 of them on a
-machine whose Playwright build is not installed), including the ones for
+browser lane still exits 0 and skips the real-page tests, including the ones for
 `task.js`. Even when they run they are blind to some of it: changing the
-calibration line or the face-files message in `web/task-calibration.js` left all
-120 tests in `tests/browser/task-workspace.test.js` green, so a change to code
+calibration line or the face-files message in `web/task-calibration.js` left
+the tests in `tests/browser/task-workspace.test.js` green, so a change to code
 the page tests do not pin needs its own node test, as that file has.
 
 ## Splitting a file
@@ -56,28 +55,22 @@ The wire topics are a contract implemented twice, in `web/lib.js` and in the
 neither name nor payload; see
 [the data channel](../codetrial-web/SKILL.md#the-data-channel-is-two-implementations).
 
-## What the tree looks like (2026-11-06)
+## Where the weight is
 
-| File | Lines | Commits in 90 days | Note |
-|---|---|---|---|
-| `web/interview.js` | 5903 | 163 | the most edited file in the browser half |
-| `web/app.js` | 2692 | 81 | |
-| `web/lib.js` | 2287 | 87 | carries the wire topics, 12 importers |
-| `web/task.js` | 1550 | 9 | an entry module, nothing imports it; the calibration checks, the case text and the result wording moved to `web/task-calibration.js`, `web/task-cases.js` and `web/task-review.js` |
-
-`eslint .` passes. With `complexity` over 20, `max-lines-per-function` over 100,
-`max-depth` over 4 and `max-params` over 7 switched on for a probe, there are 34,
-40, 5 and 1 hits, so the cost here is function size more than file size: the
-worst are `bindEvents` (496 lines), `mountBoardText` (444), `sanitizeReport` in
-`lib.js` (complexity 65) and `connect` in `interview.js` (63).
+`web/interview.js`, `web/app.js` and `web/lib.js` are the largest and
+most-edited files, and the cost is function size more than file size;
+`bindEvents`, `mountBoardText`, `sanitizeReport` in `lib.js` and `connect` in
+`interview.js` are the worst offenders. `web/task.js` is an entry module nothing
+imports; its calibration checks, case text and result wording live in
+`web/task-calibration.js`, `web/task-cases.js` and `web/task-review.js`.
 
 ## Where to start
 
 `web/task.js` was the safest first split: few commits, no importers, two
 functions over 100 lines. It was also the least covered, so each cut pins its
 behavior with a node test first and moves one cohesive block of pure code:
-`web/task-calibration.js`, `web/task-cases.js` and `web/task-review.js` are done.
-The page's 45 mutable variables live in one sealed object in `web/task-state.js`,
+the three modules named above are done.
+The page's mutable variables live in one sealed object in `web/task-state.js`,
 and `web/task-room.js` (the room connection) and `web/task-start.js` (what
 pressing Start does) reach what `task.js` still owns through `host`, lent by
 name, so they are imported without the page and tested in node with fakes. Each

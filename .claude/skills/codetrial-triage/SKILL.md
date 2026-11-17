@@ -209,15 +209,15 @@ An issue may be incomplete and still overlap another. Compare the trigger,
 observed behavior, affected version/component and requested outcome. Similar
 titles or the same broad symptom are insufficient to establish duplication.
 
-- **Duplicate**: evidence supports the same actionable problem and resolution.
+- Duplicate: evidence supports the same actionable problem and resolution.
   Link the canonical issue and explain the match. Prefer the maintained thread
   with the best context, not automatically the oldest. Preserve any unique
   reproduction evidence before recommending closure.
-- **Possibly duplicate**: name the candidate and the missing fact that would
+- Possibly duplicate: name the candidate and the missing fact that would
   distinguish the reports. Request that fact; leave closure undecided.
-- **Related**: shared area but different trigger, cause or acceptance criteria.
+- Related: shared area but different trigger, cause or acceptance criteria.
   Link the relationship and keep independently actionable work separate.
-- **Superseded by an open pull request**: not a duplicate, and not closed here.
+- Superseded by an open pull request: not a duplicate, and not closed here.
   Whether the merge closes it is a fact to check: read the PR's
   `closingIssuesReferences` and its commit messages as well as its body, since a
   Development-sidebar link or a closing keyword in a commit closes an issue even
@@ -228,7 +228,7 @@ titles or the same broad symptom are insufficient to establish duplication.
   asking its author to make the last line `Close #N`, so the merge records it
   (#143 for #141). The PR sweep's `refs_only` lists these pairs and whether a
   maintainer already asked ([pulls.md](pulls.md#closing-references)).
-- **Already shipped**: the tree already does what the request asks. `git grep -n`
+- Already shipped: the tree already does what the request asks. `git grep -n`
   over `src` and `web` finds a candidate and settles nothing, since a string also
   lives in a fixture, a disabled branch, a generated file or code behind a flag
   that is off; text carried from `problem-bank/` lands in several generated files
@@ -241,10 +241,10 @@ titles or the same broad symptom are insufficient to establish duplication.
   name; the ancestry check above decides whether the shipping commit is in the
   revision they give. A conditional path, or an acceptance criterion only partly
   met, is still open work.
-- **No duplicate found in the reviewed scope**: name the search scope. A closed
+- No duplicate found in the reviewed scope: name the search scope. A closed
   fix followed by a failure on a newer version may be a regression; verify the
   version and fix before recommending closure as a duplicate.
-- **Not actionable yet**: nobody could act on the report as written. That means
+- Not actionable yet: nobody could act on the report as written. That means
   an empty body or one too short to carry the facts the next decision needs
   (a precise one-line typo report is fine), the bug form's template text left in, prose in a
   language other than English, a feature that names no affected user and no

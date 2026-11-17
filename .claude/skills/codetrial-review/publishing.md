@@ -46,8 +46,8 @@ upstream workflow and releases. A selected-repository fine-grained token needs
 Actions write (enable/disable, dispatch, cancellation and artifact deletion),
 Contents write (release/tag changes), and Attestations read for verification.
 Workflow jobs use their own narrower permissions, not this recovery token.
-The local CLI checked during implementation was gh 2.101.0; use a version with
-all listed commands and verification flags. Confirm capabilities without writes:
+Use a `gh` version that supports every command below and the `gh attestation
+verify` flags. Confirm capabilities without writes:
 
 ```sh
 gh --version

@@ -78,8 +78,8 @@ live under `tests/unit/` and answer to the same ceiling.
 
 ### Splitting a file
 
-What splitting `src/agent/prompts.rs` (3944 lines, six modules under
-`src/agent/prompts/`, commit f122e38) needed, in order:
+What splitting `src/agent/prompts.rs` into the facade-plus-modules layout under
+`src/agent/prompts/` needed, in order:
 
 1. **Plan before moving.** Choose the file with `scripts/ceiling-hotspots.py` and
    a look at the open pull requests (`gh pr list --state open --json
@@ -171,15 +171,14 @@ in [recipes/rust.md](recipes/rust.md).
   the call: `Arc::<FakeProvider>::clone(&provider)`. An `as Arc<dyn T>` cast is
   not an option; it is a trivial cast.
 - A `std::sync::Mutex` is locked with `.lock().unwrap_or_else(|error|
-  error.into_inner())`, not `.unwrap()`: a poisoned lock is recovered. All 14
-  such locks were checked (2026-11-06) and each guards state that is written
-  whole, so the next taker sees a valid value, and a `Drop` that takes a lock
-  must not panic while a task unwinds. Where the reason is not obvious (the
-  accounts connection, the dispatch maps, the cooldown map, the pressure
-  counters, the task admission state) a comment at the declaration gives it. A
-  new lock gets the same question: if a panic halfway through an update would
-  leave its state inconsistent, recovering is wrong, and the update should be
-  one step or the lock should not be recovered.
+  error.into_inner())`, not `.unwrap()`: a poisoned lock is recovered. Each such
+  lock guards state that is written whole, so the next taker sees a valid value,
+  and a `Drop` that takes a lock must not panic while a task unwinds. Where the
+  reason is not obvious (the accounts connection, the dispatch maps, the
+  cooldown map, the pressure counters, the task admission state) a comment at
+  the declaration gives it. A new lock gets the same question: if a panic
+  halfway through an update would leave its state inconsistent, recovering is
+  wrong, and the update should be one step or the lock should not be recovered.
 - Casts that can lose information use `try_from`, `cast_unsigned` or a clamp
   first. A cast that is correct by construction carries an `expect` saying why.
 - A glob import is a re-export hub that its test module reads through
@@ -206,22 +205,7 @@ cargo test --locked <one filter>
 Then `./scripts/test.sh` per codetrial-verify. Say which of these ran; "clippy is
 clean" without the checker is half a report.
 
-## Reference synthesis and audit limits
-
-The reference projects under externals inform this policy; they are reference
-material, not additional installed skills or required CI tools. The tools that
-are not specific to Rust are in the table in [SKILL.md](SKILL.md).
-
-| Reference | Adopted here | Deliberately not adopted |
-|---|---|---|
-| rustgrade | Verify scanner hits against callers; inspect queue growth and lock lifetimes | A numeric grade as proof of safety; blanket bans on loop allocations |
-| BeautifulRust | Manifest-owned lints; narrow, reasoned expectations that expire | Blanket pedantic, Debug or documentation derives for application internals |
-| rust-style-guide-audit | Distinguish application guidance from library contracts; reproduce every finding; measure a rule's false-positive rate before adopting it (716 findings on `src`; six rules sampled and none adopted: test-only hits the audit cannot tell from production, and style with no bug class) | Chrome-specific rules; treating text matches as type-aware analysis |
-| rust-engineering | Domain boundaries, locality, cancellation and compatibility before polish | Traits, wrappers or dependencies added solely to satisfy a pattern |
-| opinionated-rust-skills | Name errors for invalid conditions; keep defaults near their fields | A new default-annotation crate or macros for a single validation |
-| rust-patterns | Validate at boundaries; explicit ownership and failure values | Type-state, static dispatch or actors without a concrete need |
-| splitrs | A facade that re-exports the same names, and modules grouped by responsibility ("Splitting a file") | Using its output: on the prompts split it proposed the same six modules and left 118 compile errors, and dropped every `pub(crate)` and `cfg(test)` re-export silently; its LSP and SMT checks |
-| refactoring-rust | Before-and-after cases whose outcome may be "leave it" ([recipes/rust.md](recipes/rust.md)) | The slides and exercise numbering |
+## Audit limits
 
 The Python style checker scans text, not expanded Rust syntax. Multiline
 spellings are checked, but strings, comments and macro expansion can defeat a

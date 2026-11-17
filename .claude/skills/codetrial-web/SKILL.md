@@ -149,9 +149,9 @@ to argue with. `no-undef` is the reason it exists, since a typo'd identifier in
 `web/interview.js` reaches a candidate's browser while the same mistake in
 `src/web/mod.rs` never leaves the terminal. Three recommended rules are excluded
 with the reasoning written above them. Adding an `eslint-disable` is a stronger
-claim than it looks: the tree carries none, and the few `#[allow]`s on the Rust
-half each have their reason on the same line. Match that bar or do not suppress
-the rule.
+claim than it looks: the tree carries none, and Rust suppressions are
+`#[expect(..., reason = ...)]` ([rust.md](../codetrial-improve/rust.md)). Match
+that bar or do not suppress the rule.
 
 Browser behavior also gets a test, in `tests/browser/*.test.js` or, where it
 needs a real browser, `scripts/browser-check.sh`; codetrial-verify has what each

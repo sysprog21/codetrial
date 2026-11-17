@@ -1,26 +1,18 @@
 # Rust recipes
 
-Each recipe is a smell, the change, the proof, and the site in this tree that
-taught it. A recipe that ends "leave it" is as much a result as one that
-rewrites. Run the gates in [rust.md](../rust.md) before handing back.
+Each recipe is a smell, the change, and the proof. A recipe that ends "leave it"
+is as much a result as one that rewrites. Run the gates in [rust.md](../rust.md)
+before handing back.
 
 ## Take `Option<&str>`, not `Option<&String>`
 
 A parameter typed `Option<&String>` names the owning type, so a caller holding a
-`&str` has to allocate before calling. `Option<&str>` accepts both.
+`&str` has to allocate before calling. Take `Option<&str>` instead and let
+callers pass `.as_deref()`; it accepts both.
 
-- **Site:** `dispatch_or_release_consent` in `src/web/token.rs`. One caller; it
-  holds an `Option<String>` and passes `interview.as_ref()`.
-- **Change:** the parameter becomes `Option<&str>`, the caller passes
-  `interview.as_deref()`, and the body builds the owned `String` that
-  `NoShowConsent::new` takes with `to_owned()` where it used `clone()`.
-- **Proof:** `rg -n 'dispatch_or_release_consent' .` lists the one caller;
-  clippy at `-D warnings` is clean; `cargo test --locked --test web token`
-  passes before and after. That filter runs the changed closure, since the tests
-  at `tests/web/token.rs:1547` and `:1909` post an `interviewId` and expect a
-  dispatch. It does not reach the release branch after a refusal: the refusal
-  tests post no interview, so a recipe that touched that branch would need a new
-  test first.
+- **Proof:** `rg -n '<function name>' .` lists every caller; clippy at
+  `-D warnings` is clean; the tests that reach the changed function pass before
+  and after. A branch no test reaches needs a new test first.
 
 ## Leave a return type that other closures share
 
