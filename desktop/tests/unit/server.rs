@@ -225,6 +225,39 @@ fn a_server_is_ready_once_bound_and_stops_when_its_stdin_closes() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A restart asked for after the server is ready, and only then: the same line
+/// before it is not one this server printed.
+#[cfg(unix)]
+#[test]
+fn a_server_asks_to_restart_once_change_keys_has_saved() {
+    let dir = temp_dir("restart");
+    let program = fake_server(
+        &dir,
+        "echo 'codetrial: keys saved and no interview running: restart now'\n\
+         echo 'codetrial: open http://127.0.0.1:9 in your browser'\n\
+         echo 'codetrial: keys saved and no interview running: restart now'\n\
+         cat >/dev/null",
+    );
+    let (sender, received) = mpsc::channel();
+    let sender = Mutex::new(sender);
+    let server = start(
+        &launch_of(&dir, program, "127.0.0.1:9".to_string()),
+        move |status| {
+            let _ = sender.lock().unwrap().send(status);
+        },
+    )
+    .unwrap();
+
+    let wait = Duration::from_secs(10);
+    assert_eq!(received.recv_timeout(wait).unwrap(), Status::Ready);
+    assert_eq!(received.recv_timeout(wait).unwrap(), Status::Restart);
+    assert!(received.recv_timeout(Duration::from_millis(300)).is_err());
+
+    server.stop(Duration::from_secs(5));
+    assert!(received.recv_timeout(Duration::from_millis(500)).is_err());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Strong enough for the server to take: it ignores a code shorter than 24
 /// letters and digits.
 #[test]

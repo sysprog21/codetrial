@@ -103,8 +103,10 @@ session signing key and a roaming profile is copied to a server:
 In it:
 
 - `codetrial.env.local`: the keys the Setup page takes, in plain text, the
-  same file the CLI writes. Change keys in the lobby rewrites its keys, which
-  take effect when the app next starts; edit it to add an option. The first
+  same file the CLI writes. Change keys in the lobby rewrites its keys, and
+  once no interview is running the app starts its server again on them and
+  returns to the lobby; edit the file to add an option, which takes effect
+  when the app next starts. The first
   launch writes it from exported LiveKit keys without asking (see `--data-dir`
   above); otherwise Setup asks, and offers to use a CLI config found in the
   folder the app was started in (see `--import-config`). An app opened from the Dock,

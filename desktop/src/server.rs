@@ -19,6 +19,11 @@ use std::time::{Duration, Instant};
 /// rather than closed. The CLI tests run the real server against this text.
 const BOUND_LINE: &str = "codetrial: open http://";
 
+/// What the server prints once Change keys has saved and nothing is running
+/// any more, for this app to start it again on the new keys. The CLI tests run
+/// the real server against this text too.
+const RESTART_LINE: &str = "codetrial: keys saved and no interview running: restart now";
+
 /// How much of the server's stderr explains an exit. The reason is its last
 /// line; the ones before it are the warnings it printed on the way.
 const REASON_LINES: usize = 12;
@@ -70,6 +75,9 @@ pub fn cli_config_in(start: &Path) -> Option<PathBuf> {
 pub enum Status {
     /// Listening on `Launch::addr`.
     Ready,
+    /// Asking to be started again: Change keys saved new ones, which only a
+    /// new launch reads, and no interview is running or will start here.
+    Restart,
     /// Gone, and why, in words for the person looking at the window.
     Exited(String),
 }
@@ -191,17 +199,21 @@ pub fn start(
         copiers.push(std::thread::spawn(move || {
             let mut bound = false;
             copy_lines(stdout, &log, |line| {
-                if bound || !line.starts_with(BOUND_LINE) {
+                let status = if !bound && line.starts_with(BOUND_LINE) {
+                    bound = true;
+                    Status::Ready
+                } else if bound && line == RESTART_LINE {
+                    Status::Restart
+                } else {
                     return;
-                }
-                bound = true;
+                };
 
                 // Held across the report: a guard taken in the `if` alone is
                 // dropped before its body runs, and `Exited` could land
                 // between.
                 let finished = finished.lock().expect("report order lock");
                 if !*finished {
-                    report(Status::Ready);
+                    report(status);
                 }
             });
         }));
