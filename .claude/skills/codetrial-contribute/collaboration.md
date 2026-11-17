@@ -99,8 +99,9 @@ partition rather than reopening it.
   instruction was to build on its branch; after it merged,
   [the instruction changed to main](https://github.com/sysprog21/codetrial/issues/94#issuecomment-6131796489).
   Recheck status before repeating checkout instructions.
-- When a prerequisite merges, rebase and remove its commits from the dependent
-  PR's diff, and if the draft's stated blocker is gone, mark it ready
+- When a prerequisite merges, offer to rebase the dependent PR so its diff
+  drops the prerequisite's commits and, if the draft's stated blocker is gone,
+  to mark it ready; run either when the user asks
   ([#280](https://github.com/sysprog21/codetrial/pull/280#issuecomment-6131927140)).
   File overlap with another open PR calls for an integration check by whichever
   lands second, not automatic duplicate closure.
@@ -190,7 +191,7 @@ so the newest visible one is current. Each maps to one action;
 | --- | --- |
 | "Rebase latest `main` branch and resolve conflicts." / "Rebase latest `main` and resolve conflicts" | A rebase onto upstream `main`, not a merge commit; contribute has the steps. |
 | "Rebase latest `main` branch." (to a question about a failing dependency check, #396) | `main` already carries the fix; rebase picks it up, and the PR carries no lockfile bump of its own. |
-| "Rebase the current branch onto the upstream default branch and rework the series into functionally minimal commits ..." | The rebase above, plus fold fixups into the commit they fix and rewrite the messages; it is the `rebase` skill's description, so run that skill when installed. |
+| "Rebase the current branch onto the upstream default branch and rework the series into functionally minimal commits ..." | The rebase above, plus fold fixups into the commit they fix and rewrite the messages; it is the `rebase` skill's description, so offer that skill when installed and run it when the user asks. |
 | "Fold similar commits" | One commit per functional change. |
 | "Check `CONTRIBUTING.md` carefully and enforce the rules." / "Check https://cbea.ms/git-commit/" | Usually the commit messages: run `./scripts/git-commit-msg.sh --rules`, then reread every commit and the PR title and body against CONTRIBUTING. |
 | "Remove AI agent markers" / "Remove unnecessary `Co-authored-by` markers" | Drop the AI-tool attribution trailers conventions names; keep a human co-author's credit. |

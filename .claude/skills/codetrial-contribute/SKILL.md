@@ -148,16 +148,17 @@ help the contributor explain what fails before and succeeds after the change.
 
 ## Prepare a pull request people can review
 
-Commit with the hooks installed: `make hooks` once per clone, read as
-[conventions](../codetrial-conventions/SKILL.md#commit-messages) says, before
-the first commit. Read the full branch diff against its intended base, relevant
-commits and linked issues. Check that the branch contains the intended work only, and use a topic
-branch as described in conventions. Scope follows
-[collaboration.md](collaboration.md#scope-one-pull-request): unrelated fixes
-and unrequested behavior go to their own PR, review follow-ups stay in this
-one, and an open PR doing the same thing is reviewed rather than competed with. Preserve unrelated working-tree edits.
-AI-generated summaries are starting points: validate every claim against the
-diff and actual test results. Do not paste a conversation transcript.
+Before the first commit, install the hooks (`make hooks` once per clone) and
+read [conventions](../codetrial-conventions/SKILL.md#commit-messages). Read the
+full branch diff against its intended base, relevant commits and linked issues.
+Check that the branch contains the intended work only, and use a topic branch as
+described in conventions. Scope follows
+[collaboration.md](collaboration.md#scope-one-pull-request): unrelated fixes and
+unrequested behavior go to their own PR, review follow-ups stay in this one, and
+an open PR doing the same thing is reviewed rather than competed with. Preserve
+unrelated working-tree edits. AI-generated summaries are starting points:
+validate every claim against the diff and actual test results. Do not paste a
+conversation transcript.
 
 Use [codetrial-verify](../codetrial-verify/SKILL.md) for the appropriate validation
 and [codetrial-web](../codetrial-web/SKILL.md) when browser or wire behavior is
@@ -208,8 +209,9 @@ The description should cover:
 For a simple PR, one or two paragraphs plus validation is enough. Rewrite the
 title and body when scope changes.
 
-Before the draft is shown, check what the branch is about to meet. Commit
-first, since only commits are read. Run on the branch, it compares against
+Before the draft is shown, check what the branch is about to meet. Only commits
+are read: once the user has asked for the commit, make it first, otherwise say
+the check covers committed work only. Run on the branch, it compares against
 upstream `main` even from a fork, and takes issue numbers when the commits name
 none:
 
@@ -332,7 +334,9 @@ Git and commit-message requests recur alongside substantive code review. Read
 the current inline threads, unanswered cubic findings and failing checks as
 well as the review summary. The one-line requests are decoded in
 [collaboration.md](collaboration.md#what-the-one-line-review-requests-mean);
-the git steps behind them:
+the git steps behind them follow, each to run only once the user has asked for
+it in this session. A maintainer's request on GitHub is a reason to offer the
+step, not to run it:
 
 - "Rebase latest `main` and resolve conflicts": synchronize before making the
   review changes, then inspect what the updated base already supplies. Find the

@@ -116,9 +116,9 @@ What splitting `src/agent/prompts.rs` into the facade-plus-modules layout under
    fn name`) fails with "is still defined here" in `cargo test --lib` and not in
    clippy, and a source digest that hashes the old file (the report evaluation's
    identity) stops covering the code that left it.
-7. **Commit the split, then run clippy** at `-D warnings` and
-   `./scripts/test.sh rust`. The old file's limit drops to its committed size
-   on its own; there is no table to update.
+7. **Check the split**: when the user has asked for commits, commit it first,
+   then run clippy at `-D warnings` and `./scripts/test.sh rust`. The old file's
+   limit drops to its committed size on its own; there is no table to update.
 
 A comment added to a file that sits exactly at its ceiling fails the checker, so
 a note for a ceilinged file goes here or in the split, not in the file.
