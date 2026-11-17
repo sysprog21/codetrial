@@ -165,6 +165,31 @@ class ReceiptTests(unittest.TestCase):
         self.assertTrue(covered)
         self.assertIn("all (3 skipped)", text)
 
+    def test_receipts_with_the_tree_id_and_toolchain_fields_are_still_read(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        folder = Path(tmp.name)
+        receipt = ran(
+            "all",
+            worktree_tree="a" * 40,
+            rustc="rustc 1.0.0",
+            cargo="cargo 1.0.0",
+            env={"profile": "local-rust", "ok": True, "required": [], "skipped": []},
+        )
+        (folder / "all.json").write_text(json.dumps(receipt))
+        # The per-tree copies sit beside the lane files and are not lane receipts.
+        (folder / "by-tree" / ("a" * 40)).mkdir(parents=True)
+        (folder / "by-tree" / ("a" * 40) / "all.json").write_text(json.dumps(receipt))
+        # A private copy: the other cases patch the shared module's globals while
+        # they run in parallel with this one.
+        own = load("agent_closeout_check_files", "agent-closeout-check.py")
+        with (
+            mock.patch.object(own, "tree", return_value="T1"),
+            mock.patch.object(own, "receipts_folder", return_value=folder),
+        ):
+            self.assertEqual(own.receipts(), [receipt])
+            self.assertTrue(own.status()[0])
+
     def test_a_later_lane_failure_beats_an_earlier_all_pass(self):
         covered, text = self.status(
             [

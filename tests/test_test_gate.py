@@ -1,7 +1,6 @@
 """Exercise CI lane selection without executing the expensive gate commands."""
 
 import importlib.util
-import json
 import os
 import re
 import shlex
@@ -108,8 +107,28 @@ class TestGateLanes(unittest.TestCase):
         unset_cxx=False,
         replace=(),
         env=None,
+        real_env_check=False,
     ):
         source = SCRIPT.read_text()
+        named = env or {}
+        env = {**os.environ, "CXX": "unused", **named}
+        # Stand in a ready Python for the lookup, which would otherwise build the
+        # instructor venv on a first run, and answer the packaging probe the
+        # portable lane asks. A test naming PYTHON or CODETRIAL_TASK_TOOLS
+        # (empty included) keeps the real lookup.
+        if (
+            "PYTHON" not in named
+            and "CODETRIAL_TASK_TOOLS" not in named
+            and sys.version_info >= (3, 11)
+        ):
+            env["PYTHON"] = sys.executable
+            replace = (("\"$1\" -c 'import cryptography'", "true"), *replace)
+        if not real_env_check:
+            # The lane dispatch is under test here, not this machine's toolchain.
+            replace = (
+                ("env_check=$ROOT/scripts/env-check.sh", "env_check=true"),
+                *replace,
+            )
         for old, new in replace:
             self.assertEqual(source.count(old), 1, old)
             source = source.replace(old, new)
@@ -141,7 +160,6 @@ gate()
         )
         if extra_gate:
             source = source.replace("gate fmt ", "gate future-check true\ngate fmt ", 1)
-        env = {**os.environ, "CXX": "unused", **(env or {})}
         if unset_cxx:
             del env["CXX"]
         result = subprocess.run(
@@ -262,6 +280,156 @@ gate()
     def test_new_gate_is_included_in_portable_lane(self):
         self.assertIn("future-check", self.run_lane("portable", extra_gate=True)[1])
         self.assertNotIn("future-check", self.run_lane("rust", extra_gate=True)[1])
+
+    def test_a_missing_cargo_stops_a_rust_run_before_any_gate(self):
+        # `gate` only records a failure and carries on, so the environment check
+        # is a plain step: a machine with no toolchain must not first sit through
+        # every gate that would each fail on the same missing tool.
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(support.link_system_tools(tmp), [])
+            result, gates = self.run_lane(
+                "rust", env={"PATH": tmp}, real_env_check=True
+            )
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertEqual(gates, [])
+        self.assertIn("cargo", result.stderr)
+        self.assertNotIn("failed gates:", result.stderr)
+
+    def test_the_pre_step_picks_a_profile_per_lane(self):
+        for lane, ci, profile in (
+            ("rust", False, "local-rust"),
+            ("all", False, "local-rust"),
+            ("rust", True, "ci-rust"),
+            ("portable", True, "portable"),
+            ("portable", False, "portable"),
+            ("browser", False, "browser"),
+        ):
+            with self.subTest(lane=lane, ci=ci):
+                self.assertEqual(
+                    self.env_check_arguments(lane, ci),
+                    f"--profile {profile} --will-provision\n",
+                )
+
+    def env_check_arguments(self, lane, ci):
+        """What test.sh passes the checker, read off a stub that records it."""
+        with tempfile.TemporaryDirectory() as tmp:
+            checker = Path(tmp) / "env-check.sh"
+            support.write_executable(
+                checker, '#!/bin/sh\nprintf "%s\\n" "$*" >> "$OUT"\n'
+            )
+            out = Path(tmp) / "out"
+            result, _ = self.run_lane(
+                lane,
+                ci=ci,
+                env={"OUT": str(out)},
+                replace=(("env_check=true", f"env_check={checker}"),),
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            # The report the gates read, then the JSON the receipt embeds.
+            first, second = out.read_text().splitlines()
+            self.assertEqual(second, f"{first} --format json")
+            return first + "\n"
+
+    def test_a_missing_optional_tool_skips_with_the_checkers_wording(self):
+        report = (
+            "skipped: ruff: installing it lints the Python under scripts/, "
+            "tests/ and the skills\n"
+            "skipped: cargo-deny: `cargo install cargo-deny` checks dependency "
+            "licenses and sources"
+        )
+        script = "\n".join(
+            [
+                "ROOT=/nonexistent",
+                'skip() { echo "skipping $1" >&2; }',
+                f"env_report={shlex.quote(report)}",
+                *(
+                    f"{name}() {{\n{function_body(name)}\n}}"
+                    for name in (
+                        "env_absent",
+                        "env_skip",
+                        "ruff_gate",
+                        "cargo_deny_gate",
+                    )
+                ),
+                "ruff_gate; cargo_deny_gate",
+                "env_absent dash && echo no-dash",
+                "env_absent ruff && echo no-ruff",
+            ]
+        )
+        result = subprocess.run(
+            ["sh", "-c", script], capture_output=True, text=True, check=False
+        )
+        self.assertEqual(
+            result.stderr.splitlines(),
+            [
+                "skipping ruff: installing it lints the Python under scripts/, "
+                "tests/ and the skills",
+                "skipping cargo-deny: `cargo install cargo-deny` checks "
+                "dependency licenses and sources",
+            ],
+        )
+        self.assertEqual(result.stdout.split(), ["no-ruff"])
+
+    def test_every_absent_optional_tool_skips_with_its_original_wording(self):
+        # The real checker's report, on a PATH with none of the optional tools,
+        # fed to the real gate functions: what the gate printed before the
+        # probes moved into scripts/env-check.sh, word for word.
+        shell_scripts = (
+            len(list(ROOT.glob("scripts/*.sh")))
+            + len(list(ROOT.glob(".claude/skills/*/*.sh")))
+            + len(list(ROOT.glob("tests/stubs/*/*.sh")))
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(support.link_system_tools(tmp), [])
+            bare = {"PATH": tmp, "HOME": tmp}
+            report = subprocess.run(
+                ["/bin/sh", str(ROOT / "scripts/env-check.sh"), "--profile", "browser"],
+                env=bare,
+                capture_output=True,
+                text=True,
+                check=False,
+            ).stdout
+            names = (
+                "env_absent",
+                "env_skip",
+                "ruff_gate",
+                "cargo_audit_gate",
+                "cargo_deny_gate",
+                "actionlint_gate",
+                "shell_syntax",
+            )
+            script = "\n".join(
+                [
+                    f"ROOT={shlex.quote(str(ROOT))}",
+                    'skip() { echo "skipping $1" >&2; }',
+                    f"env_report={shlex.quote(report)}",
+                    *(f"{name}() {{\n{function_body(name)}\n}}" for name in names),
+                    "ruff_gate; cargo_audit_gate; cargo_deny_gate",
+                    "actionlint_gate; shell_syntax",
+                ]
+            )
+            result = subprocess.run(
+                ["/bin/sh", "-c", script],
+                env=bare,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        self.assertEqual(
+            result.stderr.splitlines(),
+            [
+                "skipping ruff: installing it lints the Python under scripts/, "
+                "tests/ and the skills",
+                "skipping cargo-audit: `cargo install cargo-audit` audits the "
+                "dependency tree",
+                "skipping cargo-deny: `cargo install cargo-deny` checks "
+                "dependency licenses and sources",
+                "skipping actionlint: installing it, or docker, checks "
+                ".github/workflows",
+                f"skipping shellcheck: installing it checks what {shell_scripts} "
+                "shell scripts mean, not just that they parse",
+            ],
+        )
 
     def test_failure_does_not_hide_later_gates(self):
         for lane, failures in (
@@ -862,7 +1030,9 @@ printf 'python:%s\\n' "$*" >> "$CALLS"
             ("browser", False),
         ):
             with self.subTest(lane=lane):
-                result, _ = self.run_lane(lane, replace=replace)
+                # An empty name keeps the lookup this test is about.
+                env = {"CODETRIAL_TASK_TOOLS": ""}
+                result, _ = self.run_lane(lane, replace=replace, env=env)
                 self.assertEqual("setup:task-tools" in result.stderr, setup)
         self.assertEqual(
             condition(gates_job(), "Place the instructor packaging environment"),
@@ -1035,22 +1205,13 @@ printf 'python:%s\\n' "$*" >> "$CALLS"
 
 def function_source(name):
     """A whole shell function of scripts/test.sh, as the gate defines it."""
-    return f"{name}()\n{{\n{function_body(name)}\n}}\n"
+    return support.function_source(SCRIPT.read_text(), name)
 
 
 class GateHelperTests(unittest.TestCase):
-    """The receipt writer and the exclusion notice, run as the gate defines them."""
+    """The exclusion notice, run as the gate defines it."""
 
-    env = {
-        **os.environ,
-        "GIT_CONFIG_GLOBAL": "/dev/null",
-        "GIT_CONFIG_SYSTEM": "/dev/null",
-    }
-
-    def sh(self, script, cwd):
-        return subprocess.run(
-            ["sh", "-c", script], cwd=cwd, capture_output=True, text=True, env=self.env
-        )
+    sh = staticmethod(support.sh)
 
     def repo(self, files=None):
         tmp = tempfile.TemporaryDirectory()
@@ -1059,40 +1220,12 @@ class GateHelperTests(unittest.TestCase):
         for name, body in (files or {}).items():
             (root / name).parent.mkdir(parents=True, exist_ok=True)
             (root / name).write_text(body)
-        commit = "git -c user.name=t -c user.email=t@t commit -q"
         done = self.sh(
-            f"git init -q -b main . && git add -A && {commit} --allow-empty -m x", root
+            f"git init -q -b main . && git add -A && {support.COMMIT} --allow-empty -m x",
+            root,
         )
         self.assertEqual(done.returncode, 0, done.stderr)
         return root
-
-    def write_receipt(self, root, verdict, failed="", tree="T1", skipped=""):
-        script = (
-            f'ROOT={shlex.quote(str(root))}; lane=portable; failed="{failed}"; receipt_tree={tree}; '
-            f'skipped="{skipped}"; {function_source("write_receipt")}\nwrite_receipt {verdict}'
-        )
-        done = self.sh(script, root)
-        self.assertEqual(done.returncode, 0, done.stderr)
-        return root / ".git/codetrial-review/gate-receipts/portable.json"
-
-    def test_a_pass_and_a_failure_are_recorded_with_the_start_tree(self):
-        root = self.repo()
-        won = json.loads(
-            self.write_receipt(root, "true", skipped="\n  a\n  b").read_text()
-        )
-        self.assertEqual(
-            (won["lane"], won["passed"], won["failed"], won["skipped"], won["tree"]),
-            ("portable", True, "", 2, "T1"),
-        )
-        lost = json.loads(
-            self.write_receipt(root, "false", failed=" fmt clippy").read_text()
-        )
-        self.assertEqual((lost["passed"], lost["failed"]), (False, "fmt clippy"))
-
-    def test_no_tree_means_no_receipt(self):
-        root = self.repo()
-        path = self.write_receipt(root, "true", tree="")
-        self.assertFalse(path.exists())
 
     def exclusions(self, base, head):
         def config(entries):
