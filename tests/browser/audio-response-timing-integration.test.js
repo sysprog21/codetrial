@@ -40,6 +40,9 @@ async function fixture({ enabled = true, failFirstMonitor = false } = {}) {
   };
   const context = {
     state,
+    isAgent: (participant) => participant === agent,
+    roomParticipants: () => (interviewerPresent ? [agent] : []),
+    queueMicrotask,
     window: {
       LivekitClient: {
         Room,
@@ -118,7 +121,8 @@ async function fixture({ enabled = true, failFirstMonitor = false } = {}) {
     get audioTimingReady() {
       return context.timingApi.ready();
     },
-    roomParticipants: () => [agent],
+    isAgent: (participant) => participant === agent,
+    roomParticipants: () => (interviewerPresent ? [agent] : []),
     roomInterviewer: () => (interviewerPresent ? agent : null),
   };
   const { updateAgentState } = loadInterview(["updateAgentState"], scope, {
@@ -489,7 +493,8 @@ test("an unavailable interviewer cancels a pending turn and can speak again", as
   f.advance(40);
 
   f.setInterviewerPresent(false);
-  f.room.emit("ParticipantAttributesChanged");
+  f.room.emit("ParticipantDisconnected", f.agent);
+  await Promise.resolve();
   assert.equal(f.state.interviewerPresent, false);
   assert.deepEqual(f.diagnostics, ["interviewer unavailable"]);
   f.advance(80);
