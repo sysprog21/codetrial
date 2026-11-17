@@ -2268,7 +2268,7 @@ public:
         encoding: "utf8",
         timeout: 10000,
         maxBuffer: 1 << 24,
-        env: flags.length
+        env: flags.some((flag) => flag.startsWith("-fsanitize"))
           ? { ...process.env, ASAN_OPTIONS: "detect_leaks=0" }
           : process.env,
       };
@@ -2814,6 +2814,55 @@ public:
               testCase.label,
             );
         });
+      },
+    );
+  }
+
+  // The C harness finds p and q by value with its own walk over the input
+  // tree. Its queue held 4096 nodes on the stack, and a complete tree puts
+  // every node in it, so a larger input wrote past the end before the
+  // solution ran. The bank allows 100000 nodes here. Where cc has
+  // AddressSanitizer the harness is built with it, since a queue that grows
+  // one slot too late writes past its heap block without crashing a plain
+  // build. The solution refuses a missing node, so a walk that stops short
+  // fails too.
+  for (const nodes of [5000, 100000]) {
+    it(
+      `c harness finds a node by value in a ${nodes}-node input tree`,
+      { skip: noCc },
+      async () => {
+        const id = "lowest-common-ancestor-of-a-binary-tree";
+        const leaf = nodes - 1;
+        const parent = (leaf - 1) >> 1;
+        const results = await runJudge(
+          "c",
+          id,
+          `struct TreeNode* nearestSharedApprover(struct TreeNode* root, struct TreeNode* p, struct TreeNode* q) {
+    if (!q || !p) return NULL;
+    if (!root || root == p || root == q) return root;
+    struct TreeNode* left = nearestSharedApprover(root->left, p, q);
+    struct TreeNode* right = nearestSharedApprover(root->right, p, q);
+    if (left && right) return root;
+    return left ? left : right;
+}`,
+          [
+            {
+              input: [
+                Array.from({ length: nodes }, (_, value) => value),
+                leaf,
+                parent,
+              ],
+            },
+          ],
+          noAsan ? [] : ["-fsanitize=address"],
+        );
+        // The answer is two nodes. Only three values are compared, since a
+        // wrong answer can be the whole tree, and the assertion's diff of
+        // 100000 values takes more memory than a runner has.
+        assert.deepEqual(
+          results.map((result) => result.actual?.slice(0, 3)),
+          [[parent, leaf]],
+        );
       },
     );
   }
