@@ -16,6 +16,8 @@ async function fixture({
   const playbackReleases = [];
   const forgotten = [];
   const disconnects = [];
+  const integrityStops = [];
+  const clearedTimers = [];
   const publication = Promise.withResolvers();
   const publishing = Promise.withResolvers();
   let cancellations = 0;
@@ -45,7 +47,12 @@ async function fixture({
     }
     registerTextStreamHandler() {}
   }
-  const state = { phase: "live", connected: false, sawAgent: true };
+  const state = {
+    phase: "live",
+    connected: false,
+    sawAgent: true,
+    integrityTrackStates: new Map(),
+  };
   const agent = {
     identity: "agent-test",
     attributes: { "lk.agent.state": "listening" },
@@ -92,10 +99,15 @@ async function fixture({
     nodes: { mutedSpeechReminder: {} },
     mutedSpeech: { stop() {} },
     localRecording: { needsMicrophone: false },
-    stopPreflight() {},
+    stopTurnRing() {},
+    stopIntegrityWorker() {
+      integrityStops.push("stopped");
+    },
+    clearInterval(timer) {
+      clearedTimers.push(timer);
+    },
     isAvatarAnalyserTrack: () => false,
     releaseStart() {},
-    stopIntegrityMonitoring() {},
     stopLocalMedia() {},
     playRemoteAudio(track) {
       context.timingApi.setRemoteTrack(track);
@@ -124,7 +136,19 @@ async function fixture({
     let audioTimingReady = false;
     let jimTrack = null;
     let jimAudio = null;
-    ${["releaseAudioTiming", "attachAudioTiming", "dropRemoteAudio", "abandonStart", "connectLiveKit"].map((name) => functionBody(page, name) + "\n}").join("\n")}
+    let detachSelfView = () => {};
+    let recordingMicrophoneDeviceId = null;
+    ${[
+      "releaseAudioTiming",
+      "attachAudioTiming",
+      "dropRemoteAudio",
+      "stopPreflight",
+      "stopIntegrityMonitoring",
+      "abandonStart",
+      "connectLiveKit",
+    ]
+      .map((name) => functionBody(page, name) + "\n}")
+      .join("\n")}
     globalThis.timingApi = {
       attachAudioTiming, releaseAudioTiming, connectLiveKit, abandonStart,
       setRemoteTrack: (track) => { jimTrack = track; attachAudioTiming(track); },
@@ -171,6 +195,8 @@ async function fixture({
     playbackReleases,
     forgotten,
     disconnects,
+    integrityStops,
+    clearedTimers,
     joining,
     finishPublication: publication.resolve,
     advance: (ms) => {
@@ -613,14 +639,56 @@ for (const preserveMicrophone of [false, true]) {
     f.agent.attributes["lk.agent.state"] = "speaking";
     f.room.emit("ParticipantAttributesChanged");
     monitor.options.onQuiet();
-    const flushed = Promise.withResolvers();
-    const leaving = f.api.abandonStart(
-      {},
-      {
-        preserveMicrophone,
-        flushed: flushed.promise,
+    const audioTrack = {
+      kind: "audio",
+      readyState: "live",
+      stopCount: 0,
+      stop() {
+        this.stopCount++;
+        this.readyState = "ended";
       },
-    );
+    };
+
+    const videoTrack = {
+      kind: "video",
+      stopCount: 0,
+      stop() {
+        this.stopCount++;
+      },
+    };
+
+    const userStream = {
+      getTracks: () => [audioTrack, videoTrack],
+    };
+
+    const preflight = { userStream };
+
+    f.state.integrityHeartbeatTimer = 101;
+    f.state.integrityTrackStateTimer = 102;
+    f.state.integrityTrackStates.set("audio", "active");
+    const flushed = Promise.withResolvers();
+    const leaving = f.api.abandonStart(preflight, {
+      preserveMicrophone,
+      flushed: flushed.promise,
+    });
+    assert.equal(videoTrack.stopCount, 1);
+
+    if (preserveMicrophone) {
+      assert.equal(audioTrack.stopCount, 0);
+      assert.equal(audioTrack.readyState, "live");
+      assert.equal(f.state.localUserStream, userStream);
+
+      assert.deepEqual(f.integrityStops, ["stopped"]);
+      assert.ok(f.clearedTimers.includes(101));
+      assert.ok(f.clearedTimers.includes(102));
+
+      assert.equal(f.state.integrityHeartbeatTimer, null);
+      assert.equal(f.state.integrityTrackStateTimer, null);
+      assert.equal(f.state.integrityTrackStates.size, 0);
+    } else {
+      assert.equal(audioTrack.stopCount, 1);
+      assert.equal(audioTrack.readyState, "ended");
+    }
     assert.deepEqual(f.disconnects, []);
     assert.equal(
       monitor.stopped,
