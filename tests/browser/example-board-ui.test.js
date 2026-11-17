@@ -254,6 +254,7 @@ test("the example drawer preserves code, journals pen strokes, and sends the cle
       {
         locked: () => window.locked,
         activity: () => window.activity.push(performance.now()),
+        onExpandedChange: () => paintDrawer(),
         record: (ops) => window.ops.push(...ops),
         publish: async (blob, strokes) => {
           if (window.disconnected) return false;
@@ -262,7 +263,9 @@ test("the example drawer preserves code, journals pen strokes, and sends the cle
         },
       },
     );
-    mountInterviewDrawer(document.querySelector(".editor-panel"));
+    const paintDrawer = mountInterviewDrawer(
+      document.querySelector(".editor-panel"),
+    );
   }, base);
   assert.equal(
     await page.locator("#example-board").evaluate((node) => node.open),
@@ -860,6 +863,7 @@ async function openExpandableBoard(viewport) {
       document.querySelector("#example-board"),
       {
         locked: () => false,
+        onExpandedChange: () => paintDrawer(),
         // Kept as the bytes Jim's read_board is handed, to decode later.
         publish: async (blob, strokes) => {
           const image = await new Promise((resolve) => {
@@ -872,7 +876,9 @@ async function openExpandableBoard(viewport) {
         },
       },
     );
-    mountInterviewDrawer(document.querySelector(".editor-panel"));
+    const paintDrawer = mountInterviewDrawer(
+      document.querySelector(".editor-panel"),
+    );
   }, base);
   await page.locator("#example-board summary").click();
   await page.waitForFunction(() =>
@@ -1422,11 +1428,17 @@ test("shrinking puts the docked drawing back where it was scrolled", async (t) =
   });
   assert.deepEqual([await scrolled(), await across()], [100, 60]);
   await page.getByRole("button", { name: "Expand drawing" }).click();
-  await page.getByRole("button", { name: "Shrink drawing" }).click();
+  const restored = await page
+    .getByRole("button", { name: "Shrink drawing" })
+    .evaluate((button) => {
+      button.click();
+      const strip = document.querySelector(".example-surface");
+      return [strip.scrollTop, strip.scrollLeft];
+    });
   assert.deepEqual(
-    [await scrolled(), await across()],
+    restored,
     [100, 60],
-    "after a round trip",
+    "both scroll positions are restored before the handler returns",
   );
 });
 
@@ -1451,6 +1463,53 @@ test("Escape from an open text draft closes the draft and leaves the board expan
     assert.equal(await draft.isVisible(), false, `closed from the ${from}`);
     assert.equal(await isExpanded(page), true, `expanded after the ${from}`);
   }
+});
+
+test("shrink() sizes the docked drawing synchronously after a resize", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const page = await openExpandableBoard({ width: 1280, height: 800 });
+  t.after(() => page.close());
+  await page.locator(".drawer-resizer").focus();
+  await page.keyboard.press("End");
+  const reserved = () =>
+    page.locator(".example-surface").evaluate((node) => node.style.height);
+  const before = await reserved();
+  await page.getByRole("button", { name: "Expand drawing" }).click();
+  await page.setViewportSize({ width: 1280, height: 600 });
+  await page.evaluate(
+    () =>
+      new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve)),
+      ),
+  );
+  assert.equal(
+    await reserved(),
+    before,
+    "resizing leaves the docked height alone while expanded",
+  );
+  const back = await page.evaluate(() => {
+    const shrunk = window.example.shrink();
+    return {
+      shrunk,
+      height: document.querySelector(".example-surface").style.height,
+    };
+  });
+  assert.equal(back.shrunk, true);
+  assert.ok(
+    parseFloat(back.height) < parseFloat(before),
+    "the smaller docked height is set before shrink() returns",
+  );
+  await page.evaluate(
+    () =>
+      new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve)),
+      ),
+  );
+  assert.equal(
+    back.height,
+    await reserved(),
+    "later layout work does not repair a stale docked height",
+  );
 });
 
 // The page asks shrink() before running the tests, so an expanded board
