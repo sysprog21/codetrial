@@ -126,9 +126,10 @@ before moving selected text.
 
 `check` is the only status a branch rule for main should require. It needs every
 lane and the independent security audit to succeed, and on a pull request the
-mutation plan and every shard too; shards may be skipped only when the plan
-found no mutants. A push to main or a merge queue entry plans no mutants, so
-`check` reports as soon as the lanes finish. The workflow also runs on
+mutation plan and every shard too; shards wait for the gate lanes and may be
+skipped only when the plan found no mutants or a lane failed, in which case
+`check` fails on the lane. A push to main or a merge queue entry plans no
+mutants, so `check` reports as soon as the lanes finish. The workflow also runs on
 `merge_group`, so once main has a merge queue, it tests each pull request on top
 of the main it will land on; two pull requests that pass against their own bases
 can still break main together. A merge group saves no caches, since its queue
@@ -138,6 +139,45 @@ repository's 10 GB limit was full of them. Mutation planning checks the Rust dif
 installing its tools, so a PR with no Rust changes starts no mutation shards and
 pays no mutation-tool setup cost. Rust diffs still use the complete
 diff-selected mutant set and the existing exclusions.
+
+To reproduce a failed mutation shard, or to answer a reviewer who asks for a
+mutation run, run the same diff-scoped check CI runs. `make mutants` is not
+that: it audits a fixed set of files with `-j 6 --timeout 900`, whatever your
+branch changed, so it can pass while your diff has a surviving mutant and fail
+on code you never touched. The CI check mutates only the functions the diff
+touches:
+
+```sh
+SCRATCH=$(mktemp -d)
+./scripts/fetch-vendor.sh   # the baseline tests serve the vendored web bytes
+if [ "$(uname -sm)" = "Linux x86_64" ]; then
+    sh scripts/fetch-clang.sh target/clang
+    export CXX=$PWD/target/clang/bin/clang++
+else
+    : "${CXX:?set CXX to Clang 21 or later}"
+fi
+git diff origin/main...HEAD -- '*.rs' > "$SCRATCH/pr.diff"
+cargo mutants --list --cargo-arg=--locked --in-diff "$SCRATCH/pr.diff"   # optional preview
+cargo mutants --in-place --in-diff "$SCRATCH/pr.diff" --cargo-arg=--locked
+```
+
+Add `--shard N/K` (`N` counts from 0) to both cargo-mutants commands to run one
+shard of a plan that CI split into `K`; the shard step's log names its `N/K`.
+Both commands carry `--cargo-arg=--locked`, as CI's plan and shard steps do: it
+keeps a mutant from being judged against a lockfile cargo quietly updated, which
+is the reason the Makefile gives. `--in-place` mutates your working tree
+and restores it, so run it in a clean checkout or a worktree you can stop
+touching for the duration. For a pull request with another base, replace
+`origin/main`. `make mutants` sets up Clang the same way; off x86-64 Linux, set
+`CXX` to Clang 21 or later instead.
+
+The cost is the reason this is not a per-change requirement. The unmutated
+baseline builds and runs the whole `cargo test` once, and every mutant builds
+and runs it again, so a run costs the number of mutants times the suite's time.
+It is for reproducing a failure or answering a reviewer's request. cargo-mutants
+derives each mutant's test timeout from the baseline's test time (a multiple you
+can change with `--timeout-multiplier`) and reports `TIMEOUT` past it, which is
+neither caught nor missed.
 
 Every skip the gate sees joins its `not checked by this run:` summary: a gate's
 own skip, a Node browser test's skip or todo, a missing formatter in
