@@ -58,6 +58,118 @@
         "x"
       ],
       "expected": true
+    },
+    {
+      "label": "fewer words than letters",
+      "input": [
+        "abba",
+        "dog cat cat"
+      ],
+      "expected": false
+    },
+    {
+      "label": "extra word repeats an earlier one",
+      "input": [
+        "abba",
+        "dog cat cat dog dog"
+      ],
+      "expected": false
+    },
+    {
+      "label": "alternating words for a mirrored template",
+      "input": [
+        "abba",
+        "dog cat dog cat"
+      ],
+      "expected": false
+    },
+    {
+      "label": "new letter takes a word already used",
+      "input": [
+        "abac",
+        "dog cat dog cat"
+      ],
+      "expected": false
+    },
+    {
+      "label": "third letter reuses the first word",
+      "input": [
+        "abc",
+        "dog cat dog"
+      ],
+      "expected": false
+    },
+    {
+      "label": "one-letter words named like template letters",
+      "input": [
+        "abc",
+        "b c a"
+      ],
+      "expected": true
+    },
+    {
+      "label": "one word repeated 130 times",
+      "input": [
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog dog"
+      ],
+      "expected": true
+    },
+    {
+      "label": "second word extends the first",
+      "input": [
+        "ab",
+        "dog dogs"
+      ],
+      "expected": true
+    },
+    {
+      "label": "second word shortens the first",
+      "input": [
+        "ab",
+        "dogs dog"
+      ],
+      "expected": true
+    },
+    {
+      "label": "second word reorders the first",
+      "input": [
+        "ab",
+        "dog god"
+      ],
+      "expected": true
+    },
+    {
+      "label": "words differ only at the ninth letter",
+      "input": [
+        "ab",
+        "abcdefghx abcdefghy"
+      ],
+      "expected": true
+    },
+    {
+      "label": "second word is constructor",
+      "input": [
+        "ab",
+        "dog constructor"
+      ],
+      "expected": true
+    },
+    {
+      "label": "last letter has no word",
+      "input": [
+        "ab",
+        "dog"
+      ],
+      "expected": false
+    },
+    {
+      "label": "twelfth word is new where its letter repeats",
+      "input": [
+        "abcdefghijkbk",
+        "one two three four five six seven eight nine ten eleven twelve one"
+      ],
+      "expected": false
     }
   ],
   "paramNames": [
