@@ -4,7 +4,7 @@ import { runInNewContext } from "node:vm";
 import { createAudioResponseTiming } from "../../web/audio-response-timing.js";
 import { functionBody, loadInterview, read } from "./source.js";
 
-async function fixture({ enabled = true } = {}) {
+async function fixture({ enabled = true, failFirstMonitor = false } = {}) {
   const page = read("web/interview.js");
   const monitors = [];
   const measurements = [];
@@ -12,6 +12,8 @@ async function fixture({ enabled = true } = {}) {
   const playbackReleases = [];
   let cancellations = 0;
   let time = 0;
+  let monitorAttempts = 0;
+  let interviewerPresent = true;
   const timing = createAudioResponseTiming({
     now: () => time,
     report: (elapsed) => measurements.push(elapsed),
@@ -58,6 +60,9 @@ async function fixture({ enabled = true } = {}) {
         }
       : null,
     startAudioActivityMonitor(track, onActivity, options) {
+      monitorAttempts++;
+      if (failFirstMonitor && monitorAttempts === 1)
+        throw new Error("monitor setup failed");
       const monitor = { track, onActivity, options, stopped: false };
       monitors.push(monitor);
       return () => {
@@ -73,7 +78,9 @@ async function fixture({ enabled = true } = {}) {
     localRecording: { needsMicrophone: false },
     stopPreflight() {},
     dropRemoteAudio() {},
-    playRemoteAudio() {},
+    playRemoteAudio(track) {
+      context.timingApi.setRemoteTrack(track);
+    },
     publishPreflightTracks: async () => {},
     paintMicrophoneState() {},
     monitorIntegrityTracks() {},
@@ -105,13 +112,14 @@ async function fixture({ enabled = true } = {}) {
   `;
   runInNewContext(code, context);
   const scope = {
+    Boolean,
     state,
     audioTiming: context.audioTiming,
     get audioTimingReady() {
       return context.timingApi.ready();
     },
     roomParticipants: () => [agent],
-    roomInterviewer: () => agent,
+    roomInterviewer: () => (interviewerPresent ? agent : null),
   };
   const { updateAgentState } = loadInterview(["updateAgentState"], scope, {
     stubMissing: true,
@@ -146,6 +154,10 @@ async function fixture({ enabled = true } = {}) {
     api: context.timingApi,
     monitors,
     cancellations: () => cancellations,
+    monitorAttempts: () => monitorAttempts,
+    setInterviewerPresent: (present) => {
+      interviewerPresent = present;
+    },
   };
 }
 
@@ -435,4 +447,63 @@ test("callbacks from a replaced track cannot cancel or measure the current track
   assert.deepEqual(f.measurements, []);
   current.onActivity();
   assert.deepEqual(f.measurements, [80]);
+});
+
+test("monitor setup failure clears the track and reconnect retries the diagnostic", async () => {
+  const f = await fixture({ failFirstMonitor: true });
+  const track = remoteTrack("A");
+  f.agent.attributes["lk.agent.state"] = "listening";
+  f.room.emit("TrackSubscribed", track, {}, f.agent);
+  assert.equal(f.monitorAttempts(), 1);
+  assert.equal(f.monitors.length, 0);
+  assert.equal(f.api.currentTrack(), null);
+  assert.equal(f.api.owner(), null);
+  assert.equal(f.api.ready(), false);
+
+  f.room.emit("Reconnected");
+  assert.equal(f.monitorAttempts(), 2);
+  assert.equal(f.monitors.length, 1);
+  assert.equal(f.api.currentTrack(), track);
+  assert.equal(f.api.owner(), f.room);
+  const monitor = f.monitors[0];
+  monitor.options.onAvailable();
+  assert.equal(f.api.ready(), true);
+  f.agent.attributes["lk.agent.state"] = "speaking";
+  f.room.emit("ParticipantAttributesChanged");
+  monitor.options.onQuiet();
+  f.advance(80);
+  monitor.onActivity();
+  assert.deepEqual(f.measurements, [80]);
+  f.disconnect();
+});
+
+test("an unavailable interviewer cancels a pending turn and can speak again", async () => {
+  const f = await fixture();
+  f.agent.attributes["lk.agent.state"] = "listening";
+  f.room.emit("TrackSubscribed", remoteTrack("A"), {}, f.agent);
+  const monitor = f.monitors[0];
+  monitor.options.onAvailable();
+  f.agent.attributes["lk.agent.state"] = "speaking";
+  f.room.emit("ParticipantAttributesChanged");
+  monitor.options.onQuiet();
+  f.advance(40);
+
+  f.setInterviewerPresent(false);
+  f.room.emit("ParticipantAttributesChanged");
+  assert.equal(f.state.interviewerPresent, false);
+  assert.deepEqual(f.diagnostics, ["interviewer unavailable"]);
+  f.advance(80);
+  monitor.onActivity();
+  assert.deepEqual(f.measurements, []);
+
+  monitor.options.onQuiet();
+  f.setInterviewerPresent(true);
+  f.room.emit("ParticipantConnected", f.agent);
+  assert.equal(f.state.interviewerPresent, true);
+  monitor.options.onQuiet();
+  f.advance(60);
+  monitor.onActivity();
+  assert.deepEqual(f.measurements, [60]);
+  assert.deepEqual(f.diagnostics, ["interviewer unavailable"]);
+  f.disconnect();
 });
