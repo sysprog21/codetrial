@@ -1645,7 +1645,7 @@ test("post-interview and lobby reports wire same-category comparison into HTML a
   );
   assert.match(
     functionBody(app, "syncAttemptSelection"),
-    /downloadingSelectedAttempts \|\| selected === 0/,
+    /downloadingSelectedAttempts \|\| paginationSourcePending \|\| selected === 0/,
   );
   assert.match(functionBody(app, "downloadSavedReport"), /categoryComparison/);
 });

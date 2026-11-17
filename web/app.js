@@ -1,9 +1,11 @@
+import { mountAttemptPagination } from "./attempt-pagination.js";
 import { mountProblemGrid, setProblemPickerOpener } from "./problem-grid.js";
 import { resetAssignments } from "./selection.js";
 import {
   COMMUNICATION_SCORE_LABEL,
   FRAMEWORKS,
   SHOW_SOURCES_KEY,
+  clamp,
   codingLoop,
   interviewMode,
   languageLabel,
@@ -167,6 +169,7 @@ let roll = Math.random();
 let avoidedProblem;
 
 const nodes = {
+  practiceTitle: document.querySelector("#practice-title"),
   editorOptions: document.querySelector(".editor-options-row"),
   editorIndent: document.querySelector("#editor-indent"),
   exampleDrawing: document.querySelector("#enable-example-drawing"),
@@ -192,6 +195,9 @@ const nodes = {
     "#practice-focus-share-input",
   ),
   progressSummary: document.querySelector("#progress-summary"),
+  attemptHistoryTitle: document.querySelector("#attempt-history-title"),
+  attemptPageAnnouncement: document.querySelector("#attempt-page-announcement"),
+  attemptPagination: document.querySelector("#attempt-pagination"),
   attemptHistory: document.querySelector("#attempt-history"),
   attemptSelection: document.querySelector("#attempt-selection"),
   attemptSelectAll: document.querySelector("#attempt-select-all"),
@@ -645,12 +651,29 @@ nodes.groundingClear.addEventListener("click", clearGrounding);
 
 let progressNormalized = [];
 let progressSuffix = "saved";
+let progressLogin = null;
+/// From learning that the history belongs to another login until its rows land.
+/// The old list stays visible meanwhile; lock pagination, selection, and
+/// "Download selected" until the new account's list is drawn, which clears
+/// the old selection and resets the page.
+let paginationSourcePending = false;
 /// Attempts unticked for "Download selected", by `selectionKey`. Emptied only
 /// when the history changes source, so a choice survives a filter change and
 /// the reload that deleting another report triggers.
 const unselectedAttempts = new Set();
-/// What the attempt list draws now: the only reports a batch download takes.
+/// All matching attempts, including other pages, available to batch downloads.
 let shownAttempts = [];
+const attemptPagination = mountAttemptPagination({
+  controls: nodes.attemptPagination,
+  heading: nodes.attemptHistoryTitle,
+  history: nodes.attemptHistory,
+  size: document.querySelector("#attempt-page-size"),
+  previous: document.querySelector("#attempt-page-previous"),
+  next: document.querySelector("#attempt-page-next"),
+  status: document.querySelector("#attempt-page-status"),
+  announcement: nodes.attemptPageAnnouncement,
+  render: () => renderAttemptHistory(shownAttempts, true),
+});
 let downloadingSelectedAttempts = false;
 const selectedProgressPhases = new Map();
 /// Whether the history on screen came from an account: null until /api/session
@@ -665,7 +688,10 @@ for (const filter of [
   nodes.progressDuration,
   nodes.progressMode,
 ]) {
-  filter.addEventListener("change", renderProgress);
+  filter.addEventListener("change", () => {
+    attemptPagination.reset();
+    renderProgress();
+  });
 }
 nodes.deleteReports.addEventListener("click", deleteSavedReports);
 nodes.attemptSelectAll.addEventListener("click", () => {
@@ -720,7 +746,7 @@ nodes.attemptDownloadSelected.addEventListener("click", async () => {
         : "";
   } finally {
     downloadingSelectedAttempts = false;
-    nodes.attemptDownloadSelected.disabled = selectedAttempts().length === 0;
+    syncAttemptSelection(true);
   }
 });
 
@@ -1066,6 +1092,7 @@ function syncLobbyControls() {
     "[data-delete-report]",
   ))
     remove.disabled = deleteBlocked;
+  attemptPagination.setDisabled(deletingReports || paginationSourcePending);
 }
 
 function accountUpdatePending() {
@@ -1135,6 +1162,9 @@ function refreshHistory() {
 /// only re-enabling Start would leave the checked level and its explanation
 /// describing history the page had already replaced.
 function settle() {
+  const sourceWasPending = paginationSourcePending;
+  paginationSourcePending = false;
+  if (sourceWasPending) syncAttemptSelection(true);
   historyReady = true;
   const focusedCard = cards.find(
     (card) => card.button === document.activeElement,
@@ -1173,6 +1203,18 @@ async function loadAccount(generation) {
     ) {
       throw new Error("Invalid account response");
     }
+    const login = session.signedIn ? session.user.login : null;
+    if (login !== progressLogin) {
+      moveFocusOut(
+        nodes.attemptHistoryTitle,
+        nodes.attemptSelection,
+        nodes.attemptHistory,
+      );
+      paginationSourcePending = true;
+      syncLobbyControls();
+      syncAttemptSelection(true);
+    }
+    progressLogin = login;
     accountHistory = false;
     const peerLink = document.getElementById("peer-practice");
     if (peerLink)
@@ -1470,9 +1512,10 @@ async function deleteSavedReport(attempt, when, button) {
     `Delete the ${when} report for ${attempt.problemTitle}? Recording files follow their separate retention policy. This cannot be undone.`,
   );
   if (!confirmed) return;
-  const position = [...nodes.attemptHistory.children].indexOf(
-    button.closest("li"),
-  );
+  const position =
+    nodes.attemptHistory.start -
+    1 +
+    [...nodes.attemptHistory.children].indexOf(button.closest("li"));
   deletingReports = true;
   syncLobbyControls();
   nodes.reportDeleteStatus.textContent = "";
@@ -1537,7 +1580,8 @@ function focusAttemptRow(position, button) {
     return;
   }
   const rows = nodes.attemptHistory.children;
-  const row = rows[Math.min(position, rows.length - 1)];
+  const pagePosition = position - (nodes.attemptHistory.start - 1);
+  const row = rows[clamp(pagePosition, 0, rows.length - 1)];
   const target =
     row?.querySelector("[data-delete-report]") ?? row?.querySelector("button");
   if (target) target.focus();
@@ -1978,6 +2022,11 @@ function title(card) {
 }
 
 function showProgressError(message) {
+  if (paginationSourcePending) {
+    unselectedAttempts.clear();
+    // A failed replacement must not retain the previous account's page.
+    attemptPagination.reset();
+  }
   renderProblemAttempts([]);
   // Emptied, not just unpainted. These outlive the panel: recommendations and
   // every filter change read them again afterwards, so a lobby that failed to
@@ -2000,8 +2049,8 @@ function showProgressError(message) {
   nodes.progressTrends.replaceChildren();
   nodes.progressWeaknesses.replaceChildren();
   nodes.progressTopics.replaceChildren();
-  nodes.attemptHistory.replaceChildren();
-  syncAttemptSelection();
+  nodes.attemptPageAnnouncement.textContent = "";
+  renderAttemptHistory([]);
 }
 
 function renderProblemAttempts(attempts) {
@@ -2023,9 +2072,12 @@ function showProgress(entries, suffix) {
   // these rows, so a dropdown change has nothing to re-sanitize.
   progressNormalized = normalizeProgressEntries(entries);
   renderProblemAttempts(progressNormalized);
-  // `suffix` names the store these rows came from. A device row and its account
-  // copy share an id, so a choice made in one is not carried into the other.
-  if (suffix !== progressSuffix) unselectedAttempts.clear();
+  // A different store or login replaces the list. Even when the new rows use
+  // the same ids, selection and page position belong to the previous source.
+  if (suffix !== progressSuffix || paginationSourcePending) {
+    unselectedAttempts.clear();
+    attemptPagination.reset();
+  }
   progressSuffix = suffix;
   const erasable = entries.length > 0 || readDeviceHistory().length > 0;
   nodes.historyHeader.hidden = !erasable;
@@ -2181,10 +2233,12 @@ function renderRecentPerformance() {
 /// Taken rather than re-derived: normalizing again here is what let the trends
 /// panel and this list disagree about which stored rows count as an attempt,
 /// and it cost one more sanitizing pass over every stored report.
-function renderAttemptHistory(attempts) {
+function renderAttemptHistory(attempts, preserveDownloadNote = false) {
+  const pageAttempts = attemptPagination.items(attempts);
   nodes.attemptHistory.replaceChildren();
+  visibleReportDownloadButtons.clear();
   shownAttempts = attempts;
-  for (const attempt of [...attempts].reverse()) {
+  for (const attempt of pageAttempts) {
     const saved = savedAttemptReport(attempt);
     const item = document.createElement("li");
     const when = new Date(attempt.at).toLocaleString(undefined, {
@@ -2238,6 +2292,8 @@ function renderAttemptHistory(attempts) {
     const download = document.createElement("button");
     download.type = "button";
     download.textContent = "Download report (.md)";
+    download.disabled = pendingRowReportDownloads.has(key);
+    visibleReportDownloadButtons.set(key, download);
     download.setAttribute(
       "aria-label",
       `Download report (.md) for ${attempt.problemTitle}, ${when}`,
@@ -2351,7 +2407,7 @@ function renderAttemptHistory(attempts) {
     item.append(report);
     nodes.attemptHistory.append(item);
   }
-  syncAttemptSelection();
+  syncAttemptSelection(preserveDownloadNote);
 }
 
 /// The id where there is one, which a reload keeps. A row with none has nothing
@@ -2370,28 +2426,51 @@ function allAttemptsSelected() {
   return selectedAttempts().length === shownAttempts.length;
 }
 
-function syncAttemptSelection() {
-  nodes.attemptDownloadNote.textContent = "";
+// Focus inside a region moves out before the region is hidden or disabled.
+function moveFocusOut(to, ...from) {
+  if (
+    from.some(
+      (node) =>
+        node === document.activeElement ||
+        node.contains?.(document.activeElement),
+    )
+  )
+    to.focus();
+}
+
+function syncAttemptSelection(preserveDownloadNote = false) {
+  if (!preserveDownloadNote) nodes.attemptDownloadNote.textContent = "";
+  if (shownAttempts.length === 0)
+    moveFocusOut(nodes.attemptHistoryTitle, nodes.attemptSelection);
   nodes.attemptSelection.hidden = shownAttempts.length === 0;
   // With nothing listed, a count here would be the lobby speaking before any
   // history arrived; the labels are written when there is something to count.
   if (nodes.attemptSelection.hidden) return;
   const selected = selectedAttempts().length;
-  nodes.attemptSelectAll.textContent = allAttemptsSelected()
-    ? "Deselect all"
-    : "Select all";
-  nodes.attemptDownloadSelected.textContent = `Download selected (${selected})`;
+  const scope = attemptPagination.hasMultiplePages() ? " pages" : "";
+  nodes.attemptSelectAll.textContent = `${allAttemptsSelected() ? "Deselect" : "Select"} all${scope}`;
+  nodes.attemptDownloadSelected.textContent = `Download selected (${selected}${scope && ", all pages"})`;
   nodes.attemptDownloadSelected.disabled =
-    downloadingSelectedAttempts || selected === 0;
+    downloadingSelectedAttempts || paginationSourcePending || selected === 0;
+  nodes.attemptSelectAll.disabled = paginationSourcePending;
+  for (const box of nodes.attemptHistory.querySelectorAll(
+    "[data-attempt-select]",
+  ))
+    box.disabled = paginationSourcePending;
 }
 
 const pendingReportDownloads = new Set();
+const pendingRowReportDownloads = new Set();
+const visibleReportDownloadButtons = new Map();
 
 async function exportSavedReport(attempt, button, categories) {
   const key = selectionKey(attempt);
   if (pendingReportDownloads.has(key) || button?.disabled) return;
   pendingReportDownloads.add(key);
-  if (button) button.disabled = true;
+  if (button) {
+    pendingRowReportDownloads.add(key);
+    button.disabled = true;
+  }
   try {
     await downloadSavedReport(
       attempt,
@@ -2399,7 +2478,9 @@ async function exportSavedReport(attempt, button, categories) {
     );
   } finally {
     pendingReportDownloads.delete(key);
-    if (button) button.disabled = false;
+    if (button) pendingRowReportDownloads.delete(key);
+    const visibleButton = visibleReportDownloadButtons.get(key) ?? button;
+    if (visibleButton) visibleButton.disabled = false;
   }
 }
 
@@ -2779,8 +2860,11 @@ function renderProgress() {
   nodes.progressTrends.replaceChildren();
   nodes.progressWeaknesses.replaceChildren();
   nodes.progressTopics.replaceChildren();
+  // Loading, filtering, and deletion redraw the history without announcing a page.
+  nodes.attemptPageAnnouncement.textContent = "";
   renderAttemptHistory(model.attempts);
   if (model.total === 0) {
+    moveFocusOut(nodes.practiceTitle, nodes.history);
     nodes.history.hidden = true;
     return;
   }
@@ -2793,8 +2877,8 @@ function renderProgress() {
   ).length;
   nodes.progressSummary.textContent =
     assessed === 0
-      ? `${model.attempts.length} of ${model.total} attempts shown · these legacy or unassessed reports have no versioned phase scores, so nothing is plotted · ${progressSuffix}.`
-      : `${model.attempts.length} of ${model.total} attempts shown · ${assessed} have comparable formative phase scores, not calibrated hiring evidence · hollow baseline markers mean not assessed, not a score of zero · ${progressSuffix}.`;
+      ? `${model.attempts.length} of ${model.total} attempts match these filters · these legacy or unassessed reports have no versioned phase scores, so nothing is plotted · ${progressSuffix}.`
+      : `${model.attempts.length} of ${model.total} attempts match these filters · ${assessed} have comparable formative phase scores, not calibrated hiring evidence · hollow baseline markers mean not assessed, not a score of zero · ${progressSuffix}.`;
   // Keep REACTO and STAR in separate tables: they score different exercises.
   // Inside each table, a step selector reuses one chart so long attempt histories
   // stay readable without turning the two frameworks into a ten-step scale.

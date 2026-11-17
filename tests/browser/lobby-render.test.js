@@ -28,6 +28,16 @@ import { installDocument } from "./dom.js";
 
 const markup = read("web/index.html");
 const dom = installDocument(markup);
+dom.node("attempt-page-size").options = ["5", "10", "20"].map((value) => ({
+  value,
+}));
+// The small DOM stub does not apply an option's HTML `selected` attribute.
+const pageSizeMarkup = markup.match(
+  /<select\b[^>]*id="attempt-page-size"[\s\S]*?<\/select>/,
+)[0];
+dom.node("attempt-page-size").value = pageSizeMarkup.match(
+  /<option value="([^"]+)" selected>/,
+)[1];
 
 // Site data blocked, said here rather than left to the runtime: from Node 25
 // `sessionStorage` is a working store by default and `localStorage` is one
@@ -68,6 +78,7 @@ const UNIDENTIFIED = {
   "login-link": "Retry account check",
   "progress-problem": "all",
   "progress-mode": "all",
+  "attempt-page-size": "10",
   start: "Start interview",
   "progress-summary":
     "Could not load account progress. Retry the account check.",

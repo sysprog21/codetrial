@@ -32,6 +32,8 @@ for (const [path, name] of [
       },
       requestTimeoutMs: 10_000,
       pendingReportDownloads: new Set(),
+      pendingRowReportDownloads: new Set(),
+      visibleReportDownloadButtons: new Map(),
       selectionKey: (attempt) => attempt.id || attempt,
       loadPageMapWithin: () =>
         new Promise((resolve, reject) => {
