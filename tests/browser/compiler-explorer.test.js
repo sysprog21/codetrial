@@ -279,6 +279,29 @@ test("generated harnesses emit JSON for control characters and non-finite double
   );
 });
 
+test("valid-anagram cases reject equal-length character-digest shortcuts", () => {
+  const codes = (s) => [...s].map((c) => c.charCodeAt(0));
+  const add = (values) => values.reduce((a, b) => a + b, 0);
+  for (const [name, digest] of [
+    ["sum", (s) => add(codes(s))],
+    ["xor", (s) => codes(s).reduce((a, b) => a ^ b, 0)],
+    [
+      "sum and sum of squares",
+      (s) => `${add(codes(s))} ${add(codes(s).map((c) => c * c))}`,
+    ],
+  ]) {
+    assert.ok(
+      judges["valid-anagram"].cases.some(
+        ({ input: [s, t], expected }) =>
+          expected === false &&
+          s.length === t.length &&
+          digest(s) === digest(t),
+      ),
+      `the built-in cases must reject the length-and-character-${name} shortcut`,
+    );
+  }
+});
+
 test("harness generator covers every function problem without network access", () => {
   for (const [id, spec] of Object.entries(judges)) {
     if (spec.kind !== "function") continue;

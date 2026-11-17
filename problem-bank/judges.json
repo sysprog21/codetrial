@@ -4321,6 +4321,30 @@
           "trace"
         ],
         "expected": true
+      },
+      {
+        "label": "different short codes",
+        "input": [
+          "ad",
+          "bc"
+        ],
+        "expected": false
+      },
+      {
+        "label": "different two-letter codes",
+        "input": [
+          "af",
+          "be"
+        ],
+        "expected": false
+      },
+      {
+        "label": "different three-letter codes",
+        "input": [
+          "bfg",
+          "cdh"
+        ],
+        "expected": false
       }
     ],
     "paramNames": [
