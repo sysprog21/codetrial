@@ -2485,7 +2485,7 @@ fn cut_turn(
     output_audio: &mut OutputAudio,
     cut: crate::agent::DeliveryCut,
 ) -> Duration {
-    state.interviewer_delivery.cancel(cut, Instant::now());
+    state.cut_interviewer(cut);
     let unplayed = output_audio
         .playout_deadline
         .saturating_duration_since(Instant::now());

@@ -581,6 +581,7 @@ fn completed_coding_idle_board_progress_uses_encoded_bytes_not_repeated_receipt(
     );
     assert!(!record(&mut board, &mut state, snapshot(vec![0], 0)));
     assert_eq!(state.board_snapshots, 5);
+    assert_eq!(state.hint_attempt.board_revisions, 3);
 }
 
 #[tokio::test]

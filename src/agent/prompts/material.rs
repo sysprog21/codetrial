@@ -524,6 +524,20 @@ pub fn hint_rung_withheld_text(hints_used: u32) -> String {
     )
 }
 
+/// No clue either while a Candidate-led candidate has not acted on the last
+/// one, for the reason given above `hint_rung_withheld_text`. With no spoken
+/// step left for the phase judge to find, only work outside speech counts.
+pub(crate) fn hint_rung_held_text(hints_used: u32, spoken: bool) -> String {
+    let ask = if spoken {
+        "In one short sentence, ask what they tried with the last clue, and wait."
+    } else {
+        "Only an edit, an executed run or a board change counts now, since no spoken step is left to observe: in one short sentence, ask them to try the last clue in the code, a run or the board, and wait."
+    };
+    format!(
+        "Not counted as a hint; total hints so far: {hints_used}. The candidate has not acted on the last clue yet: no edit, test run, board change, or newly observed step since it. Give no clue this turn. {ask} Do not restate an earlier clue, and name no technique, data structure, ordering, or step."
+    )
+}
+
 pub fn hint_ladder_used_text(hints_used: u32) -> String {
     format!(
         "{} Every rung is used. Keep helping them reason from their own code without revealing another step.",

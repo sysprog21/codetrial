@@ -475,6 +475,91 @@ pub fn framework_evidence_json(evidence: &FrameworkEvidence) -> serde_json::Valu
     })
 }
 
+/// What a hint request can tell about the candidate's work since the last rung.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HintAttempt {
+    /// Boards that differed from the one before, counted by
+    /// `livekit::board::record`. It only grows, so a board resent unchanged
+    /// after a reconnect or a phase checkpoint cannot undo an edit.
+    pub board_revisions: u32,
+    /// Runs that executed cases. `test_runs` also counts a setup error and a
+    /// missing runner, which a Run click produces with nothing executed.
+    pub real_test_runs: u32,
+    /// The latest line a candidate turn starts on that the phase judge found a
+    /// spoken step in, each quote read from the first turn that said it, so
+    /// words repeated later are not new work. Only grows, unlike a count of
+    /// the evidence rows, which the cap evicts.
+    pub quoted_turn_start: Option<usize>,
+    /// Where the work stood when the last rung went out; Candidate-led only.
+    mark: Option<HintAttemptMark>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct HintAttemptMark {
+    candidate_edits: u64,
+    real_test_runs: u32,
+    board_revisions: u32,
+    /// The interviewer line still open when the call arrived, which the clue
+    /// goes on to fill, or else the next line.
+    clue_from: usize,
+    /// A cut came before the interviewer spoke after the first answer.
+    cut: bool,
+}
+
+impl HintAttemptMark {
+    fn of(state: &RuntimeState) -> Self {
+        let open = state.interviewer_delivery.current;
+        Self {
+            candidate_edits: state.evidence_ledger.code.candidate_edits,
+            real_test_runs: state.hint_attempt.real_test_runs,
+            board_revisions: state.hint_attempt.board_revisions,
+            clue_from: open.unwrap_or(state.transcript.len()),
+            cut: false,
+        }
+    }
+
+    /// The first candidate line after the clue's first interviewer line.
+    fn reply(self, state: &RuntimeState) -> Option<usize> {
+        let said = |line: &usize, who| speaker_speech(&state.transcript[*line], who).is_some();
+        (self.clue_from..state.transcript.len())
+            .skip_while(|line| !said(line, INTERVIEWER_SPEAKER))
+            .find(|line| said(line, CANDIDATE_SPEAKER))
+    }
+
+    /// Speech counts from the first candidate turn after the clue began, so a
+    /// request transcribed after a spoken opening counts. A wiped board tried
+    /// nothing. A cut clue may never have been heard, so it holds nothing: a
+    /// cut counts on the clue until the interviewer speaks again after the
+    /// first answer, a held reply with no words yet included, erring toward a
+    /// rung over a question about a clue they may not have heard.
+    fn acted_since(self, state: &RuntimeState) -> bool {
+        let (attempt, reply) = (&state.hint_attempt, self.reply(state));
+        state.evidence_ledger.code.candidate_edits > self.candidate_edits
+            || attempt.real_test_runs > self.real_test_runs
+            || (attempt.board_revisions > self.board_revisions && state.board_strokes > 0)
+            || reply.is_some_and(|reply| attempt.quoted_turn_start >= Some(reply))
+            || self.cut
+    }
+}
+
+impl RuntimeState {
+    /// Cuts the interviewer's output, and marks the clue cut when no
+    /// interviewer line follows the candidate's first reply to it yet.
+    pub(crate) fn cut_interviewer(&mut self, cut: DeliveryCut) {
+        self.interviewer_delivery
+            .cancel(cut, std::time::Instant::now());
+        let interviewer = |line: &String| speaker_speech(line, INTERVIEWER_SPEAKER).is_some();
+        if let Some(mark) = self.hint_attempt.mark
+            && cut != DeliveryCut::Idle
+            && !mark
+                .reply(self)
+                .is_some_and(|reply| self.transcript[reply..].iter().any(interviewer))
+        {
+            self.hint_attempt.mark = Some(HintAttemptMark { cut: true, ..mark });
+        }
+    }
+}
+
 /// Count a hint and, when the candidate asked for it, hand out the next rung.
 ///
 /// The last rung names the key step, so it waits until the candidate has an
@@ -483,7 +568,8 @@ pub fn framework_evidence_json(evidence: &FrameworkEvidence) -> serde_json::Valu
 /// An Algorithm phase the interviewer only inferred does not count, since that
 /// is the model's word alone. Until then the interviewer gets no clue and is
 /// told to ask what the candidate would try; the request is not counted,
-/// because the candidate was given nothing.
+/// because the candidate was given nothing. When the candidate leads, a rung
+/// after the first is held that way too until they act on the one before.
 pub fn record_hint(state: &mut RuntimeState, requested: bool) -> String {
     // One reading for the call, whichever of the branches below answers it.
     let receipt_timestamp_ms = crate::current_epoch_millis();
@@ -491,6 +577,16 @@ pub fn record_hint(state: &mut RuntimeState, requested: bool) -> String {
         .then(|| state.hint_ladder.get(state.hint_rungs_given))
         .flatten();
     if clue.is_some() {
+        let mark = state.hint_attempt.mark;
+        if state.candidate_led_enabled && mark.is_some_and(|mark| !mark.acted_since(state)) {
+            state
+                .evidence_ledger
+                .record_hint(receipt_timestamp_ms, requested, false);
+            let spoken = phase_judge_open(state)
+                .into_iter()
+                .any(|id| id != phase_id(FrameworkPhase::Coding));
+            return prompts::hint_rung_held_text(state.hints_used, spoken);
+        }
         let last = state.hint_rungs_given + 1 == state.hint_ladder.len();
         let approach_stated = state.framework_evidence.iter().any(|item| {
             item.phase == FrameworkPhase::Algorithm && item.kind == EvidenceKind::Observed
@@ -509,6 +605,9 @@ pub fn record_hint(state: &mut RuntimeState, requested: bool) -> String {
     match clue {
         Some(clue) => {
             state.hint_rungs_given += 1;
+            if state.candidate_led_enabled {
+                state.hint_attempt.mark = Some(HintAttemptMark::of(state));
+            }
             state
                 .evidence_ledger
                 .record_hint(receipt_timestamp_ms, requested, true);

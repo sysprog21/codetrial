@@ -19,6 +19,7 @@ pub use assessment::{
     report_system_instruction_for_examples, rolling_assessment, unvoiced_record_note,
 };
 pub use instructions::build_instructions_for_plan;
+pub(crate) use material::hint_rung_held_text;
 pub use material::{
     MAX_EXCERPT_LINE_CHARS, MAX_NUMBERED_BYTES, changed_excerpt, format_test_run,
     format_test_run_for_reaction, hint_ladder_used_text, hint_rung_text, hint_rung_withheld_text,

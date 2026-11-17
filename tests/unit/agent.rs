@@ -626,3 +626,66 @@ fn delivery_uncertainty_accepts_a_missing_star_opportunity_after_cut_coding_wrap
         assert!(recovery.contains("Wait, I want to clarify the complexity."));
     }
 }
+
+/// A Candidate-led interview that has served the first rung, its clue spoken
+/// on the line the interviewer opened before calling `log_hint`.
+fn led_after_a_clue() -> RuntimeState {
+    let mut state = RuntimeState {
+        candidate_led_enabled: true,
+        hint_ladder: crate::agent::get_problem(Some("3sum")).variant().hints,
+        ..RuntimeState::default()
+    };
+    let (mut turn, interviewer) = (super::SpeakerTurn::default(), super::INTERVIEWER_SPEAKER);
+    turn.record(&mut state.transcript, interviewer, "Sure, a hint.");
+    state.interviewer_delivery.transcript(0);
+    super::record_hint(&mut state, true);
+    turn.record(&mut state.transcript, interviewer, " Think on it.");
+    state
+}
+
+#[test]
+fn a_hint_counts_the_reply_to_a_clue_begun_before_the_call_and_a_cut_clue() {
+    use super::DeliveryCut::{Generation, Idle};
+    const HELD: &str = "what they tried";
+    let (mut state, reply) = (led_after_a_clue(), "Candidate: Two pointers move inward.");
+    state.transcript.push(reply.into());
+    assert!(super::record_hint(&mut state, true).contains(HELD));
+    state.hint_attempt.quoted_turn_start = Some(1);
+    assert!(super::record_hint(&mut state, true).contains(state.hint_ladder[1]));
+
+    // An idle cut stops nothing. A cut clue releases, transcribed or not, and
+    // so does one whose barge-in words landed before Gemini's own cut.
+    let barge_in = Some("Candidate: Wait, say that again?");
+    for (kept, barge_in) in [(1, None), (0, None), (1, barge_in)] {
+        let mut state = led_after_a_clue();
+        state.transcript.truncate(kept);
+        state.transcript.extend(barge_in.map(String::from));
+        state.cut_interviewer(Idle);
+        assert!(super::record_hint(&mut state, true).contains(HELD));
+        state.cut_interviewer(Generation);
+        assert!(super::record_hint(&mut state, true).contains(state.hint_ladder[1]));
+    }
+
+    // Cut on the held reply, after the candidate answered the clue they heard.
+    let (mut state, unsure) = (led_after_a_clue(), "Candidate: I am not sure yet.");
+    state.transcript.push(unsure.into());
+    assert!(super::record_hint(&mut state, true).contains(HELD));
+    state.transcript.push("Interviewer: And?".into());
+    state.cut_interviewer(Generation);
+    assert!(super::record_hint(&mut state, true).contains(HELD));
+}
+
+#[test]
+fn a_held_hint_gives_no_clue_and_asks_what_was_tried() {
+    let held = |spoken| super::prompts::hint_rung_held_text(2, spoken);
+    let work = "Only an edit, an executed run or a board change counts now";
+    let tried = "ask what they tried with the last clue";
+    for (spoken, ask) in [(true, tried), (false, work)] {
+        let text = held(spoken);
+        assert!(text.starts_with("Not counted as a hint; total hints so far: 2. "));
+        for rule in ["Give no clue this turn", ask, "Do not restate"] {
+            assert!(text.contains(rule), "{rule}: {text}");
+        }
+    }
+    assert!(!held(true).contains(work));
+}

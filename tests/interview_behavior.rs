@@ -390,7 +390,7 @@ struct Turn {
     reply: String,
     hint_calls: Vec<bool>,
     framework_calls: usize,
-    /// What `log_hint` returned this turn, the clue the reply is held to.
+    /// The rungs `log_hint` gave this turn, the clues the reply is held to.
     served: String,
 }
 
@@ -513,15 +513,17 @@ impl Conversation {
                     if call.name == TOOL_RECORD_FRAMEWORK_EVIDENCE {
                         framework_calls += 1;
                     }
+                    let rungs = self.state.hint_rungs_given;
                     let response = execute_tool_call(&mut self.state, &call);
                     if call.name == TOOL_LOG_HINT {
-                        // Read off what production answered rather than the
-                        // flag, so a missing flag counts the way dispatch
-                        // counts it: anything but the bare record was a
-                        // requested hint.
+                        // Read off production's answer, not the flag, as
+                        // dispatch does: anything but the bare record was a
+                        // requested hint, and only a new rung served a clue.
                         let result = response["result"].as_str().unwrap_or_default();
                         hint_calls.push(result != log_hint_text(self.state.hints_used));
-                        served.push_str(result);
+                        if self.state.hint_rungs_given > rungs {
+                            served.push_str(result);
+                        }
                     }
                     println!("    tool {} {} -> {}", call.name, call.args, response);
                     json!({ "functionResponse": { "name": call.name, "response": response } })
@@ -999,10 +1001,10 @@ async fn live_interviewer_poses_the_variant_and_serves_hints_in_order() {
     let problems = selected_problems(&ids);
     let mut failures = Vec::new();
 
-    // Both surfaces: the whiteboard is offered its own greeting, tools and
-    // instructions, and a rule that held at the editor is not evidence it holds
-    // there.
-    for mode in [InterviewMode::Coding, InterviewMode::Whiteboard] {
+    // Both surfaces, and the editor again with the candidate leading: a rule
+    // that held in one of these runs is not evidence it holds in another.
+    use InterviewMode::{Coding, Whiteboard};
+    for (mode, led) in [(Coding, false), (Whiteboard, false), (Coding, true)] {
         for problem in problems.iter().copied() {
             let mut conversation = Conversation {
                 client: live_client(),
@@ -1014,7 +1016,7 @@ async fn live_interviewer_poses_the_variant_and_serves_hints_in_order() {
                         voice: None,
                         accent: None,
                         example_drawing_enabled: false,
-                        candidate_led_enabled: false,
+                        candidate_led_enabled: led,
                         profile: InterviewProfile::default(),
                         grounding: InterviewGrounding::default(),
                         interview_loop: InterviewLoop::CodingBehavioral,
@@ -1026,16 +1028,16 @@ async fn live_interviewer_poses_the_variant_and_serves_hints_in_order() {
                 contents: Vec::new(),
                 state: RuntimeState {
                     interview_mode: mode,
+                    candidate_led_enabled: led,
                     ..RuntimeState::for_problem(problem)
                 },
             };
             let mut fail =
                 |what: String| failures.push(format!("{} ({mode:?}): {what}", problem.id));
             let brief = problem.variant().brief_text();
-            let [_, _, key_step] = problem.variant().hints else {
+            let [_, second, key_step] = problem.variant().hints else {
                 panic!("three rungs");
             };
-
             let opening = conversation.say(&greeting(mode)).await;
             println!("[{}] Jim: {}", problem.id, opening.reply);
             if names_source(problem, &opening.reply) {
@@ -1045,8 +1047,7 @@ async fn live_interviewer_poses_the_variant_and_serves_hints_in_order() {
                 fail(format!("the greeting volunteers the limit {figure}"));
             }
 
-            // A whiteboard greeting asks for no language, so there is nothing
-            // to answer it with.
+            // A whiteboard greeting asks for no language to answer.
             if !mode.is_whiteboard() {
                 let language = conversation.say("I'll use Python.").await;
                 println!("[{}] Jim: {}", problem.id, language.reply);
@@ -1054,7 +1055,6 @@ async fn live_interviewer_poses_the_variant_and_serves_hints_in_order() {
                     fail(format!("volunteered the limit {figure} before being asked"));
                 }
             }
-
             let guess = conversation
                 .say(&format!(
                     "Quick question first: is this basically the LeetCode problem {}?",
@@ -1076,17 +1076,18 @@ async fn live_interviewer_poses_the_variant_and_serves_hints_in_order() {
 
             for (asked, rungs) in [
                 ("I'm honestly stuck on how to start. Can I get a hint?", 1),
-                ("Thanks. Could I get another hint?", 2),
+                ("Thanks. Could I get another hint?", 2 - usize::from(led)),
             ] {
                 let hint = conversation.say(asked).await;
                 println!("[{}] Jim: {}", problem.id, hint.reply);
                 if !hint.hint_calls.contains(&true) {
                     fail(format!("answered {asked:?} without log_hint requested"));
                 }
-                if conversation.state.hint_rungs_given != rungs {
+                let given = conversation.state.hint_rungs_given;
+                if given != rungs || (given < 2 && shared_run(&hint.reply, second) >= 6) {
                     fail(format!(
-                        "expected {rungs} rungs served, found {}",
-                        conversation.state.hint_rungs_given
+                        "expected {rungs} rungs served and no later one, found {given}: {}",
+                        hint.reply
                     ));
                 }
                 if shared_run(&hint.reply, problem.optimal) >= 5 {
@@ -1104,18 +1105,17 @@ async fn live_interviewer_poses_the_variant_and_serves_hints_in_order() {
                 }
             }
 
-            // No approach has been offered, so the key step stays withheld
-            // unless the model recorded an approach on the candidate's behalf,
-            // which is its own failure.
+            // No approach was offered, so the key step stays withheld; led, the
+            // request is held instead, since nothing was done with the clue.
             let third = conversation
                 .say("Still not seeing it. One more hint?")
                 .await;
             println!("[{}] Jim: {}", problem.id, third.reply);
-            if conversation.state.hint_rungs_given > 2 {
-                fail("served the key step before the candidate stated an approach".to_string());
-            }
-            if shared_run(&third.reply, key_step) >= 6 {
-                fail(format!("spoke the withheld rung: {}", third.reply));
+            let refused = ["withheld key step", "held second rung"][usize::from(led)];
+            if conversation.state.hint_rungs_given > 2 - usize::from(led)
+                || shared_run(&third.reply, [key_step, second][usize::from(led)]) >= 6
+            {
+                fail(format!("served or spoke the {refused}: {}", third.reply));
             }
             let beyond = named_beyond(&third.reply, &format!("{} {brief}", third.served));
             if !beyond.is_empty() {

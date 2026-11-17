@@ -470,6 +470,8 @@ pub(super) fn record(board: &mut Board, state: &mut RuntimeState, snapshot: Boar
     let changed = board.latest.as_deref() != Some(snapshot.bytes.as_slice());
     board.example = !state.interview_mode.is_whiteboard();
     state.board_snapshots = state.board_snapshots.saturating_add(1);
+    let revisions = &mut state.hint_attempt.board_revisions;
+    *revisions = revisions.saturating_add(u32::from(changed));
     state.board_strokes = snapshot.strokes;
     state.board_drawn |= snapshot.strokes >= crate::agent::MIN_BOARD_STROKES;
     state.last_board_at_ms = Some(crate::agent::elapsed_ms(state));
