@@ -450,6 +450,54 @@ does not fetch `origin`. Git has no pre-pull hook. Installing replaces
 the exact refspecs an earlier installer wrote. Uninstalling removes the refspec;
 other fetch settings stay in place.
 
+### Gate evidence on a push
+
+The pre-push hook asks of each topic branch it is about to publish whether the
+change is one the Rust gate covers, and if so for a gate run on the content
+being pushed. The scope is `scripts/check-gate-evidence.py --scope-only` over
+the paths the branch changes since it left main. The main it is measured from is
+the first that resolves of the push remote's (or upstream's), `origin`'s,
+`upstream`'s, and the push remote's default branch, so a clone whose fork has
+another name is still judged. When none resolves the hook cannot tell whether
+the change is in scope: it says so, refuses nothing, and still sends the note
+when a matching receipt exists, because turning away pushes that change nothing
+in scope only teaches people to bypass the hook. The hook keeps no list of its
+own. A branch outside the scope, such as a change to a workflow or to prose no
+Rust source reads, sends nothing and is never refused. Pushes of `main`, of
+tags, of a deletion, and of the notes refs themselves are not judged for
+evidence, and neither is `--publish-review`, which sends only a record.
+
+For a branch in scope the hook reads the receipts of the tree of the pushed head
+(`gate-receipts/by-tree/<tree>/`, written by `scripts/test.sh`) and accepts the
+push when one of them is a `rust` or `all` run that passed. A `portable` or
+`browser` receipt does not vouch for Rust, and an optional-tool skip does not
+disqualify a run. Because the receipt names a tree and not a commit, an amend
+that only rewords, and a gate run on a dirty tree that is then committed
+unchanged, both match. A commit that holds anything else does not: a rebase
+that changes the tree, an edit, or a partial commit (`git add -p`, a file left
+out), which needs the gate re-run on what is committed.
+
+With no matching receipt the push is refused with the `scripts/env-check.sh`
+report, which names a missing `cargo` or toolchain and the command that
+installs it, and the steps: `./scripts/env-check.sh`, `./scripts/test.sh`, push
+again.
+
+A matching receipt is sent as a note on `refs/notes/codetrial-gate`, attached
+to the head commit of the branch, before the branch itself and to the same
+remote. `scripts/gate-note.py` builds it: a JSON object of at most 16 KiB with
+the tree and, per receipt, only the lane, verdict, skip count, time and
+toolchain lines. The receipt files are treated as data: a malformed one is
+ignored, and nothing from one is passed to a shell. The notes the remote already
+holds are fetched and merged first, so other heads' notes are kept, and the push
+stops if the note cannot be sent. A head whose identical note the remote already
+holds sends nothing, so pushing the same head again is not a second upload.
+Notes for heads a contributor later amends away stay on their own fork.
+
+The receipt is a file on the contributor's machine and can be written by hand,
+and a hook can be skipped or never installed; an agent with no toolchain
+usually has none installed. The note narrows who is asked for CI time. CI and
+the maintainer's approval, not this hook, are what bind.
+
 ### Offline credential checks and message guidance
 
 `scripts/check-secrets.py` checks the changed index blobs before pre-commit

@@ -21,6 +21,9 @@ each missing tool with the command that installs it, without starting a build.
 `scripts/test.sh` runs it first and stops there, before any gate, when a
 required tool is missing.
 
+The [Before you push](../../../CONTRIBUTING.md#before-you-push) section of
+CONTRIBUTING.md has the order an agent runs it in before a push.
+
 CI runs one `gates (<lane>)` job per lane in parallel: `gates (rust)`,
 `gates (portable)` and, in three slices, `gates (browser 1/3)`,
 `gates (browser 2/3)` and `gates (browser 3/3)`
