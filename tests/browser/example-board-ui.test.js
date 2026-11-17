@@ -5,14 +5,18 @@ import {
   exerciseTextBaseline,
 } from "./board-text-fixture.js";
 import { read, launchChromium, startStaticServer } from "./source.js";
+import {
+  exampleMarkup,
+  moveBoardPointer,
+  openShapeBoard as openBoard,
+} from "./example-board-fixture.js";
 
 let browser;
 let server;
 let base;
 
 before(async () => {
-  // Exercise native capture with the full browser's headless mode.
-  browser = await launchChromium({ channel: "chromium" });
+  browser = await launchChromium();
   if (browser)
     ({ server, base } = await startStaticServer({
       handle: (_request, response, url) => {
@@ -33,80 +37,8 @@ after(async () => {
   await new Promise((resolve) => (server ? server.close(resolve) : resolve()));
 });
 
-function exampleMarkup(source = "web/interview.html") {
-  const html = read(source);
-  const start = html.search(/<details id="(?:example|task)-board"/);
-  return html.slice(start, html.indexOf("</details>", start) + 10);
-}
-
-async function openShapeBoard(t, source) {
-  const page = await browser.newPage();
-  t.after(() => page.close());
-  await page.goto(base);
-  await page.setContent(exampleMarkup(source));
-  await page.evaluate(async (base) => {
-    const { mountExampleBoard } = await import(`${base}/example-board.js`);
-    const { BOARD_WIDTH, BOARD_HEIGHT, MAX_STROKES, MAX_STROKES_MESSAGE } =
-      await import(`${base}/whiteboard.js`);
-    const root = document.querySelector("details");
-    root.open = true;
-    const canvas = root.querySelector("canvas");
-    canvas.style.width = "640px";
-    canvas.style.height = "400px";
-    // Synthetic pointers have no native capture slot; drawing and journaling
-    // still use the real handlers and canvas, as in the full-board test below.
-    canvas.setPointerCapture = () => {};
-    window.ops = [];
-    window.turnActivity = 0;
-    window.online = false;
-    window.locked = false;
-    window.uploads = [];
-    window.example = mountExampleBoard(root, {
-      turnActivity: () => window.turnActivity++,
-      locked: () => window.locked,
-      connected: () => window.online,
-      record: (ops) => window.ops.push(...ops),
-      publish: async (blob, count) => {
-        const image = await new Promise((resolve) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(reader.result);
-          reader.readAsDataURL(blob);
-        });
-        window.uploads.push({ image, count });
-        return true;
-      },
-    });
-    window.limits = { MAX_STROKES, MAX_STROKES_MESSAGE };
-    window.pointer = (type, x = 20, y = 20) => {
-      const box = canvas.getBoundingClientRect();
-      canvas.dispatchEvent(
-        new PointerEvent(type, {
-          pointerId: 1,
-          pointerType: "mouse",
-          isPrimary: true,
-          button: 0,
-          buttons: type === "pointerup" ? 0 : 1,
-          clientX: box.x + (x * box.width) / BOARD_WIDTH,
-          clientY: box.y + (y * box.height) / BOARD_HEIGHT,
-        }),
-      );
-    };
-  }, base);
-  return page;
-}
-
-async function moveBoardPointer(page, x, y) {
-  const point = await page.locator("canvas").evaluate(
-    (canvas, { x, y }) => {
-      const bounds = canvas.getBoundingClientRect();
-      return {
-        x: bounds.x + (x * bounds.width) / canvas.width,
-        y: bounds.y + (y * bounds.height) / canvas.height,
-      };
-    },
-    { x, y },
-  );
-  await page.mouse.move(point.x, point.y);
+function openShapeBoard(t, source) {
+  return openBoard(t, browser, base, source);
 }
 
 // Publication tests keep real JPEG encoding, but do not benchmark its wall time.
@@ -150,88 +82,6 @@ test(
     assert.deepEqual(await page.evaluate(() => window.ops), []);
   },
 );
-
-for (const [start, end, bounds] of [
-  [
-    [1400, 500],
-    [2000, 700],
-    [1400, 500, 1600, 700],
-  ],
-  [
-    [200, 500],
-    [-400, 700],
-    [0, 500, 200, 700],
-  ],
-  [
-    [800, 200],
-    [1000, -300],
-    [800, 0, 1000, 200],
-  ],
-  [
-    [800, 800],
-    [1000, 1300],
-    [800, 800, 1000, 1000],
-  ],
-]) {
-  test(`Ellipse released outside the board at (${end}) keeps an elliptical outline`, async (t) => {
-    if (!browser) return t.skip("playwright chromium unavailable");
-    const page = await openShapeBoard(t);
-    await page.locator("canvas").evaluate((canvas) => {
-      delete canvas.setPointerCapture;
-      window.edgeEvents = [];
-      for (const type of [
-        "pointerdown",
-        "gotpointercapture",
-        "pointermove",
-        "pointerup",
-        "lostpointercapture",
-        "pointercancel",
-      ])
-        canvas.addEventListener(type, (event) => {
-          window.edgeEvents.push({
-            type,
-            id: event.pointerId,
-            buttons: event.buttons,
-            x: event.clientX,
-            y: event.clientY,
-            captured: canvas.hasPointerCapture(event.pointerId),
-            ops: window.ops.length,
-          });
-        });
-    });
-    await page.getByRole("button", { name: "Ellipse", exact: true }).click();
-    await moveBoardPointer(page, ...start);
-    await page.mouse.down();
-    await moveBoardPointer(page, ...end);
-    await page.mouse.up();
-    const { ops, events } = await page.evaluate(() => ({
-      ops: window.ops,
-      events: window.edgeEvents,
-    }));
-    assert.equal(
-      ops.length,
-      1,
-      `native edge drag events: ${JSON.stringify(events)}`,
-    );
-    const stroke = ops[0];
-    assert.equal(stroke.op, "stroke");
-    assert.equal(stroke.points.length, 258);
-    assert.deepEqual(stroke.points.slice(-2), stroke.points.slice(0, 2));
-    const [left, top, right, bottom] = bounds;
-    const cx = (left + right) / 2;
-    const cy = (top + bottom) / 2;
-    const rx = (right - left) / 2;
-    const ry = (bottom - top) / 2;
-    for (let i = 0; i < stroke.points.length; i += 2) {
-      const [x, y] = stroke.points.slice(i, i + 2);
-      assert.ok(x >= left && x <= right && y >= top && y <= bottom);
-      assert.ok(
-        Math.abs(((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2 - 1) < 0.03,
-        `outline point (${x}, ${y}) must stay on the bounded ellipse`,
-      );
-    }
-  });
-}
 
 for (const source of ["web/interview.html", "web/task.html"]) {
   test(`${source} names shape colours without implying a pen switch`, async (t) => {

@@ -10,8 +10,8 @@ description: Restore Playwright's Chromium and install the system libraries it l
 # Most lanes need only the headless shell. Browser interaction tests can opt
 # into the full browser for native pointer capture in Chromium's new headless
 # mode. Separate cache keys keep a shell-only hit from hiding that binary.
-# Shell lanes can restore the full entry, which includes the shell and is
-# saved by the browser lane, instead of downloading it on every shell run.
+# The first browser slice saves full; Rust saves shell. Shell consumers do
+# not restore the larger full archive just to run its shell.
 #
 # The system libraries are not in the cached directory, and installing them
 # was most of this step's cost: `--with-deps` runs `apt-get update` and an
@@ -45,7 +45,6 @@ runs:
       with:
         path: ~/.cache/ms-playwright
         key: playwright-${{ inputs.full-browser == 'true' && 'full' || 'shell' }}-${{ runner.os }}-${{ hashFiles('node_modules/playwright-core/browsers.json') }}
-        restore-keys: playwright-full-${{ runner.os }}-${{ hashFiles('node_modules/playwright-core/browsers.json') }}
     - shell: bash
       env:
         CHROMIUM_FULL_BROWSER: ${{ inputs.full-browser }}

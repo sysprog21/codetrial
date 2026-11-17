@@ -178,7 +178,8 @@ browser_tests()
     # the lane over runners. The slices partition the files: each goes to the
     # slice with the least source so far, largest first, which keeps the slow
     # editor suites apart without a hand-kept list. An unset variable runs them
-    # all, which is what a local run wants.
+    # all, which is what a local run wants. Native capture stays on the first
+    # slice, the only browser job that installs full Chromium.
     if [ "$tier" = static ] && [ -n "${BROWSER_SHARD:-}" ]; then
         case $BROWSER_SHARD in
             [1-9]/[1-9]) ;;
@@ -192,11 +193,13 @@ browser_tests()
             return 1
         fi
         slice=$(wc -c "$@" | sort -k1,1nr -k2 | awk \
-            -v index_="${BROWSER_SHARD%/*}" -v total="${BROWSER_SHARD#*/}" '
+            -v index_="${BROWSER_SHARD%/*}" -v total="${BROWSER_SHARD#*/}" \
+            -v native="$ROOT/tests/browser/example-board-capture.test.js" '
             $2 == "total" { next }
             {
                 pick = 0
-                for (k = 1; k < total; k++) if (load[k] < load[pick]) pick = k
+                if ($2 != native)
+                    for (k = 1; k < total; k++) if (load[k] < load[pick]) pick = k
                 load[pick] += $1
                 if (pick == index_ - 1) { sub(/^ *[0-9]+ /, ""); print }
             }')

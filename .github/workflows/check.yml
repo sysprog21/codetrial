@@ -347,14 +347,14 @@ jobs:
       - name: Install node dependencies
         run: npm ci
 
-      # Both browser-driving lanes restore Chromium; the browser lane saves it,
-      # below.
+      # Only the first browser slice runs native capture with full Chromium.
+      # Rust and the other slices use the shell; each cache has one writer.
       - name: Install Chromium
         if: matrix.lane != 'portable'
         id: chromium
         uses: ./.github/actions/chromium
         with:
-          full-browser: ${{ matrix.lane == 'browser' }}
+          full-browser: ${{ matrix.lane == 'browser' && startsWith(matrix.shard, '1/') }}
 
       - name: Place the instructor packaging environment
         if: matrix.lane == 'portable'
@@ -449,7 +449,7 @@ jobs:
           path: web/vendor
           key: ${{ steps.vendor.outputs.key }}
       - name: Save Chromium
-        if: github.event_name != 'merge_group' && matrix.lane == 'browser' && steps.chromium.outputs.cache-hit != 'true'
+        if: github.event_name != 'merge_group' && (matrix.lane == 'rust' || (matrix.lane == 'browser' && startsWith(matrix.shard, '1/'))) && steps.chromium.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
         with:
           path: ~/.cache/ms-playwright

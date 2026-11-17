@@ -443,6 +443,8 @@ printf 'python:%s\\n' "$*" >> "$CALLS"
                 suite for suite in suites if suite.name != "face-detector.test.js"
             )
             self.assertTrue(expected)
+            capture = ROOT / "tests/browser/example-board-capture.test.js"
+            self.assertIn(capture, expected)
             ran = Counter()
             for shard in shards:
                 result = self.run_browser_tests(
@@ -451,6 +453,7 @@ printf 'python:%s\\n' "$*" >> "$CALLS"
                 self.assertEqual(result.returncode, 0, result.stderr)
                 selected = [Path(line) for line in result.stderr.splitlines()]
                 self.assertTrue(selected, shard)
+                self.assertEqual(capture in selected, shard.startswith("1/"))
                 ran.update(selected)
             # A Counter, not a set: a suite run twice must not look like once.
             self.assertEqual(ran, expected)
@@ -463,6 +466,36 @@ printf 'python:%s\\n' "$*" >> "$CALLS"
                     ROOT, "static", path=directory, env={"BROWSER_SHARD": bad}
                 )
                 self.assertNotEqual(refused.returncode, 0, bad)
+
+    def test_native_capture_stays_on_the_first_browser_shard(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            suites = root / "tests/browser"
+            suites.mkdir(parents=True)
+            capture = suites / "example-board-capture.test.js"
+            for name, size in [("a", 900), ("b", 800), ("c", 700), ("d", 600)]:
+                (suites / f"{name}.test.js").write_text(" " * size)
+            capture.write_text(" " * 100)
+            binaries = root / "bin"
+            binaries.mkdir()
+            support.write_executable(
+                binaries / "node",
+                '#!/bin/sh\nfor arg do\ncase "$arg" in *.test.js) printf "%s\\n" "$arg" >&2 ;; esac\ndone\n',
+            )
+            for count in (3, 4):
+                ran = Counter()
+                for index in range(1, count + 1):
+                    result = self.run_browser_tests(
+                        root,
+                        "static",
+                        path=binaries,
+                        env={"BROWSER_SHARD": f"{index}/{count}"},
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    selected = [Path(line) for line in result.stderr.splitlines()]
+                    self.assertEqual(capture in selected, index == 1)
+                    ran.update(selected)
+                self.assertEqual(ran, Counter(suites.glob("*.test.js")))
 
     def test_publishing_waits_on_the_lanes_not_on_check(self):
         # A push skips the mutation jobs `check` waits on, and the default
@@ -788,21 +821,20 @@ printf 'python:%s\\n' "$*" >> "$CALLS"
 
         gates = gates_job()
         self.assertIn(
-            "full-browser: ${{ matrix.lane == 'browser' }}",
+            "full-browser: ${{ matrix.lane == 'browser' && startsWith(matrix.shard, '1/') }}",
             support.step(gates, "Install Chromium"),
         )
         save = support.step(gates, "Save Chromium")
-        self.assertIn("matrix.lane == 'browser'", save)
+        self.assertIn("matrix.lane == 'rust'", save)
+        self.assertIn(
+            "matrix.lane == 'browser' && startsWith(matrix.shard, '1/')", save
+        )
         self.assertIn("key: ${{ steps.chromium.outputs.key }}", save)
-        # The only writer runs with full-browser=true. Both restore modes
-        # must reach its exact build, directly or through a fallback prefix.
-        saved = key(primary, True)
-        for full in (False, True):
-            with self.subTest(full_browser=full):
-                candidates = [key(primary, full), *(key(f, full) for f in fallbacks)]
-                self.assertTrue(
-                    any(saved.startswith(candidate) for candidate in candidates)
-                )
+        # Rust writes the shell key; the first browser shard writes full.
+        # The smaller shell jobs must not restore the larger full archive.
+        self.assertEqual(fallbacks, [])
+        self.assertEqual(key(primary, False), "playwright-shell-Linux-pinned-build")
+        self.assertEqual(key(primary, True), "playwright-full-Linux-pinned-build")
 
     def test_every_browser_launch_is_headless(self):
         # Only the native-capture fixture needs full Chromium. Its CI lane
@@ -816,11 +848,14 @@ printf 'python:%s\\n' "$*" >> "$CALLS"
             with self.subTest(path=path.name):
                 source = path.read_text()
                 self.assertNotRegex(source, r"\bheadless:(?!\s*true\b)")
-                if path.name == "example-board-ui.test.js":
+                if path.name == "example-board-capture.test.js":
                     self.assertIn('channel: "chromium"', source)
                     source = source.replace('channel: "chromium"', "")
                 self.assertNotRegex(source, r"\bchannel:")
-        self.assertIn("full-browser: ${{ matrix.lane == 'browser' }}", gates_job())
+        self.assertIn(
+            "full-browser: ${{ matrix.lane == 'browser' && startsWith(matrix.shard, '1/') }}",
+            gates_job(),
+        )
 
     def test_avatar_reuses_the_gate_caches_without_saving_them(self):
         avatar = support.job("avatar")
@@ -1009,10 +1044,7 @@ printf 'python:%s\\n' "$*" >> "$CALLS"
         # Every lane restores the vendor tree and Chromium; one lane saves each,
         # after its gates, under the key the restores asked for.
         self.assertEqual(condition(gates, "Restore vendored bytes"), "")
-        for name, lane, step_id in (
-            ("Save vendored bytes", "portable", "vendor"),
-            ("Save Chromium", "browser", "chromium"),
-        ):
+        for name, lane, step_id in (("Save vendored bytes", "portable", "vendor"),):
             with self.subTest(step=name):
                 self.assertEqual(
                     condition(gates, name),
@@ -1026,6 +1058,19 @@ printf 'python:%s\\n' "$*" >> "$CALLS"
                 self.assertLess(
                     gates.index("- name: Run gates"), gates.index(f"- name: {name}")
                 )
+        self.assertEqual(
+            condition(gates, "Save Chromium"),
+            "github.event_name != 'merge_group' && "
+            "(matrix.lane == 'rust' || (matrix.lane == 'browser' && startsWith(matrix.shard, '1/'))) && "
+            "steps.chromium.outputs.cache-hit != 'true'",
+        )
+        self.assertIn(
+            "key: ${{ steps.chromium.outputs.key }}",
+            support.step(gates, "Save Chromium"),
+        )
+        self.assertLess(
+            gates.index("- name: Run gates"), gates.index("- name: Save Chromium")
+        )
         # GitHub reads 0 as false, so `portable && 0 || 1` would always be 1.
         self.assertIn(
             "fetch-depth: ${{ matrix.lane != 'portable' && 1 || 0 }}\n", gates
