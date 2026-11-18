@@ -32,6 +32,7 @@ fn config_with(ids: &[&str]) -> WebServerConfig {
         production: false,
         compiler_explorer_enabled: false,
         guest_mode_enabled: false,
+        default_duration_min: crate::config::DEFAULT_DURATION_MIN,
         trusted_proxy_hops: 0,
         allowed_hosts: Vec::new(),
         recording: None,

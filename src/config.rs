@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::fmt;
+use std::num::IntErrorKind;
 use std::path::Path;
 
 mod peer_observer;
@@ -443,6 +444,11 @@ pub fn load_from_pairs(
         invalid_entries.push("CODETRIAL_MAX_INTERIM_REVIEWS must be a whole number".into());
     }
 
+    let default_duration_min = configured_duration(&values).unwrap_or_else(|message| {
+        invalid_entries.push(message);
+        (DEFAULT_DURATION_MIN, None)
+    });
+
     if !missing_keys.is_empty() || !invalid_entries.is_empty() {
         return Err(ConfigError {
             missing_keys,
@@ -498,7 +504,7 @@ pub fn load_from_pairs(
             DEFAULT_GEMINI_END_SENSITIVITY,
         ),
         room_prefix: optional(&values, "CODETRIAL_ROOM_PREFIX", DEFAULT_ROOM_PREFIX),
-        default_duration_min: optional_u32(&values, "CODETRIAL_DURATION_MIN", DEFAULT_DURATION_MIN),
+        default_duration_min: default_duration_min.0,
         gemini_candidate_video_enabled: gemini_candidate_video_enabled(
             values
                 .get("CODETRIAL_GEMINI_CANDIDATE_VIDEO_ENABLED")
@@ -658,6 +664,48 @@ pub fn max_concurrent_interviews(
             DEFAULT_MAX_CONCURRENT_INTERVIEWS
         }
     }
+}
+
+/// The length `CODETRIAL_DURATION_MIN` stands for, held to the range the
+/// endpoints offer, and what to say when a number is clamped. Text that is no
+/// number is refused rather than read as the built-in length: `3O` typed for 30
+/// would otherwise run a 45-minute default on a host nobody watches. One
+/// function for both entry points, so the number in the message is the one the
+/// server runs on.
+pub fn configured_duration(
+    values: &BTreeMap<String, String>,
+) -> Result<(u32, Option<String>), String> {
+    let value = present(values, "CODETRIAL_DURATION_MIN").unwrap_or_default();
+    if value.is_empty() {
+        return Ok((DEFAULT_DURATION_MIN, None));
+    }
+
+    // A number past `i64` is still a number, only a very large or small one, so
+    // it is clamped like the rest. Text after the digits is not.
+    let digits_only = value
+        .strip_prefix(['+', '-'])
+        .unwrap_or(value)
+        .bytes()
+        .all(|byte| byte.is_ascii_digit());
+    let minutes = match value.parse::<i64>() {
+        Ok(minutes) => minutes,
+        Err(error) if *error.kind() == IntErrorKind::PosOverflow && digits_only => i64::MAX,
+        Err(error) if *error.kind() == IntErrorKind::NegOverflow && digits_only => i64::MIN,
+        Err(_) => {
+            return Err(format!(
+                "CODETRIAL_DURATION_MIN {value:?} must be a whole number of minutes"
+            ));
+        }
+    };
+    let used =
+        u32::try_from(minutes.clamp(i64::from(MIN_DURATION_MIN), i64::from(MAX_DURATION_MIN)))
+            .unwrap_or(DEFAULT_DURATION_MIN);
+    let warning = (i64::from(used) != minutes).then(|| {
+        format!(
+            "codetrial: CODETRIAL_DURATION_MIN {value:?} is outside {MIN_DURATION_MIN} to {MAX_DURATION_MIN}; read as {used}"
+        )
+    });
+    Ok((used, warning))
 }
 
 fn optional_u32(values: &BTreeMap<String, String>, key: &str, default: u32) -> u32 {

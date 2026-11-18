@@ -24,6 +24,7 @@ impl<'a> LiveEffects<'a> {
                 api_secret: &config.livekit_api_secret,
                 server_url: &config.livekit_url,
                 recording_max_min: recording_cap,
+                default_duration_min: crate::config::DEFAULT_DURATION_MIN,
             },
             body.as_bytes(),
             &room_name,

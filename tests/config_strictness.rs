@@ -39,6 +39,34 @@ fn a_malformed_interim_review_limit_is_refused() {
     );
 }
 
+/// A length typed as `45min` or `3O` for 30 must not start the interviewer on
+/// the built-in 45: `run-livekit` and `check-gemini` read it here.
+#[test]
+fn a_malformed_interview_length_is_refused() {
+    for typo in ["45min", "3O", "999999999999999999999x"] {
+        let Err(error) =
+            load_from_pairs(base().into_iter().chain([("CODETRIAL_DURATION_MIN", typo)]))
+        else {
+            panic!("{typo:?} must not be read as the default");
+        };
+        assert_eq!(
+            error.invalid_entries,
+            [format!(
+                "CODETRIAL_DURATION_MIN {typo:?} must be a whole number of minutes"
+            )],
+            "{typo:?}"
+        );
+    }
+    assert!(
+        load_from_pairs(
+            base()
+                .into_iter()
+                .chain([("CODETRIAL_DURATION_MIN", " 30 ")])
+        )
+        .is_ok()
+    );
+}
+
 /// A file copied from shell syntax. Left as `export NODE_ENV`, the key matches
 /// nothing and the server starts on the local defaults without saying so.
 #[test]

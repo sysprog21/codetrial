@@ -309,6 +309,7 @@ test("the actual connection preserves refusal reasons and gates the init deadlin
       updateRunAvailability() {},
       tabStorage: {},
       params: new URLSearchParams(),
+      namedDuration: false,
       durationMin: 45,
       codingMinutes: 45,
       behavioralMinutes: 0,
