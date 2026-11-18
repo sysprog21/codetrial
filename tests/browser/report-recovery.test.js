@@ -4,6 +4,7 @@ import {
   createReportRecovery,
   reportRecoveryLimits,
 } from "../../web/report-recovery.js";
+import { createAudioTimingController } from "../../web/audio-response-timing.js";
 import { retryReportPayload, sanitizeReport, topics } from "../../web/lib.js";
 
 // Counted from the agent's answer, or from the click when no answer comes.
@@ -269,6 +270,7 @@ function pageHarness(phase = "live") {
   nodes.endingTitle.textContent = "Jim is writing up your evaluation...";
   nodes.leaveRoom.textContent = "Taking too long? Leave the room";
   const scope = {
+    audioTiming: null,
     strict: false,
     state: { phase, room, connected: true },
     nodes,
@@ -398,6 +400,43 @@ test("page finalizes a regeneration once, cancelling provisional timers", async 
   );
 });
 
+test("a final report stops audio timing before its receipt flushes", async () => {
+  const page = pageHarness();
+  const measurements = [];
+  let activity;
+  let stopped = false;
+  const timing = createAudioTimingController({
+    report: (elapsed) => measurements.push(elapsed),
+    startMonitor(_track, onActivity, { onAvailable, onQuiet }) {
+      onAvailable();
+      activity = { onActivity, onQuiet };
+      return () => {
+        stopped = true;
+      };
+    },
+  });
+  page.scope.audioTiming = timing;
+  timing.attach({ mediaStreamTrack: {} }, page.room);
+  timing.speakingChanged(true, true);
+  activity.onQuiet();
+
+  const flushed = Promise.withResolvers();
+  const receiving = page.receiveReport(
+    page.room,
+    packet({ summary: "Finished" }),
+    flushed.promise,
+  );
+  assert.equal(page.scope.state.phase, "report");
+  assert.ok(!page.events.includes("disconnect"));
+  activity.onActivity();
+  assert.deepEqual(measurements, []);
+  assert.equal(stopped, true);
+
+  flushed.resolve();
+  await receiving;
+  assert.ok(page.events.includes("disconnect"));
+});
+
 test("page keeps the room for a report held through the rejoin grace", async () => {
   const page = pageHarness();
   await page.receiveReport(page.room, packet(raw));
@@ -511,6 +550,8 @@ test("terminal room disconnect finalizes recovery before clearing the room", asy
   page.scope.audioPlayback = { release: (room) => playbackRooms.push(room) };
   const timingDisconnects = [];
   page.scope.audioTiming = {
+    release() {},
+    reset() {},
     disconnect: (...rooms) => timingDisconnects.push(rooms),
   };
   page.scope.preflight = { userStream: { label: "Preflight stream" } };

@@ -2964,6 +2964,8 @@ async function receiveReport(room, payload, flushed = Promise.resolve()) {
     });
     void flushReplay();
     state.phase = "report";
+    audioTiming?.release(null, "interview ended");
+    audioTiming?.reset();
     setLocalAudioEnabled(false);
     const saving = saveHistory();
     // renderReport releases the devices for every report path, so there is no
@@ -4874,6 +4876,8 @@ async function showReport() {
   // saved to history the same way.
   if (state.reportSkipped) return;
   state.phase = "report";
+  audioTiming?.release(null, "interview ended");
+  audioTiming?.reset();
   // The offline summary is now offered while a room is still up -- it used to
   // be hidden for the whole life of one -- so this is the one report path that
   // can leave the agent in an interview nobody is attending. Receiving an

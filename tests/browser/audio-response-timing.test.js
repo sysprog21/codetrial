@@ -614,16 +614,25 @@ test("callbacks from a released monitor cannot affect a reattached track", () =>
   const current = monitors[1];
   current.onAvailable();
   controller.speakingChanged(true, true);
+  old.onQuiet();
+  time = 40;
+  current.activity();
+  assert.deepEqual(measurements, []);
+  assert.deepEqual(diagnostics, ["audio already active before a quiet frame"]);
+
+  controller.speakingChanged(false, true);
+  current.onQuiet();
+  controller.speakingChanged(true, true);
   current.onQuiet();
   old.onUnavailable("track ended");
   old.onAvailable();
   old.onQuiet();
-  time = 80;
+  time = 120;
   old.activity();
   assert.deepEqual(measurements, []);
   current.activity();
   assert.deepEqual(measurements, [80]);
-  assert.deepEqual(diagnostics, []);
+  assert.equal(diagnostics.length, 1);
 });
 
 test("a stale disconnect preserves the newer monitor even after the page clears its room", () => {
