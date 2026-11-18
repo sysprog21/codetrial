@@ -137,6 +137,15 @@ export function evaluate(text, { angle = "rad" } = {}) {
       else return value;
     }
   }
+  // NaN survives every later step but two, `NaN ** 0` is 1 and
+  // `hypot(NaN, Infinity)` is Infinity, so it is refused where a power or a
+  // function reads it, whatever made it. An infinity stays allowed, so
+  // `5 % exp(1000)` and `atan(ln(0))` keep their values.
+  function defined(value) {
+    if (Number.isNaN(value))
+      throw new Error("A step of the expression is undefined");
+    return value;
+  }
   // The divisor of `/`, `//` or `%`. A zero divisor is refused here, where it
   // is read, because a later step can turn its NaN or Infinity back into a
   // finite number: `(5 % 0)^0` would be 1 and `min(1/0, 3)` would be 3.
@@ -168,7 +177,7 @@ export function evaluate(text, { angle = "rad" } = {}) {
     const base = primary();
     // Right-associative, and binding tighter than unary minus on its left:
     // `-2^2` is -4, as in written mathematics.
-    if (take("^") || take("**")) return base ** unary();
+    if (take("^") || take("**")) return defined(base) ** unary();
     return base;
   }
   function primary() {
@@ -193,7 +202,7 @@ export function evaluate(text, { angle = "rad" } = {}) {
           throw new Error(
             `${token.name} takes ${arity} argument${arity === 1 ? "" : "s"}`,
           );
-        return apply(angle, ...values);
+        return apply(angle, ...values.map(defined));
       }
       throw new Error(`Unknown name "${token.name}"`);
     }
@@ -204,6 +213,7 @@ export function evaluate(text, { angle = "rad" } = {}) {
     throw new Error(
       `Unexpected "${tokens[at].op ?? tokens[at].name ?? tokens[at].number}"`,
     );
+  defined(value);
   if (!Number.isFinite(value))
     throw new Error("The result is not a finite number");
   return value;
