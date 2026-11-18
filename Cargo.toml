@@ -186,6 +186,7 @@ strip = "symbols"
 opt-level = 2
 debug-assertions = false
 overflow-checks = false
+debug = "line-tables-only"
 
 # `cargo test` builds under the test profile, which does not inherit the package
 # override above, so the same line is needed here or the suite measures an
@@ -194,6 +195,7 @@ overflow-checks = false
 opt-level = 2
 debug-assertions = false
 overflow-checks = false
+debug = "line-tables-only"
 
 # Exempted from the two overrides above, which are about codec speed and have
 # nothing to say about a crate that only reads files. `rust-embed` splits on

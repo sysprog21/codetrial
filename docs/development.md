@@ -292,9 +292,11 @@ why CI caches `target` keyed on the lockfile and links with mold, and it is why
 a local run that suddenly takes twenty minutes has usually just had its cache
 invalidated rather than got slower.
 
-Trimming debug info, which is what buys CI 40% per relink, was measured here
-and buys nothing: 7.5s against 8.1s on macOS, where the system linker rather
-than mold does the work. It stays a CI setting for that reason.
+An earlier macOS comparison measured relink times of 7.5s and 8.1s with the
+system linker. The local `dev` and `test` profiles use
+`debug = "line-tables-only"` for dependencies to reduce build output on disk.
+This keeps file and line information in backtraces. Workspace packages keep
+full debug information by default in local builds.
 
 ## Environment check
 
