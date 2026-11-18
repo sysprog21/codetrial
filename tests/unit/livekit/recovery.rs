@@ -378,6 +378,7 @@ async fn a_tool_call_consumed_while_a_prompt_is_owed_keeps_the_original_obligati
 }
 
 // The credentialed real-room fixture and its offline pieces.
+#[cfg(unix)]
 #[path = "recovery_live.rs"]
 mod live;
 
