@@ -232,7 +232,7 @@ test("untrusted recovery metadata cannot offer unbounded retention", () => {
 
 // Exercise the real page functions with a small DOM and LiveKit boundary.
 // The recovery controller uses fake time; rendering and saving are observed.
-import { functionBody, read } from "./source.js";
+import { functionBody, loadInterview, read } from "./source.js";
 
 function pageHarness(phase = "live") {
   const source = read("web/interview.js");
@@ -257,11 +257,13 @@ function pageHarness(phase = "live") {
       "frameworkHint",
       "retryReport",
       "editor",
+      "end",
       "ending",
       "forceReport",
       "skipReport",
       "leaveRoom",
       "endingDetail",
+      "report",
       "mutedSpeechReminder",
     ].map((key) => [key, {}]),
   );
@@ -400,42 +402,59 @@ test("page finalizes a regeneration once, cancelling provisional timers", async 
   );
 });
 
-test("a final report stops audio timing before its receipt flushes", async () => {
-  const page = pageHarness();
-  const measurements = [];
-  let activity;
-  let stopped = false;
-  const timing = createAudioTimingController({
-    report: (elapsed) => measurements.push(elapsed),
-    startMonitor(_track, onActivity, { onAvailable, onQuiet }) {
-      onAvailable();
-      activity = { onActivity, onQuiet };
-      return () => {
-        stopped = true;
-      };
-    },
+for (const [name, payload, phase] of [
+  ["a final report", packet({ summary: "Finished" }), "report"],
+  ["malformed report JSON", new TextEncoder().encode("{"), "live"],
+]) {
+  test(`${name} stops audio timing before its receipt flushes`, async () => {
+    const page = pageHarness();
+    page.scope.console = { warn() {} };
+    Object.assign(
+      page.scope,
+      loadInterview(["reportRenderFailed"], page.scope),
+    );
+    const measurements = [];
+    let now = 0;
+    let activity;
+    let stopped = false;
+    const timing = createAudioTimingController({
+      now: () => now,
+      report: (elapsed) => measurements.push(elapsed),
+      startMonitor(_track, onActivity, { onAvailable, onQuiet }) {
+        onAvailable();
+        activity = { onActivity, onQuiet };
+        return () => {
+          stopped = true;
+        };
+      },
+    });
+    page.scope.audioTiming = timing;
+    timing.attach({ mediaStreamTrack: {} }, page.room);
+    timing.speakingChanged(true, true);
+    activity.onQuiet();
+
+    const flushed = Promise.withResolvers();
+    const receiving = page.receiveReport(page.room, payload, flushed.promise);
+    try {
+      assert.equal(page.scope.state.phase, phase);
+      assert.equal(page.scope.state.room, null);
+      assert.ok(!page.events.includes("disconnect"));
+      now = 40;
+      activity.onActivity();
+      assert.deepEqual(measurements, []);
+      assert.equal(stopped, true);
+    } finally {
+      flushed.resolve();
+      await receiving;
+    }
+    assert.ok(page.events.includes("disconnect"));
+    if (phase === "live") {
+      assert.equal(page.scope.state.phase, "ending");
+      assert.equal(page.scope.state.reportUnreadable, true);
+      assert.equal(page.scope.nodes.forceReport.hidden, false);
+    }
   });
-  page.scope.audioTiming = timing;
-  timing.attach({ mediaStreamTrack: {} }, page.room);
-  timing.speakingChanged(true, true);
-  activity.onQuiet();
-
-  const flushed = Promise.withResolvers();
-  const receiving = page.receiveReport(
-    page.room,
-    packet({ summary: "Finished" }),
-    flushed.promise,
-  );
-  assert.equal(page.scope.state.phase, "report");
-  assert.ok(!page.events.includes("disconnect"));
-  activity.onActivity();
-  assert.deepEqual(measurements, []);
-  assert.equal(stopped, true);
-
-  flushed.resolve();
-  await receiving;
-  assert.ok(page.events.includes("disconnect"));
-});
+}
 
 test("page keeps the room for a report held through the rejoin grace", async () => {
   const page = pageHarness();

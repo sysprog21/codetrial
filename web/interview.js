@@ -2999,6 +2999,8 @@ async function receiveReport(room, payload, flushed = Promise.resolve()) {
     // teardown with it, leaving the microphone, the camera and the integrity
     // heartbeat running behind an overlay that says the report cannot be
     // shown, until the candidate pressed something.
+    audioTiming?.release(null, "interview ended");
+    audioTiming?.reset();
     stopAvatar();
     stopLocalMedia();
     void flushed.then(() => room?.disconnect()).catch(() => {});
