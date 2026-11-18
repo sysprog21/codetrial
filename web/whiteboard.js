@@ -150,7 +150,7 @@ export function createPointerGate() {
 /// counting against the ceilings above; rounded because a replay stores every
 /// point and a board drawn in whole pixels is half the bytes of one drawn in
 /// fractions of them.
-function clamp(value, max) {
+export function clamp(value, max) {
   return Math.min(Math.max(Math.round(value), 0), max);
 }
 
