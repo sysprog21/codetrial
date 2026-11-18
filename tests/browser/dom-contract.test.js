@@ -1279,6 +1279,9 @@ test("the skip packet is the control message the agent listens for", async () =>
 test("skip waits for agent acknowledgement before disconnecting", async () => {
   const script = interviewSource();
   const { skipReportPayload } = await import(webUrl("lib.js"));
+  const { createAudioTimingController } = await import(
+    webUrl("audio-response-timing.js")
+  );
   const bodies = ["skipReport", "leaveRoom", "receiveControl"]
     .map((name) => `${functionBody(script, name)}\n}`)
     .join("\n");
@@ -1291,6 +1294,7 @@ test("skip waits for agent acknowledgement before disconnecting", async () => {
       disconnect: async () => events.push("disconnect"),
     };
     const scope = {
+      audioTiming: null,
       state: {
         phase: "ending",
         reportReceiving: false,
@@ -1373,11 +1377,38 @@ test("skip waits for agent acknowledgement before disconnecting", async () => {
   // A resolved publish promise does not prove the agent received the packet.
   {
     const page = setup();
+    const samples = [];
+    let now = 0;
+    let activity;
+    let quiet;
+    let stops = 0;
+    const timing = createAudioTimingController({
+      now: () => now,
+      report: (elapsed) => samples.push(elapsed),
+      startMonitor(_track, onActivity, { onAvailable, onQuiet }) {
+        onAvailable();
+        activity = onActivity;
+        quiet = onQuiet;
+        return () => {
+          stops++;
+        };
+      },
+    });
+    page.scope.audioTiming = timing;
+    // Capture the callbacks from the active monitor before the exit.
+    timing.attach({ mediaStreamTrack: {} }, page.scope.state.room);
+    timing.speakingChanged(true, true);
+    quiet();
     const leaving = page.skipReport();
     await page.settle();
     assert.ok(page.events.includes("publish"));
     assert.ok(!page.events.includes("disconnect"));
     assert.equal(page.scope.window.location.href, "/interview");
+
+    now = 40;
+    activity();
+    assert.deepEqual(samples, []);
+    assert.equal(stops, 1);
 
     page.acknowledge();
     await leaving;

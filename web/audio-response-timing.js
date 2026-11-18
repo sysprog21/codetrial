@@ -77,6 +77,7 @@ export function createAudioTimingController({
 } = {}) {
   const timing = createAudioResponseTiming(timingOptions);
   let monitor = null;
+  let finished = false;
 
   function release(track = null, reason = "audio monitor released") {
     // A late unsubscribe may refer to a track we already replaced.
@@ -89,6 +90,7 @@ export function createAudioTimingController({
   }
 
   function attach(track, room) {
+    if (finished) return;
     if (monitor?.track === track && monitor.room === room) return;
     release(null, "audio track replaced");
 
@@ -123,8 +125,16 @@ export function createAudioTimingController({
     }
   }
 
+  function finish(reason) {
+    if (finished) return;
+    finished = true;
+    release(null, reason);
+    timing.reset();
+  }
+
   return {
     attach,
+    finish,
     release,
     reset: timing.reset,
     disconnect(room, currentRoom) {
@@ -132,10 +142,10 @@ export function createAudioTimingController({
       if (currentRoom !== room && (currentRoom || monitor?.room !== room))
         return;
 
-      release(null, "room disconnected");
-      timing.reset();
+      finish("room disconnected");
     },
     speakingChanged(speaking, connected) {
+      if (finished) return;
       timing.speakingChanged(
         speaking,
         !connected

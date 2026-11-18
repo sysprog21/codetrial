@@ -1156,6 +1156,7 @@ test("leaving waits for the recording to finish before navigating", async (t) =>
         `with (scope) { ${source}\n}\nreturn leaveRoom; }`,
       )({
         state: { phase: "ending" },
+        audioTiming: null,
         beforeUnloadGuard: { dispose() {} },
         stopEndingClock() {},
         stopAvatar() {},

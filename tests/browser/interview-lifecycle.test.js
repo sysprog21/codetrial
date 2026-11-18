@@ -573,6 +573,43 @@ test("LiveKit stays connected while the native leave warning is pending", () => 
   assert.match(roomOptions, /disconnectOnPageLeave:\s*false/);
 });
 
+for (const startupPending of [false, true]) {
+  test(`End stops audio timing before ${startupPending ? "startup disconnect" : "requesting the report"}`, () => {
+    const calls = [];
+    const agent = {};
+    const state = {
+      phase: "live",
+      endsAt: startupPending ? 0 : 1,
+      interviewerReadiness: { fail() {} },
+      room: { disconnect: async () => calls.push("disconnect") },
+    };
+    const { endInterview } = loadInterview(
+      ["endInterview"],
+      {
+        state,
+        audioTiming: { finish: () => calls.push("timing") },
+        exampleBoard: null,
+        strict: false,
+        whiteboard: false,
+        codePublishTimer: null,
+        pendingLanguagePublish: null,
+        roomInterviewer: () => agent,
+        roomParticipants: () => [agent],
+        setTimeout() {},
+        publish: () => calls.push("publish"),
+      },
+      { stubMissing: true },
+    );
+
+    endInterview("candidate_ended");
+    assert.equal(state.phase, "ending");
+    assert.deepEqual(calls, [
+      "timing",
+      startupPending ? "disconnect" : "publish",
+    ]);
+  });
+}
+
 test("the room disconnects on actual pagehide, not when beforeunload is cancelled", () => {
   const source = read("web/interview.js");
   assert.match(
@@ -599,9 +636,14 @@ test("the room disconnects on actual pagehide, not when beforeunload is cancelle
     "reportRecovery",
     "localRecording",
     "releaseStart",
+    "audioTiming",
     `${body}\n}\nreturn finalizeRecoveryOnPageHide;`,
-  )(state, reportRecovery, { dispose: () => calls.push("dispose") }, () =>
-    calls.push("release"),
+  )(
+    state,
+    reportRecovery,
+    { dispose: () => calls.push("dispose") },
+    () => calls.push("release"),
+    { finish: () => calls.push("timing") },
   );
   const guard = createBeforeUnloadGuard(target);
 
@@ -614,12 +656,12 @@ test("the room disconnects on actual pagehide, not when beforeunload is cancelle
 
   // Once navigation really proceeds, pagehide performs room cleanup.
   target.dispatchEvent(new Event("pagehide"));
-  assert.deepEqual(calls, ["dispose", "disconnect", "release"]);
+  assert.deepEqual(calls, ["dispose", "timing", "disconnect", "release"]);
 
   // A page the back-forward cache keeps comes back to the same start.
   calls.length = 0;
   pagehide({ persisted: true });
-  assert.deepEqual(calls, ["dispose", "disconnect"]);
+  assert.deepEqual(calls, ["dispose", "timing", "disconnect"]);
 
   guard.dispose();
   target.removeEventListener("pagehide", pagehide);
@@ -657,6 +699,7 @@ test("the Leave button releases the warning before tearing down the session", as
     "stopAvatar",
     "stopLocalMedia",
     "localRecording",
+    "audioTiming",
     `${body}\n}\nreturn leaveRoom;`,
   )(
     {
@@ -676,6 +719,7 @@ test("the Leave button releases the warning before tearing down the session", as
     () => calls.push("stop-avatar"),
     () => calls.push("stop-media"),
     { stop: async () => {} },
+    { finish: () => calls.push("timing") },
   );
 
   await leaveRoom();
@@ -683,6 +727,7 @@ test("the Leave button releases the warning before tearing down the session", as
   assert.deepEqual(calls, [
     "guard-off",
     "stop-clock",
+    "timing",
     "disconnect",
     "stop-avatar",
     "stop-media",
@@ -813,6 +858,7 @@ test("Practice this stores the selected item and stays on failure", async () => 
       "localRecording",
       "storeReportPracticeFocus",
       "tabStorage",
+      "audioTiming",
       `${body}\n}\nreturn leaveRoom;`,
     )(
       {
@@ -835,6 +881,7 @@ test("Practice this stores the selected item and stays on failure", async () => 
       { stop: async () => {} },
       storeReportPracticeFocus,
       storage,
+      null,
     );
     await leaveRoom(button);
     assert.deepEqual(
@@ -1071,6 +1118,7 @@ test("pagehide finalizes recovery before disconnecting the room", () => {
     "reportRecovery",
     "localRecording",
     "releaseStart",
+    "audioTiming",
     `${body}\n}\nreturn finalizeRecoveryOnPageHide;`,
   )(
     {
@@ -1085,8 +1133,15 @@ test("pagehide finalizes recovery before disconnecting the room", () => {
     { finish: () => calls.push("finish") },
     { dispose: () => calls.push("dispose") },
     () => calls.push("release"),
+    { finish: () => calls.push("timing") },
   );
 
   handler();
-  assert.deepEqual(calls, ["dispose", "finish", "disconnect", "release"]);
+  assert.deepEqual(calls, [
+    "dispose",
+    "finish",
+    "timing",
+    "disconnect",
+    "release",
+  ]);
 });

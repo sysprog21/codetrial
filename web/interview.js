@@ -2424,10 +2424,7 @@ async function connectLiveKit(connection, preflight, presenting = false) {
     state.connected = true;
     // LiveKit may retain the same remote audio track across reconnects.
     // Reattach the diagnostic even when no new TrackSubscribed event fires.
-    if (
-      state.phase !== "report_recovery" &&
-      jimTrack?.mediaStreamTrack?.readyState === "live"
-    ) {
+    if (jimTrack?.mediaStreamTrack?.readyState === "live") {
       audioTiming?.attach(jimTrack, room);
     }
     if (strict) updateRunAvailability();
@@ -2707,8 +2704,7 @@ let detachSelfView = () => {};
 /// left only once that notice is acknowledged or given up on.
 function abandonStart(preflight, { preserveMicrophone = false, flushed } = {}) {
   const joined = state.room;
-  audioTiming?.release();
-  audioTiming?.reset();
+  audioTiming?.finish();
   state.connected = false;
   state.room = null;
   if (joined) audioPlayback.release(joined);
@@ -2796,8 +2792,7 @@ const reportRecovery = createReportRecovery({
   },
   offer: (ready, cooldown, cause) => {
     state.phase = "report_recovery";
-    audioTiming?.release(null, "interview ended");
-    audioTiming?.reset();
+    audioTiming?.finish("interview ended");
     if (strict) updateRunAvailability();
     if (!ready) stopEndingEscape();
     globalThis.clearTimeout(frameworkHintTimer);
@@ -2893,8 +2888,10 @@ function finalizeRecoveryOnPageHide(event) {
   if (state.phase === "report_recovery") reportRecovery.finish();
   // A start holds its room from before the join. A page the cache keeps
   // finishes that join on restore, so only a joined room is left here.
-  if (!event?.persisted || state.initialMediaPublished)
+  if (!event?.persisted || state.initialMediaPublished) {
+    audioTiming?.finish();
     void state.room?.disconnect?.().catch?.(() => {});
+  }
   // Closing the tab mid-start is the usual way a start is given up, and the
   // interviewer is held for it until someone joins. A page the back-forward
   // cache keeps still has its join in flight and finishes it on restore, into
@@ -2969,8 +2966,7 @@ async function receiveReport(room, payload, flushed = Promise.resolve()) {
     });
     void flushReplay();
     state.phase = "report";
-    audioTiming?.release(null, "interview ended");
-    audioTiming?.reset();
+    audioTiming?.finish("interview ended");
     setLocalAudioEnabled(false);
     const saving = saveHistory();
     // renderReport releases the devices for every report path, so there is no
@@ -3004,8 +3000,7 @@ async function receiveReport(room, payload, flushed = Promise.resolve()) {
     // teardown with it, leaving the microphone, the camera and the integrity
     // heartbeat running behind an overlay that says the report cannot be
     // shown, until the candidate pressed something.
-    audioTiming?.release(null, "interview ended");
-    audioTiming?.reset();
+    audioTiming?.finish("interview ended");
     stopAvatar();
     stopLocalMedia();
     void flushed.then(() => room?.disconnect()).catch(() => {});
@@ -3086,7 +3081,7 @@ function playRemoteAudio(track, participant) {
     });
   }
   attachAvatarAnalyser(track, participant);
-  if (state.phase !== "report_recovery") audioTiming?.attach(track, state.room);
+  audioTiming?.attach(track, state.room);
 }
 
 function dropRemoteAudio(track) {
@@ -4630,6 +4625,7 @@ function endInterview(reason) {
   const startupPending = Boolean(state.interviewerReadiness) && !state.endsAt;
   const exampleFinished = exampleBoard?.finish();
   state.phase = "ending";
+  audioTiming?.finish("interview ended");
   if (startupPending) {
     state.interviewerReadiness.fail();
     stopLocalMedia();
@@ -4798,6 +4794,7 @@ async function skipReport() {
   // made about a wait.
   if (state.phase !== "ending" || state.reportReceiving) return;
   state.reportSkipped = true;
+  audioTiming?.finish("interview ended");
   // The overlay must show that Skip took effect, or it keeps saying a report
   // is being written. Focus moves to the title first: disabling the button
   // that has it would drop focus to the page body.
@@ -4861,6 +4858,7 @@ async function leaveRoom(practiceButton = null) {
   }
   beforeUnloadGuard.dispose();
   stopEndingClock();
+  audioTiming?.finish();
   void state.room?.disconnect?.();
   stopAvatar();
   stopLocalMedia();
@@ -4883,8 +4881,7 @@ async function showReport() {
   // saved to history the same way.
   if (state.reportSkipped) return;
   state.phase = "report";
-  audioTiming?.release(null, "interview ended");
-  audioTiming?.reset();
+  audioTiming?.finish("interview ended");
   // The offline summary is now offered while a room is still up -- it used to
   // be hidden for the whole life of one -- so this is the one report path that
   // can leave the agent in an interview nobody is attending. Receiving an
@@ -5415,8 +5412,7 @@ function updateAgentState() {
   const value = published || "listening";
   state.agentSpeaking = value === "speaking";
   state.agentThinking = value === "thinking";
-  if (state.phase !== "report_recovery")
-    audioTiming?.speakingChanged(published === "speaking", state.connected);
+  audioTiming?.speakingChanged(published === "speaking", state.connected);
   if (state.agentSpeaking || state.agentThinking) {
     drawingTurn?.reset();
     hideTurnRing();

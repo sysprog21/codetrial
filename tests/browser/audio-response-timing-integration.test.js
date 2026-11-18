@@ -178,6 +178,7 @@ async function fixture({
     room,
     agent,
     avatarTracks,
+    audioTiming,
     diagnostics,
     measurements,
     playbackReleases,
@@ -524,6 +525,7 @@ test("room events do not restart audio timing during report recovery", async () 
   f.room.emit("TrackSubscribed", track, {}, f.agent);
   f.room.emit("Reconnecting");
   f.state.phase = "report_recovery";
+  f.audioTiming.finish();
   f.room.emit("Reconnected");
   f.room.emit("TrackSubscribed", remoteTrack("B"), {}, f.agent);
   f.agent.attributes["lk.agent.state"] = "speaking";

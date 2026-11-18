@@ -607,8 +607,7 @@ test("terminal room disconnect finalizes recovery before clearing the room", asy
   page.scope.audioPlayback = { release: (room) => playbackRooms.push(room) };
   const timingDisconnects = [];
   page.scope.audioTiming = {
-    release() {},
-    reset() {},
+    finish() {},
     disconnect: (...rooms) => timingDisconnects.push(rooms),
   };
   page.scope.preflight = { userStream: { label: "Preflight stream" } };
