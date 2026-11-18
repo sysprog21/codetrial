@@ -302,6 +302,68 @@ test("valid-anagram cases reject equal-length character-digest shortcuts", () =>
   }
 });
 
+test("jump-game cases reject each hop-by-hop shortcut", () => {
+  const travel = (choose) => (nums) => {
+    let at = 0;
+    while (at < nums.length - 1) {
+      const next = nums[at] === 0 ? at : choose(nums, at);
+      if (next === at) return false;
+      at = next;
+    }
+    return true;
+  };
+  const last = (nums) => nums.length - 1;
+  const largestRange = (pickLaterTie) => (nums, at) => {
+    if (at + nums[at] >= last(nums)) return last(nums);
+    const beats = pickLaterTie ? (a, b) => a >= b : (a, b) => a > b;
+    let best = at + 1;
+    for (let next = at + 2; next <= at + nums[at]; next += 1) {
+      if (beats(nums[next], nums[best])) best = next;
+    }
+    return best;
+  };
+  const byLabel = Object.fromEntries(
+    judges["jump-game"].cases.map(({ label, input: [nums], expected }) => [
+      label,
+      { nums, expected },
+    ]),
+  );
+  for (const [name, choose, label] of [
+    [
+      "the full range",
+      (nums, at) => Math.min(at + nums[at], last(nums)),
+      "range grows one relay ahead",
+    ],
+    [
+      "the farthest relay that is not a zero",
+      (nums, at) => {
+        let next = Math.min(at + nums[at], last(nums));
+        while (next > at && next < last(nums) && nums[next] === 0) next -= 1;
+        return next;
+      },
+      "second relay clears two zeros",
+    ],
+    [
+      "the reachable relay with the largest range",
+      largestRange(false),
+      "far small relay beats a near big one",
+    ],
+    [
+      "the reachable relay with the largest range, the later one on a tie",
+      largestRange(true),
+      "far small relay beats a near big one",
+    ],
+  ]) {
+    const pinned = byLabel[label];
+    assert.ok(pinned, `the built-in cases must keep "${label}"`);
+    assert.notEqual(
+      travel(choose)(pinned.nums),
+      pinned.expected,
+      `"${label}" must reject always hopping to ${name}`,
+    );
+  }
+});
+
 test("harness generator covers every function problem without network access", () => {
   for (const [id, spec] of Object.entries(judges)) {
     if (spec.kind !== "function") continue;

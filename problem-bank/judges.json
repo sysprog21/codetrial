@@ -902,6 +902,73 @@
           ]
         ],
         "expected": false
+      },
+      {
+        "label": "range grows one relay ahead",
+        "input": [
+          [
+            2,
+            5,
+            0,
+            0
+          ]
+        ],
+        "expected": true
+      },
+      {
+        "label": "range grows after a forced hop",
+        "input": [
+          [
+            1,
+            2,
+            3,
+            0,
+            0,
+            0
+          ]
+        ],
+        "expected": true
+      },
+      {
+        "label": "short first hop then a long one",
+        "input": [
+          [
+            2,
+            3,
+            1,
+            0,
+            1,
+            0
+          ]
+        ],
+        "expected": true
+      },
+      {
+        "label": "second relay clears two zeros",
+        "input": [
+          [
+            2,
+            3,
+            1,
+            0,
+            0
+          ]
+        ],
+        "expected": true
+      },
+      {
+        "label": "far small relay beats a near big one",
+        "input": [
+          [
+            4,
+            2,
+            0,
+            0,
+            1,
+            0
+          ]
+        ],
+        "expected": true
       }
     ],
     "paramNames": [
