@@ -37,6 +37,68 @@ const judges = Object.fromEntries(
   ]),
 );
 
+test("EventQueue cases reject incorrect queue implementations", () => {
+  const replay = ({ input: [operations, args] }, fault = "correct") => {
+    const capacity = args[0][0];
+    const slots = Array(capacity);
+    let head = 0;
+    let tail = 0;
+    let count = 0;
+    const linear = fault === "linear tail resets only when empty";
+    const rejected = fault === "rejected push advances tail";
+    const queue = {
+      push(value) {
+        const slot = tail;
+        if (rejected) tail = (tail + 1) % capacity;
+        const full =
+          fault === "full check wastes a slot"
+            ? (tail + 1) % capacity === head
+            : count === capacity;
+        if (full || (linear && tail === capacity)) return false;
+        slots[slot] = value;
+        if (!rejected) tail = linear ? tail + 1 : (tail + 1) % capacity;
+        count++;
+        return true;
+      },
+      pop() {
+        if (count === 0) return -1;
+        const value = slots[head];
+        head = fault === "head never wraps" ? head + 1 : (head + 1) % capacity;
+        count--;
+        if (linear && count === 0) head = tail = 0;
+        return value;
+      },
+      front() {
+        return count ? slots[head] : -1;
+      },
+      size() {
+        return fault === "size is tail minus head" ? tail - head : count;
+      },
+    };
+    return operations.map((operation, index) =>
+      index === 0 ? null : queue[operation](...args[index]),
+    );
+  };
+  const cases = judges["fixed-capacity-ring-buffer"].cases;
+  for (const testCase of cases)
+    assert.deepEqual(replay(testCase), testCase.expected, testCase.label);
+  for (const [name, label] of [
+    ["linear tail resets only when empty", "wrap after removing the oldest"],
+    ["full check wastes a slot", "one slot can be reused repeatedly"],
+    ["head never wraps", "one slot can be reused repeatedly"],
+    ["size is tail minus head", "empty reads and rejected overflow"],
+    ["rejected push advances tail", "rejected push keeps later order"],
+  ]) {
+    const testCase = cases.find((row) => row.label === label);
+    assert.ok(testCase, `missing case for ${name}: ${label}`);
+    assert.notDeepEqual(
+      replay(testCase, name),
+      testCase.expected,
+      `${label} must reject ${name}`,
+    );
+  }
+});
+
 const sampleValues = {
   boolean: true,
   "character[][]": [["a", "b"], ["c"]],

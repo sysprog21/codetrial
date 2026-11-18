@@ -15602,7 +15602,7 @@
         "label": "wrap after removing the oldest",
         "input": [
           ["RingBuffer", "push", "push", "pop", "push", "front", "pop", "pop", "size"],
-          [[3], [4], [5], [], [6], [], [], [], []]
+          [[2], [4], [5], [], [6], [], [], [], []]
         ],
         "expected": [null, true, true, 4, true, 5, 5, 6, 0]
       },
@@ -15629,6 +15629,14 @@
           [[2], []]
         ],
         "expected": [null, 0]
+      },
+      {
+        "label": "rejected push keeps later order",
+        "input": [
+          ["RingBuffer", "push", "push", "push", "pop", "push", "pop", "pop"],
+          [[2], [7], [9], [11], [], [13], [], []]
+        ],
+        "expected": [null, true, true, false, 7, true, 9, 13]
       }
     ]
   }
