@@ -75,7 +75,12 @@ server's rules:
   least 24 letters and digits, and never prints it. The app fills it into the
   Setup page in its own window, or, with the interview in the browser, shows
   it on the page it leaves in its window. Read from the environment for the
-  same reason as the pipe above.
+  same reason as the pipe above. After Change keys saves, a child with a
+  Google key, which hosts its interviewer, stops admitting interviews and
+  prints `codetrial: keys saved and no interview running: restart now` once
+  none is running or writing its report. It admits nothing more, so whatever
+  launched it has to restart it then; the app does. A child without a Google
+  key keeps its old keys until it is restarted.
 - `--no-update-check`: the lobby never offers a newer release, whatever the
   config file says about `CODETRIAL_UPDATE_CHECK`. That check compares the
   server with the `latest` release, and the app is published as
@@ -103,8 +108,12 @@ session signing key and a roaming profile is copied to a server:
 In it:
 
 - `codetrial.env.local`: the keys the Setup page takes, in plain text, the
-  same file the CLI writes. Change keys in the lobby rewrites its keys, which
-  take effect when the app next starts; edit it to add an option. The first
+  same file the CLI writes. Change keys in the lobby rewrites its keys, and
+  once no interview is running or writing its report, the app starts its
+  server again on them and returns to the lobby. Without a Google key the
+  interviews are hosted elsewhere, out of the server's sight, so the keys
+  take effect when the app next starts, as an edit adding an option does.
+  The first
   launch writes it from exported LiveKit keys without asking (see `--data-dir`
   above); otherwise Setup asks, and offers to use a CLI config found in the
   folder the app was started in (see `--import-config`). An app opened from the Dock,

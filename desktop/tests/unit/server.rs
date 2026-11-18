@@ -229,6 +229,107 @@ fn a_server_is_ready_once_bound_and_stops_when_its_stdin_closes() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A restart asked for after the server is ready, and only then: the same line
+/// before it is not one this server printed.
+#[cfg(unix)]
+#[test]
+fn a_server_asks_to_restart_once_change_keys_has_saved() {
+    let dir = temp_dir("restart");
+    let (sender, received) = mpsc::channel();
+    let sender = Mutex::new(sender);
+    let server = start_fake(
+        &dir,
+        "echo 'codetrial: keys saved and no interview running: restart now'\n\
+         echo 'codetrial: open http://127.0.0.1:9 in your browser'\n\
+         echo 'codetrial: keys saved and no interview running: restart now'\n\
+         cat >/dev/null",
+        move |status| {
+            let _ = sender.lock().unwrap().send(status);
+        },
+    );
+
+    let wait = Duration::from_secs(10);
+    assert_eq!(received.recv_timeout(wait).unwrap(), Status::Ready);
+    assert_eq!(received.recv_timeout(wait).unwrap(), Status::Restart);
+    assert!(received.recv_timeout(Duration::from_millis(300)).is_err());
+
+    server.stop(Duration::from_secs(5));
+    assert!(received.recv_timeout(Duration::from_millis(500)).is_err());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A fake server started in a folder of its own under `dir`, with the process
+/// id it wrote there once running.
+#[cfg(unix)]
+fn running(dir: &Path, name: &str, body: &str) -> (Server, String) {
+    let dir = dir.join(name);
+    std::fs::create_dir_all(&dir).unwrap();
+    let pid = dir.join("pid");
+    let server = start_fake(
+        &dir,
+        &format!(
+            "echo $$ > '{}'
+{body}",
+            pid.display()
+        ),
+        |_| {},
+    );
+    let began = Instant::now();
+    while !pid.exists() && began.elapsed() < Duration::from_secs(10) {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    (
+        server,
+        std::fs::read_to_string(pid).unwrap().trim().to_string(),
+    )
+}
+
+/// A quit while a restart is still stopping the old server waits for that stop,
+/// and for the server the restart then started, so neither outlives the app.
+/// The old one ignores its stdin closing, so only the kill after the grace
+/// ends it, well after the quit was asked for.
+#[cfg(unix)]
+#[test]
+fn a_quit_during_a_restart_waits_for_both_servers_to_stop() {
+    let dir = temp_dir("quit-restart");
+    let alive = |pid: &str| {
+        // Started under `SPAWNING`, as every process this binary starts is.
+        let _spawning = SPAWNING
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Command::new("kill")
+            .args(["-0", pid])
+            .status()
+            .unwrap()
+            .success()
+    };
+    let (old, old_pid) = running(
+        &dir,
+        "old",
+        "cat >/dev/null
+sleep 60",
+    );
+    let slot = Arc::new(Slot::default());
+    slot.put(old);
+    let next_pid = Arc::new(Mutex::new(None));
+    let (next_slot, next_dir, next_seen) = (Arc::clone(&slot), dir.clone(), Arc::clone(&next_pid));
+    slot.replace(Duration::from_secs(1), move || {
+        let (next, pid) = running(&next_dir, "next", "cat >/dev/null");
+        *next_seen.lock().unwrap() = Some(pid);
+        next_slot.put(next);
+    });
+
+    slot.stop(Duration::from_secs(5));
+    assert!(!alive(&old_pid), "the old server outlived the quit");
+    let next_pid = next_pid.lock().unwrap().clone();
+    let next_pid = next_pid.expect("the restart had not finished when the quit returned");
+    assert!(
+        !alive(&next_pid),
+        "the server the restart started outlived the quit"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Strong enough for the server to take: it ignores a code shorter than 24
 /// letters and digits.
 #[test]

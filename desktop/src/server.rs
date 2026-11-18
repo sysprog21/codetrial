@@ -19,6 +19,11 @@ use std::time::{Duration, Instant};
 /// rather than closed. The CLI tests run the real server against this text.
 const BOUND_LINE: &str = "codetrial: open http://";
 
+/// What the server prints once Change keys has saved and nothing is running
+/// any more, for this app to start it again on the new keys. The CLI tests run
+/// the real server against this text too.
+const RESTART_LINE: &str = "codetrial: keys saved and no interview running: restart now";
+
 /// How much of the server's stderr explains an exit. The reason is its last
 /// line; the ones before it are the warnings it printed on the way.
 const REASON_LINES: usize = 12;
@@ -70,6 +75,9 @@ pub fn cli_config_in(start: &Path) -> Option<PathBuf> {
 pub enum Status {
     /// Listening on `Launch::addr`.
     Ready,
+    /// Asking to be started again: Change keys saved new ones, which only a
+    /// new launch reads, and no interview is running or will start here.
+    Restart,
     /// Gone, and why, in words for the person looking at the window.
     Exited(String),
 }
@@ -144,9 +152,11 @@ fn command(launch: &Launch) -> Command {
     command
 }
 
-/// Starts the server and reports to `report` once: `Ready` and later perhaps
-/// `Exited`, or `Exited` alone. Never `Ready` after `Exited`, so a window that
-/// has been told the server is gone is not sent back to the port.
+/// Starts the server and reports to `report`: `Ready` once, then `Restart` for
+/// every restart line the server prints, then perhaps `Exited`; or `Exited`
+/// alone. `Restart` comes only after `Ready`, and neither comes after
+/// `Exited`, so a window that has been told the server is gone is not sent
+/// back to the port.
 pub fn start(
     launch: &Launch,
     report: impl Fn(Status) + Send + Sync + 'static,
@@ -191,17 +201,21 @@ pub fn start(
         copiers.push(std::thread::spawn(move || {
             let mut bound = false;
             copy_lines(stdout, &log, |line| {
-                if bound || !line.starts_with(BOUND_LINE) {
+                let status = if !bound && line.starts_with(BOUND_LINE) {
+                    bound = true;
+                    Status::Ready
+                } else if bound && line == RESTART_LINE {
+                    Status::Restart
+                } else {
                     return;
-                }
-                bound = true;
+                };
 
                 // Held across the report: a guard taken in the `if` alone is
                 // dropped before its body runs, and `Exited` could land
                 // between.
                 let finished = finished.lock().expect("report order lock");
                 if !*finished {
-                    report(Status::Ready);
+                    report(status);
                 }
             });
         }));
@@ -262,6 +276,55 @@ impl Server {
             }
             drop(child);
             std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+}
+
+/// The server this app runs, and the restart under way that is replacing it.
+/// One owner for both, so a quit can wait for a server a restart is still
+/// stopping, and for the one that restart starts, instead of exiting while
+/// either still holds the port.
+#[derive(Default)]
+pub struct Slot {
+    server: Mutex<Option<Server>>,
+    replacing: Mutex<Option<std::thread::JoinHandle<()>>>,
+}
+
+impl Slot {
+    pub fn put(&self, server: Server) {
+        *self.server.lock().expect("server lock") = Some(server);
+    }
+
+    /// Stops the running server and then runs `next`, on a thread of its own:
+    /// the stop can take up to `grace`, and the caller may be the thread
+    /// reading that server's output, which has to keep reading until it is
+    /// gone.
+    pub fn replace(&self, grace: Duration, next: impl FnOnce() + Send + 'static) {
+        // Held while the server is taken and until the thread is recorded, so a
+        // `stop` that finds the server gone also finds the thread to wait for.
+        let mut replacing = self.replacing.lock().expect("replacing lock");
+        let server = self.server.lock().expect("server lock").take();
+        *replacing = Some(std::thread::spawn(move || {
+            if let Some(server) = server {
+                server.stop(grace);
+            }
+            next();
+        }));
+    }
+
+    /// Stops the running server, waits for a restart under way, and stops
+    /// the server that restart started.
+    pub fn stop(&self, grace: Duration) {
+        let running = || self.server.lock().expect("server lock").take();
+        if let Some(server) = running() {
+            server.stop(grace);
+        }
+        let replacing = self.replacing.lock().expect("replacing lock").take();
+        if let Some(replacing) = replacing {
+            let _ = replacing.join();
+        }
+        if let Some(server) = running() {
+            server.stop(grace);
         }
     }
 }

@@ -63,7 +63,7 @@ const CLOSE_PROBE: &str = r#"(() => {
   }
 })()"#;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Phase {
     /// Waiting for both the server to be ready and the starting page to say
     /// whether this web view has WebRTC. See `open_server`.
@@ -78,6 +78,25 @@ enum Phase {
     Failed,
 }
 
+impl Phase {
+    /// Where a restart leaves the shell, or `None` when no server is serving
+    /// this window: still starting, or failed. A second request while starting
+    /// cannot follow a save, since the first save leaves the config changed and
+    /// a second is refused. WebRTC is already known from the launch being
+    /// replaced, so `open_server` acts on the new server's ready line alone.
+    fn restarting(self) -> Option<Phase> {
+        let webrtc = match self {
+            Phase::Serving => true,
+            Phase::InBrowser => false,
+            Phase::Starting { .. } | Phase::Failed => return None,
+        };
+        Some(Phase::Starting {
+            server_ready: false,
+            webrtc: Some(webrtc),
+        })
+    }
+}
+
 /// Where a close stands. One value rather than two flags, so "quitting but not
 /// closing" is not a state anything can reach.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -90,7 +109,7 @@ enum Close {
 }
 
 struct Shell {
-    server: Mutex<Option<server::Server>>,
+    server: server::Slot,
     /// The running server's Change keys code, shown or filled in this window.
     change_keys_code: Mutex<Option<String>>,
     phase: Mutex<Phase>,
@@ -116,7 +135,7 @@ fn main() {
         }))
         .plugin(tauri_plugin_dialog::init())
         .manage(Shell {
-            server: Mutex::new(None),
+            server: server::Slot::default(),
             change_keys_code: Mutex::new(None),
             phase: Mutex::new(Phase::Starting {
                 server_ready: false,
@@ -150,17 +169,7 @@ fn main() {
                 request_quit(app);
             }
         }
-        RunEvent::Exit => {
-            if let Some(server) = app
-                .state::<Shell>()
-                .server
-                .lock()
-                .expect("server lock")
-                .take()
-            {
-                server.stop(STOP_GRACE);
-            }
-        }
+        RunEvent::Exit => app.state::<Shell>().server.stop(STOP_GRACE),
         _ => {}
     });
 }
@@ -358,6 +367,7 @@ fn launch(app: &AppHandle) {
                 }
                 open_server(app);
             }
+            server::Status::Restart => restart(app),
             server::Status::Exited(message) => {
                 if !app.state::<Shell>().quitting() {
                     show_failure(app, &message, Some(data_dir.as_path()));
@@ -367,10 +377,35 @@ fn launch(app: &AppHandle) {
     });
     match started {
         Ok(server) => {
-            *app.state::<Shell>().server.lock().expect("server lock") = Some(server);
+            app.state::<Shell>().server.put(server);
         }
         Err(message) => show_failure(app, &message, Some(launch.data_dir.as_path())),
     }
+}
+
+/// Starts the server again on the keys Change keys saved, which only a new
+/// launch reads, then shows the lobby where the old one was shown. The server
+/// asks only once nothing is running and nothing new will start.
+///
+/// Back to `Starting` with WebRTC already known, so `open_server` acts on the
+/// new server's ready line alone, and so `on_navigation` keeps the window off
+/// the port while no server is behind it.
+fn restart(app: &AppHandle) {
+    let shell = app.state::<Shell>();
+    {
+        let mut phase = shell.phase.lock().expect("phase lock");
+        let Some(next) = phase.restarting() else {
+            return;
+        };
+        *phase = next;
+    }
+    note("Change keys saved: starting the server again");
+    let relauncher = app.clone();
+    shell.server.replace(STOP_GRACE, move || {
+        if !relauncher.state::<Shell>().quitting() {
+            launch(&relauncher);
+        }
+    });
 }
 
 /// The script that puts `code`, hex digits only, into the Setup page's code
@@ -543,17 +578,19 @@ fn confirm_quit(app: &AppHandle, message: &str) {
         });
 }
 
-/// Stops the server, then exits. Off the event loop, because the stop waits
-/// for the server and the window has to keep drawing while it does.
+/// Stops the server, and any a restart is still replacing, then exits. Off the
+/// event loop, because the stop waits for the server and the window has to
+/// keep drawing while it does.
 fn quit(app: &AppHandle) {
     let shell = app.state::<Shell>();
     *shell.close.lock().expect("close lock") = Close::Quitting;
-    let server = shell.server.lock().expect("server lock").take();
     let app = app.clone();
     std::thread::spawn(move || {
-        if let Some(server) = server {
-            server.stop(STOP_GRACE);
-        }
+        app.state::<Shell>().server.stop(STOP_GRACE);
         app.exit(0);
     });
 }
+
+#[cfg(test)]
+#[path = "../tests/unit/phase.rs"]
+mod tests;
