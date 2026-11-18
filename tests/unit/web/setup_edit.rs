@@ -373,6 +373,7 @@ async fn change_keys_answers_only_its_loopback_host_and_code() {
             "livekitEndpoint": livekit,
             "googleApiKey": false,
             "restartPending": false,
+            "appRestarts": false,
         })
     );
     for body in [
@@ -428,7 +429,13 @@ async fn a_save_writes_only_the_new_keys_and_this_process_keeps_the_old_ones() {
             "livekitApiSecret": NEW_SECRET,
         }))
         .await;
-    assert_eq!((status, body), (StatusCode::OK, json!({ "saved": true })));
+    assert_eq!(
+        (status, body),
+        (
+            StatusCode::OK,
+            json!({ "saved": true, "appRestarts": false })
+        )
+    );
     assert_eq!(
         std::fs::read_to_string(&server.path).unwrap(),
         format!(
@@ -614,6 +621,8 @@ async fn only_a_launchers_child_stops_admitting_interviews_once_it_saves() {
             }))
             .await;
         assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["appRestarts"], closes);
+        assert_eq!(server.summary().await["appRestarts"], closes);
         let closed = || dispatcher.closed.load(std::sync::atomic::Ordering::SeqCst);
         let began = std::time::Instant::now();
         while !closed() && began.elapsed() < std::time::Duration::from_secs(2) {
@@ -621,6 +630,24 @@ async fn only_a_launchers_child_stops_admitting_interviews_once_it_saves() {
         }
         assert_eq!(closed(), closes);
     }
+}
+
+/// A launcher's child without an interviewer of its own never asks for the
+/// restart, so its page tells the person to restart it by hand.
+#[tokio::test]
+async fn a_launchers_child_without_an_interviewer_says_it_is_restarted_by_hand() {
+    let (livekit, _livekit) = livekit().await;
+    let server = Server::start_after(&livekit, None, AfterSave::Launcher).await;
+    assert_eq!(server.summary().await["appRestarts"], false);
+    let (status, body) = server
+        .save(json!({
+            "code": server.code,
+            "livekitApiKey": NEW_KEY,
+            "livekitApiSecret": NEW_SECRET,
+        }))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["appRestarts"], false);
 }
 
 /// An interview admitted between the save's own check and the close still runs

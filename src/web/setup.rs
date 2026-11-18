@@ -448,6 +448,13 @@ const SETUP_PAGE: &str = r#"<!doctype html>
   const useOffer = document.getElementById('use-offer');
   const offerStatus = document.getElementById('offer-status');
   const restartNotice = document.getElementById('restart-notice');
+  // Shows the notice, worded for whoever restarts the server onto the new keys.
+  const showRestartNotice = (appRestarts) => {
+    if (appRestarts) {
+      restartNotice.textContent = 'The app starts the server again on the new keys once no interview is running. Until then it keeps using the old ones and admits no new interview.';
+    }
+    restartNotice.hidden = false;
+  };
   // Set once the server says this is Change keys, on a server already running.
   let editing = false;
 
@@ -588,7 +595,7 @@ const SETUP_PAGE: &str = r#"<!doctype html>
     if (response.ok && editing) {
       line.className = 'ok';
       line.textContent = 'Saved.';
-      restartNotice.hidden = false;
+      showRestartNotice(body.appRestarts);
     } else if (response.ok) {
       line.className = 'ok';
       line.textContent = 'Saved. Starting codetrial…';
@@ -678,7 +685,7 @@ const SETUP_PAGE: &str = r#"<!doctype html>
     form.elements.code.required = true;
     submit.textContent = 'Save changes';
     if (found.restartPending) {
-      restartNotice.hidden = false;
+      showRestartNotice(found.appRestarts);
       submit.disabled = true;
     }
   })();

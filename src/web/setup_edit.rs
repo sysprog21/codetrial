@@ -92,14 +92,21 @@ impl SetupContext {
         &self.code
     }
 
+    /// Whether the launcher restarts this server once a save is drained, so the
+    /// page says the app restarts it rather than asking the person to.
+    fn app_restarts(&self, dispatcher: Option<&dyn RoomDispatcher>) -> bool {
+        self.after_save == AfterSave::Launcher && dispatcher.is_some()
+    }
+
     /// What the page may show of the running config. Never a key.
-    fn summary(&self) -> Value {
+    fn summary(&self, dispatcher: Option<&dyn RoomDispatcher>) -> Value {
         let value = |key: &str| self.values.get(key).map_or("", |value| value.trim());
         json!({
             "configured": true,
             "livekitEndpoint": super::setup::public_endpoint(value("LIVEKIT_URL")),
             "googleApiKey": !value("GOOGLE_API_KEY").is_empty() || !value("GOOGLE_API_KEYS").is_empty(),
             "restartPending": regular_file(&self.path).as_deref() != Some(self.contents.as_str()),
+            "appRestarts": self.app_restarts(dispatcher),
         })
     }
 
@@ -210,7 +217,10 @@ impl SetupContext {
                 json!({ "error": format!("could not write {}: {error}", self.path.display()) }),
             );
         }
-        json_response(StatusCode::OK, json!({ "saved": true }))
+        json_response(
+            StatusCode::OK,
+            json!({ "saved": true, "appRestarts": self.app_restarts(dispatcher) }),
+        )
     }
 }
 
@@ -373,7 +383,7 @@ pub(super) async fn page_handler(State(state): State<AppState>, headers: HeaderM
 
 pub(super) async fn summary_handler(State(state): State<AppState>, headers: HeaderMap) -> Response {
     match allowed(&state, &headers) {
-        Ok(context) => json_response(StatusCode::OK, context.summary()),
+        Ok(context) => json_response(StatusCode::OK, context.summary(state.dispatcher.as_deref())),
         Err(refusal) => refusal,
     }
 }
