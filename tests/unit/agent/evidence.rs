@@ -418,11 +418,13 @@ fn evidence_ledger_measures_reversal_and_test_progress_latency() {
         true,
         analyze_code("python", changed, starter),
     );
-    ledger.record_test(
-        Some(40),
-        450,
-        &serde_json::json!({ "passed": 1, "total": 1 }),
-    );
+    for (source, receipt, passed) in [(35, 350, 0), (40, 450, 1)] {
+        ledger.record_test(
+            Some(source),
+            receipt,
+            &serde_json::json!({ "passed": passed, "total": 1 }),
+        );
+    }
     assert_eq!(ledger.stuck.undo_redo_cycles, 1);
     assert_eq!(ledger.stuck.last_meaningful_change_ms, Some(300));
     assert_eq!(ledger.stuck.last_test_progress_ms, Some(450));
@@ -1024,10 +1026,8 @@ fn a_run_that_never_executed_leaves_the_deltas_where_they_were() {
     );
     assert_eq!(ledger.tests.newly_passed, 0);
 
-    // The first run was progress and is still the last one. Counting the
-    // unchanged code as three cases newly passing would have moved that mark to
-    // the run that only repeated it.
-    assert_eq!(ledger.stuck.last_test_progress_ms, Some(200));
+    // The baseline and the unchanged rerun record no progress.
+    assert_eq!(ledger.stuck.last_test_progress_ms, None);
 
     // Entry 2 is the diagnostic the failed setup produced; entry 3 is the run
     // itself, which says in as many words that it did not execute.

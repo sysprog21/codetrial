@@ -4,8 +4,25 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{EvidenceLedger, ObservationFamily, Provenance, TestState};
+use super::{EvidenceLedger, ObservationFamily, Provenance};
 use crate::sha256_hex;
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct TestState {
+    pub total: u32,
+    pub passed: u32,
+    pub failed: u32,
+    pub newly_passed: i32,
+    pub newly_failed: i32,
+    /// Whether an earlier executed run supplies a baseline for the deltas.
+    /// Naming a different language than the last executed run that named one
+    /// starts a new baseline.
+    pub follows_executed_run: bool,
+    pub regression: bool,
+    pub consecutive_identical_failures: u32,
+    pub failure_signature: Option<String>,
+    pub source_timestamp_ms: Option<u64>,
+}
 
 /// A digest of what failed, used only to tell one failing run from the next.
 ///
@@ -206,14 +223,15 @@ impl EvidenceLedger {
                 source_timestamp_ms,
             };
             self.progress.tested = true;
-            self.progress.test_progress |= self.tests.newly_passed > 0;
-            if self.tests.newly_passed > 0 {
+            if self.tests.follows_executed_run && self.tests.newly_passed > 0 {
+                self.progress.test_progress = true;
                 self.stuck.last_test_progress_ms = Some(receipt_timestamp_ms);
                 self.stuck.test_progress_latency_ms = self
                     .stuck
                     .last_meaningful_change_ms
                     .map(|meaningful| receipt_timestamp_ms.saturating_sub(meaningful));
             }
+
             self.progress.all_tests_passed_once |= passed == total;
             self.stuck.repeated_failure_count = self.tests.consecutive_identical_failures;
         }
