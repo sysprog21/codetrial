@@ -432,13 +432,13 @@ async fn a_failed_listening_note_keeps_the_cold_brief_due_and_never_arms_the_tic
     .unwrap();
     let peer = tokio::spawn(async move {
         let (socket, _) = listener.accept().await.unwrap();
+        let mut socket = tokio_tungstenite::accept_async(socket).await.unwrap();
         let accepted_recv = {
-            let socket_ref = socket2::SockRef::from(&socket);
+            let socket_ref = socket2::SockRef::from(socket.get_ref());
             socket_ref.set_recv_buffer_size(1024).unwrap();
             socket_ref.recv_buffer_size().unwrap()
         };
         assert!((1..=16_384).contains(&accepted_recv), "{accepted_recv}");
-        let mut socket = tokio_tungstenite::accept_async(socket).await.unwrap();
         let setup = socket.next().await.unwrap().unwrap();
         assert!(
             serde_json::from_str::<serde_json::Value>(setup.to_text().unwrap()).unwrap()["setup"]
