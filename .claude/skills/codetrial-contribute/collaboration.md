@@ -33,7 +33,11 @@ post one on the user's behalf.
 An accepted issue usually carries a maintainer comment that confirms the
 cause on `main` at `file:line`, draws the boundary of the change, names the
 tests to add, and says to open the pull request with `Closes #N`. That comment
-is the specification: build exactly that slice.
+is the specification: build exactly that slice. `main` moves while an issue
+waits, so before the first edit rerun the comment's reproduction or open its
+`file:line` on current upstream `main`. When the code no longer matches,
+draft what it shows for the user to approve and post, then wait for the
+maintainer to redraw the slice instead of building the old one.
 
 The maintainer also assigns the issue, without being asked, to the contributor
 whose plan it accepts, and the assignee is the record of who holds the work
@@ -99,8 +103,9 @@ partition rather than reopening it.
   instruction was to build on its branch; after it merged,
   [the instruction changed to main](https://github.com/sysprog21/codetrial/issues/94#issuecomment-6131796489).
   Recheck status before repeating checkout instructions.
-- When a prerequisite merges, rebase and remove its commits from the dependent
-  PR's diff, and if the draft's stated blocker is gone, mark it ready
+- When a prerequisite merges, offer to rebase the dependent PR so its diff
+  drops the prerequisite's commits and, if the draft's stated blocker is gone,
+  to mark it ready; run either when the user asks
   ([#280](https://github.com/sysprog21/codetrial/pull/280#issuecomment-6131927140)).
   File overlap with another open PR calls for an integration check by whichever
   lands second, not automatic duplicate closure.
@@ -190,7 +195,7 @@ so the newest visible one is current. Each maps to one action;
 | --- | --- |
 | "Rebase latest `main` branch and resolve conflicts." / "Rebase latest `main` and resolve conflicts" | A rebase onto upstream `main`, not a merge commit; contribute has the steps. |
 | "Rebase latest `main` branch." (to a question about a failing dependency check, #396) | `main` already carries the fix; rebase picks it up, and the PR carries no lockfile bump of its own. |
-| "Rebase the current branch onto the upstream default branch and rework the series into functionally minimal commits ..." | The rebase above, plus fold fixups into the commit they fix and rewrite the messages; it is the `rebase` skill's description, so run that skill when installed. |
+| "Rebase the current branch onto the upstream default branch and rework the series into functionally minimal commits ..." | The rebase above, plus fold fixups into the commit they fix and rewrite the messages; it is the `rebase` skill's description, so offer that skill when installed and run it when the user asks. |
 | "Fold similar commits" | One commit per functional change. |
 | "Check `CONTRIBUTING.md` carefully and enforce the rules." / "Check https://cbea.ms/git-commit/" | Usually the commit messages: run `./scripts/git-commit-msg.sh --rules`, then reread every commit and the PR title and body against CONTRIBUTING. |
 | "Remove AI agent markers" / "Remove unnecessary `Co-authored-by` markers" | Drop the AI-tool attribution trailers conventions names; keep a human co-author's credit. |
@@ -201,6 +206,8 @@ so the newest visible one is current. Each maps to one action;
 | "Create another pull request." / "split it into a separate pull request" | Move that change to its own branch and PR; drop it from this one. |
 | "Do more analysis and refinements." | Find the cause; a rerun or a local pass is not an answer. |
 | "Any update?" | A review is waiting on the author: push or reply on each open thread. |
+| "State your intent directly" instead of "Could you assign this to me?" (#695) | Claim an issue in one sentence: "I would like to take on this task." |
+| "Simply request for review via GitHub web interface" instead of "Could you take another look?" (#605) | After pushing, use Re-request review on the pull request page instead of a comment asking for a re-look. |
 | "Provide a more thorough analysis and identify the root cause." / "... the detailed action items." / "Provide more analysis and consolidate proposal." (#317, #336, #368, #387, #392) | The issue is not actionable yet: name the code path at `file:line` and why it fails, or list bounded action items, each with an observable outcome. |
 | "Update the GitHub issue descriptions accordingly." (#359) | The analysis posted as a comment goes into the issue body, so the next reader needs no comments; "An edit to the issue" in [SKILL.md](SKILL.md) has the steps. |
 | "Create an issue addressing P1 and make it fully actionable." (#306) | Claiming one item of a multi-part proposal: file that item as its own issue with scope and acceptance criteria, rather than claiming it in the proposal thread. |

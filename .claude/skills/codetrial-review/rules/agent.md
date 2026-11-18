@@ -59,7 +59,7 @@ Applies to: `src/agent.rs` (`LIVE_PROMPT_VERSION`, report schema), `web/lib.js`
 `tests/browser/render.test.js`
 
 A version bump has to change the Rust constant,
-`ACTIVE_CONTRACT.livePromptVersion` (currently 30 on both sides), the new
+`ACTIVE_CONTRACT.livePromptVersion` (the same number on both sides), the new
 bundle row (which names its live prompt version, like every earlier row), and
 the browser tests that pin the active contract or allowlist card words.
 `interview_contract_versions_are_one_closed_bundle` checks only that the row

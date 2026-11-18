@@ -53,11 +53,11 @@ git log --no-merges --format=%s | awk '{print length}' | sort -n
 
 One thing reviewers reject that the hook cannot see: the body stands on its
 own. "Related to #263" in place of the reason got "explain the rationale and
-context" (#268). The hook now refuses the two other things maintainers used to
-ask for by hand: a `Co-authored-by` or "Generated with" trailer attributing an
-AI tool (#251, #256, #285; a human co-author's credit stays), and a subject that
-names only the file, such as GitHub's web-editor default "Update web/app.js"
-(#276), which says where and not what and which the refusal explains.
+context" (#268). The hook refuses a `Co-authored-by` or "Generated with" trailer
+attributing an AI tool (#251, #256, #285; a human co-author's credit stays), and
+a subject that names only the file, such as GitHub's web-editor default "Update
+web/app.js" (#276), which says where and not what and which the refusal
+explains.
 
 ## Prose register
 
@@ -119,7 +119,7 @@ Use one report for a combined invocation, listing every skill used; a separate
 subtask with another examined head needs its own report. A conversational
 answer with no code findings still records its scope and evidence, with empty
 case arrays. Incomplete work records its limits and next checks, not a successful
-review. Review bundle preparation now automates pinned begin and bounded private
+review. Review bundle preparation automates pinned begin and bounded private
 experience context; review closeout explicitly runs `review-lifecycle.py finish`
 and retains durable pending data for an explicit retry on failure. Other skills
 close with `experience-close.sh`, a wrapper over `experience record` that fills
@@ -194,8 +194,12 @@ what and why, so a reply that re-summarizes the diff is telling the reviewer
 what git is showing them. A reply opens with the fact. It carries no greeting,
 thanks, apology ("Sorry for the delay"), self-introduction ("my first issue"),
 or list of what the last push changed; maintainers called out each of those on
-#60, #83, #94, #123, #185, #271 and #285. A counterexample to a review finding
-is a correction in CONTRIBUTING.md's sense and belongs in its thread.
+#60, #83, #94, #123, #185, #271 and #285. A request states its intent instead of
+asking a question, and a review is asked for with GitHub's request-review
+control, not a comment
+([collaboration.md](../codetrial-contribute/collaboration.md#what-the-one-line-review-requests-mean)
+has the wording). A counterexample to a review finding is a correction in
+CONTRIBUTING.md's sense and belongs in its thread.
 [collaboration.md](../codetrial-contribute/collaboration.md#review-evidence-including-bot-findings)
 has how to answer a bot finding.
 

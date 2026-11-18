@@ -5,8 +5,8 @@ features. The snapshot builder, verified `ensure`, source-safe evidence output
 and public credential projection are implemented. The publisher workflow and
 release management are implemented; real workflow-token and signed-download
 validation still require deployment. An offline bootstrap harness checks pipeline
-consistency without claiming network performance. Retrieval expansion,
-inflight/freshness changes and evaluation work remain planned.
+consistency without claiming network performance. Retrieval expansion, inflight
+links, per-thread freshness and ranking work remain planned.
 
 ## Reference and boundary
 
@@ -103,8 +103,8 @@ that a model ignores malicious prose; the review's verification step remains.
 
 ### Ask several bounded questions without widening scope
 
-Current search already retries an empty AND query with OR, but does not disclose
-that change. Make that observable first. Then measure a bounded expansion layer:
+Search discloses its AND to OR fallback (`fallback=` in the retrieval line,
+`--strict` to forbid it). Measure a bounded expansion layer:
 original text, normalized errors, symbols, paths, and caller filters without text.
 A single-term query cannot be widened; report a fallback even when it remains
 empty only when the effective query actually changed.
@@ -131,12 +131,12 @@ must be retrievable in full through the existing show command. If a new
 thread-focus view is justified, focus orders an already selected thread rather
 than accidentally filtering every comment away.
 
-Use SQL-level selection and diversity caps before transferring rows to Python.
-Materialize FTS5 rank before applying window functions, and validate the minimum
-supported SQLite version instead of assuming every host supports the same SQL.
-The present search fetches every match and caps in Python; that becomes an
-avoidable cost as snapshots grow. Select the best evidence before applying a
-presentation-only newest sort, so recency does not pick LGTM as a representative.
+Selection and diversity caps run in SQL (`--candidate-limit`); keep them there
+as snapshots grow. Materialize FTS5 rank before applying window functions, and
+validate the minimum supported SQLite version instead of assuming every host
+supports the same SQL. Select the best evidence before applying a
+presentation-only newest sort, so recency does not pick LGTM as a
+representative.
 
 ### Inflight work is a relation, not just path overlap
 
@@ -205,9 +205,9 @@ remain hypotheses, not publication gates or reported improvements.
 
 ## Delivery order and non-goals
 
-First establish the new evidence/coverage and safety tests and a frozen retrieval
-baseline. Then implement disclosed fallback, bounded expansion, inflight links,
-per-thread freshness and focused context in small measured changes. Build the
+The evidence/coverage and safety tests and the frozen retrieval controls ship
+(see evaluation.md). Implement bounded expansion, inflight links, per-thread
+freshness and focused context in small measured changes. Build the
 publisher using the already verified snapshot/bootstrap path, with bounded,
 resumable preparation and limited retention. Do not delay release distribution
 on a statistically conclusive human experiment; do not claim it improves review

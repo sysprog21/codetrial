@@ -101,6 +101,11 @@ is yours:
 
 Say in the report how many findings were exact, moved, stale, unchecked and
 unparsed.
+A finding the author declined with a reason is read again at the head with that
+reason in hand. If the code or a maintainer's ruling shows the reason holds, it
+moves to Completed as accepted with that evidence; otherwise it is raised once
+more with the new evidence and then stays an open Question for the maintainer.
+
 Placement establishes only where the quote is: verify every finding at the current head
 under [step 4](SKILL.md#4-verify), guards and callers included, even when it
 is exact, and keep an unproven one as a Question.

@@ -159,7 +159,7 @@ keep it outside Git and never publish it.
 
 `diffmodel.py` reads the pinned diff once, with the standard library only, into
 files, hunks and numbered lines, and the page draws that reading
-(`GET /api/diff`; the polled session no longer carries the diff). The same reading
+(`GET /api/diff`; the polled session does not carry the diff). The same reading
 decides what the reviewer is given. It knows no language: it matches lines and
 words, and a change it cannot classify stays an ordinary edit.
 

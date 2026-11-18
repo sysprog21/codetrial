@@ -592,10 +592,13 @@ comment needs a judgement of the PR, so it goes on the confirmed list.
 
 ## Review the queue
 
-`review` is the queue for "review what is waiting on me". Before launching PR
-agents, run one bounded `memory.py ensure --budget 300 --max 60` using the handled
-JSON/exit-code flow in [review-prs.md](review-prs.md#one-agent-per-pr-all-in-one-message).
-Pass that exact shared status path, exit code, reason and coverage to every agent.
+`review` is the queue for an explicit request to review what is waiting on the
+maintainer. A bare `/codetrial-triage` reviews low or blocked PRs, and any other
+with an open review thread, unattended under [review-prs.md](review-prs.md)
+instead, and this section's confirmation applies only to the by-hand request.
+Before launching PR agents, follow the memory ensure and shared-status flow in
+[review-prs.md](review-prs.md#one-agent-per-pr-all-in-one-message) and pass that
+exact shared status path, exit code, reason and coverage to every agent.
 Each agent runs local context only, without another ensure/poll/detail or backfill.
 Missing/degraded history appears in every review's coverage; it never aborts the
 code review or proves that no precedent exists. Each PR otherwise gets the

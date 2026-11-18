@@ -94,12 +94,8 @@ these samples as a production latency bound or emit an inferred speedup ratio.
 Record live backfill/poll/detail/sweep observations separately with immutable
 per-invocation responses, actual start/end times and the token type. Distinguish
 gh invocations, returned response pages and any separately instrumented HTTP
-requests/retries. Missing timing or capture evidence stays unknown. The previous
-exploratory backfill capture has no exact end time. Its recorder would overwrite
-repeated argv responses, but an audit found 1,191 distinct argv across 1,191
-invocations, so no overwrite was observed. Do not claim data loss from that
-design risk, or infer a precise full-backfill wall time from it. This harness
-still uses a state-derived fixture, not that chronological response trace.
+requests/retries. Missing timing or capture evidence stays unknown. This harness
+still uses a state-derived fixture, not a chronological response trace.
 
 After deployment, measure actual signed download, attestation, installation and
 catch-up from a fresh clone. Check real workflow-token permissions separately.
