@@ -1,4 +1,5 @@
-import { startMediaMeter } from "./mic-meter.js";
+import { peakLevel } from "./audio-check.js";
+
 /// Browser-observed gap between Jim entering "speaking" and the first
 /// detectable remote audio activity. This is not end-to-end latency.
 export function createAudioResponseTiming({
@@ -68,6 +69,85 @@ export function createAudioResponseTiming({
     reset,
   };
 }
+/// Owns the diagnostic monitor for the current room and remote track.
+export function createAudioTimingController({
+  startMonitor = startAudioActivityMonitor,
+  onMonitorError = () => {},
+  ...timingOptions
+} = {}) {
+  const timing = createAudioResponseTiming(timingOptions);
+  let monitor = null;
+
+  function release(track = null, reason = "audio monitor released") {
+    // A late unsubscribe may refer to a track we already replaced.
+    if (track && track !== monitor?.track) return;
+
+    const previous = monitor;
+    monitor = null;
+    previous?.stop?.();
+    timing.cancelPending(reason);
+  }
+
+  function attach(track, room) {
+    if (monitor?.track === track && monitor.room === room) return;
+    release(null, "audio track replaced");
+
+    const mediaTrack = track.mediaStreamTrack;
+    if (!mediaTrack) return;
+
+    const current = { track, room, stop: null, ready: false };
+    monitor = current;
+    try {
+      current.stop = startMonitor(
+        mediaTrack,
+        () => {
+          if (monitor === current && current.ready) timing.audioActivity();
+        },
+        {
+          onAvailable() {
+            if (monitor === current) current.ready = true;
+          },
+          onQuiet() {
+            if (monitor === current) timing.audioQuiet();
+          },
+          onUnavailable(reason) {
+            if (monitor !== current) return;
+            current.ready = false;
+            timing.cancelPending(reason);
+          },
+        },
+      );
+    } catch (error) {
+      release();
+      onMonitorError(error);
+    }
+  }
+
+  return {
+    attach,
+    release,
+    reset: timing.reset,
+    disconnect(room, currentRoom) {
+      // Report delivery can clear the page's room before disconnect emits.
+      if (currentRoom !== room && (currentRoom || monitor?.room !== room))
+        return;
+
+      release(null, "room disconnected");
+      timing.reset();
+    },
+    speakingChanged(speaking, connected) {
+      timing.speakingChanged(
+        speaking,
+        !connected
+          ? "room disconnected"
+          : monitor?.ready
+            ? null
+            : "monitor not ready",
+      );
+    },
+  };
+}
+
 /// Observe remote audio activity without routing it to another output.
 /// The returned function releases the analyser and its AudioContext.
 export function startAudioActivityMonitor(
@@ -90,6 +170,8 @@ export function startAudioActivityMonitor(
   const context = createContext();
   let stopped = false;
   let unavailable;
+  let source;
+  let frame = null;
 
   function notifyAvailability(reason) {
     if (unavailable === reason) return;
@@ -111,63 +193,61 @@ export function startAudioActivityMonitor(
     void context.resume?.().catch(() => {});
   }
 
-  const stopMeter = startMediaMeter(
-    stream,
-    (peak) => {
-      if (peak > threshold) onActivity();
-      else onQuiet();
-    },
-    (message) => {
-      throw new Error(message);
-    },
-    () => stopped,
-    {
-      createContext: () => context,
-      schedule,
-      cancel,
-      sampleSize: 1024,
-      deferFirstFrame: true,
-      shouldSample: () => {
-        const reason = visibilityTarget?.hidden
-          ? "page hidden"
-          : context.state !== "running"
-            ? `audio context ${context.state}`
-            : track.readyState !== "live"
-              ? "track ended"
-              : track.muted
-                ? "track muted"
-                : track.enabled === false
-                  ? "track disabled"
-                  : null;
-
-        notifyAvailability(reason);
-        return reason === null;
-      },
-    },
-  );
-  try {
-    resumeOnGesture();
-  } catch (error) {
-    stopMeter();
-    throw error;
-  }
-  visibilityTarget?.addEventListener("visibilitychange", visibilityChanged);
-  gestureTarget?.addEventListener("pointerdown", resumeOnGesture);
-  gestureTarget?.addEventListener("keydown", resumeOnGesture);
-
-  return () => {
+  function stop() {
     if (stopped) return;
-
     stopped = true;
-
+    if (frame !== null) cancel(frame);
     gestureTarget?.removeEventListener("pointerdown", resumeOnGesture);
     gestureTarget?.removeEventListener("keydown", resumeOnGesture);
-
     visibilityTarget?.removeEventListener(
       "visibilitychange",
       visibilityChanged,
     );
+    source?.disconnect();
+    void context.close().catch(() => {});
+  }
 
-    stopMeter();
-  };
+  try {
+    const analyser = context.createAnalyser();
+    analyser.fftSize = 1024;
+    source = context.createMediaStreamSource(stream);
+    source.connect(analyser);
+    const samples = new Uint8Array(analyser.fftSize);
+
+    function tick() {
+      frame = null;
+      if (stopped) return;
+
+      const reason = visibilityTarget?.hidden
+        ? "page hidden"
+        : context.state !== "running"
+          ? `audio context ${context.state}`
+          : track.readyState !== "live"
+            ? "track ended"
+            : track.muted
+              ? "track muted"
+              : track.enabled === false
+                ? "track disabled"
+                : null;
+
+      notifyAvailability(reason);
+      if (!stopped && reason === null) {
+        analyser.getByteTimeDomainData(samples);
+        if (peakLevel(samples) > threshold) onActivity();
+        else onQuiet();
+      }
+      if (!stopped) frame = schedule(tick);
+    }
+
+    frame = schedule(tick);
+    resumeOnGesture();
+    visibilityTarget?.addEventListener("visibilitychange", visibilityChanged);
+    gestureTarget?.addEventListener("pointerdown", resumeOnGesture);
+    gestureTarget?.addEventListener("keydown", resumeOnGesture);
+  } catch (error) {
+    stop();
+    throw error;
+  }
+
+  return stop;
 }

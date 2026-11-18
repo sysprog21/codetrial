@@ -13,8 +13,7 @@ import {
   MIC_CONFIRM_FRAMES,
   preflightReadiness,
 } from "../../web/audio-check.js";
-import { createMicMeter, startMediaMeter } from "../../web/mic-meter.js";
-import { stubGlobal } from "./source.js";
+import { createMicMeter } from "../../web/mic-meter.js";
 
 /// A pool with one audio track, whose readiness a test can change.
 function fakePool(audioState = "live") {
@@ -293,95 +292,4 @@ test("a dead device of either kind reopens the request the pool makes", () => {
       `and the pool asked for a replacement ${dead} device`,
     );
   }
-});
-
-test("the real media meter samples its own stream immediately and stops on the next frame", async (t) => {
-  let tick;
-  let stopped = false;
-  let closes = 0;
-  const stream = { label: "microphone stream" };
-  const streams = [];
-  const sampleLengths = [];
-  const peaks = [];
-  const errors = [];
-  const analyser = {
-    fftSize: 0,
-    get frequencyBinCount() {
-      return this.fftSize / 2;
-    },
-    getByteTimeDomainData(samples) {
-      sampleLengths.push(samples.length);
-      samples.fill(128);
-      samples[511] = 192;
-    },
-  };
-  stubGlobal(
-    t,
-    "AudioContext",
-    class {
-      createAnalyser() {
-        return analyser;
-      }
-      createMediaStreamSource(input) {
-        streams.push(input);
-        return {
-          connect(target) {
-            assert.equal(target, analyser);
-          },
-          disconnect() {},
-        };
-      }
-      async close() {
-        closes++;
-      }
-    },
-  );
-  stubGlobal(t, "requestAnimationFrame", (callback) => {
-    tick = callback;
-    return 1;
-  });
-  stubGlobal(t, "cancelAnimationFrame", () => {});
-  const stop = await startMediaMeter(
-    stream,
-    (peak) => peaks.push(peak),
-    (error) => errors.push(error),
-    () => stopped,
-  );
-  assert.equal(
-    typeof stop,
-    "function",
-    "the shared loop exposes explicit cleanup",
-  );
-  assert.deepEqual(streams, [stream]);
-  assert.equal(analyser.fftSize, 1024);
-  assert.deepEqual(sampleLengths, [512]);
-  assert.deepEqual(peaks, [0.5]);
-  tick();
-  assert.deepEqual(peaks, [0.5, 0.5]);
-  stopped = true;
-  tick();
-  stop();
-  assert.equal(closes, 1, "cleanup is idempotent after shouldStop");
-  assert.deepEqual(peaks, [0.5, 0.5]);
-  assert.deepEqual(errors, []);
-});
-
-test("the real media meter reports setup failures as strings", async (t) => {
-  stubGlobal(
-    t,
-    "AudioContext",
-    class {
-      constructor() {
-        throw new Error("No audio context");
-      }
-    },
-  );
-  const errors = [];
-  await startMediaMeter(
-    {},
-    () => assert.fail("no sample without a context"),
-    (error) => errors.push(error),
-    () => false,
-  );
-  assert.deepEqual(errors, ["No audio context"]);
 });

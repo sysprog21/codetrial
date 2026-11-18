@@ -1,8 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { startMediaMeter } from "../../web/mic-meter.js";
 import {
   createAudioResponseTiming,
+  createAudioTimingController,
   startAudioActivityMonitor,
 } from "../../web/audio-response-timing.js";
 
@@ -547,48 +547,6 @@ for (const [name, peak, expected] of [
   });
 }
 
-test("microphone and remote timing meters retain separate sources and lifetimes", () => {
-  const f = fixture();
-  const mic = monitorFixture();
-  const remote = monitorFixture({ peak: 0 });
-  const peaks = [];
-  const stopMic = startMediaMeter(
-    mic.options.createStream(mic.track),
-    (peak) => peaks.push(peak),
-    (error) => assert.fail(error),
-    () => false,
-    mic.options,
-  );
-  const stopRemote = startAudioActivityMonitor(
-    remote.track,
-    f.timing.audioActivity,
-    { ...remote.options, onQuiet: f.timing.audioQuiet },
-  );
-  assert.equal(mic.streams[0].getTracks()[0], mic.track);
-  assert.equal(remote.streams[0].getTracks()[0], remote.track);
-  remote.tick();
-  f.timing.speakingChanged(true);
-  remote.tick();
-  mic.tick();
-  assert.deepEqual(peaks, [0.5, 0.5]);
-  assert.deepEqual(
-    f.measurements,
-    [],
-    "microphone activity cannot satisfy remote timing",
-  );
-  f.advance(80);
-  remote.setPeak(0.5);
-  remote.tick();
-  assert.deepEqual(f.measurements, [80]);
-  stopRemote();
-  assert.equal(remote.closes(), 1);
-  assert.equal(mic.closes(), 0);
-  mic.tick();
-  assert.equal(peaks.length, 3);
-  stopMic();
-  assert.equal(mic.closes(), 1);
-});
-
 test("failed monitor setup leaves no gesture or visibility listeners", () => {
   const m = monitorFixture({
     state: "suspended",
@@ -613,7 +571,7 @@ test("failed monitor setup leaves no gesture or visibility listeners", () => {
   assert.equal(m.closes(), 1);
 });
 
-test("a synchronous resume failure releases the shared meter before throwing", () => {
+test("a synchronous resume failure releases the remote monitor before throwing", () => {
   const m = monitorFixture({ state: "suspended" });
   m.context.resume = () => {
     throw new Error("Resume failed");
@@ -625,4 +583,104 @@ test("a synchronous resume failure releases the shared meter before throwing", (
   assert.equal(m.closes(), 1);
   assert.equal(m.disconnections(), 1);
   assert.equal(m.cancellations(), 1);
+});
+
+test("callbacks from a released monitor cannot affect a reattached track", () => {
+  const monitors = [];
+  const measurements = [];
+  const diagnostics = [];
+  let time = 0;
+  const controller = createAudioTimingController({
+    now: () => time,
+    report: (elapsed) => measurements.push(elapsed),
+    diagnose: (reason) => diagnostics.push(reason),
+    startMonitor(track, activity, options) {
+      const monitor = { activity, ...options, stopped: false };
+      monitors.push(monitor);
+      return () => {
+        monitor.stopped = true;
+      };
+    },
+  });
+  const room = {};
+  const track = { mediaStreamTrack: {} };
+  controller.attach(track, room);
+  const old = monitors[0];
+  controller.release(null, "room reconnecting");
+  assert.equal(old.stopped, true);
+  controller.attach(track, room);
+  controller.attach(track, room);
+  assert.equal(monitors.length, 2);
+  const current = monitors[1];
+  current.onAvailable();
+  controller.speakingChanged(true, true);
+  current.onQuiet();
+  old.onUnavailable("track ended");
+  old.onAvailable();
+  old.onQuiet();
+  time = 80;
+  old.activity();
+  assert.deepEqual(measurements, []);
+  current.activity();
+  assert.deepEqual(measurements, [80]);
+  assert.deepEqual(diagnostics, []);
+});
+
+test("a stale disconnect preserves the newer monitor even after the page clears its room", () => {
+  const f = fixture();
+  const first = monitorFixture({ peak: 0 });
+  const second = monitorFixture({ peak: 0 });
+  const controller = createAudioTimingController({
+    diagnose: (reason) => f.diagnostics.push(reason),
+    startMonitor(track, activity, options) {
+      const m = track === first.track ? first : second;
+      return startAudioActivityMonitor(track, activity, {
+        ...m.options,
+        ...options,
+      });
+    },
+  });
+  const oldRoom = {};
+  const newRoom = {};
+  const oldTrack = { mediaStreamTrack: first.track };
+  const newTrack = { mediaStreamTrack: second.track };
+  controller.attach(oldTrack, oldRoom);
+  controller.attach(newTrack, newRoom);
+  assert.equal(first.closes(), 1);
+  controller.release(oldTrack);
+  controller.disconnect(oldRoom, newRoom);
+  controller.disconnect(oldRoom, null);
+  assert.equal(second.closes(), 0);
+
+  second.tick();
+  controller.speakingChanged(true, true);
+  second.tick();
+  controller.disconnect(newRoom, null);
+  assert.equal(second.closes(), 1);
+  assert.deepEqual(f.diagnostics, ["room disconnected"]);
+});
+
+test("unavailable audio cancels a pending turn and recovery cannot measure it", () => {
+  const m = monitorFixture({ peak: 0 });
+  const diagnostics = [];
+  const measurements = [];
+  const controller = createAudioTimingController({
+    diagnose: (reason) => diagnostics.push(reason),
+    report: (elapsed) => measurements.push(elapsed),
+    startMonitor: (track, activity, options) =>
+      startAudioActivityMonitor(track, activity, { ...m.options, ...options }),
+  });
+  controller.attach({ mediaStreamTrack: m.track }, {});
+  m.tick();
+  controller.speakingChanged(true, true);
+  m.tick();
+  m.track.muted = true;
+  m.tick();
+  m.track.muted = false;
+  m.tick();
+  m.setPeak(0.5);
+  m.tick();
+  assert.deepEqual(diagnostics, ["track muted"]);
+  assert.deepEqual(measurements, []);
+  controller.release();
 });

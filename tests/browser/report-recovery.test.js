@@ -509,17 +509,9 @@ test("terminal room disconnect finalizes recovery before clearing the room", asy
   page.scope.console = { warn() {} };
   const playbackRooms = [];
   page.scope.audioPlayback = { release: (room) => playbackRooms.push(room) };
-  let audioTimingReleases = 0;
-  let audioTimingResets = 0;
-
-  page.scope.releaseAudioTiming = () => {
-    audioTimingReleases++;
-  };
-
+  const timingDisconnects = [];
   page.scope.audioTiming = {
-    reset: () => {
-      audioTimingResets++;
-    },
+    disconnect: (...rooms) => timingDisconnects.push(rooms),
   };
   page.scope.preflight = { userStream: { label: "Preflight stream" } };
   page.scope.localRecording.needsMicrophone = false;
@@ -532,8 +524,7 @@ test("terminal room disconnect finalizes recovery before clearing the room", asy
   )(new Proxy(page.scope, { has: (target, key) => key in target }));
   disconnect();
   await settle();
-  assert.equal(audioTimingReleases, 1);
-  assert.equal(audioTimingResets, 1);
+  assert.deepEqual(timingDisconnects, [[page.room, page.room]]);
   assert.deepEqual(playbackRooms, [page.room]);
   assert.deepEqual(mediaCleanup, [
     [page.scope.preflight, { preserveMicrophone: false }],
