@@ -59,6 +59,7 @@ import {
   INDENT_UNITS,
   indentFromParams,
 } from "./editor-options.js";
+import { createJavaScriptFormatter } from "./format.js";
 import { attachSplitter } from "./splitter.js";
 import {
   BOARD_WIDTH,
@@ -338,6 +339,15 @@ const replayVersion = globalThis.CODETRIAL_REPLAY_VERSION || 1;
 const params = new URLSearchParams(window.location.search);
 const editorOptions = editorOptionsFromParams(params);
 const indentUnit = INDENT_UNITS[indentFromParams(params)];
+const formatJavaScript = createJavaScriptFormatter();
+// Formats still waiting on Prettier; the button looks busy until none is.
+let formatsPending = 0;
+// Counts tab changes, so a result does not land after a round trip to another
+// tab even when the buffer it comes back to is the same.
+let tabSwitches = 0;
+// Counts every change to the buffer, an undo included, so a result is
+// dropped after an edit even when the text came back to what was formatted.
+let editorEdits = 0;
 const strict = params.get("selection") === "strict";
 // Start this independent request while the problem data is loading. It has to
 // settle rather than reject: nothing awaits it until init() reaches the sign-in
@@ -671,8 +681,10 @@ const nodes = {
   editorFontLarger: document.querySelector("#editor-font-larger"),
   editorThemeToggle: document.querySelector("#editor-theme-toggle"),
   editorWrapToggle: document.querySelector("#editor-wrap-toggle"),
+  formatButton: document.querySelector("#editor-format"),
   restoreStarter: document.querySelector("#editor-restore-starter"),
   restoreStatus: document.querySelector("#editor-restore-status"),
+  formatStatus: document.querySelector("#editor-format-status"),
   compileDisclosure: document.querySelector(".compile-disclosure"),
   run: document.querySelector("#run-tests"),
   testDrawer: document.querySelector(".test-drawer"),
@@ -1078,8 +1090,8 @@ async function init() {
   // Strict editing waits for readiness: work done while Gemini stays silent
   // would be untimed. The deadline arms the leave warning.
   if (strict) {
-    updateRunAvailability();
     if (!whiteboard) nodes.editor.disabled = false;
+    updateRunAvailability();
   }
   updateBeforeUnloadGuard();
   tickTimer();
@@ -1198,6 +1210,7 @@ function announceRestore(message, stillTrue) {
 // Restoring is one ordinary, undoable edit in the current language.
 function restoreStarter() {
   clearRestoreStatus();
+  clearFormatStatus();
   const starter = problem?.starterCode[state.language];
   if (
     codingClosed() ||
@@ -1219,6 +1232,111 @@ function restoreStarter() {
   applyEditorEdit({ value: starter, start: 0, end: 0 });
   nodes.restoreStatus.textContent =
     "Restored the starter code. Ctrl+Z (Cmd+Z on a Mac) undoes this, including after switching languages.";
+}
+
+function clearFormatStatus() {
+  nodes.formatStatus.classList.remove("held");
+  nodes.formatStatus.textContent = "";
+}
+
+// Takes a result out of the status line but keeps its row, so the editor does
+// not move under the caret. Emptied rather than replaced with a space: the
+// line is a live region, which reads text it gains and not text it loses.
+function quietFormatStatus() {
+  if (!nodes.formatStatus.textContent) return;
+  nodes.formatStatus.classList.add("held");
+  nodes.formatStatus.textContent = "";
+}
+
+// Written a frame after the clear, as announceRestore is, so the same message
+// twice is still announced twice, and only while the buffer is still the one
+// the message is about and formatting still applies: a lock in between (the
+// behavioral round, the end of coding) has already cleared the line, and a
+// background tab runs no frame until the candidate comes back.
+function announceFormat(message, code) {
+  requestAnimationFrame(() => {
+    if (formatAvailable() && nodes.editor.value === code)
+      nodes.formatStatus.textContent = message;
+  });
+}
+
+function formatAvailable() {
+  return (
+    state.language === "javascript" &&
+    !codingClosed() &&
+    !nodes.editor.disabled &&
+    !nodes.editor.readOnly
+  );
+}
+
+/// The Format JS button, and Shift+Alt+F where the keystroke reaches the
+/// page. Answers whether formatting applies, so the editor takes the chord
+/// only then.
+///
+/// Formatting is asynchronous, the first one loading Prettier, and a result is
+/// written only over the buffer it was made from: an edit (even one undone,
+/// whose redo the result would otherwise discard), a tab switch (even one back
+/// to this tab), a composition or the end of coding in the meantime drops it,
+/// and a caret moved in the meantime formats again from where the caret is
+/// now. So a second press needs no queue: whichever result still fits the
+/// buffer lands, and the other is dropped. A failure leaves the buffer, the
+/// selection and the history as they were.
+function formatCode(repeat = false) {
+  if (!formatAvailable()) return false;
+  // A held chord formats once.
+  if (repeat) return true;
+  quietFormatStatus();
+  formatsPending += 1;
+  nodes.formatButton.classList.add("busy");
+  const tab = tabSwitches;
+  const edits = editorEdits;
+  const before = editorSnapshot(nodes.editor);
+  void formatJavaScript(before.value, before.start, indentUnit).then(
+    (result) => {
+      formatsPending -= 1;
+      if (!formatsPending) nodes.formatButton.classList.remove("busy");
+      const now = editorSnapshot(nodes.editor);
+      if (
+        tab !== tabSwitches ||
+        edits !== editorEdits ||
+        !formatAvailable() ||
+        editorComposition ||
+        now.value !== before.value
+      )
+        return;
+      if (now.start !== before.start || now.end !== before.end) {
+        formatCode();
+        return;
+      }
+      if (!result.ok)
+        announceFormat(
+          `Formatting failed: ${result.message}. The code was not changed.`,
+          before.value,
+        );
+      else if (result.value === before.value)
+        announceFormat("The code is already formatted.", before.value);
+      else {
+        applyEditorEdit({
+          value: result.value,
+          start: result.cursor,
+          end: result.cursor,
+        });
+        announceFormat(
+          `Formatted the code. ${mac ? "Cmd+Z" : "Ctrl+Z"} undoes this.`,
+          result.value,
+        );
+      }
+    },
+  );
+  return true;
+}
+
+// The chord works in the editor, not on the button, so the editor names it,
+// and only on the tab where it formats.
+function renderFormatShortcut() {
+  if (state.language === "javascript")
+    nodes.editor.setAttribute("aria-keyshortcuts", "Shift+Alt+F");
+  else nodes.editor.removeAttribute("aria-keyshortcuts");
 }
 
 function bindEvents() {
@@ -1390,6 +1508,12 @@ function bindEvents() {
     syncEditorScroll();
     writeStored(EDITOR_WRAP_KEY, on ? "1" : "0");
   });
+  // Back to the editor first, as Restore does: the caret the formatter maps
+  // is the editor's, and the candidate goes on typing there.
+  nodes.formatButton.addEventListener("click", () => {
+    nodes.editor.focus();
+    formatCode();
+  });
   // The CSS media query repaints the editor itself on a system theme change
   // with no reload, but aria-pressed is JS state and would otherwise go
   // stale until the next click. Re-applying with the current attribute is a
@@ -1467,6 +1591,7 @@ function bindEvents() {
       },
       onEdit: workspaceEdited,
       indentFor,
+      formatCode,
     },
   });
   nodes.report.addEventListener("click", (event) => {
@@ -1478,8 +1603,18 @@ function bindEvents() {
     if (event.target.closest("#done")) leaveRoom();
     if (event.target.closest("#download-report")) void downloadReport();
   });
+  // Typing, applyEditorEdit and restoreEditorHistory all end in an input event,
+  // so this sees every change to the buffer, an undo among them.
   nodes.editor.addEventListener("input", () => {
+    editorEdits += 1;
     clearRestoreStatus();
+    // A failure still says where to look while the candidate fixes the code.
+    // The other results describe the buffer as it was, and after typing one
+    // undo no longer takes the format back, so they go. The hint changes, not
+    // the undo: a format is one step in editorHistory like any other edit, and
+    // Ctrl+Z takes back one step, so typing after it is undone first.
+    if (!nodes.formatStatus.textContent.startsWith("Formatting failed"))
+      quietFormatStatus();
   });
 }
 
@@ -3373,6 +3508,7 @@ function setLanguage(language) {
     flushPendingEditorPublish();
     state.codeByLanguage[state.language] = nodes.editor.value;
     clearRestoreStatus();
+    clearFormatStatus();
   }
   const next = editorHistory.select(
     language,
@@ -3384,7 +3520,9 @@ function setLanguage(language) {
     },
     editorInitialized ? editorSnapshot(nodes.editor) : null,
   );
+  if (language !== state.language) tabSwitches += 1;
   state.language = language;
+  renderFormatShortcut();
   nodes.editor.value = next.value;
   nodes.editor.setSelectionRange(next.start, next.end, next.direction);
   observedEditor = editorSnapshot(nodes.editor);
@@ -4411,6 +4549,12 @@ function updateRunAvailability() {
     nodes.languageSelect.focus({ preventScroll: true });
   nodes.restoreStarter.disabled = restoreOff;
   if (restoreOff) clearRestoreStatus();
+  // Off wherever a press would do nothing: another tab, a locked editor.
+  const formatOff = !formatAvailable();
+  if (formatOff && document.activeElement === nodes.formatButton)
+    nodes.languageSelect.focus({ preventScroll: true });
+  nodes.formatButton.disabled = formatOff;
+  if (formatOff) clearFormatStatus();
   nodes.run.disabled =
     state.candidateCaseEdit !== null ||
     !editorOptions.execution ||

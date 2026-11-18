@@ -292,6 +292,18 @@
           >
             <span aria-hidden="true">&#8634;</span>
           </button>
+          <!-- Beside Restore, the other control that rewrites the code. A
+               button first, the chord second: a keystroke can be taken by an
+               input method, the system or a missing keyboard before the page
+               sees it. interview.js disables it wherever it would do nothing. -->
+          <button
+            id="editor-format"
+            class="font-size-button"
+            type="button"
+            title="Format the JavaScript code (Shift+Alt+F in the editor)"
+          >
+            Format JS
+          </button>
           <span
             id="editor-restore-status"
             class="visually-hidden"
@@ -356,6 +368,15 @@
             </button>
           </div>
         </div>
+        <!-- What Format JS did, between the button and the code it is about,
+             where it is seen without scrolling. It blocks nothing. A failure
+             stays while the candidate types; any other result is emptied by
+             typing but keeps its row, so the editor does not move. -->
+        <p
+          id="editor-format-status"
+          class="editor-format-status"
+          role="status"
+        ></p>
         <!-- The textarea stays the source of truth and keeps native editing;
              the pre behind it only paints the colors. -->
         <div class="editor-stack">

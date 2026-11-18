@@ -10,6 +10,8 @@ import {
   indentSelection,
   toggleLineComment,
   isToggleCommentKeystroke,
+  isFormatKeystroke,
+  shortcutKey,
   insertBracketPair,
   isBracketOpenerKeystroke,
   isBracketCloserKeystroke,
@@ -268,11 +270,7 @@ function mountControlledWorkspace(nodes, c) {
     });
   }
   nodes.editor.addEventListener("keydown", (event) => {
-    const key = /^[\x20-\x7e]$/.test(event.key)
-      ? event.key.toLowerCase()
-      : event.key.length === 1
-        ? event.code?.replace(/^Key/, "").toLowerCase()
-        : event.key;
+    const key = shortcutKey(event);
     const historyKey =
       (c.mac
         ? event.metaKey && !event.ctrlKey
@@ -322,6 +320,13 @@ function mountControlledWorkspace(nodes, c) {
       // A held chord repeats. Each repeat would flip the block back, and leave
       // an undo step of its own behind.
       if (!event.repeat) c.applyEditorEdit(toggled);
+      return;
+    }
+    if (isFormatKeystroke(event)) {
+      // Taken only where the formatter answers to it. Anywhere else, in
+      // another language or a locked editor, a Mac still types the character
+      // Option+Shift+F makes.
+      if (c.formatCode?.(event.repeat)) event.preventDefault();
       return;
     }
     if (!indents) return;
