@@ -20,8 +20,7 @@ export async function openShapeBoard(t, browser, base, source) {
     const canvas = root.querySelector("canvas");
     canvas.style.width = "640px";
     canvas.style.height = "400px";
-    // Synthetic pointers have no native capture slot. The capture suite
-    // removes this instance stub before its real off-board mouse drags.
+    // Synthetic pointers have no native capture slot.
     canvas.setPointerCapture = () => {};
     window.ops = [];
     window.turnActivity = 0;

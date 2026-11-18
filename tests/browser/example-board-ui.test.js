@@ -169,7 +169,32 @@ for (const [end, moves] of [
     assert.ok(result.advanced.paints > 0);
     assert.notEqual(result.advanced.image, result.preview);
     assert.equal(result.ops.length, 1);
-    assert.equal(result.ops[0].points.length, 258);
+    const stroke = result.ops[0];
+    assert.equal(stroke.op, "stroke");
+    assert.equal(stroke.points.length, 258);
+    assert.deepEqual(stroke.points.slice(-2), stroke.points.slice(0, 2));
+    const right = Math.min(end[0], 1600);
+    const bottom = 701;
+    const cx = (800 + right) / 2;
+    const cy = (400 + bottom) / 2;
+    const rx = (right - 800) / 2;
+    const ry = (bottom - 400) / 2;
+    const xs = [];
+    const ys = [];
+    for (let i = 0; i < stroke.points.length; i += 2) {
+      const [x, y] = stroke.points.slice(i, i + 2);
+      xs.push(x);
+      ys.push(y);
+      assert.ok(x >= 800 && x <= right && y >= 400 && y <= bottom);
+      assert.ok(
+        Math.abs(((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2 - 1) < 0.03,
+        `outline point (${x}, ${y}) must stay on the bounded ellipse`,
+      );
+    }
+    assert.deepEqual(
+      [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)],
+      [800, 400, right, bottom],
+    );
   });
 }
 

@@ -54,11 +54,8 @@ has a 30 s default without Playwright Test.
 Applies to: `tests/**`, `scripts/test.sh`, `scripts/browser-check.cjs`,
 `tests/golden/**`
 
-CI defaults to the headless shell. The separate example-board capture suite
-uses `channel: "chromium"` on the first browser shard, which alone installs
-full Chromium. The other browser shards, Rust and avatar use the shell.
-`test_every_browser_launch_is_headless` rejects other channel launches. Linux
-Chromium reports a collapsed caret direction as
+CI installs only headless Chromium (`test_every_browser_launch_is_headless`
+rejects `channel:`). Linux Chromium reports a collapsed caret direction as
 `forward`, unlike macOS. `Instant::now() - 15 min` panics on a young CI
 container (use `past_the_coding_round`). Java tests must probe both `javac` and
 `java`. Compile-and-run cases belong in `describe(..., { concurrency: true })`.

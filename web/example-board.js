@@ -302,7 +302,8 @@ export function mountExampleBoard(
     // A shape collapsed to one board pixel is an empty gesture, not a pen dot.
     if (
       SHAPE_TOOLS.includes(tool) &&
-      (!model.isDrawing() || model.strokes().at(-1).points.length === 2)
+      (!model.isDrawing() ||
+        (drag.end.x === drag.start.x && drag.end.y === drag.start.y))
     )
       return dropDrag();
     model.end();
