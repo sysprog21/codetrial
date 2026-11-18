@@ -73,6 +73,15 @@ fn admitted(bytes: u32) -> io::Result<u32> {
     }
 }
 
+fn constrain_sender(stream: &TcpStream) -> io::Result<u32> {
+    socket2::SockRef::from(stream)
+        .set_send_buffer_size(usize::try_from(REQUESTED).map_err(io::Error::other)?)?;
+    admitted(
+        u32::try_from(socket2::SockRef::from(stream).send_buffer_size()?)
+            .map_err(io::Error::other)?,
+    )
+}
+
 pub(super) async fn connect(endpoint: &str) -> io::Result<Option<TcpStream>> {
     let Some(state) = claim(endpoint)? else {
         return Ok(None);
@@ -81,10 +90,8 @@ pub(super) async fn connect(endpoint: &str) -> io::Result<Option<TcpStream>> {
     socket.set_send_buffer_size(REQUESTED)?;
     let before = admitted(socket.send_buffer_size()?)?;
     let stream = socket.connect(state.address.into()).await?;
-    let connected = admitted(
-        u32::try_from(socket2::SockRef::from(&stream).send_buffer_size()?)
-            .map_err(io::Error::other)?,
-    )?;
+    // Bound the connected socket rather than rely on its initial options.
+    let connected = constrain_sender(&stream)?;
     *state
         .buffers
         .lock()

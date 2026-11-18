@@ -1,5 +1,7 @@
 use super::*;
 
+const STARTUP_PRESSURE_FRAMES: usize = 3;
+
 struct MeasuredStartupInput {
     receiver: mpsc::UnboundedReceiver<StartupInput>,
     yielded: Arc<AtomicUsize>,
@@ -22,7 +24,6 @@ async fn startup_success_after_a_delayed_microphone_write_keeps_the_receive_time
     let keys = GeminiKeys::from_config(&config);
     let boot = crate::runtime::bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
     let listener = tokio::net::TcpSocket::new_v4().unwrap();
-    listener.set_recv_buffer_size(4096).unwrap();
     listener.bind("127.0.0.1:0".parse().unwrap()).unwrap();
     let listener = listener.listen(1).unwrap();
     let url = format!("ws://{}/", listener.local_addr().unwrap());
@@ -55,9 +56,10 @@ async fn startup_success_after_a_delayed_microphone_write_keeps_the_receive_time
             .unwrap();
         socket.send(Message::Text(r#"{"usageMetadata":{"promptTokenCount":7,"responseTokenCount":3},"serverContent":{"inputTranscription":{"text":"candidate"},"modelTurn":{"parts":[{"text":"Hello"}]},"turnComplete":true}}"#.into())).await.unwrap();
 
-        // Keep the write pending even after the independent reader answers.
-        // Releasing the peer's reads must complete it successfully, not invoke
-        // either the write-error rescue or the outer startup deadline.
+        // The flush checkpoint keeps the write pending after the reader
+        // answers. Releasing it and the peer's reads must complete the write
+        // successfully, without write-error rescue or the outer startup
+        // deadline.
         startup_fixture_io("peer read release", released)
             .await
             .unwrap();
@@ -90,10 +92,10 @@ async fn startup_success_after_a_delayed_microphone_write_keeps_the_receive_time
         (generations, audio_bytes)
     });
     let server = StartupPeer(server);
-    GeminiLiveSession::constrain_next_startup_test_socket();
     let mut gemini = crate::gemini::live_session_with_keys_at(&url, &keys, &boot, None)
         .await
         .unwrap();
+    let (writing, resume_write) = GeminiLiveSession::pause_next_startup_test_write();
     let (observed_usage, reader) = gemini.startup_reader_observer();
     let mut state = startup_state_for(&config);
     let greeting = with_timer(&state, "opening".into());
@@ -129,9 +131,9 @@ async fn startup_success_after_a_delayed_microphone_write_keeps_the_receive_time
             result = &mut probe => panic!("setup is not readiness: {result:?}"),
             result = opening => result.unwrap(),
         }
-        for value in 0..200 {
+        for value in 0..STARTUP_PRESSURE_FRAMES {
             tx.send(StartupInput::Audio(Some(AudioFrame {
-                data: vec![value; 160].into(),
+                data: vec![i16::try_from(value).unwrap(); 160].into(),
                 sample_rate: 16_000,
                 num_channels: 1,
                 samples_per_channel: 160,
@@ -140,10 +142,10 @@ async fn startup_success_after_a_delayed_microphone_write_keeps_the_receive_time
         }
         tokio::select! {
             result = &mut probe => panic!("no model output yet: {result:?}"),
-            _ = tokio::time::sleep(Duration::from_millis(100)) => {}
+            result = startup_fixture_io("microphone write checkpoint", writing) => result.unwrap(),
         }
         let blocked = yielded.load(Ordering::SeqCst);
-        assert!((1..200).contains(&blocked), "a real write is pending");
+        assert_eq!(blocked, 1, "the first audio write is held");
         answer.send(()).unwrap();
         tokio::select! {
             result = &mut probe => panic!("the write still blocks output consumption: {result:?}"),
@@ -160,6 +162,7 @@ async fn startup_success_after_a_delayed_microphone_write_keeps_the_receive_time
         assert_eq!(yielded.load(Ordering::SeqCst), blocked);
         let released_at = Instant::now();
         release.send(()).unwrap();
+        resume_write.send(()).unwrap();
         let ready_at = tokio::time::timeout(Duration::from_secs(3), &mut probe)
             .await
             .unwrap()
@@ -282,7 +285,6 @@ async fn startup_deadline_reader_pause(
     let keys = GeminiKeys::from_config(&config);
     let boot = crate::runtime::bootstrap(&config, "interview-fixed", Some("two-sum"), 45);
     let listener = tokio::net::TcpSocket::new_v4().unwrap();
-    listener.set_recv_buffer_size(4096).unwrap();
     listener.bind("127.0.0.1:0".parse().unwrap()).unwrap();
     let listener = listener.listen(1).unwrap();
     let url = format!("ws://{}/", listener.local_addr().unwrap());
@@ -381,7 +383,6 @@ async fn startup_deadline_reader_pause(
         (generations, microphone)
     });
     let server = StartupPeer(server);
-    GeminiLiveSession::constrain_next_startup_test_socket();
     let (mut decoded, resume) = if pause_before_enqueue {
         let (decoded, resume) = GeminiLiveSession::pause_next_startup_test_output();
         (Some(decoded), Some(resume))
@@ -391,6 +392,12 @@ async fn startup_deadline_reader_pause(
     let mut gemini = crate::gemini::live_session_with_keys_at(&url, &keys, &boot, None)
         .await
         .unwrap();
+    let (writing, resume_write) = if backpressure {
+        let (writing, resume) = GeminiLiveSession::pause_next_startup_test_write();
+        (Some(writing), Some(resume))
+    } else {
+        (None, None)
+    };
     let (observed_usage, reader) = gemini.startup_reader_observer();
     let mut state = startup_state_for(&config);
     let greeting = with_timer(&state, "opening".into());
@@ -433,17 +440,26 @@ async fn startup_deadline_reader_pause(
             _ = tokio::time::sleep_until(began + limit * 8 / 10) => {}
         }
 
-        // At most two seconds of ordinary 10 ms mono PCM frames. Tiny socket
-        // buffers, not a multi-megabyte synthetic audio frame, force
-        // backpressure.
-        for value in 0..if backpressure { 200 } else { 0 } {
+        // The first ordinary 10 ms frame stops after the sink owns it; a second
+        // queued frame proves that startup cannot consume more input meanwhile.
+        for value in 0..if backpressure {
+            STARTUP_PRESSURE_FRAMES
+        } else {
+            0
+        } {
             tx.send(StartupInput::Audio(Some(AudioFrame {
-                data: vec![value; 160].into(),
+                data: vec![i16::try_from(value).unwrap(); 160].into(),
                 sample_rate: 16_000,
                 num_channels: 1,
                 samples_per_channel: 160,
             })))
             .unwrap();
+        }
+        if let Some(writing) = writing {
+            tokio::select! {
+                _ = &mut probe => panic!("startup completed before microphone backpressure"),
+                result = startup_fixture_io("microphone write checkpoint", writing) => result.unwrap(),
+            }
         }
         tokio::select! {
             _ = &mut probe => panic!("startup completed before the answer"),
@@ -452,7 +468,7 @@ async fn startup_deadline_reader_pause(
         let blocked = yielded.load(Ordering::SeqCst);
         assert!(
             if backpressure {
-                (1..200).contains(&blocked)
+                blocked == 1
             } else {
                 blocked == 0
             },
@@ -500,6 +516,12 @@ async fn startup_deadline_reader_pause(
         );
         (probe.await, tokio::time::Instant::now())
     };
+    if let Some(resume_write) = resume_write {
+        assert!(
+            resume_write.send(()).is_err(),
+            "startup cancelled the held flush"
+        );
+    }
     if let Some(at) = decoded_at {
         assert_eq!(at < deadline.into_std(), !late);
         assert_eq!(
@@ -601,7 +623,7 @@ async fn startup_deadline_reader_pause(
             &mut media,
             &mut gemini,
             Some(AudioFrame {
-                data: vec![200; 160].into(),
+                data: vec![i16::try_from(STARTUP_PRESSURE_FRAMES).unwrap(); 160].into(),
                 sample_rate: 16_000,
                 num_channels: 1,
                 samples_per_channel: 160,
@@ -621,17 +643,14 @@ async fn startup_deadline_reader_pause(
         .await
         .unwrap();
     assert_eq!(generations, 1);
-    assert!(if backpressure {
-        (1..200).contains(&microphone.len())
-    } else {
-        microphone.is_empty()
-    });
-    if result.is_ok() {
-        assert_eq!(microphone.last(), Some(&200));
-    }
-    assert!(
-        microphone.windows(2).all(|pair| pair[0] < pair[1]),
-        "cancelled microphone samples must not be resent: {microphone:?}"
+    let expected = match (backpressure, result.is_ok()) {
+        (false, _) => Vec::new(),
+        (true, true) => vec![0, i16::try_from(STARTUP_PRESSURE_FRAMES).unwrap()],
+        (true, false) => vec![0],
+    };
+    assert_eq!(
+        microphone, expected,
+        "sink-owned microphone frames must reach the peer in order"
     );
     eprintln!(
         "startup deadline: limit={limit:?}, output_at={:?}, probe_finished={:?}, attempted_frames={}, wire_frames={}, result={result:?}",
