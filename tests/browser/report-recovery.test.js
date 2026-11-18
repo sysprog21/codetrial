@@ -456,6 +456,44 @@ for (const [name, payload, phase] of [
   });
 }
 
+test("report recovery stops audio timing while retaining the retry room", async () => {
+  const page = pageHarness();
+  const measurements = [];
+  let now = 0;
+  let activity;
+  let stops = 0;
+  const timing = createAudioTimingController({
+    now: () => now,
+    report: (elapsed) => measurements.push(elapsed),
+    startMonitor(_track, onActivity, { onAvailable, onQuiet }) {
+      onAvailable();
+      activity = { onActivity, onQuiet };
+      return () => {
+        stops++;
+      };
+    },
+  });
+  page.scope.audioTiming = timing;
+  timing.attach({ mediaStreamTrack: {} }, page.room);
+  timing.speakingChanged(true, true);
+  activity.onQuiet();
+
+  await page.receiveReport(page.room, packet(raw));
+  assert.equal(page.scope.state.phase, "report_recovery");
+  assert.equal(page.scope.state.room, page.room);
+  assert.equal(page.scope.state.connected, true);
+  assert.ok(!page.events.includes("disconnect"));
+  now = 40;
+  activity.onActivity();
+  assert.deepEqual(measurements, []);
+  assert.equal(stops, 1);
+
+  await page.receiveReport(page.room, packet({ summary: "Finished" }));
+  assert.equal(page.scope.state.phase, "report");
+  assert.ok(page.events.includes("disconnect"));
+  assert.equal(stops, 1);
+});
+
 test("page keeps the room for a report held through the rejoin grace", async () => {
   const page = pageHarness();
   await page.receiveReport(page.room, packet(raw));

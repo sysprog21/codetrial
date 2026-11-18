@@ -516,3 +516,20 @@ test("reconnected preserves a monitor attached by TrackSubscribed", async () => 
   assert.deepEqual(f.measurements, [80]);
   f.disconnect();
 });
+
+test("room events do not restart audio timing during report recovery", async () => {
+  const f = await fixture();
+  const track = remoteTrack("A");
+  f.agent.attributes["lk.agent.state"] = "listening";
+  f.room.emit("TrackSubscribed", track, {}, f.agent);
+  f.room.emit("Reconnecting");
+  f.state.phase = "report_recovery";
+  f.room.emit("Reconnected");
+  f.room.emit("TrackSubscribed", remoteTrack("B"), {}, f.agent);
+  f.agent.attributes["lk.agent.state"] = "speaking";
+  f.room.emit("ParticipantAttributesChanged");
+  assert.equal(f.monitorAttempts(), 1);
+  assert.deepEqual(f.diagnostics, []);
+  assert.equal(f.state.room, f.room);
+  assert.equal(f.state.connected, true);
+});

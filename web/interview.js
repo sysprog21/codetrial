@@ -2424,7 +2424,10 @@ async function connectLiveKit(connection, preflight, presenting = false) {
     state.connected = true;
     // LiveKit may retain the same remote audio track across reconnects.
     // Reattach the diagnostic even when no new TrackSubscribed event fires.
-    if (jimTrack?.mediaStreamTrack?.readyState === "live") {
+    if (
+      state.phase !== "report_recovery" &&
+      jimTrack?.mediaStreamTrack?.readyState === "live"
+    ) {
       audioTiming?.attach(jimTrack, room);
     }
     if (strict) updateRunAvailability();
@@ -2793,6 +2796,8 @@ const reportRecovery = createReportRecovery({
   },
   offer: (ready, cooldown, cause) => {
     state.phase = "report_recovery";
+    audioTiming?.release(null, "interview ended");
+    audioTiming?.reset();
     if (strict) updateRunAvailability();
     if (!ready) stopEndingEscape();
     globalThis.clearTimeout(frameworkHintTimer);
@@ -3081,7 +3086,7 @@ function playRemoteAudio(track, participant) {
     });
   }
   attachAvatarAnalyser(track, participant);
-  audioTiming?.attach(track, state.room);
+  if (state.phase !== "report_recovery") audioTiming?.attach(track, state.room);
 }
 
 function dropRemoteAudio(track) {
@@ -5410,7 +5415,8 @@ function updateAgentState() {
   const value = published || "listening";
   state.agentSpeaking = value === "speaking";
   state.agentThinking = value === "thinking";
-  audioTiming?.speakingChanged(published === "speaking", state.connected);
+  if (state.phase !== "report_recovery")
+    audioTiming?.speakingChanged(published === "speaking", state.connected);
   if (state.agentSpeaking || state.agentThinking) {
     drawingTurn?.reset();
     hideTurnRing();
