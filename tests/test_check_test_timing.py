@@ -112,6 +112,125 @@ class CheckTestTimingTests(unittest.TestCase):
     def test_wait_helper_is_exempt(self):
         self.assertAccepted("const deadline = Date.now() + timeout;\n", "wait.js")
 
+    def test_a_wait_bounding_what_was_just_set_is_rejected(self):
+        self.assertRejected(SET_THEN + BOUND_WAIT, "a.test.js:4: wait bounds")
+
+    def test_the_message_names_the_property_just_set(self):
+        self.assertRejected(
+            SET_THEN + BOUND_WAIT, "wait bounds .scrollTop, which the test just set"
+        )
+
+    def test_every_bound_operator_and_wait_helper_is_rejected(self):
+        for wait in (
+            "await page.waitForFunction(() => layer.scrollTop !== 0);\n",
+            "await reaches(page, () => layer.scrollTop >= 1);\n",
+            "await reaches(page, () => layer.scrollTop <= 1);\n",
+            "await page.waitForFunction(() => layer.scrollTop != 0);\n",
+            "await until(async () => (await top()).scrollTop < 2000, 'top');\n",
+            "await page.waitForFunction (() => layer.scrollTop > 0);\n",
+        ):
+            with self.subTest(wait=wait):
+                self.assertRejected(SET_THEN + wait, "wait bounds")
+
+    def test_an_exact_comparison_beside_the_bound_does_not_exempt_it(self):
+        for wait in (
+            "await page.waitForFunction(\n"
+            "  () => layer.scrollTop === 900 || layer.scrollTop > 0,\n"
+            ");\n",
+            "await page.waitForFunction(\n"
+            "  () => code.scrollTop === 900 && layer.scrollTop > 0,\n"
+            ");\n",
+        ):
+            with self.subTest(wait=wait):
+                self.assertRejected(SET_THEN + wait, "wait bounds")
+
+    def test_a_bound_with_the_property_on_the_right_is_rejected(self):
+        for wait in (
+            "await page.waitForFunction(() => 0 < layer.scrollTop);\n",
+            "await page.waitForFunction(\n"
+            "  () => 0 !== document.querySelector('.layer').scrollTop,\n"
+            ");\n",
+        ):
+            with self.subTest(wait=wait):
+                self.assertRejected(SET_THEN + wait, "wait bounds")
+
+    def test_the_value_set_on_the_right_passes(self):
+        self.assertAccepted(
+            SET_THEN + "await page.waitForFunction(() => 900 === layer.scrollTop);\n"
+        )
+
+    def test_a_wait_for_the_value_set_passes(self):
+        self.assertAccepted(
+            SET_THEN
+            + "await reaches(page, () => layer.scrollTop === 900 && top > 0);\n"
+        )
+
+    def test_a_step_between_the_set_and_the_wait_unties_them(self):
+        self.assertAccepted(SET_THEN + "await page.click('#more');\n" + BOUND_WAIT)
+
+    def test_a_step_that_is_not_awaited_also_unties_them(self):
+        self.assertAccepted(
+            SET_THEN + "layer.scrollTo({ top: 0, behavior: 'instant' });\n" + BOUND_WAIT
+        )
+
+    def test_an_assignment_in_another_test_is_not_tied_to_the_wait(self):
+        self.assertAccepted(
+            "test('set', async () => {\n"
+            "  await first.evaluate(() => { code.scrollTop = 900; });\n"
+            "});\n"
+            "test('wait', async () => {\n"
+            "  await second.waitForFunction(() => layer.scrollTop > 0);\n"
+            "});\n"
+        )
+
+    def test_a_wait_is_reported_once(self):
+        for source in (
+            "await page.evaluate(() => {\n"
+            "  left.scrollTop = 900;\n"
+            "  right.scrollTop = 900;\n"
+            "});\n" + BOUND_WAIT,
+            "await page.evaluate(() => {\n"
+            "  left.scrollTop = right.scrollTop = 900;\n"
+            "});\n" + BOUND_WAIT,
+        ):
+            with self.subTest(source=source):
+                code, message = check(source)
+                self.assertEqual(code, 1, message)
+                self.assertEqual(message.count("wait bounds"), 1, message)
+
+    def test_a_bound_on_another_property_passes(self):
+        self.assertAccepted(
+            "await page.evaluate(() => { code.value = 'x'; });\n" + BOUND_WAIT
+        )
+
+    def test_a_comparison_after_the_wait_is_not_its_predicate(self):
+        self.assertAccepted(
+            SET_THEN
+            + "await page.waitForFunction(() => ready);\n"
+            + "assert.ok(layer.scrollTop > 0);\n"
+        )
+
+    def test_an_assignment_in_a_comment_or_string_is_not_code(self):
+        self.assertAccepted("// code.scrollTop = 900;\n" + BOUND_WAIT)
+        self.assertAccepted("const note = 'code.scrollTop = 900';\n" + BOUND_WAIT)
+
+    def test_timing_ok_marker_accepts_a_deliberate_bound_wait(self):
+        self.assertAccepted(
+            "await page.evaluate(() => { globalThis.count = 0; });\n"
+            "// timing-ok: the reset is below the bound\n"
+            "await page.waitForFunction(() => globalThis.count >= 3);\n"
+        )
+
+
+# The shape a task editor test failed in CI with: the layers had already
+# followed an earlier scroll, so `> 0` held before they followed this one.
+SET_THEN = (
+    "await page.evaluate(() => {\n"
+    "  document.getElementById('code').scrollTop = 900;\n"
+    "});\n"
+)
+BOUND_WAIT = "await page.waitForFunction(() => layer.scrollTop > 0);\n"
+
 
 if __name__ == "__main__":
     unittest.main()
