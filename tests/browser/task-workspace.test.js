@@ -3224,44 +3224,82 @@ test("a Finish dialog open when the attempt ends closes and finishes nothing", a
   }
 });
 
-test("a result poll still on its way neither repeats nor replaces the delivered result", async (t) => {
-  const ctx = await pageFor(t);
-  if (!ctx) return;
-  const { page } = ctx;
-  let held = 0;
-  const releases = [];
-  try {
-    await start(page);
-    await page.route("**/api/task-reviews/**", async (route) => {
-      held += 1;
-      await new Promise((resolve) => releases.push(resolve));
-      await route.fulfill({
-        status: 202,
-        contentType: "application/json",
-        body: JSON.stringify({ pending: true }),
-      });
+test(
+  "a result poll still on its way neither repeats nor replaces the delivered result",
+  { timeout: 60000 },
+  async (t) => {
+    const ctx = await pageFor(t);
+    if (!ctx) return;
+    const { page } = ctx;
+    let held = 0;
+    const releases = [];
+    let polling;
+    const pollStarted = new Promise((resolve) => {
+      polling = resolve;
     });
-    await page.evaluate(() => document.exitFullscreen());
-    // Past the delivery window, with the first poll still unanswered.
-    await page.clock.runFor(301000);
-    assert.equal(held, 1);
-    await page.evaluate(
-      (value) => globalThis.taskHarness.publish("task_review", value),
-      result("invalid", "fullscreen"),
-    );
-    await page.locator("#review").waitFor({ state: "visible" });
-    for (const release of releases) release();
-    await page.clock.runFor(1000);
-    assert.match(await page.locator("#outcome").textContent(), /invalid/);
-    assert.doesNotMatch(
-      await page.locator("#review-content").textContent(),
-      /still being finalized|unavailable/i,
-    );
-  } finally {
-    for (const release of releases) release();
-    await page.close();
-  }
-});
+    try {
+      await start(page);
+      await page.route("**/api/task-reviews/**", async (route) => {
+        held += 1;
+        polling();
+        await new Promise((resolve) => releases.push(resolve));
+        await route.fulfill({
+          status: 202,
+          contentType: "application/json",
+          body: JSON.stringify({ pending: true }),
+        });
+      });
+      await page.evaluate(() => document.exitFullscreen());
+      // Past the delivery window, with the first poll still unanswered.
+      await page.clock.runFor(301000);
+      // Advancing the page clock does not flush Playwright's network events.
+      let noPoll;
+      await Promise.race([
+        pollStarted,
+        new Promise((_, reject) => {
+          noPoll = setTimeout(
+            () =>
+              reject(
+                new Error("no task-review poll after the delivery window"),
+              ),
+            5000,
+          );
+        }),
+      ]).finally(() => clearTimeout(noPoll));
+      assert.equal(held, 1);
+      const pollingState = await page.evaluateHandle(async () => {
+        const { st } = await import("/task-state.js");
+        return st;
+      });
+      assert.equal(
+        await pollingState.evaluate((state) => state.reviewPolling),
+        true,
+      );
+      await page.evaluate(
+        (value) => globalThis.taskHarness.publish("task_review", value),
+        result("invalid", "fullscreen"),
+      );
+      await page.locator("#review").waitFor({ state: "visible" });
+      for (const release of releases) release();
+      await page.waitForFunction((state) => !state.reviewPolling, pollingState);
+      await page.clock.runFor(5000);
+      assert.equal(
+        await pollingState.evaluate((state) => state.reviewPolling),
+        false,
+        "the delivered result must not start another poll",
+      );
+      assert.match(await page.locator("#outcome").textContent(), /invalid/);
+      assert.doesNotMatch(
+        await page.locator("#review-content").textContent(),
+        /still being finalized|unavailable/i,
+      );
+      assert.equal(held, 1);
+    } finally {
+      for (const release of releases) release();
+      await page.close();
+    }
+  },
+);
 
 test("an ended attempt lets go of a wake lock granted late and of its detector", async (t) => {
   const ctx = await pageFor(t);
