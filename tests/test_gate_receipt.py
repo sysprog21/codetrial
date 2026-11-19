@@ -302,6 +302,26 @@ class ReceiptTests(unittest.TestCase):
         self.run_gate(Path(tmp.name), receipt_tree="")
         self.assertEqual(list(Path(tmp.name).iterdir()), [])
 
+    def test_the_start_tree_is_taken_without_the_executable_bit(self):
+        # The closeout check matches a receipt against the fingerprint it takes
+        # through sh, so the gate has to take the start tree the same way, or a
+        # checkout that lost the bit writes no receipt for it to match.
+        root = self.repo()
+        (root / "scripts").mkdir()
+        script = root / "scripts/tree-fingerprint.sh"
+        script.write_bytes((ROOT / "scripts/tree-fingerprint.sh").read_bytes())
+        script.chmod(0o644)
+        line = next(
+            line for line in SOURCE.splitlines() if line.startswith("receipt_tree=")
+        )
+        done = support.sh(
+            f'ROOT={shlex.quote(str(root))}\n{line}\nprintf %s "$receipt_tree"',
+            root,
+        )
+        want = support.sh("sh scripts/tree-fingerprint.sh", root).stdout.strip()
+        self.assertNotEqual(want, "")
+        self.assertEqual(done.stdout, want)
+
     def test_a_work_tree_without_a_head_writes_no_tree_id(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)

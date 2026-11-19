@@ -5,6 +5,7 @@ import io
 import json
 import re
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -108,7 +109,7 @@ def ran(lane, tree="T1", passed=True, **more):
 class ReceiptTests(unittest.TestCase):
     def fingerprint(self, repo):
         done = subprocess.run(
-            [str(ROOT / "scripts" / "tree-fingerprint.sh"), str(repo)],
+            ["sh", str(ROOT / "scripts" / "tree-fingerprint.sh"), str(repo)],
             capture_output=True,
             text=True,
             check=True,
@@ -136,11 +137,25 @@ class ReceiptTests(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         done = subprocess.run(
-            [str(ROOT / "scripts" / "tree-fingerprint.sh"), tmp.name],
+            ["sh", str(ROOT / "scripts" / "tree-fingerprint.sh"), tmp.name],
             capture_output=True,
             text=True,
         )
         self.assertEqual((done.returncode, done.stdout), (1, ""))
+
+    def test_the_closeout_check_runs_the_fingerprint_through_sh(self):
+        # Windows cannot execute a .sh file and a checkout may lack the
+        # executable bit; both made the Stop hook raise instead of answering.
+        repo = make_repo(self)
+        (repo / "scripts").mkdir()
+        script = repo / "scripts" / "tree-fingerprint.sh"
+        script.write_bytes((ROOT / "scripts" / "tree-fingerprint.sh").read_bytes())
+        script.chmod(0o644)
+        # A private copy: the other cases patch the shared module's globals
+        # while they run in parallel with this one.
+        own = load("agent_closeout_check_sh", "agent-closeout-check.py")
+        with mock.patch.object(own, "ROOT", repo):
+            self.assertEqual(own.tree(), self.fingerprint(repo))
 
     def status(self, receipts):
         with (
@@ -219,7 +234,7 @@ class ReceiptTests(unittest.TestCase):
 
     def test_stop_hook_never_blocks_and_ignores_a_reentrant_stop(self):
         done = subprocess.run(
-            [str(ROOT / "scripts" / "agent-closeout-check.py")],
+            [sys.executable, str(ROOT / "scripts" / "agent-closeout-check.py")],
             input=json.dumps({"stop_hook_active": True}),
             capture_output=True,
             text=True,
