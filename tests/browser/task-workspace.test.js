@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import {
   launchChromium,
   pauseClock,
+  reaches,
   read,
   startStaticServer,
 } from "./source.js";
@@ -595,24 +596,43 @@ test("the task editor paints syntax colours and line numbers behind the textarea
     assert.equal(await layer.textContent(), await painted());
 
     // A long buffer: the layers follow the textarea's scroll.
+    const scrolls = () =>
+      page.evaluate(() => [
+        document.getElementById("code").scrollTop,
+        document.querySelector(".editor-highlight").scrollTop,
+        document.querySelector(".editor-lines").scrollTop,
+      ]);
     await page.fill(
       "#code",
       Array.from({ length: 120 }, (_, i) => `x${i} = ${i}`).join("\n"),
     );
+    // The fill leaves the caret at the end, so the textarea scrolls to the
+    // bottom and the layers follow it there on the next frame, which can come
+    // before the scroll below or after it. Waiting for it makes every run start
+    // from layers that have left 0.
+    await reaches(page, () => {
+      const top = document.getElementById("code").scrollTop;
+      return (
+        top > 900 &&
+        document.querySelector(".editor-highlight").scrollTop === top &&
+        document.querySelector(".editor-lines").scrollTop === top
+      );
+    });
+    const filled = await scrolls();
+    assert.ok(filled[0] > 900, `the fill scrolled to ${filled[0]}`);
+    assert.deepEqual(filled.slice(1), [filled[0], filled[0]]);
     await page.evaluate(() => {
       document.getElementById("code").scrollTop = 900;
     });
-    await page.waitForFunction(
-      () => document.querySelector(".editor-highlight").scrollTop > 0,
+    // The layers already sit past 0, so only the position they are to reach
+    // tells their move to 900 from the one the fill made.
+    await reaches(
+      page,
+      () =>
+        document.querySelector(".editor-highlight").scrollTop === 900 &&
+        document.querySelector(".editor-lines").scrollTop === 900,
     );
-    assert.deepEqual(
-      await page.evaluate(() => [
-        document.getElementById("code").scrollTop,
-        document.querySelector(".editor-highlight").scrollTop,
-        document.querySelector(".editor-lines").scrollTop,
-      ]),
-      [900, 900, 900],
-    );
+    assert.deepEqual(await scrolls(), [900, 900, 900]);
   } finally {
     await page.close();
   }
