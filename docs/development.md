@@ -293,10 +293,17 @@ a local run that suddenly takes twenty minutes has usually just had its cache
 invalidated rather than got slower.
 
 An earlier macOS comparison measured relink times of 7.5s and 8.1s with the
-system linker. The local `dev` and `test` profiles use
-`debug = "line-tables-only"` for dependencies to reduce build output on disk.
-This keeps file and line information in backtraces. Workspace packages keep
-full debug information by default in local builds.
+system linker. CI continues to set `CARGO_PROFILE_DEV_DEBUG` and
+`CARGO_PROFILE_TEST_DEBUG` to `line-tables-only` for the whole profile,
+with a measured 40% reduction in relink time. That timing improvement was
+not observed in the macOS comparison.
+
+Locally, `[profile.dev.package."*"]` and `[profile.test.package."*"]` use
+`debug = "line-tables-only"` to reduce dependency build output on disk while
+retaining file and line information in backtraces. The Apple Silicon
+measurement in PR #769 reduced a clean web-test target directory by
+49.3 MiB (1.06%). Workspace packages keep full debug information by default
+in local builds.
 
 ## Environment check
 
