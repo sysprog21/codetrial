@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import textwrap
 import unittest
 
 SPEC = importlib.util.spec_from_file_location(
@@ -1435,6 +1436,102 @@ app.save({'identity':s['identity'],'revision':s['revision'],'answers':s['answers
         # hook's own push of the notes ref does not loop back into the checks.
         self.git("push", "-q", "fork", "HEAD:refs/heads/topic")
         self.assertEqual(self.fork_note(head)["status"], "complete")
+
+
+class EvidenceLockPortabilityTests(unittest.TestCase):
+    PROBE = textwrap.dedent("""
+        import errno, importlib.util, subprocess, sys, tempfile, types
+        from pathlib import Path
+
+        mode, gate_path = sys.argv[1], sys.argv[2]
+        calls = []
+        if mode in ("windows", "windows-bad-descriptor"):
+            sys.modules["fcntl"] = None
+            fake = types.ModuleType("msvcrt")
+            fake.LK_LOCK, fake.LK_UNLCK = 1, 2
+            error = (
+                errno.EBADF
+                if mode == "windows-bad-descriptor"
+                else errno.EDEADLK
+            )
+            outcomes = iter([OSError(error, "locking failed"), None])
+
+            def locking(fd, op, size):
+                calls.append(op)
+                outcome = next(outcomes) if op == fake.LK_LOCK else None
+                if outcome:
+                    raise outcome
+
+            fake.locking = locking
+            sys.modules["msvcrt"] = fake
+        else:
+            fake = types.ModuleType("fcntl")
+            fake.LOCK_EX = 2
+            fake.flock = lambda fd, op: calls.append(op)
+            sys.modules["fcntl"] = fake
+        spec = importlib.util.spec_from_file_location("gate", gate_path)
+        gate = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(gate)
+        with tempfile.TemporaryDirectory() as td:
+            gate.evidence_path = lambda head: Path(td) / (head + ".json")
+            with gate.evidence_lock("0" * 40):
+                calls.append("body")
+        print(calls)
+    """)
+
+    def probe(self, mode):
+        return subprocess.run(
+            [sys.executable, "-I", "-c", self.PROBE, mode, str(GATE)],
+            capture_output=True,
+            text=True,
+        )
+
+    def test_windows_keeps_trying_until_it_holds_the_lock(self):
+        run = self.probe("windows")
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertEqual(run.stdout.strip(), "[1, 1, 'body', 2]")
+
+    def test_windows_refuses_unrelated_locking_failures(self):
+        run = self.probe("windows-bad-descriptor")
+        self.assertNotEqual(run.returncode, 0)
+        self.assertEqual(run.stdout.strip(), "")
+
+    def test_flock_is_used_where_fcntl_exists(self):
+        run = self.probe("unix")
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertEqual(run.stdout.strip(), "[2, 'body']")
+
+    @unittest.skipIf(os.name == "nt", "fsync_dir skips directories on Windows")
+    def test_fsync_dir_reports_a_missing_directory_off_windows(self):
+        gate = load_gate("gate_fsync")
+        with tempfile.TemporaryDirectory() as td:
+            with self.assertRaises(FileNotFoundError):
+                gate.fsync_dir(Path(td) / "missing")
+
+    def test_fsync_dir_skips_directories_on_windows(self):
+        probe = textwrap.dedent("""
+            import importlib.util, os, sys, tempfile
+            from pathlib import Path
+
+            spec = importlib.util.spec_from_file_location("gate", sys.argv[1])
+            gate = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(gate)
+            with tempfile.TemporaryDirectory() as td:
+                missing = str(Path(td) / "missing")
+                name, os.name = os.name, "nt"
+                try:
+                    gate.fsync_dir(missing)
+                finally:
+                    os.name = name
+            print("skipped")
+        """)
+        run = subprocess.run(
+            [sys.executable, "-I", "-c", probe, str(GATE)],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertEqual(run.stdout.strip(), "skipped")
 
 
 class QueueReviewTests(unittest.TestCase):

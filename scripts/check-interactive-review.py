@@ -3,7 +3,7 @@
 
 import argparse
 import contextlib
-import fcntl
+import errno
 import functools
 import hashlib
 import importlib.util
@@ -14,6 +14,12 @@ import re
 import sqlite3
 import subprocess
 import tempfile
+
+try:
+    import fcntl
+except ImportError:  # Windows
+    fcntl = None
+    import msvcrt
 
 
 LARGE_COMMIT = 200  # added plus deleted lines in one commit
@@ -207,11 +213,32 @@ def evidence_lock(head):
     path = evidence_path(head)
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     with open(path.parent / ".lock", "a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        yield
+        if fcntl is not None:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            yield
+            return
+        # One byte at offset 0 of the empty file. LK_LOCK gives up after ten
+        # tries and raises; flock would keep waiting, so keep trying.
+        lock.seek(0)
+        while True:
+            try:
+                msvcrt.locking(lock.fileno(), msvcrt.LK_LOCK, 1)
+                break
+            except OSError as error:
+                if error.errno not in (errno.EDEADLK, errno.EACCES):
+                    raise
+        try:
+            yield
+        finally:
+            lock.seek(0)
+            msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
 
 
 def fsync_dir(directory):
+    # Windows cannot open a directory with os.open; anywhere else a failure
+    # here is a real one and must not be swallowed.
+    if os.name == "nt":
+        return
     fd = os.open(directory, os.O_RDONLY)
     try:
         os.fsync(fd)
