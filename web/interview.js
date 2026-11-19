@@ -324,6 +324,9 @@ const JIM_SELF_VIEW_WIDTH_PX = 120;
 
 /// In px, between the editor toolbar's bottom and the top of Jim's stage.
 const JIM_STAGE_TOOLBAR_GAP_PX = 6;
+/// In px, between the end of the editor's text and the floating stage, so the
+/// last glyph never ends flush against it or a fraction under it.
+const JIM_STAGE_EDITOR_GAP_PX = 6;
 
 // From /runtime-config.js, which is the only thing allowed to name what the
 // server does. A literal here would be a second answer to "does this server
@@ -5857,12 +5860,58 @@ function placeJimStageBelowToolbar(toolbar) {
       "scrollable",
       stage.top < 0 || stage.bottom > window.innerHeight,
     );
+    // Measured again: becoming scrollable can move the stage.
+    reserveJimStageInEditor(nodes.jimStage.getBoundingClientRect());
   };
   const observer = new window.ResizeObserver(place);
   observer.observe(toolbar);
   observer.observe(nodes.jimStage);
+  // The test drawer's splitter moves the editor's bottom under the card.
+  if (nodes.editorStack.isConnected) observer.observe(nodes.editorStack);
   window.addEventListener("resize", place);
   place();
+}
+
+/// Tells the editor how much of it Jim's stage covers, so the end of a long
+/// line and the caret never scroll under it. It reserves the cheaper side: the
+/// width beside the stage, or the bottom measured at rest like the toolbar,
+/// since scrolling only moves the editor up from under the fixed card. A card
+/// over half the editor's width never takes the width, so in the desktop shell
+/// it always takes the bottom. Where the page scrolls the editor, below that
+/// shell, as on a phone, it takes neither: the page gets room below its end
+/// instead, so it scrolls any row and the caret above it.
+function reserveJimStageInEditor(stage) {
+  const stack = nodes.editorStack;
+  if (!stack.isConnected) return;
+  const editor = stack.getBoundingClientRect();
+  const right =
+    stage.width > 0 && stage.left < editor.right
+      ? Math.ceil(editor.right - stage.left) + JIM_STAGE_EDITOR_GAP_PX
+      : 0;
+  const wide = right > editor.width / 2;
+  // The desktop shell is one window tall, so its panel, not the page, scrolls.
+  const pageRoom = wide && !matchMedia(JIM_DRAWING_DESKTOP_WINDOW).matches;
+  // A stage that scrolls with the page sits under the toolbar, not at the end.
+  const page =
+    pageRoom && !nodes.jimStage.classList.contains("scrollable")
+      ? Math.max(0, Math.ceil(window.innerHeight - stage.top)) +
+        JIM_STAGE_EDITOR_GAP_PX
+      : 0;
+  document.documentElement.style.setProperty(
+    "--jim-stage-reserve-page",
+    `${page}px`,
+  );
+  const rest = window.scrollY + stack.closest(".editor-panel").scrollTop;
+  const below = Math.max(0, Math.ceil(editor.bottom + rest - stage.top));
+  const bottom = wide
+    ? !pageRoom
+    : below / editor.height < right / editor.width;
+  const side = bottom || wide ? 0 : right;
+  stack.style.setProperty("--jim-stage-reserve-right", `${side}px`);
+  stack.style.setProperty(
+    "--jim-stage-reserve-bottom",
+    `${bottom ? below : 0}px`,
+  );
 }
 
 function editorFontSize() {
