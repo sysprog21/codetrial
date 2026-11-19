@@ -42,6 +42,14 @@
         "abcde"
       ],
       "expected": true
+    },
+    {
+      "label": "reversed character order",
+      "input": [
+        "ab",
+        "ba"
+      ],
+      "expected": false
     }
   ],
   "paramNames": [
