@@ -8,8 +8,10 @@ fingerprint) under the git directory; this compares them with the tree now.
     agent-closeout-check.py              # a Claude Code Stop hook
 
 As a Stop hook it prints a `systemMessage` when the work tree has changes no
-passing receipt covers. It never blocks and always exits 0. A receipt shows a
-run happened on this tree, not that it was complete; CI recomputes the verdict.
+passing receipt covers. It never blocks and exits 0, except that with no `sh`
+on PATH to take the fingerprint with, as outside Git Bash on Windows, it raises
+FileNotFoundError. A receipt shows a run happened on this tree, not that it was
+complete; CI recomputes the verdict.
 """
 
 import contextlib
@@ -46,7 +48,7 @@ def receipts():
 
 def tree():
     done = subprocess.run(
-        [str(ROOT / "scripts" / "tree-fingerprint.sh")],
+        ["sh", str(ROOT / "scripts" / "tree-fingerprint.sh")],
         capture_output=True,
         text=True,
         check=False,

@@ -46,8 +46,9 @@ printf '%s\n' "$env_report" | grep -E '^(warning|note): ' >&2
 
 # The tree this run judges, taken before any gate runs: an edit made while a
 # long run is in progress then fails to match the receipt, instead of being
-# stamped as what the run saw. Empty outside a git work tree.
-receipt_tree=$("$ROOT/scripts/tree-fingerprint.sh" 2> /dev/null) || receipt_tree=
+# stamped as what the run saw. Empty outside a git work tree. Through sh, as
+# scripts/agent-closeout-check.py takes the fingerprint it matches this against.
+receipt_tree=$(sh "$ROOT/scripts/tree-fingerprint.sh" 2> /dev/null) || receipt_tree=
 
 # worktree_tree: the id of the tree a commit would get if everything the work
 # tree holds that git does not ignore were staged, which is what lets evidence
