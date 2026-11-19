@@ -7252,6 +7252,103 @@ lobbyTest(
   },
 );
 
+lobbyTest(
+  "recording history waits for account and device report deletion",
+  async (page) => {
+    session.recordingAvailable = true;
+    const report = savedAttempt(EASY[0]);
+    reports = [report];
+    await lobby(page);
+
+    const keys = ["codetrial_history", "codetrial_review_history"];
+    await page.evaluate(
+      ({ keys, entry }) => {
+        for (const key of keys)
+          localStorage.setItem(key, JSON.stringify([entry]));
+      },
+      { keys, entry: report.payload },
+    );
+    const deviceCopies = () =>
+      page.evaluate(
+        (keys) =>
+          keys.map((key) => JSON.parse(localStorage.getItem(key)) ?? []),
+        keys,
+      );
+    const deleteTimeoutMs = 5_000;
+    let accountDeleted, accountDeleteFailed;
+    const deleted = new Promise((resolve, reject) => {
+      accountDeleted = resolve;
+      accountDeleteFailed = reject;
+    });
+    let releaseDelete;
+    const held = new Promise((resolve) => (releaseDelete = resolve));
+    await page.route("**/api/reports", async (route) => {
+      if (route.request().method() !== "DELETE") return route.continue();
+      let response;
+      try {
+        response = await route.fetch({ timeout: deleteTimeoutMs });
+      } catch (error) {
+        accountDeleteFailed(error);
+        await route.abort().catch(() => {});
+        return;
+      }
+      accountDeleted(response.status());
+      await held;
+      await route.fulfill({ response });
+    });
+
+    const link = page.locator("#recording-history");
+    page.once("dialog", (dialog) => dialog.accept());
+    const deleteDeadline = setTimeout(
+      () =>
+        accountDeleteFailed(new Error("Timed out waiting for report DELETE")),
+      deleteTimeoutMs,
+    );
+    try {
+      const [deleteStatus] = await Promise.all([
+        deleted,
+        page.click("#delete-reports", { timeout: deleteTimeoutMs }),
+      ]);
+      assert.equal(deleteStatus, 200);
+      assert.deepEqual(reports, []);
+      assert.deepEqual(await deviceCopies(), [
+        [report.payload],
+        [report.payload],
+      ]);
+
+      await link.scrollIntoViewIfNeeded();
+      const { x, y, width, height } = await link.boundingBox();
+      await page.mouse.click(x + width / 2, y + height / 2);
+      assert.equal(page.url(), `${base}/`);
+      assert.equal(
+        await link.getAttribute("inert", { timeout: 1000 }),
+        "",
+        "the recording link must be inert while the delete response is held",
+      );
+      await page.locator(".advanced-settings > summary").focus();
+      await page.keyboard.press("Tab");
+      assert.equal(await isFocused(page.locator("#progress-problem")), true);
+      assert.equal(page.url(), `${base}/`);
+      assert.deepEqual(await deviceCopies(), [
+        [report.payload],
+        [report.payload],
+      ]);
+    } finally {
+      clearTimeout(deleteDeadline);
+      releaseDelete();
+    }
+
+    const status = page.locator("#report-delete-status");
+    await status
+      .getByText("Saved reports and progress were deleted.")
+      .waitFor();
+    assert.deepEqual(await deviceCopies(), [[], []]);
+    assert.equal(await isFocused(status), true);
+    await page.getByRole("link", { name: "Your recordings" }).click();
+    await page.waitForURL(`${base}/replay.html`);
+  },
+);
+
 for (const account of [true, false]) {
   lobbyTest(
     `the problem filter keeps ${account ? "account" : "device"} history and charts in sync`,
@@ -12304,6 +12401,408 @@ lobbyTest(
   },
 );
 
+async function mockRecordingConfig(page, flag) {
+  await page.route("**/runtime-config.js", (route) =>
+    route.fulfill({
+      contentType: "text/javascript",
+      body: `globalThis.CODETRIAL_RECORDING_ENABLED = ${JSON.stringify(flag)};
+`,
+    }),
+  );
+}
+
+lobbyTest(
+  "recording history opens while saved reports are still loading",
+  async (page) => {
+    session.recordingAvailable = true;
+    reports = pagedEntries("recorded", 1, () => ({}));
+    await page.route(
+      (url) => url.pathname === "/api/recordings",
+      (route) => route.fulfill({ json: { recordings: [], nextCursor: null } }),
+    );
+    const progress = page.locator("#history-header");
+    const link = progress.getByRole("link", { name: "Your recordings" });
+    const deleteReports = page.locator("#delete-reports");
+    const release = holdHistory();
+    try {
+      const requested = page.waitForRequest(`${base}/api/reports`);
+      await page.goto(`${base}/`, { waitUntil: "domcontentloaded" });
+      await requested;
+      assert.equal(
+        await link.isVisible(),
+        true,
+        "recordings should be reachable before reports finish loading",
+      );
+      assert.equal(await deleteReports.isHidden(), true);
+
+      await link.click();
+      await page.waitForURL(`${base}/replay.html`);
+      await page.getByText("No recordings yet.", { exact: true }).waitFor();
+
+      const requestedAgain = page.waitForRequest(`${base}/api/reports`);
+      await page.getByRole("link", { name: "Back to lobby" }).click();
+      await requestedAgain;
+    } finally {
+      release();
+    }
+
+    await page.locator("#attempt-history > li").first().waitFor();
+    assert.equal(await link.isVisible(), true);
+    assert.equal(await deleteReports.isVisible(), true);
+
+    failing.add("/api/reports");
+    await lobby(page);
+    assert.equal(
+      await page.locator("#progress-summary").textContent(),
+      "Could not load saved account progress.",
+    );
+    assert.equal(await link.isVisible(), true);
+  },
+);
+
+lobbyTest(
+  "recording history is keyboard reachable even with no recordings",
+  async (page) => {
+    await mockRecordingConfig(page, false);
+    session.recordingAvailable = true;
+    session.identityVerified = false;
+    let reads = 0;
+    await page.route(
+      (url) => url.pathname === "/api/recordings",
+      (route) => {
+        reads++;
+        return route.fulfill({ json: { recordings: [], nextCursor: null } });
+      },
+    );
+
+    await lobby(page);
+    assert.equal(reads, 0, "the lobby must not read recording history");
+    const progress = page.locator("#history-header");
+    const link = progress.getByRole("link", { name: "Your recordings" });
+    assert.ok(
+      await link.isVisible(),
+      "recordings should be next to Interview progress",
+    );
+    assert.equal(
+      await progress
+        .getByRole("heading", { name: "Interview progress" })
+        .isVisible(),
+      true,
+    );
+    assert.equal(
+      await page
+        .getByRole("button", { name: "Delete saved reports" })
+        .isVisible(),
+      false,
+    );
+    // The collapsed settings summary is the last control before progress.
+    await page.locator(".advanced-settings > summary").focus();
+    await page.keyboard.press("Tab");
+    assert.equal(await isFocused(link), true);
+    await page.keyboard.press("Enter");
+
+    await page.waitForURL(`${base}/replay.html`);
+    await page.getByRole("heading", { name: "Your recordings" }).waitFor();
+    await page.getByText("No recordings yet.", { exact: true }).waitFor();
+    assert.equal(reads, 1);
+
+    reports = pagedEntries("recorded", 11, () => ({}));
+    await page.getByRole("link", { name: "Back to lobby" }).click();
+    await page.waitForURL(`${base}/index.html`);
+    await page.locator("#attempt-history > li").first().waitFor();
+    const controls = paginationControls(page);
+    const firstPageCount = await page.locator("#attempt-history > li").count();
+    assert.ok(firstPageCount < reports.length);
+    await controls.next.click();
+    await page.waitForFunction(() =>
+      document
+        .querySelector("#attempt-page-status")
+        .textContent.includes("Page 2"),
+    );
+    await link.click();
+    await page.waitForURL(`${base}/replay.html`);
+    await page.getByText("No recordings yet.", { exact: true }).waitFor();
+    assert.equal(reads, 2);
+  },
+);
+
+lobbyTest(
+  "replay can return to the lobby by click or keyboard after a direct visit",
+  async (page) => {
+    const firstPage = Array.from({ length: 20 }, (_, index) => ({
+      recordingId: `recording-${20 - index}`,
+      createdAt: 1770000020 - index,
+      state: "ready",
+    }));
+    const cursor = "1770000001.recording-1";
+    const older = {
+      recordingId: "recording-0",
+      createdAt: 1770000000,
+      state: "ready",
+    };
+    const cursors = [];
+    await page.route("**/api/recordings**", (route) => {
+      const before = new URL(route.request().url()).searchParams.get("before");
+      cursors.push(before);
+      return route.fulfill({
+        json:
+          before === cursor
+            ? { recordings: [older], nextCursor: null }
+            : { recordings: firstPage, nextCursor: cursor },
+      });
+    });
+
+    await page.goto(`${base}/replay.html`);
+    const back = page.getByRole("link", { name: "Back to lobby" });
+    const rows = page.locator("#replay-list").getByRole("button");
+    const more = page.getByRole("button", { name: "Older" });
+    await back.waitFor();
+    assert.equal(await back.getAttribute("href"), "/index.html");
+    await more.waitFor();
+    assert.equal(await rows.count(), 20);
+    await more.click();
+    await rows.nth(20).waitFor();
+    assert.equal(await rows.count(), 21);
+    assert.equal(
+      await rows.first().getAttribute("data-recording"),
+      "recording-20",
+    );
+    assert.equal(
+      await rows.last().getAttribute("data-recording"),
+      "recording-0",
+    );
+    assert.deepEqual(cursors, [null, cursor]);
+    assert.equal(await more.isHidden(), true);
+    await back.click();
+    await page.waitForURL(`${base}/index.html`);
+    await page.locator("main.lobby").waitFor();
+
+    await page.goto(`${base}/replay.html`);
+    await back.waitFor();
+    await page.keyboard.press("Tab");
+    assert.equal(await isFocused(back), true);
+    await page.keyboard.press("Enter");
+    await page.waitForURL(`${base}/index.html`);
+    await page.locator("main.lobby").waitFor();
+  },
+);
+
+lobbyTest(
+  "recording history follows the current session rather than deployment flags",
+  async (page) => {
+    const link = page.locator("#recording-history");
+    await mockRecordingConfig(page, true);
+    await lobby(page);
+    assert.equal(await link.isHidden(), true, "the field is absent");
+    session.recordingAvailable = false;
+    await lobby(page);
+    assert.equal(await link.isHidden(), true, "the service is unavailable");
+    session.recordingAvailable = "false";
+    await lobby(page);
+    assert.equal(
+      await link.isHidden(),
+      true,
+      "a string cannot enable the link",
+    );
+
+    session = { signedIn: false, recordingAvailable: true };
+    await page.route("**/api/login", (route) => {
+      session = {
+        signedIn: true,
+        user: { login: "candidate" },
+        recordingAvailable: true,
+      };
+      return route.fulfill({ json: { ok: true } });
+    });
+    await page.route("**/api/logout", (route) => {
+      assert.equal(route.request().method(), "POST");
+      session = { signedIn: false };
+      return route.fulfill({ status: 204 });
+    });
+    await lobby(page);
+    assert.equal(await link.isHidden(), true);
+
+    await page
+      .getByRole("textbox", { name: "GitHub username" })
+      .fill("candidate");
+    await page.getByRole("button", { name: "Use GitHub" }).click();
+    await link.waitFor({ state: "visible" });
+
+    await page.getByRole("button", { name: "Sign out" }).click();
+    await page.getByRole("button", { name: "Use GitHub" }).waitFor();
+    assert.equal(await link.isHidden(), true);
+    assert.equal(await page.locator("#history-header").isHidden(), true);
+  },
+);
+
+for (const outcome of ["success", "failure"]) {
+  lobbyTest(
+    `recording history waits for sign-out and a fresh session after ${outcome}`,
+    async (page) => {
+      session.recordingAvailable = true;
+      reports = [savedAttempt(EASY[0])];
+      await lobby(page);
+
+      let releaseLogout;
+      const logoutHeld = new Promise((resolve) => (releaseLogout = resolve));
+      let releaseSession;
+      const sessionHeld = new Promise((resolve) => (releaseSession = resolve));
+      await page.route("**/api/logout", async (route) => {
+        await logoutHeld;
+        if (outcome === "failure") return route.abort();
+        session = { signedIn: false };
+        return route.fulfill({ json: { ok: true } });
+      });
+
+      const link = page.locator("#recording-history");
+      const sessionHeading = page.locator("#session-heading");
+      try {
+        const requested = page.waitForRequest("**/api/logout");
+        await link.focus();
+        // Keep focus on the link until the sign-out handler disables it.
+        await page.locator("#logout").evaluate((button) => button.click());
+        assert.equal((await requested).method(), "POST");
+        assert.equal(await link.getAttribute("inert"), "");
+        assert.equal(await isFocused(sessionHeading), true);
+
+        await link.scrollIntoViewIfNeeded();
+        const { x, y, width, height } = await link.boundingBox();
+        await page.mouse.click(x + width / 2, y + height / 2);
+        assert.equal(page.url(), `${base}/`);
+        await page.locator(".advanced-settings > summary").focus();
+        await page.keyboard.press("Tab");
+        assert.equal(await isFocused(page.locator("#delete-reports")), true);
+
+        // Even a signed-in answer to a restore cannot unlock a pending logout.
+        await restore(page);
+        await link.waitFor({ state: "visible" });
+        assert.equal(await link.getAttribute("inert"), "");
+
+        holdSession = sessionHeld;
+        const reloaded = page.waitForEvent("domcontentloaded");
+        releaseLogout();
+        await reloaded;
+        assert.equal(await link.isHidden(), true);
+      } finally {
+        releaseLogout();
+        releaseSession();
+      }
+
+      if (outcome === "success") {
+        await page.getByRole("button", { name: "Use GitHub" }).waitFor();
+        assert.equal(await link.isHidden(), true);
+      } else {
+        await link.waitFor();
+        assert.equal(await link.getAttribute("inert"), null);
+        await page.getByRole("link", { name: "Your recordings" }).click();
+        await page.waitForURL(`${base}/replay.html`);
+      }
+    },
+  );
+}
+
+lobbyTest(
+  "restoring the lobby moves focus before hiding the recording history link",
+  async (page) => {
+    session.recordingAvailable = true;
+    await lobby(page);
+    const link = page.getByRole("link", { name: "Your recordings" });
+    const sessionHeading = page.getByRole("heading", {
+      name: "Set up your session",
+    });
+    await link.focus();
+    assert.equal(await isFocused(link), true);
+
+    // Reproduce the restored page state without relying on Chromium using BFCache.
+    let release;
+    holdSession = new Promise((resolve) => (release = resolve));
+    try {
+      const checking = page.waitForRequest(`${base}/api/session`);
+      await restore(page);
+      await checking;
+      assert.equal(await isFocused(sessionHeading), true);
+      assert.equal(await link.isHidden(), true);
+    } finally {
+      release();
+    }
+
+    await awaitReady(page);
+    assert.equal(await isFocused(sessionHeading), true);
+    for (const name of [
+      "30 min",
+      "45 min",
+      "60 min",
+      "Coding only",
+      "Coding + behavioral",
+      "Editor",
+      "Whiteboard",
+    ]) {
+      await page.keyboard.press("Tab");
+      assert.equal(
+        await isFocused(page.getByRole("button", { name, exact: true })),
+        true,
+        `Tab should reach ${name}`,
+      );
+    }
+    await page.keyboard.press("Tab");
+    assert.equal(
+      await isFocused(page.locator(".advanced-settings > summary")),
+      true,
+    );
+    await page.keyboard.press("Tab");
+    assert.equal(await isFocused(link), true);
+  },
+);
+
+lobbyTest(
+  "stale session replies cannot show recording history after a failed recheck",
+  async (page) => {
+    session.recordingAvailable = true;
+    await lobby(page);
+    const link = page.locator("#recording-history");
+    assert.equal(await link.isVisible(), true);
+
+    const visibility = await page.evaluate(async () => {
+      const original = window.fetch;
+      const pending = [];
+      window.fetch = (path, ...options) =>
+        path === "/api/session"
+          ? new Promise((resolve) => pending.push(resolve))
+          : original(path, ...options);
+      const recheck = () =>
+        window.dispatchEvent(
+          new PageTransitionEvent("pageshow", { persisted: true }),
+        );
+      const hidden = () => document.querySelector("#recording-history").hidden;
+
+      try {
+        recheck();
+        const whileChecking = hidden();
+        recheck();
+        pending[1]({ ok: false, status: 500 });
+        // Let the fetch wrapper and loadAccount settle before the older answer.
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        const afterFailure = hidden();
+        pending[0]({
+          ok: true,
+          json: async () => ({
+            signedIn: true,
+            user: { login: "stale" },
+            recordingAvailable: true,
+          }),
+        });
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        return [whileChecking, afterFailure, hidden()];
+      } finally {
+        window.fetch = original;
+      }
+    });
+    assert.deepEqual(visibility, [true, true, true]);
+    assert.equal(await link.isHidden(), true);
+    assert.equal(await page.locator("#history-header").isHidden(), true);
+  },
+);
+
 async function openSavedList(page, ids) {
   await page.addInitScript(
     ([key, ids]) => localStorage.setItem(key, JSON.stringify(ids)),
@@ -13139,11 +13638,13 @@ for (const outcome of ["success", "failure"]) {
   lobbyTest(
     `pagination unlocks after a pending deletion ${outcome}`,
     async (page) => {
+      session.recordingAvailable = true;
       reports = pagedEntries("locked", 21, () => ({
         report: { decision: "HIRE" },
       })).map((payload) => ({ id: payload.id, payload }));
       await lobby(page);
       const { size, previous, next, status } = paginationControls(page);
+      const recordings = page.locator("#recording-history");
       await size.selectOption("5");
       await next.click();
       for (const control of [previous, next, size])
@@ -13168,6 +13669,7 @@ for (const outcome of ["success", "failure"]) {
       try {
         for (const control of [previous, next, size])
           assert.equal(await control.isDisabled(), true);
+        assert.equal(await recordings.getAttribute("inert"), "");
         assert.equal(await status.textContent(), "Page 2 of 5");
       } finally {
         releaseDelete();
@@ -13177,6 +13679,7 @@ for (const outcome of ["success", "failure"]) {
       );
       for (const control of [previous, next, size])
         assert.equal(await control.isDisabled(), false);
+      assert.equal(await recordings.getAttribute("inert"), null);
       assert.equal(
         await status.textContent(),
         outcome === "success" ? "Page 2 of 4" : "Page 2 of 5",

@@ -124,6 +124,7 @@ let historyLoad = 0;
 // finish before that pick can start, even if an older load completes first.
 let historyRefreshing = false;
 let loginPending = false;
+let logoutPending = false;
 // Successful and uncertain POSTs need an account check before another login.
 // Null means no check is owed; otherwise this is "recorded" or "unknown", or
 // "unchecked" for a session check that failed where storage is blocked, which
@@ -181,6 +182,8 @@ const nodes = {
   githubLogin: document.querySelector("#github-login"),
   loginLink: document.querySelector("#login-link"),
   logout: document.querySelector("#logout"),
+  sessionHeading: document.querySelector("#session-heading"),
+  recordingHistory: document.querySelector("#recording-history"),
   historyHeader: document.querySelector("#history-header"),
   history: document.querySelector("#history"),
   deleteReports: document.querySelector("#delete-reports"),
@@ -1096,6 +1099,13 @@ function syncLobbyControls() {
   // a press would do nothing.
   nodes.sequelSuggestionPick.disabled =
     !historyReady || starting || accountBusy || deletingReports;
+  nodes.logout.disabled = logoutPending;
+  if (nodes.recordingHistory) {
+    const recordingBlocked = deletingReports || logoutPending;
+    if (recordingBlocked)
+      moveFocusOut(nodes.sessionHeading, nodes.recordingHistory);
+    nodes.recordingHistory.inert = recordingBlocked;
+  }
   const deleteBlocked = reportDeletesBlocked();
   nodes.deleteReports.disabled = deleteBlocked;
   for (const remove of nodes.attemptHistory.querySelectorAll(
@@ -1130,12 +1140,12 @@ function setStartGate(blocked) {
 }
 
 nodes.logout.addEventListener("click", async () => {
-  nodes.logout.disabled = true;
-  try {
-    await fetch("/api/logout", { method: "POST" });
-  } finally {
-    window.location.reload();
-  }
+  if (logoutPending) return;
+  logoutPending = true;
+  syncLobbyControls();
+  // A fresh session decides what to show even if the logout response was lost.
+  await fetch("/api/logout", { method: "POST" }).catch(() => {});
+  window.location.reload();
 });
 
 applyDifficulties();
@@ -1203,6 +1213,11 @@ function settle() {
 
 async function loadAccount(generation) {
   accountHistory = null;
+  if (nodes.recordingHistory) {
+    moveFocusOut(nodes.sessionHeading, nodes.recordingHistory);
+    nodes.recordingHistory.hidden = true;
+  }
+  nodes.historyHeader.hidden = nodes.deleteReports.hidden;
   let signedOutMessage = "Signed out";
   try {
     const session = await fetchJson("/api/session");
@@ -1265,6 +1280,10 @@ async function loadAccount(generation) {
         : null;
     applyCostNote();
     if (session.signedIn) {
+      if (nodes.recordingHistory && session.recordingAvailable === true) {
+        nodes.recordingHistory.hidden = false;
+        nodes.historyHeader.hidden = false;
+      }
       loginResult = null;
       accountHistory = true;
       nodes.loginLink.textContent = "Use GitHub";
@@ -2093,6 +2112,7 @@ function showProgressError(message) {
   renderSequelSuggestion();
   hideRecentPerformance();
   nodes.historyHeader.hidden = false;
+  nodes.deleteReports.hidden = false;
   nodes.history.hidden = false;
   nodes.progressSummary.textContent = message;
   nodes.progressTrends.replaceChildren();
@@ -2129,7 +2149,9 @@ function showProgress(entries, suffix) {
   }
   progressSuffix = suffix;
   const erasable = entries.length > 0 || readDeviceHistory().length > 0;
-  nodes.historyHeader.hidden = !erasable;
+  nodes.historyHeader.hidden =
+    !erasable && nodes.recordingHistory?.hidden !== false;
+  nodes.deleteReports.hidden = !erasable;
   nodes.history.hidden = false;
   const model = progressModelFrom(progressNormalized);
   syncFilter(nodes.progressProblem, model.options.problemId, "All problems");

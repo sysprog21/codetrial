@@ -123,6 +123,10 @@ header {
   color: var(--ink);
 }
 
+.account-link[inert] {
+  opacity: 0.6;
+}
+
 /* Its look is the lobby's field style, with the other fields there. */
 .account-input {
   width: 12rem;
