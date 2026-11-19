@@ -302,6 +302,77 @@ test("valid-anagram cases reject equal-length character-digest shortcuts", () =>
   }
 });
 
+test("word-pattern cases reject shortcuts that skip a length or mapping check", () => {
+  const distinct = (values) => new Set(values).size;
+  const sameDistinct = (p, w) =>
+    distinct([...p].slice(0, w.length).map((c, i) => `${c} ${w[i]}`)) ===
+      distinct(p) && distinct(p) === distinct(w);
+  const counts = (v) => v.map((x) => v.filter((y) => y === x).length).sort();
+  // A letter keeps its first word; clash(i) can refuse a new letter's word.
+  const oneWay = (p, w, clash) => {
+    const wordOf = new Map();
+    return [...p].every((c, i) =>
+      wordOf.has(c) ? wordOf.get(c) === w[i] : !clash(i) && wordOf.set(c, w[i]),
+    );
+  };
+  const sameLength = (answer) => (p, w) =>
+    p.length === w.length && answer(p, w);
+  for (const [name, answer] of [
+    ["distinct counts without a length check", sameDistinct],
+    [
+      "distinct counts that refuse only a short message",
+      (p, w) => w.length >= p.length && sameDistinct(p, w),
+    ],
+    [
+      "letter and word counts",
+      sameLength((p, w) => `${counts([...p])}` === `${counts(w)}`),
+    ],
+    [
+      "comparison with the first position",
+      sameLength((p, w) =>
+        [...p].every((c, i) => (c === p[0]) === (w[i] === w[0])),
+      ),
+    ],
+    [
+      "one-way map with a neighbour check",
+      sameLength(
+        (p, w) =>
+          oneWay(p, w, () => false) &&
+          [...p].every(
+            (c, i) => i === 0 || (c === p[i - 1]) === (w[i] === w[i - 1]),
+          ),
+      ),
+    ],
+    [
+      "one-way map checked against the last new word",
+      sameLength((p, w) => {
+        let last;
+        return oneWay(p, w, (i) => {
+          const clash = w[i] === last;
+          last = w[i];
+          return clash;
+        });
+      }),
+    ],
+    [
+      "one map for both directions",
+      sameLength((p, w) => {
+        const seen = new Map();
+        const claim = (k, v) => (seen.get(k) ?? seen.set(k, v).get(k)) === v;
+        return [...p].every((c, i) => claim(c, w[i]) && claim(w[i], c));
+      }),
+    ],
+  ]) {
+    assert.ok(
+      judges["word-pattern"].cases.some(
+        ({ input: [pattern, s], expected }) =>
+          answer(pattern, s.split(" ")) !== expected,
+      ),
+      `the built-in cases must reject the ${name} shortcut`,
+    );
+  }
+});
+
 test("harness generator covers every function problem without network access", () => {
   for (const [id, spec] of Object.entries(judges)) {
     if (spec.kind !== "function") continue;

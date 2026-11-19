@@ -734,6 +734,16 @@ fn static_problem_bank_and_judges_cover_each_problem() {
             "best-time-to-buy-and-sell-stock-iii",
             "best trades span a dip",
         ),
+        ("word-pattern", "fewer words than letters"),
+        ("word-pattern", "extra word repeats an earlier one"),
+        ("word-pattern", "alternating words for a mirrored template"),
+        ("word-pattern", "new letter takes a word already used"),
+        ("word-pattern", "third letter reuses the first word"),
+        (
+            "word-pattern",
+            "one-letter words named like template letters",
+        ),
+        ("word-pattern", "one word repeated 130 times"),
     ] {
         let labels = judges[id]["cases"]
             .as_array()
