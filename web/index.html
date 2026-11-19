@@ -1804,7 +1804,7 @@
           <div class="setup-heading">
             <span class="step-number" aria-hidden="true">2</span>
             <div>
-              <h2 id="session-heading">Set up your session</h2>
+              <h2 id="session-heading" tabindex="-1">Set up your session</h2>
               <p>Choose the length, format and editor you want.</p>
             </div>
           </div>
@@ -2132,11 +2132,19 @@
 
       <div id="history-header" class="history-header" hidden>
         <h2 id="progress-title">Interview progress</h2>
+        <a
+          id="recording-history"
+          class="account-link"
+          href="/replay.html"
+          hidden
+          >Your recordings</a
+        >
         <button
           id="delete-reports"
           class="pill-button danger"
           type="button"
           disabled
+          hidden
         >
           Delete saved reports
         </button>

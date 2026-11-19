@@ -1157,6 +1157,16 @@ three scoped to the account.
 | `GET /api/recordings/{id}` | one recording's state, dates and recovery |
 | `GET /api/recordings/{id}/events` | its replay: snapshot, review or tail |
 
+The signed-in `GET /api/session` response includes a boolean
+`recordingAvailable`. It is `true` when the server has a recorder and the
+signed-in account has a verified email address. The field describes whether
+the account can make a recording now, not whether it has existing recordings.
+An account without a verified email can still open `/replay` while signed in to
+view its existing recordings. The signed-out response omits the field. Clients
+can use the session response alone to decide whether to show the lobby's
+recordings link: show it only when the session confirms sign-in and the field
+is `true`.
+
 The events route has three shapes and two query parameters. Absent or negative
 `after` is the snapshot, which keeps the newest row of each replaceable kind and
 drops what it replaced. A sequence number is the tail, which drops nothing.
