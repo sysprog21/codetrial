@@ -2300,7 +2300,7 @@ lobbyTest(
     assert.equal(await page.locator(".problem-card:visible").count(), 0);
     assert.match(
       await page.locator("#problem-filter-summary").textContent(),
-      /0 problems/,
+      /0 Medium problems tagged Array/,
     );
 
     await page.click("#problem-filters-reset");
@@ -2450,7 +2450,7 @@ lobbyTest(
     );
     assert.match(
       await page.locator("#problem-filter-summary").textContent(),
-      /0 problems matching scenario title/,
+      /0 Medium problems matching scenario title/,
     );
   },
 );
@@ -2887,7 +2887,7 @@ lobbyTest(
     );
     assert.match(
       await page.locator("#problem-filter-summary").textContent(),
-      /0 problems tagged Binary Tree and matching scenario title/,
+      /0 Easy or Medium problems tagged Binary Tree and matching scenario title/,
     );
   },
 );
@@ -5978,7 +5978,7 @@ lobbyTest(
     );
     assert.match(
       await page.locator("#problem-filter-summary").textContent(),
-      /0 problems matching scenario title/,
+      /0 Medium problems matching scenario title/,
     );
   },
 );
@@ -12191,7 +12191,7 @@ lobbyTest(
     await page.waitForFunction(
       () =>
         document.querySelector("#problem-filter-summary").textContent ===
-        '1 problem in your list and matching LeetCode number or title "Jump Game" shown.',
+        '1 Medium problem in your list and matching LeetCode number or title "Jump Game" shown.',
     );
     assert.deepEqual(await visible(), [MEDIUM[0]]);
     const excludedTopic = Object.values(TOPICS_BY_PAGE)
@@ -12207,7 +12207,7 @@ lobbyTest(
     assert.equal((await visible()).length, 0);
     assert.match(
       await page.locator("#problem-filter-summary").textContent(),
-      /No saved problems match/,
+      /No saved Medium problems match/,
     );
     await page.click("#problem-filters-reset");
     assert.equal(await only.isChecked(), false);
@@ -13053,3 +13053,78 @@ for (const outcome of ["success", "failure"]) {
     },
   );
 }
+
+lobbyTest(
+  "problem filter summary shows active difficulty when results are zero",
+  async (page) => {
+    const targetId = MEDIUM[0];
+    await openSavedList(page, [targetId]);
+
+    // Keep only Easy checked while the saved problem is Medium
+    await setLevel(page, "Easy", true);
+    await setLevel(page, "Medium", false);
+    await setLevel(page, "Hard", false);
+
+    // Only my list names the active difficulty when it hides saved problems
+    await page.check("#problem-only-list");
+    assert.equal(await page.locator(".problem-card:visible").count(), 0);
+    assert.equal(
+      await page.locator("#problem-filter-summary").textContent(),
+      "No saved Easy problems match the current filters.",
+    );
+
+    // Re-enable Medium: the saved problem becomes visible again
+    await setLevel(page, "Medium", true);
+    assert.equal(
+      await page.locator(`[data-problem="${targetId}"]`).isVisible(),
+      true,
+    );
+    assert.equal(
+      await page.locator("#problem-filter-summary").textContent(),
+      "1 Easy or Medium problem in your list shown.",
+    );
+  },
+);
+
+lobbyTest(
+  "problem filter summary includes restricted difficulty even when zero problems match",
+  async (page) => {
+    await lobby(page);
+    await awaitReady(page);
+    await openTopicFilter(page);
+
+    const targetTitle = await page
+      .locator(`[data-problem="${MEDIUM[0]}"] .problem-title`)
+      .textContent();
+    await page.fill("#problem-search", targetTitle);
+
+    await setLevel(page, "Easy", true);
+    await setLevel(page, "Medium", false);
+    assert.equal(await page.locator(".problem-card:visible").count(), 0);
+    assert.equal(
+      await page.locator("#problem-filter-summary").textContent(),
+      `0 Easy problems matching scenario title "${targetTitle}" shown.`,
+    );
+
+    await setLevel(page, "Medium", true);
+    assert.equal(
+      await page.locator("#problem-filter-summary").textContent(),
+      `1 Easy or Medium problem matching scenario title "${targetTitle}" shown.`,
+    );
+
+    const noMatchTitle = "no-title-has-this-unique-phrase-404";
+    await page.fill("#problem-search", noMatchTitle);
+    assert.equal(await page.locator(".problem-card:visible").count(), 0);
+    assert.equal(
+      await page.locator("#problem-filter-summary").textContent(),
+      `0 Easy or Medium problems matching scenario title "${noMatchTitle}" shown.`,
+    );
+
+    await setLevel(page, "Hard", true);
+    assert.equal(await page.locator(".problem-card:visible").count(), 0);
+    assert.equal(
+      await page.locator("#problem-filter-summary").textContent(),
+      `0 problems matching scenario title "${noMatchTitle}" shown.`,
+    );
+  },
+);

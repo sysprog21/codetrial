@@ -1700,14 +1700,23 @@ function applyProblemFilters(difficulties = selectedDifficulties()) {
         ]
       : []),
   ];
+  const activeDifficulties = levels
+    .map((input) => input.value)
+    .filter((value) => difficulties.has(value));
+  const difficultyLabel =
+    activeDifficulties.length > 0 && activeDifficulties.length < levels.length
+      ? `${activeDifficulties.join(" or ")} `
+      : "";
+
   if (nodes.problemOnlyList.checked && !visible.size) {
     nodes.problemFilterSummary.textContent = practiceList.size
-      ? "No saved problems match the current filters."
+      ? `No saved ${difficultyLabel}problems match the current filters.`
       : "Your list is empty. Uncheck Only my list to add problems.";
     return;
   }
+
   nodes.problemFilterSummary.textContent = description.length
-    ? `${visible.size} problem${visible.size === 1 ? "" : "s"} ${description.join(" and ")} shown.`
+    ? `${visible.size} ${difficultyLabel}problem${visible.size === 1 ? "" : "s"} ${description.join(" and ")} shown.`
     : "";
 }
 
