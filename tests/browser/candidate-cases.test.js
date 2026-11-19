@@ -12,6 +12,418 @@ import {
   startStaticServer,
 } from "./source.js";
 import { COMPILED_LANGUAGES } from "../../web/compiler-explorer.js";
+import { grant, openInterview } from "./interview-fixture.js";
+
+test("Undo restores a removed case in place with its expectation and draft intact", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  for (const expected of ["", "null", "false", "0", '\"\"', "[1,2]"]) {
+    const page = await openCandidateEditPage();
+    try {
+      for (const input of ["[[[1]]]", "[[[2]]]", "[[[3]]]"])
+        await addCaseWithExpectation(page, input, expected);
+      const key = "codetrial.candidateCases.conveyor-grid-routing";
+      const before = await page.evaluate(
+        (key) => sessionStorage.getItem(key),
+        key,
+      );
+      await page.locator("#language-select").selectOption("javascript");
+      await page
+        .locator("#editor")
+        .fill("function cheapestRouteCost(grid) { return grid[0][0]; }");
+      await runEditedCandidateTests(page);
+      await page.locator("#candidate-case-input").fill("[[[99]]]");
+      await page.locator("#candidate-case-expected").fill("100");
+      await page.locator('[data-remove-case="1"]').click();
+      const undo = page.locator("#candidate-case-undo");
+      assert.equal(await undo.isVisible(), true);
+      await undo.focus();
+      await page.keyboard.press("Enter");
+      assert.equal(await undo.isHidden(), true);
+      assert.equal(
+        await page.evaluate((key) => sessionStorage.getItem(key), key),
+        before,
+      );
+      assert.equal(
+        await page.locator("#candidate-case-input").inputValue(),
+        "[[[99]]]",
+      );
+      assert.equal(
+        await page.locator("#candidate-case-expected").inputValue(),
+        "100",
+      );
+      assert.equal(
+        await page
+          .locator('[data-edit-case="1"]')
+          .evaluate((node) => node === document.activeElement),
+        true,
+      );
+      assert.match(
+        await page.locator("#results-content").textContent(),
+        /Run the test cases any time/,
+      );
+      await undo.dispatchEvent("click");
+      assert.equal(await page.locator("#candidate-case-list > li").count(), 3);
+      await page.locator("#candidate-case-input").fill("");
+      await runEditedCandidateTests(page);
+      assert.match(
+        await page.locator("#results-content").textContent(),
+        /Your case 2/,
+      );
+      await page.locator("#force-report").evaluate((node) => node.click());
+      const download = page.waitForEvent("download");
+      await page.locator("#download-report").click();
+      const markdown = await readFile(await (await download).path(), "utf8");
+      assert.equal([...markdown.matchAll(/^### Run \d+/gm)].length, 2);
+    } finally {
+      await page.close();
+    }
+  }
+});
+
+test("a saved case change discards Undo and a new removal replaces it", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  for (const action of [
+    "add",
+    "edit",
+    "run",
+    "clear",
+    "end",
+    "reload",
+    "remove",
+  ]) {
+    const page = await openCandidateEditPage();
+    try {
+      await addCaseWithExpectation(page, "[[[1]]]", "1");
+      await addCaseWithExpectation(page, "[[[2]]]", "2");
+      await page.locator('[data-remove-case="0"]').click();
+      if (action === "add") await addCaseWithExpectation(page, "[[[3]]]", "3");
+      if (action === "edit") {
+        await page.locator('[data-edit-case="0"]').click();
+        await saveEditedCandidateCase(page, "[[[4]]]", "4");
+      }
+      if (action === "run") {
+        await page.locator("#language-select").selectOption("javascript");
+        await page
+          .locator("#editor")
+          .fill("function cheapestRouteCost(grid) { return grid[0][0]; }");
+        await runEditedCandidateTests(page);
+      }
+      if (action === "clear")
+        await page.locator("#force-report").evaluate((node) => node.click());
+      if (action === "end") {
+        page.on("dialog", (dialog) => dialog.accept());
+        await page.locator("#end").click();
+      }
+      if (action === "reload") {
+        await page.reload();
+        await closeSetupCheck(page);
+        await page.locator("#candidate-case").evaluate((node) => {
+          node.open = true;
+        });
+        await page.locator("[data-remove-case]").waitFor();
+      }
+      if (action === "remove") {
+        await page.locator('[data-remove-case="0"]').click();
+        await page.locator("#candidate-case-undo").click();
+        assert.match(
+          await page.locator("#candidate-case-list").textContent(),
+          /\[\[\[2\]\]\]/,
+        );
+      }
+      assert.equal(await page.locator("#candidate-case-undo").isHidden(), true);
+      assert.doesNotMatch(
+        await page.locator("#candidate-case-status").textContent(),
+        /Undo available/,
+      );
+      const count = await page.locator("#candidate-case-list > li").count();
+      await page.locator("#candidate-case-undo").dispatchEvent("click");
+      assert.equal(
+        await page.locator("#candidate-case-list > li").count(),
+        count,
+      );
+    } finally {
+      await page.close();
+    }
+  }
+});
+
+test("rejected additions and canceled edits preserve the removed case for Undo", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const page = await openCandidateEditPage();
+  try {
+    for (const input of ["[[[1]]]", "[[[2]]]", "[[[3]]]"])
+      await addCaseWithExpectation(page, input, "0");
+    const key = "codetrial.candidateCases.conveyor-grid-routing";
+    const before = await page.evaluate(
+      (key) => sessionStorage.getItem(key),
+      key,
+    );
+    await page.locator('[data-remove-case="1"]').click();
+    for (const [input, expected] of [
+      ["not JSON", "0"],
+      ["", "0"],
+      ["[[[4]]]", "not JSON"],
+    ]) {
+      await page.locator("#candidate-case-input").fill(input);
+      await page.locator("#candidate-case-expected").fill(expected);
+      const actions = input.trim()
+        ? ["#candidate-case-add", "#run-tests"]
+        : ["#candidate-case-add"];
+      for (const action of actions) {
+        await page.locator(action).click();
+        await page.waitForFunction(
+          () =>
+            !document.querySelector("#candidate-case-add").disabled &&
+            !document.querySelector("#run-tests").disabled,
+        );
+        assert.equal(
+          await page.locator("#candidate-case-undo").isVisible(),
+          true,
+          `Undo remains available after a rejected ${action}`,
+        );
+        assert.equal(
+          await page.locator("#candidate-case-list > li").count(),
+          2,
+        );
+      }
+    }
+    await page.locator('[data-edit-case="0"]').click();
+    await page.locator("#candidate-case-undo").dispatchEvent("click");
+    assert.equal(await page.locator("#candidate-case-list > li").count(), 2);
+    assert.match(
+      await page.locator("#candidate-case-status").textContent(),
+      /Save or cancel/,
+    );
+    await page.locator("#candidate-case-input").fill("not JSON");
+    await page.locator("#candidate-case-add").click();
+    await page.waitForFunction(
+      () => !document.querySelector("#candidate-case-add").disabled,
+    );
+    assert.equal(await page.locator("#candidate-case-undo").isVisible(), true);
+    await page.locator("#candidate-case-cancel").click();
+    await page.locator("#candidate-case-undo").click();
+    assert.equal(await page.locator("#candidate-case-list > li").count(), 3);
+    assert.equal(
+      await page.evaluate((key) => sessionStorage.getItem(key), key),
+      before,
+    );
+  } finally {
+    await page.close();
+  }
+});
+
+test("pending addition explains refused removal and defers Undo until it finishes", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const page = await browser.newPage();
+  const release = await holdJudge(page);
+  try {
+    await page.addInitScript(() =>
+      sessionStorage.setItem(
+        "codetrial.candidateCases.chargeback-pair-match",
+        JSON.stringify(
+          Array.from({ length: 5 }, (_, i) => ({ input: [[i, 7], 8] })),
+        ),
+      ),
+    );
+    await page.goto(`${base}/interview.html?problem=chargeback-pair-match`, {
+      waitUntil: "domcontentloaded",
+    });
+    await closeSetupCheck(page);
+    await page.locator("#candidate-case").evaluate((node) => {
+      node.open = true;
+    });
+    await page.locator('[data-remove-case="0"]').click();
+    await page.locator("#candidate-case-input").fill("[[2,7],9]");
+    await page.locator("#candidate-case-add").click();
+    await page.locator('[data-remove-case="0"]').click();
+    assert.match(
+      await page.locator("#candidate-case-status").textContent(),
+      /Wait for the case addition/,
+    );
+    assert.equal(await page.locator("#candidate-case-list > li").count(), 4);
+    assert.equal(await page.locator("#candidate-case-undo").isVisible(), true);
+    await page.locator("#candidate-case-undo").click();
+    assert.equal(await page.locator("#candidate-case-list > li").count(), 4);
+    assert.match(
+      await page.locator("#candidate-case-status").textContent(),
+      /Wait for the case addition/,
+    );
+    release();
+    await page.waitForFunction(
+      () => !document.querySelector("#candidate-case-add").disabled,
+    );
+    assert.equal(await page.locator("#candidate-case-list > li").count(), 5);
+    assert.equal(
+      await page
+        .locator("#candidate-case-input")
+        .evaluate((node) => node === document.activeElement),
+      true,
+    );
+    assert.equal(
+      await page.locator("#candidate-case-status").textContent(),
+      "5/5 cases ready.",
+    );
+    assert.equal(await page.locator("#candidate-case-undo").isHidden(), true);
+    await page.locator("#candidate-case-undo").dispatchEvent("click");
+    assert.equal(await page.locator("#candidate-case-list > li").count(), 5);
+  } finally {
+    release();
+    await page.close();
+  }
+});
+
+test("clearing Undo preserves other status text and removes only its availability suffix", () => {
+  for (const [status, expected] of [
+    ["The interview has ended.", "The interview has ended."],
+    ["Cases cannot be edited right now.", "Cases cannot be edited right now."],
+    [
+      'Could not parse "abc Undo available." as JSON.',
+      'Could not parse "abc Undo available." as JSON.',
+    ],
+    ["1/5 cases ready. Undo available.", "1/5 cases ready."],
+    ["", ""],
+  ]) {
+    const state = {
+      candidateCases: [{ input: [1] }, { input: [2] }],
+      removedCandidateCase: { index: 1, testCase: { input: [3] } },
+    };
+    const nodes = {
+      candidateCaseStatus: { textContent: status },
+      candidateCaseUndo: {},
+      candidateCaseUndoNotice: { hidden: false },
+    };
+    const { clearCandidateCaseUndo } = loadInterview(
+      ["clearCandidateCaseUndo"],
+      {
+        state,
+        nodes,
+        document: { activeElement: null },
+        CANDIDATE_CASE_LIMIT: 5,
+      },
+    );
+    clearCandidateCaseUndo();
+    assert.equal(nodes.candidateCaseStatus.textContent, expected);
+    assert.equal(state.removedCandidateCase, null);
+    assert.equal(nodes.candidateCaseUndoNotice.hidden, true);
+    nodes.candidateCaseStatus.textContent = "Another status.";
+    clearCandidateCaseUndo();
+    assert.equal(nodes.candidateCaseStatus.textContent, "Another status.");
+  }
+});
+
+test("Undo follows Practice persistence and Strict memory-only case storage", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  for (const strict of [false, true]) {
+    const page = await openInterview(
+      { browser, base },
+      t,
+      strict
+        ? "selection=strict&language=javascript"
+        : "problem=chargeback-pair-match&language=javascript",
+      (route) =>
+        route.fulfill({ json: grant("chargeback-pair-match", "undo-storage") }),
+    );
+    try {
+      await page.locator("#audio-heard").click();
+      await page.locator("#camera-skip").click();
+      await page.locator("#audio-check-join").click();
+      await page.locator("#editor:not([disabled])").waitFor();
+      await page.waitForFunction(() =>
+        window.roomPublicationSettled?.includes("integrity"),
+      );
+      await page.locator("#candidate-case").evaluate((node) => {
+        node.open = true;
+      });
+      await addCaseWithExpectation(page, "[[2,7],9]", "[0,1]");
+      await page.locator('[data-remove-case="0"]').click();
+      await page.locator("#candidate-case-undo").click();
+      assert.equal(await page.locator("#candidate-case-list > li").count(), 1);
+      const stored = await page.evaluate(
+        (key) => sessionStorage.getItem(key),
+        CASES_KEY,
+      );
+      assert.deepEqual(
+        stored ? JSON.parse(stored) : null,
+        strict ? null : [{ input: [[2, 7], 9], expected: [0, 1] }],
+      );
+      if (strict) await addCaseWithExpectation(page, "[[1,7],8]", "[0,1]");
+      await page.locator('[data-remove-case="0"]').click();
+      await page.locator("#candidate-case-input").fill("[[2,7],9]");
+      await page
+        .locator("#candidate-case-expected")
+        .fill("abc Undo available.");
+      await page.locator("#candidate-case-add").click();
+      await page.waitForFunction(
+        () => !document.querySelector("#candidate-case-add").disabled,
+      );
+      const statusBeforeClosure = await page
+        .locator("#candidate-case-status")
+        .textContent();
+      assert.doesNotMatch(statusBeforeClosure, /cases ready/);
+      assert.match(statusBeforeClosure, /abc Undo available\./);
+      assert.equal(
+        await page.locator("#candidate-case-undo").isVisible(),
+        true,
+      );
+      await page.evaluate((strict) => {
+        const payload = new TextEncoder().encode(
+          JSON.stringify(
+            strict
+              ? {
+                  type: "round_state",
+                  round: "behavioral",
+                  status: "started",
+                }
+              : {
+                  incomplete: true,
+                  summary: "503",
+                  reportRecovery: {
+                    expiresInSeconds: 300,
+                    retryAfterSeconds: 30,
+                  },
+                },
+          ),
+        );
+        for (const handler of window.roomEvents.DataReceived)
+          void handler(
+            payload,
+            { kind: "AGENT" },
+            undefined,
+            strict ? "control" : "report",
+          );
+      }, strict);
+      if (!strict) await page.locator("#ending-overlay").waitFor();
+      assert.equal(
+        await page.locator("#candidate-case-status").textContent(),
+        statusBeforeClosure,
+      );
+      assert.equal(await page.locator("#candidate-case-undo").isHidden(), true);
+      await page.locator("#candidate-case-undo").dispatchEvent("click");
+      assert.equal(
+        await page.locator("#candidate-case-list > li").count(),
+        strict ? 1 : 0,
+      );
+      if (strict) {
+        await page.locator('[data-remove-case="0"]').click();
+        assert.equal(
+          await page.locator("#candidate-case-list > li").count(),
+          1,
+        );
+        assert.equal(
+          await page.locator("#candidate-case-status").textContent(),
+          "Cases cannot be removed right now.",
+        );
+      }
+      if (strict)
+        assert.equal(
+          await page.locator("#results-label").textContent(),
+          "Coding round complete",
+        );
+    } finally {
+      await page.close();
+    }
+  }
+});
 
 let browser = null;
 let server = null;
@@ -434,7 +846,7 @@ test("removing a saved candidate case frees its slot and persists", async (t) =>
     );
     assert.equal(
       await page.locator("#candidate-case-status").textContent(),
-      "4/5 cases ready.",
+      "4/5 cases ready. Undo available.",
     );
     assert.equal(
       await page.evaluate(() =>
@@ -504,7 +916,7 @@ test("removing a saved candidate case frees its slot and persists", async (t) =>
     );
     assert.equal(
       await page.locator("#candidate-case-status").textContent(),
-      "0/5 cases ready.",
+      "0/5 cases ready. Undo available.",
     );
     assert.equal(
       await page.evaluate(() => document.activeElement.id),
@@ -596,7 +1008,7 @@ test("a case cannot be removed while tests are running", async (t) => {
     );
     assert.equal(
       await page.locator("#candidate-case-status").textContent(),
-      "2/5 cases ready.",
+      "2/5 cases ready. Undo available.",
     );
   } finally {
     await page.close();
@@ -1666,6 +2078,7 @@ test("saving edits preserves Practice storage and Strict non-persistence", async
       candidateCaseEdit: { index: 0 },
       candidateCaseAddition: null,
       candidateCases: [{ input: [[[2]]], expected: 3 }],
+      removedCandidateCase: { index: 1, testCase: { input: [[[9]]] } },
       runningTests: false,
       phase: "live",
       latestSummary: { passed: 0 },
@@ -1682,7 +2095,9 @@ test("saving edits preserves Practice storage and Strict non-persistence", async
       candidateCaseExpected: { value: "8" },
       candidateCaseAdd: {},
       candidateCaseCancel: {},
-      candidateCaseStatus: {},
+      candidateCaseStatus: { textContent: "" },
+      candidateCaseUndo: {},
+      candidateCaseUndoNotice: { hidden: false },
       resultsLabel: {},
       resultsFilter: {},
       resultsContent: {},
@@ -1692,10 +2107,13 @@ test("saving edits preserves Practice storage and Strict non-persistence", async
         "candidateCaseFromForm",
         "invalidateCandidateCaseResults",
         "saveCandidateCaseEdit",
+        "clearCandidateCaseUndo",
       ],
       {
         state,
         nodes,
+        document: { activeElement: null },
+        CANDIDATE_CASE_LIMIT: 5,
         strict,
         tabStorage: storage,
         candidateCaseStorageKey: "synthetic-cases",
@@ -1712,6 +2130,8 @@ test("saving edits preserves Practice storage and Strict non-persistence", async
     await saveCandidateCaseEdit();
     assert.deepEqual(state.candidateCases, [{ input: [[[7]]], expected: 8 }]);
     assert.equal(state.latestSummary, null);
+    assert.equal(state.removedCandidateCase, null);
+    assert.equal(nodes.candidateCaseUndoNotice.hidden, true);
     assert.strictEqual(state.testHistory, history);
     assert.deepEqual(history, [{ runNumber: 1, cases: [{ got: "2" }] }]);
     assert.equal(writes.length, strict ? 0 : 1);
