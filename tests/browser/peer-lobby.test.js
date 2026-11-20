@@ -62,6 +62,39 @@ async function setup(
   );
   return page;
 }
+test("peer lobby keeps its hero stacked outside the home setup layout", async (t) => {
+  const page = await setup(t);
+  if (!page) return;
+  await page.goto(`${base}/peer-lobby.html`);
+  for (const [width, height] of [
+    [1280, 1000],
+    [1280, 800],
+    [375, 700],
+  ]) {
+    await page.setViewportSize({ width, height });
+    const layout = await page.locator(".practice-hero").evaluate((hero) => {
+      const badge = hero.querySelector(".practice-badge");
+      const heading = hero.querySelector("h1");
+      const lead = hero.querySelector("p");
+      return {
+        badge: badge.getBoundingClientRect().toJSON(),
+        heading: heading.getBoundingClientRect().toJSON(),
+        lead: lead.getBoundingClientRect().toJSON(),
+        badgeMargin: parseFloat(getComputedStyle(badge).marginBottom),
+        heroMargin: parseFloat(getComputedStyle(hero).marginBottom),
+      };
+    });
+    for (const box of [layout.badge, layout.heading, layout.lead])
+      assert.ok(box.width > 0 && box.height > 0, JSON.stringify(layout));
+    assert.ok(
+      layout.heading.top >= layout.badge.bottom,
+      JSON.stringify(layout),
+    );
+    assert.ok(layout.lead.top >= layout.heading.bottom, JSON.stringify(layout));
+    assert.ok(layout.badgeMargin > 0, JSON.stringify(layout));
+    assert.ok(layout.heroMargin > 0, JSON.stringify(layout));
+  }
+});
 test("signed-out invite survives fragment clearing and GitHub sign-in", async (t) => {
   const page = await setup(t, { signedIn: false });
   if (!page) return;

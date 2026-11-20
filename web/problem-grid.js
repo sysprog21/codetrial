@@ -12,6 +12,7 @@ export function mountProblemGrid() {
   const setup = document.querySelector(".setup-grid");
   const summary = picker.querySelector("summary");
   const search = picker.querySelector("input[type=search]");
+  const listCount = document.querySelector("#practice-list-count");
   const listStatus = document.querySelector("#practice-list-status");
   const listHome = document.createComment("practice-list-status-home");
   listStatus.before(listHome);
@@ -86,7 +87,7 @@ export function mountProblemGrid() {
     if (open === expanded) return;
     expanded = open;
     if (open) {
-      grid.before(listStatus);
+      grid.before(listCount, listStatus);
       dialog.append(picker);
       summary.removeAttribute("aria-haspopup");
       dialog.scrollTop = 0;
@@ -98,6 +99,7 @@ export function mountProblemGrid() {
       pressedBackdrop = false;
       dialog.close();
       home.after(picker);
+      listHome.before(listCount);
       listHome.after(listStatus);
       summary.setAttribute("aria-haspopup", "dialog");
       if (!picker.hidden) {

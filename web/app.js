@@ -432,14 +432,16 @@ for (const card of cards) {
     focusProblemPicker();
 
     // Scroll to the selected problem after the picker collapses.
-    requestAnimationFrame(() => {
-      nodes.recommendation.scrollIntoView({
-        behavior: matchMedia("(prefers-reduced-motion: reduce)").matches
-          ? "auto"
-          : "smooth",
-        block: "center",
-      });
-    });
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        nodes.recommendation.scrollIntoView({
+          behavior: matchMedia("(prefers-reduced-motion: reduce)").matches
+            ? "auto"
+            : "smooth",
+          block: "center",
+        });
+      }),
+    );
   });
 }
 
@@ -530,13 +532,15 @@ function renderPracticeList() {
   for (const card of cards)
     card.practiceInput.checked = practiceList.has(card.id);
   const count = practiceList.size;
+  document.querySelector("#practice-list-count").textContent =
+    `${count} problem${count === 1 ? "" : "s"}`;
   const storageNote = practiceListSaved
     ? "Saved in this browser only."
     : "Kept for this visit only; browser storage is unavailable.";
   if (nodes.problemOnlyList.checked) applyTitleSearchFilters();
   nodes.practiceListStatus.textContent = count
-    ? `${count} problem${count === 1 ? "" : "s"} in your list. Draws use all checked problems, regardless of filters. ${storageNote}`
-    : `0 problems in your list. Check problems in the problem picker to add them. ${storageNote}`;
+    ? `Draws use all checked problems, regardless of filters. ${storageNote}`
+    : `Check problems in the problem picker to add them. ${storageNote}`;
 }
 
 for (const input of levels) {
@@ -880,7 +884,7 @@ start.addEventListener("click", async () => {
       nodes.groundingConsent.checked,
     );
   } catch (error) {
-    nodes.groundingError.textContent = error.message;
+    showGroundingError(error);
     return;
   }
 
@@ -891,7 +895,7 @@ start.addEventListener("click", async () => {
   // which stay ungated.
   if (signInFirst && tabStorageBlocked) {
     nodes.accountStatus.textContent = SITE_DATA_NEEDED;
-    // On a narrow page Start sits far below the account row, out of its view.
+    // Bring the account field and its recovery message into view.
     nodes.githubLogin.focus();
     return;
   }
@@ -923,7 +927,7 @@ start.addEventListener("click", async () => {
     storeGroundingPacket(tabStorage, packet);
     storeSharedFocus(tabStorage, focus?.weakness ?? null);
   } catch (error) {
-    nodes.groundingError.textContent = error.message;
+    showGroundingError(error);
     starting = false;
     syncLobbyControls();
     setStartGate(signInFirst);
@@ -1824,6 +1828,7 @@ function renderPracticeFocus() {
   nodes.practiceFocus.textContent = focus
     ? `${prefix}: ${focus.weakness}. Drill: ${focus.drill}. Success: ${focus.successCriterion}.`
     : "";
+  document.querySelector("#carry-forward").hidden = focus === null;
   nodes.practiceFocus.hidden = focus === null;
   nodes.practiceFocusShare.hidden = focus === null;
   // Consent applies to the focus currently shown. A different explicit or
@@ -1831,6 +1836,7 @@ function renderPracticeFocus() {
   if (focus?.weakness !== sharedFocus)
     nodes.practiceFocusShareInput.checked = false;
   sharedFocus = focus?.weakness ?? null;
+  syncFocusSharing();
 }
 
 /// Check the level the candidate's own results point at and return the sentence
@@ -2995,3 +3001,20 @@ mountProblemGrid();
 
 const updateNotice = mountUpdateNotice({ fetchJson, readStored, writeStored });
 void updateNotice.refresh();
+
+function syncFocusSharing() {
+  document.querySelector("#carry-forward-sharing").hidden =
+    !nodes.practiceFocusShareInput.checked;
+}
+nodes.practiceFocusShareInput.addEventListener("change", syncFocusSharing);
+
+function showGroundingError(error) {
+  nodes.groundingError.textContent = error.message;
+  for (
+    let parent = nodes.groundingError.parentElement;
+    parent;
+    parent = parent.parentElement
+  )
+    if (parent instanceof HTMLDetailsElement) parent.open = true;
+  nodes.groundingError.focus();
+}

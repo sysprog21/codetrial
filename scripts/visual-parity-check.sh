@@ -87,7 +87,7 @@ const fs = require("fs");
 const path = require("path");
 
 const pages = [
-  { name: "home", route: "/", ready: "Practice a live technical interview", selectors: ["body", "main", "h1", ".problem-grid", ".problem-card", ".duration-row", ".start-row"] },
+  { name: "home", route: "/", ready: "Start Interview", selectors: ["body", "main", "h1", ".problem-grid", ".problem-card", ".duration-row", ".hero-start"] },
   { name: "interview", route: "/interview?problem=two-sum&duration=45", ready: "Example 1", selectors: ["body", "main", "#problem-title", ".interview-sidebar", ".editor-panel", "#editor", "#run-tests", "#transcript-panel"] },
 ];
 

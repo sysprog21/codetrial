@@ -626,6 +626,7 @@ lobbyTest(
     reports = [focusedAttempt(EASY[0])];
     const state = await lobby(page);
     assert.match(state.focus, /Test boundaries/);
+    await page.locator("#carry-forward > summary").click();
     await page.check("#practice-focus-share-input");
     await page.click("#start");
     await page.waitForURL("**/interview?**");
@@ -645,6 +646,7 @@ lobbyTest(
   async (page) => {
     await blockSessionStorage(page);
     await lobby(page);
+    await page.locator(".advanced-settings > summary").click();
     await page.click("details.interview-context summary");
     await page.setInputFiles("#grounding-jd", {
       name: "jd.txt",
@@ -656,6 +658,7 @@ lobbyTest(
       .first()
       .check();
     await page.check("#grounding-consent");
+    await page.locator(".advanced-settings > summary").click();
     await page.click("#start");
     await page.waitForFunction(
       () => document.querySelector("#grounding-error").textContent !== "",
@@ -664,6 +667,8 @@ lobbyTest(
       await page.locator("#grounding-error").textContent(),
       /Clear grounding to start normally/,
     );
+    assert.equal(await page.locator("#grounding-error").isVisible(), true);
+    assert.equal(await isFocused(page.locator("#grounding-error")), true);
     assert.equal(new URL(page.url()).pathname, "/");
     await page.click("#grounding-clear");
     await page.click("#start");
@@ -673,8 +678,7 @@ lobbyTest(
 
 // Where the block also refuses the session cookie, a recorded username would
 // reach the interview signed out and come straight back with its choices reset.
-// Phone-sized, because there Start sits far below the account row the reason
-// lands in, and a reason out of view is a Start that looks dead.
+// Phone-sized so account recovery must remain visible on a narrow viewport.
 lobbyTest(
   "Start asks for site data before signing in when session storage is blocked",
   async (page) => {
@@ -690,6 +694,7 @@ lobbyTest(
     });
     await lobby(page);
     await page.fill("#github-login", "candidate");
+    await page.locator(".advanced-settings > summary").click();
     await page.click("details.interview-context summary");
     await page.setInputFiles("#grounding-jd", {
       name: "jd.txt",
@@ -1059,6 +1064,7 @@ lobbyTest(
   "editor options default to all five features enabled",
   async (page) => {
     await lobby(page);
+    await page.locator(".advanced-settings > summary").click();
     const group = page.getByRole("group", { name: "Editor options" });
     assert.equal(await group.getByRole("checkbox").count(), 5);
     for (const label of [
@@ -1092,6 +1098,7 @@ lobbyTest(
   "whiteboard disables editor options without losing editor preferences",
   async (page) => {
     await lobby(page);
+    await page.locator(".advanced-settings > summary").click();
     const group = page.getByRole("group", { name: "Editor options" });
     const highlight = group.getByRole("checkbox", {
       name: "Syntax highlighting",
@@ -1107,6 +1114,7 @@ lobbyTest(
       assert.equal(await input.isDisabled(), false);
     assert.equal(await highlight.isChecked(), false);
     await lobby(page);
+    await page.locator(".advanced-settings > summary").click();
     assert.equal(await highlight.isChecked(), false);
     assert.equal(await highlight.isDisabled(), false);
   },
@@ -1116,6 +1124,7 @@ lobbyTest(
   "editor options survive reloads and travel with the selected problem",
   async (page) => {
     await lobby(page);
+    await page.locator(".advanced-settings > summary").click();
     await page
       .getByRole("checkbox", { name: "Syntax highlighting", exact: true })
       .uncheck();
@@ -1123,6 +1132,7 @@ lobbyTest(
       .getByRole("checkbox", { name: "Bracket auto-close", exact: true })
       .uncheck();
     await lobby(page);
+    await page.locator(".advanced-settings > summary").click();
     assert.equal(
       await page
         .getByRole("checkbox", { name: "Syntax highlighting", exact: true })
@@ -1160,10 +1170,12 @@ lobbyTest(
   "the indentation choice survives reloads and travels with the problem",
   async (page) => {
     await lobby(page);
+    await page.locator(".advanced-settings > summary").click();
     const indent = page.getByRole("combobox", { name: "Indentation" });
     assert.equal(await indent.inputValue(), "4");
     await indent.selectOption("2");
     await lobby(page);
+    await page.locator(".advanced-settings > summary").click();
     assert.equal(await indent.inputValue(), "2");
     await page.locator('[data-mode="whiteboard"]').click();
     assert.equal(await indent.isDisabled(), true);
@@ -1179,6 +1191,7 @@ lobbyTest(
   async (page) => {
     session = { signedIn: false, loginRequired: true };
     await lobby(page);
+    await page.locator(".advanced-settings > summary").click();
     await page
       .getByRole("checkbox", { name: "Code execution", exact: true })
       .uncheck();
@@ -1263,12 +1276,20 @@ lobbyTest(
     await lobby(page);
     await openTopicFilter(page);
     const before = await snapshot(page);
+    assert.equal(
+      await problemPickerDialog(page).locator("#practice-list-count").count(),
+      1,
+    );
     const pick = page.getByRole("button", {
       name: "Pick from my list",
       exact: true,
       includeHidden: true,
     });
     assert.equal(await pick.isDisabled(), true);
+    assert.equal(
+      await page.locator("#practice-list-count").getAttribute("aria-live"),
+      "polite",
+    );
     assert.equal(
       await pick.evaluate((button) => getComputedStyle(button).cursor),
       "not-allowed",
@@ -1293,13 +1314,25 @@ lobbyTest(
       await pick.evaluate((button) => getComputedStyle(button).cursor),
       "pointer",
     );
+    assert.equal(
+      await page.locator("#practice-list-count").textContent(),
+      "1 problem",
+    );
     assert.match(
       await page.locator("#practice-list-status").textContent(),
-      /1 problem in your list/,
+      /^Draws use all checked problems, regardless of filters\./,
     );
     await checkbox.focus();
     await page.keyboard.press("Space");
     assert.equal(await checkbox.isChecked(), false);
+    assert.equal(
+      await page.locator("#practice-list-count").textContent(),
+      "0 problems",
+    );
+    assert.equal(
+      await checkbox.evaluate((input) => document.activeElement === input),
+      true,
+    );
     assert.deepEqual(await snapshot(page), before);
     assert.equal(await pick.isDisabled(), true);
     assert.deepEqual(
@@ -1413,9 +1446,13 @@ lobbyTest(
         await page.locator("#practice-list-status").isVisible(),
         true,
       );
+      assert.equal(
+        await page.locator("#practice-list-count").textContent(),
+        "0 problems",
+      );
       assert.match(
         await page.locator("#practice-list-status").textContent(),
-        /0 problems/,
+        /^Check problems in the problem picker to add them\./,
       );
       await page.keyboard.press("Tab");
       assert.equal(
@@ -1485,19 +1522,21 @@ lobbyTest("practice lists stay in sync across lobby tabs", async (page) => {
     await openTopicFilter(other);
     const before = await snapshot(other);
     await practiceInput(page, MEDIUM[0]).check();
-    await reaches(other, () =>
-      document
-        .querySelector("#practice-list-status")
-        .textContent.startsWith("1 problem"),
+    await reaches(
+      other,
+      () =>
+        document.querySelector("#practice-list-count").textContent ===
+        "1 problem",
     );
     assert.equal(await practiceInput(other, MEDIUM[0]).isChecked(), true);
     assert.deepEqual(await snapshot(other), before);
     assert.equal(await other.locator("#practice-list-pick").isEnabled(), true);
     await practiceInput(other, MEDIUM[1]).check();
-    await reaches(page, () =>
-      document
-        .querySelector("#practice-list-status")
-        .textContent.startsWith("2 problems"),
+    await reaches(
+      page,
+      () =>
+        document.querySelector("#practice-list-count").textContent ===
+        "2 problems",
     );
     assert.equal(await practiceInput(page, MEDIUM[1]).isChecked(), true);
     assert.deepEqual(
@@ -1508,10 +1547,11 @@ lobbyTest("practice lists stay in sync across lobby tabs", async (page) => {
       MEDIUM,
     );
     await practiceInput(page, MEDIUM[0]).uncheck();
-    await reaches(other, () =>
-      document
-        .querySelector("#practice-list-status")
-        .textContent.startsWith("1 problem"),
+    await reaches(
+      other,
+      () =>
+        document.querySelector("#practice-list-count").textContent ===
+        "1 problem",
     );
     assert.equal(await practiceInput(other, MEDIUM[0]).isChecked(), false);
     await toggleProblemPicker(other);
@@ -1644,9 +1684,13 @@ for (const change of ["replace", "empty", "remove", "clear"]) {
         if (change === "replace") {
           assert.equal((await snapshot(page)).card, MEDIUM[1]);
           assert.equal(await practiceInput(page, MEDIUM[1]).isChecked(), true);
+          assert.equal(
+            await page.locator("#practice-list-count").textContent(),
+            "1 problem",
+          );
           assert.match(
             await page.locator("#practice-list-status").textContent(),
-            /^1 problem in your list/,
+            /^Draws use all checked problems, regardless of filters\./,
           );
         } else {
           assert.deepEqual(await snapshot(page), before);
@@ -1658,9 +1702,13 @@ for (const change of ["replace", "empty", "remove", "clear"]) {
             await page.locator("[data-practice-problem]:checked").count(),
             0,
           );
+          assert.equal(
+            await page.locator("#practice-list-count").textContent(),
+            "0 problems",
+          );
           assert.match(
             await page.locator("#practice-list-status").textContent(),
-            /^0 problems in your list/,
+            /^Check problems in the problem picker to add them\./,
           );
           assert.equal(
             await page.evaluate(() => document.activeElement.id),
@@ -1848,17 +1896,25 @@ for (const failure of ["throw", "ignore"]) {
         ),
         [MEDIUM[0]],
       );
+      assert.equal(
+        await page.locator("#practice-list-count").textContent(),
+        "0 problems",
+      );
       assert.match(
         await page.locator("#practice-list-status").textContent(),
-        /^0 problems in your list.*Kept for this visit only/,
+        /^Check problems in the problem picker to add them\..*Kept for this visit only/,
       );
       await page.reload({ waitUntil: "domcontentloaded" });
       await awaitReady(page);
       assert.equal(await practiceInput(page, MEDIUM[0]).isChecked(), true);
       assert.equal(await page.locator("#practice-list-pick").isEnabled(), true);
+      assert.equal(
+        await page.locator("#practice-list-count").textContent(),
+        "1 problem",
+      );
       assert.match(
         await page.locator("#practice-list-status").textContent(),
-        /^1 problem in your list.*Saved in this browser only/,
+        /^Draws use all checked problems, regardless of filters\..*Saved in this browser only/,
       );
       assert.deepEqual(errors, []);
     },
@@ -1890,9 +1946,13 @@ for (const failure of ["throw", "ignore"]) {
       await practiceInput(page, MEDIUM[0]).uncheck();
       assert.equal(await practiceInput(page, MEDIUM[1]).isChecked(), true);
       assert.equal(await practiceInput(page, MEDIUM[0]).isChecked(), false);
+      assert.equal(
+        await page.locator("#practice-list-count").textContent(),
+        "1 problem",
+      );
       assert.match(
         await page.locator("#practice-list-status").textContent(),
-        /1 problem in your list.*Kept for this visit only/,
+        /^Draws use all checked problems, regardless of filters\..*Kept for this visit only/,
       );
       assert.deepEqual(
         await page.evaluate(
@@ -1989,9 +2049,13 @@ for (const failure of ["access", "read"]) {
         [PRACTICE_LIST_KEY, failure],
       );
       await lobby(page);
+      assert.equal(
+        await page.locator("#practice-list-count").textContent(),
+        "0 problems",
+      );
       assert.match(
         await page.locator("#practice-list-status").textContent(),
-        /^0 problems in your list.*Kept for this visit only/,
+        /^Check problems in the problem picker to add them\..*Kept for this visit only/,
       );
       assert.equal(
         await page.locator("#practice-list-pick").isDisabled(),
@@ -2137,20 +2201,21 @@ lobbyTest(
         }),
       );
     const closed = await cards();
-    assert.equal(closed.length, 3, "the lobby has three setup cards");
+    assert.equal(closed.length, 2, "the lobby has two setup cards");
     assert.equal(
       new Set(closed.map((card) => card.bottom)).size,
       1,
       `closed cards end on one line: ${JSON.stringify(closed)}`,
     );
 
+    await page.locator(".advanced-settings > summary").click();
     await page.click("details.interview-context summary");
     const open = await cards();
     assert.ok(
-      open[2].height > open[0].height + 100,
+      open[1].height > open[0].height + 100,
       `the context form is the tall card: ${JSON.stringify(open)}`,
     );
-    for (const index of [0, 1]) {
+    for (const index of [0]) {
       assert.ok(
         open[index].height <= closed[index].height,
         `card ${index + 1} stretched to the open one: ${JSON.stringify({ closed, open })}`,
@@ -2164,7 +2229,7 @@ lobbyTest(
 // the button shrank below one word of a title on a phone and pushed the page
 // wider than the window; this title overflowed even at 375px.
 lobbyTest(
-  "the selected problem drops below the button only when it cannot fit beside it",
+  "the selected problem stays below the button at every width",
   async (page) => {
     await lobby(page);
     await toggleProblemPicker(page);
@@ -2179,7 +2244,7 @@ lobbyTest(
     for (const [width, beside] of [
       [320, false],
       [375, false],
-      [1280, true],
+      [1280, false],
     ]) {
       await page.setViewportSize({ width, height: 800 });
       const layout = await page.evaluate(() => {
@@ -4201,6 +4266,7 @@ lobbyTest(
     reports = [selectedAttempt, recurringAttempt];
 
     const initial = await lobby(page);
+    await page.locator(".advanced-settings > summary").click();
 
     assert.match(
       initial.focus,
@@ -4213,6 +4279,7 @@ lobbyTest(
       .getByRole("group", { name: "Editor options" })
       .getByRole("checkbox");
 
+    assert.equal(await editorOptions.count(), 5);
     const beforeEditorOptions = await editorOptions.evaluateAll((inputs) =>
       inputs.map((input) => ({
         checked: input.checked,
@@ -4325,6 +4392,7 @@ lobbyTest(
     assert.match(state.focus, /^Selected practice focus · Coding:/);
 
     // Sharing remains a separate explicit opt-in and uses the selected focus.
+    await page.locator("#carry-forward > summary").click();
     await page.locator("#practice-focus-share-input").check();
     await page.click("#start");
     await page.waitForURL(/\/interview/);
@@ -4379,8 +4447,10 @@ lobbyTest(
   async (page) => {
     reports = [focusedAttempt(EASY[0])];
     await lobby(page);
-    assert.equal(await page.locator("#practice-focus-share").isHidden(), false);
+    assert.equal(await page.locator("#practice-focus-share").isHidden(), true);
+    assert.equal(await page.locator("#carry-forward").isVisible(), true);
 
+    await page.locator("#carry-forward > summary").click();
     await page.click("#practice-focus-share-input");
     await page.click("#start");
     await page.waitForURL(/\/interview/);
@@ -4401,6 +4471,7 @@ lobbyTest(
   "loading a resume keeps the JD requirements already checked",
   async (page) => {
     await lobby(page);
+    await page.locator(".advanced-settings > summary").click();
     await page.click("details.interview-context summary");
     const txt = (name, text) => ({
       name,
@@ -4475,6 +4546,7 @@ lobbyTest(
   "a resume and a JD read out of PDFs with the vendored pdf.js",
   async (page) => {
     await lobby(page);
+    await page.locator(".advanced-settings > summary").click();
     await page.click("details.interview-context summary");
     const asPdf = (name, pages) => ({
       name,
@@ -4523,6 +4595,7 @@ lobbyTest(
   "a PDF the platform types as something else is still read",
   async (page) => {
     await lobby(page);
+    await page.locator(".advanced-settings > summary").click();
     await page.click("details.interview-context summary");
     await page.setInputFiles("#grounding-jd", {
       name: "jd.pdf",
@@ -4541,6 +4614,7 @@ lobbyTest(
   "a PDF over the page limit is refused with its page count",
   async (page) => {
     await lobby(page);
+    await page.locator(".advanced-settings > summary").click();
     await page.click("details.interview-context summary");
     const pages = Array.from({ length: 11 }, (_, index) => [
       `Must know topic ${index}`,
@@ -4568,6 +4642,7 @@ lobbyTest(
   async (page) => {
     failing.add("/vendor/pdfjs/pdf.min.mjs");
     await lobby(page);
+    await page.locator(".advanced-settings > summary").click();
     await page.click("details.interview-context summary");
     await page.setInputFiles("#grounding-jd", {
       name: "jd.pdf",
@@ -4590,6 +4665,7 @@ lobbyTest(
   "a PDF with no text layer says so instead of offering nothing",
   async (page) => {
     await lobby(page);
+    await page.locator(".advanced-settings > summary").click();
     await page.click("details.interview-context summary");
     await page.setInputFiles("#grounding-resume", {
       name: "scan.pdf",
@@ -4653,6 +4729,7 @@ lobbyTest(
   "a slower read of an earlier JD does not replace the one picked after it",
   async (page) => {
     await lobby(page);
+    await page.locator(".advanced-settings > summary").click();
     await page.click("details.interview-context summary");
     const release = await holdSlowRead(page);
 
@@ -4682,6 +4759,7 @@ lobbyTest(
   "a resume still reading when grounding is cleared stays cleared",
   async (page) => {
     await lobby(page);
+    await page.locator(".advanced-settings > summary").click();
     await page.click("details.interview-context summary");
     const release = await holdSlowRead(page);
 
@@ -4976,10 +5054,8 @@ lobbyTest(
     const recommendation = await page
       .locator("#recommendation")
       .evaluate(bounds);
-    assert.ok(button.x + button.width <= recommendation.x);
     assert.ok(
-      recommendation.y >= button.y &&
-        recommendation.y < button.y + button.height,
+      recommendation.y >= button.y + button.height,
       JSON.stringify({ button, recommendation }),
     );
 
@@ -6797,6 +6873,7 @@ lobbyTest(
       name: "Practice this: Build a test table",
     });
     await choices.first().click();
+    await page.locator("#carry-forward > summary").click();
     await page.check("#practice-focus-share-input");
     let releaseLogin;
     holdLogin = new Promise((resolve) => (releaseLogin = resolve));
@@ -6864,6 +6941,7 @@ lobbyTest(
   async (page) => {
     session = { signedIn: false, loginRequired: true };
     await lobby(page);
+    await page.locator(".advanced-settings > summary").click();
     await page.click("details.interview-context summary");
     const txt = (name, text) => ({
       name,
@@ -6918,6 +6996,7 @@ lobbyTest(
   async (page) => {
     session = { signedIn: false, loginRequired: true };
     await lobby(page);
+    await page.locator(".advanced-settings > summary").click();
     await page.click("details.interview-context summary");
     await page.setInputFiles("#grounding-jd", {
       name: "jd.txt",
@@ -6953,6 +7032,7 @@ lobbyTest(
   async (page) => {
     session = { signedIn: false, loginRequired: true };
     await lobby(page);
+    await page.locator(".advanced-settings > summary").click();
     await page.click("details.interview-context summary");
     await page.setInputFiles("#grounding-jd", {
       name: "jd.txt",
@@ -8019,6 +8099,7 @@ lobbyTest(
       .getByRole("button", { name: /^Practice this:/ })
       .first()
       .click();
+    await page.locator("#carry-forward > summary").click();
     await page.check("#practice-focus-share-input");
     page.once("dialog", (dialog) => dialog.accept());
     await page.click("#delete-reports");
@@ -8655,12 +8736,14 @@ for (const trigger of ["Enter", "button"]) {
         localStorage.setItem("codetrial_history", JSON.stringify([entry]));
       }, focusedAttempt(EASY[0]).payload);
       await lobby(page);
+      await page.locator("#carry-forward > summary").click();
       await page.check("#practice-focus-share-input");
       await toggleProblemPicker(page);
       await setLevel(page, "Hard", true);
       await page.click(`[data-problem="${MEDIUM[1]}"]`);
       await page.click('[data-duration="60"]');
       await page.click('[data-loop="coding_only"]');
+      await page.locator(".advanced-settings > summary").click();
       await page.click("details.interview-context summary");
       await page.fill("#profile-role", "Backend engineer");
       await page.selectOption("#profile-seniority", "senior");
@@ -8912,6 +8995,7 @@ lobbyTest(
       exact: true,
     });
     await workspace.selectOption("coding");
+    await page.locator("#carry-forward > summary").click();
     await page.check("#practice-focus-share-input");
     failing.add("/api/reports");
     await page.fill("#github-login", "candidate");
@@ -9219,6 +9303,7 @@ lobbyTest(
       localStorage.setItem("codetrial_history", JSON.stringify([entry]));
     }, focusedAttempt(EASY[0]).payload);
     await lobby(page);
+    await page.locator("#carry-forward > summary").click();
     await page.check("#practice-focus-share-input");
     await page.fill("#github-login", "candidate");
     await page.press("#github-login", "Enter");
@@ -9990,6 +10075,7 @@ lobbyTest(
   async (page) => {
     for (const enabled of [false, true]) {
       await lobby(page);
+      await page.locator(".advanced-settings > summary").click();
       const toggle = page.getByRole("checkbox", {
         name: "Enable Example drawing",
         exact: true,
@@ -10004,6 +10090,7 @@ lobbyTest(
       );
     }
     await lobby(page);
+    await page.locator(".advanced-settings > summary").click();
     const toggle = page.getByRole("checkbox", {
       name: "Enable Example drawing",
       exact: true,
@@ -10021,6 +10108,7 @@ lobbyTest(
   "example drawing choice survives reload and can be turned off",
   async (page) => {
     await lobby(page);
+    await page.locator(".advanced-settings > summary").click();
     const toggle = page.getByRole("checkbox", {
       name: "Enable Example drawing",
       exact: true,
@@ -10037,16 +10125,19 @@ lobbyTest(
     );
     await page.reload();
     await awaitReady(page);
+    await page.locator(".advanced-settings > summary").click();
     assert.equal(await toggle.isChecked(), true);
     await page.click('[data-mode="whiteboard"]');
     await page.reload();
     await awaitReady(page);
+    await page.locator(".advanced-settings > summary").click();
     assert.equal(await toggle.isDisabled(), true);
     assert.equal(await toggle.isChecked(), true);
     await page.click('[data-mode="coding"]');
     await toggle.uncheck();
     await page.reload();
     await awaitReady(page);
+    await page.locator(".advanced-settings > summary").click();
     assert.equal(await toggle.isChecked(), false);
     assert.equal(await toggle.isDisabled(), false);
   },
@@ -10069,6 +10160,7 @@ for (const settings of [
         settings,
       );
       await lobby(page);
+      await page.locator(".advanced-settings > summary").click();
       assert.equal(
         await page
           .getByRole("checkbox", {
@@ -10087,6 +10179,7 @@ lobbyTest(
   async (page) => {
     for (const enabled of [false, true]) {
       await lobby(page);
+      await page.locator(".advanced-settings > summary").click();
       const toggle = page.getByRole("checkbox", {
         name: "Candidate-led coding",
         exact: true,
@@ -10101,6 +10194,7 @@ lobbyTest(
       );
     }
     await lobby(page);
+    await page.locator(".advanced-settings > summary").click();
     const toggle = page.getByRole("checkbox", {
       name: "Candidate-led coding",
       exact: true,
@@ -10118,6 +10212,7 @@ lobbyTest(
   "candidate led choice survives reload and can be turned off",
   async (page) => {
     await lobby(page);
+    await page.locator(".advanced-settings > summary").click();
     const toggle = page.getByRole("checkbox", {
       name: "Candidate-led coding",
       exact: true,
@@ -10134,15 +10229,18 @@ lobbyTest(
     );
     await page.reload();
     await awaitReady(page);
+    await page.locator(".advanced-settings > summary").click();
     assert.equal(await toggle.isChecked(), true);
     await page.click('[data-mode="whiteboard"]');
     await page.reload();
     await awaitReady(page);
+    await page.locator(".advanced-settings > summary").click();
     assert.equal(await toggle.isDisabled(), false);
     assert.equal(await toggle.isChecked(), true);
     await toggle.uncheck();
     await page.reload();
     await awaitReady(page);
+    await page.locator(".advanced-settings > summary").click();
     assert.equal(await toggle.isChecked(), false);
   },
 );
@@ -10164,6 +10262,7 @@ for (const settings of [
         settings,
       );
       await lobby(page);
+      await page.locator(".advanced-settings > summary").click();
       assert.equal(
         await page
           .getByRole("checkbox", {
@@ -10449,13 +10548,23 @@ lobbyTest(
       await page.locator(".practice-list-picker #practice-list-status").count(),
       1,
     );
+    assert.equal(
+      await page.locator(".practice-list-picker #practice-list-count").count(),
+      1,
+    );
+    assert.equal(
+      await page
+        .locator("#practice-list-pick")
+        .getAttribute("aria-describedby"),
+      "practice-list-count practice-list-status",
+    );
     await page.click("#practice-list-pick");
     assert.equal((await snapshot(page)).card, MEDIUM[0]);
     await openTopicFilter(page);
     await practiceInput(page, MEDIUM[0]).uncheck();
     assert.match(
       await dialog.ariaSnapshot(),
-      /0 problems in your list.*Kept for this visit only/,
+      /Check problems in the problem picker to add them\..*Kept for this visit only/,
     );
   },
 );
@@ -10574,11 +10683,43 @@ for (const width of [1440, 800, 390]) {
       await summary.click();
       await page.click('[data-problem="pipeline-stage-gains"]');
       assert.equal(await picker.evaluate((node) => node.open), false);
-      assert.equal(await page.locator(".start-panel").isVisible(), true);
+      assert.equal(await page.locator(".hero-start").isVisible(), true);
       assert.equal((await snapshot(page)).card, "pipeline-stage-gains");
     },
   );
 }
+
+lobbyTest("session choices contain enlarged text", async (page) => {
+  await lobby(page);
+  await page.addStyleTag({ content: "html { font-size: 24px; }" });
+  for (const width of [800, 375, 320]) {
+    await page.setViewportSize({ width, height: 900 });
+    const buttons = page.locator(".session-choice-group .duration-button");
+    assert.equal(await buttons.count(), 4);
+    for (const button of await buttons.all()) {
+      const bounds = await button.evaluate((node) => {
+        const box = node.getBoundingClientRect();
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        return {
+          label: node.textContent.trim(),
+          contained: Array.from(range.getClientRects()).every(
+            (rect) =>
+              rect.left >= box.left &&
+              rect.right <= box.right &&
+              rect.top >= box.top &&
+              rect.bottom <= box.bottom,
+          ),
+        };
+      });
+      assert.equal(
+        bounds.contained,
+        true,
+        JSON.stringify({ width, ...bounds }),
+      );
+    }
+  }
+});
 
 test("the picker keeps the page's classic scrollbar", async (t) => {
   if (!browser) return t.skip("playwright chromium unavailable");
@@ -10708,10 +10849,9 @@ for (const width of [1440, 800]) {
         const heights = await panels.evaluateAll((nodes) =>
           nodes.map((node) => node.getBoundingClientRect().height),
         );
-        assert.equal(heights.length, 3);
+        assert.equal(heights.length, 2);
         assert.ok(heights.every((height) => height > 0));
         assert.equal(heights[0], heights[1]);
-        if (width === 1440) assert.equal(heights[1], heights[2]);
       };
       await assertStretched();
       await openTopicFilter(page);
@@ -10720,6 +10860,7 @@ for (const width of [1440, 800]) {
       await page.locator(".problem-picker-dialog").waitFor({ state: "hidden" });
       await assertStretched();
 
+      await page.locator(".advanced-settings > summary").click();
       await page.locator(".interview-context > summary").click();
       assert.equal(
         await page
@@ -10833,7 +10974,7 @@ lobbyTest(
         await page
           .locator(".problem-picker")
           .evaluate((node) => getComputedStyle(node).marginTop),
-        width >= 640 ? "16px" : "36px",
+        width >= 1024 ? "8px" : width >= 640 ? "16px" : "36px",
       );
     }
     await page.setViewportSize({ width: 1280, height: 851 });
@@ -11828,6 +11969,7 @@ for (const candidateVideo of [true, false]) {
       const drawing = `Sends ${voice}, and your drawing whenever Jim reads it, to Gemini Live with the interview text. ${BILLED_TO_SERVER}`;
       assert.equal(await note.textContent(), plain);
 
+      await page.locator(".advanced-settings > summary").click();
       await page.locator("#enable-example-drawing").check();
       assert.equal(await note.textContent(), drawing);
 
@@ -13128,3 +13270,179 @@ lobbyTest(
     );
   },
 );
+
+lobbyTest(
+  "advanced settings collapse without resetting choices",
+  async (page) => {
+    await page.goto(base);
+    await page.locator("#start:not([disabled])").waitFor();
+    const advanced = page.locator("details.advanced-settings");
+    assert.equal(await advanced.getAttribute("open"), null);
+    await advanced.locator(":scope > summary").click();
+    await page.locator("#enable-candidate-led").check();
+    await page.locator("#editor-indent").selectOption("2");
+    await advanced.locator(":scope > summary").click();
+    await advanced.locator(":scope > summary").click();
+    assert.equal(await page.locator("#enable-candidate-led").isChecked(), true);
+    assert.equal(await page.locator("#editor-indent").inputValue(), "2");
+    assert.equal(await page.locator(".setup-grid > .setup-panel").count(), 2);
+    assert.equal(await page.locator(".practice-hero #start").count(), 1);
+  },
+);
+
+lobbyTest("carry forward retains sharing while collapsed", async (page) => {
+  reports = [focusedAttempt(EASY[0])];
+  await lobby(page);
+  const carry = page.locator("#carry-forward");
+  assert.equal(await carry.getAttribute("open"), null);
+  await carry.locator("summary").click();
+  await page.locator("#practice-focus-share-input").check();
+  await carry.locator("summary").click();
+  assert.equal(await page.locator("#carry-forward-sharing").isVisible(), true);
+  assert.equal(
+    await page.locator("#practice-focus-share-input").isChecked(),
+    true,
+  );
+  await page.click("#start");
+  await page.waitForURL(/\/interview/);
+  assert.equal(
+    await page.evaluate(() =>
+      sessionStorage.getItem("codetrial.sharedPracticeFocus"),
+    ),
+    "Test boundaries",
+  );
+});
+
+lobbyTest(
+  "setup disclosures remain usable at desktop and narrow widths",
+  async (page) => {
+    await lobby(page);
+    assert.equal(await page.locator("#carry-forward").isVisible(), false);
+    for (const width of [1448, 1024, 761, 760, 375, 320]) {
+      await page.setViewportSize({ width, height: 900 });
+      const advanced = page.locator(".advanced-settings");
+      await advanced.locator(":scope > summary").click();
+      assert.equal(await page.locator("#editor-indent").isVisible(), true);
+      assert.equal(await page.locator("#start").isEnabled(), true);
+      assert.deepEqual(
+        await page.evaluate(() => [
+          document.documentElement.scrollWidth,
+          innerWidth,
+        ]),
+        [width, width],
+      );
+      const bounds = await page.locator(".setup-grid").evaluate((node) => ({
+        columns: getComputedStyle(node).gridTemplateColumns.split(" ").length,
+      }));
+      assert.equal(bounds.columns, width > 760 ? 2 : 1);
+      await advanced.locator(":scope > summary").click();
+    }
+  },
+);
+
+lobbyTest(
+  "collapsed advanced settings preserve document selection and reveal missing consent",
+  async (page) => {
+    await page.setViewportSize({ width: 375, height: 812 });
+    await lobby(page);
+    await page.locator(".advanced-settings > summary").click();
+    await page.locator(".interview-context > summary").click();
+    await page.fill("#profile-role", "Backend engineer");
+    await page.setInputFiles(
+      "#grounding-jd",
+      groundingTxt("jd.txt", "Must know Rust"),
+    );
+    await page
+      .locator('#grounding-choices input[data-group="requirements"]')
+      .first()
+      .check();
+    await page.locator(".advanced-settings > summary").click();
+    await page.click("#start");
+    const error = page.locator("#grounding-error");
+    await page.waitForFunction(
+      () => document.activeElement.id === "grounding-error",
+    );
+    assert.match(await error.textContent(), /Agree/);
+    const box = await error.boundingBox();
+    assert.ok(box.y >= 0 && box.y + box.height <= 812);
+    await page.check("#grounding-consent");
+    await page.locator(".advanced-settings > summary").click();
+    await page.click("#start");
+    await page.waitForURL(/\/interview/);
+    assert.equal(
+      new URL(page.url()).searchParams.get("role"),
+      "Backend engineer",
+    );
+    assert.match(
+      await page.evaluate(() =>
+        sessionStorage.getItem("codetrial.interview-grounding.v1"),
+      ),
+      /Must know Rust/,
+    );
+  },
+);
+
+lobbyTest("hero text stays clear of Start with enlarged text", async (page) => {
+  await page.setViewportSize({ width: 800, height: 900 });
+  await lobby(page);
+  for (const fontSize of [24, 32]) {
+    await page.evaluate((size) => {
+      document.documentElement.style.fontSize = `${size}px`;
+    }, fontSize);
+    const bounds = await page.locator(".practice-intro").boundingBox();
+    assert.ok(bounds && bounds.width > 0, JSON.stringify(bounds));
+    const stackedAction = await page.locator(".hero-start").boundingBox();
+    assert.ok(
+      stackedAction && stackedAction.y >= bounds.y + bounds.height,
+      JSON.stringify({ fontSize, bounds, stackedAction }),
+    );
+    const result = await page.locator(".practice-lead").evaluate((lead) => {
+      const nodes = document.createTreeWalker(lead, NodeFilter.SHOW_TEXT);
+      const range = document.createRange();
+      let measured = 0;
+      let covered = 0;
+      while (nodes.nextNode()) {
+        const text = nodes.currentNode;
+        for (let index = 0; index < text.length; index++) {
+          if (!text.textContent[index].trim()) continue;
+          range.setStart(text, index);
+          range.setEnd(text, index + 1);
+          for (const rect of range.getClientRects()) {
+            const x = (rect.left + rect.right) / 2;
+            const y = (rect.top + rect.bottom) / 2;
+            if (x < 0 || x >= innerWidth || y < 0 || y >= innerHeight) continue;
+            measured++;
+            if (document.elementFromPoint(x, y)?.closest("#start")) covered++;
+          }
+        }
+      }
+      return { measured, covered };
+    });
+    assert.ok(result.measured > 0);
+    assert.equal(result.covered, 0, JSON.stringify(result));
+  }
+  await page.setViewportSize({ width: 1448, height: 1000 });
+  await page.evaluate(() => {
+    document.documentElement.style.fontSize = "16px";
+  });
+  for (const width of [1280, 1448]) {
+    await page.setViewportSize({ width, height: 1000 });
+    const hero = await page.locator(".practice-hero").boundingBox();
+    const intro = await page.locator(".practice-intro").boundingBox();
+    const action = await page.locator(".hero-start").boundingBox();
+    const start = await page.locator("#start").boundingBox();
+    assert.ok(hero && intro && action && start);
+    assert.equal(action.width, 320, JSON.stringify({ width, action }));
+    assert.equal(start.width, 320);
+    const badge = await page.locator(".practice-badge").boundingBox();
+    assert.ok(badge && badge.width < hero.width / 2);
+    assert.ok(
+      Math.abs(hero.x + hero.width - action.x - action.width) < 1,
+      JSON.stringify({ width, hero, action }),
+    );
+    assert.ok(
+      Math.abs(intro.width - (hero.width - 320 - 32)) < 1,
+      JSON.stringify({ width, hero, intro }),
+    );
+  }
+});

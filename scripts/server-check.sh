@@ -60,7 +60,7 @@ fi
 
 wait_for_server "$BASE_URL" 60 "$SERVER_LOG" "${SERVER_PID:-}" "$TMP/home.html" || exit 1
 
-grep -F "Practice a live technical interview" "$TMP/home.html" > /dev/null
+grep -F "Start Interview" "$TMP/home.html" > /dev/null
 grep -F 'data-problem="template-delimiter-audit"' "$TMP/home.html" > /dev/null
 grep -F "Start interview" "$TMP/home.html" > /dev/null
 

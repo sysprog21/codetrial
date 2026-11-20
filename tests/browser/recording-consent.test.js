@@ -50,8 +50,9 @@ test("recording-consent the notice is part of the preflight, not the sidebar", (
     overlay.includes('id="recording-consent"'),
     "and it needs a control to agree with",
   );
-  assert.ok(
-    overlay.includes('id="recording-consent-step" hidden'),
+  assert.match(
+    overlay,
+    /id="recording-consent-step"\s+hidden(?:\s|>)/,
     "hidden by default, because most deployments record nothing",
   );
   assert.ok(

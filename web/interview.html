@@ -596,298 +596,368 @@
         aria-labelledby="audio-check-title"
       >
         <div class="audio-check-card">
-          <header class="preflight-head">
-            <p class="preflight-kicker">Before you join</p>
-            <h2 id="audio-check-title" tabindex="-1">Check your setup</h2>
-            <p>
-              Confirm you can hear Jim and he can hear you. The camera is
-              optional unless this interview is recorded.
-            </p>
-            <p id="strict-note" class="muted small" hidden>
-              Strict Interview assigns a problem after these checks. Reloading
-              requires preflight again and starts a new attempt with a different
-              problem. Your previous interview progress is not restored.
-            </p>
-            <p id="round-plan-summary" class="muted small"></p>
-          </header>
-          <div class="preflight-body">
-            <div
-              class="preflight-column"
-              role="group"
-              aria-labelledby="prefs-title"
-            >
-              <!-- Hidden unless the server says it records. Shown here rather than
+          <div class="preflight-content">
+            <header class="preflight-head">
+              <p class="preflight-kicker">Before you join</p>
+              <h2 id="audio-check-title" tabindex="-1">Check your setup</h2>
+              <p>
+                Confirm your interview preferences and devices before starting.
+              </p>
+              <p id="strict-note" class="muted small" hidden>
+                Strict Interview assigns a problem after these checks. Reloading
+                requires preflight again and starts a new attempt with a
+                different problem. Your previous interview progress is not
+                restored.
+              </p>
+              <p id="round-plan-summary" class="muted small"></p>
+            </header>
+            <div class="preflight-body">
+              <div
+                class="preflight-column"
+                role="group"
+                aria-labelledby="prefs-title"
+              >
+                <!-- Hidden unless the server says it records. Shown here rather than
                    in the sidebar for the same reason the Meet checkbox is: it has
                    to be settled before the room starts, because consent is written
                    down before any recording can begin. -->
-              <div class="audio-check-step" id="recording-consent-step" hidden>
-                <h3 class="preflight-section-title">Recording</h3>
-                <p>
-                  <label for="recording-consent">
-                    <input type="checkbox" id="recording-consent" />
-                    I agree to this interview being recorded
-                  </label>
-                </p>
-                <p id="recording-consent-disclosure" class="muted small">
-                  Your camera, microphone, and this page are recorded to one
-                  video file. It is shared with the verified email address on
-                  your GitHub account, as a read-only link, and both the link
-                  and the file are deleted 24 hours later. You can withdraw
-                  consent during the interview: recording stops and the file is
-                  scheduled for deletion. Anything already downloaded by someone
-                  who had the link is outside CodeTrial's control and cannot be
-                  recalled.
-                </p>
-              </div>
-              <h3 id="prefs-title" class="preflight-section-title">
-                Interview preferences
-              </h3>
-              <!-- Outside the interviewer controls, which hold Jim's voice and
+                <div
+                  class="audio-check-step"
+                  id="recording-consent-step"
+                  hidden
+                >
+                  <h3 class="preflight-section-title">Recording</h3>
+                  <p>
+                    <label for="recording-consent">
+                      <input type="checkbox" id="recording-consent" />
+                      I agree to this interview being recorded
+                    </label>
+                  </p>
+                  <p id="recording-consent-disclosure" class="muted small">
+                    Your camera, microphone, and this page are recorded to one
+                    video file. It is shared with the verified email address on
+                    your GitHub account, as a read-only link, and both the link
+                    and the file are deleted 24 hours later. You can withdraw
+                    consent during the interview: recording stops and the file
+                    is scheduled for deletion. Anything already downloaded by
+                    someone who had the link is outside CodeTrial's control and
+                    cannot be recalled.
+                  </p>
+                </div>
+                <h3 id="prefs-title" class="preflight-section-title">
+                  Interview preferences
+                </h3>
+                <!-- Outside the interviewer controls, which hold Jim's voice and
                    accent; the interview opens in this language, so Jim does
                    not ask for one. -->
-              <div class="preflight-language" id="audio-step-language">
-                <label for="preflight-language">Programming language</label>
-                <select id="preflight-language">
-                  <option value="python" data-language="python">
-                    Python 3
-                  </option>
-                  <option value="javascript" data-language="javascript">
-                    JavaScript
-                  </option>
-                  <option value="c" data-language="c">C</option>
-                  <option value="cpp" data-language="cpp">C++</option>
-                  <option value="java" data-language="java">Java</option>
-                </select>
-              </div>
-              <div class="interviewer-style-controls">
-                <div>
-                  <label for="interviewer-voice">Jim's voice</label>
-                  <select id="interviewer-voice">
-                    <option value="">Default</option>
-                    <option value="Puck">Puck</option>
-                    <option value="Charon">Charon</option>
-                    <option value="Kore">Kore</option>
-                    <option value="Orus">Orus</option>
-                    <option value="Random">Random</option>
+                <div class="preflight-language" id="audio-step-language">
+                  <label for="preflight-language">Programming language</label>
+                  <select id="preflight-language">
+                    <option value="python" data-language="python">
+                      Python 3
+                    </option>
+                    <option value="javascript" data-language="javascript">
+                      JavaScript
+                    </option>
+                    <option value="c" data-language="c">C</option>
+                    <option value="cpp" data-language="cpp">C++</option>
+                    <option value="java" data-language="java">Java</option>
                   </select>
                 </div>
-                <div>
-                  <label for="interviewer-accent">English accent</label>
-                  <select id="interviewer-accent">
-                    <option value="">Default</option>
-                    <option value="American">American</option>
-                    <option value="British">British</option>
-                    <option value="Australian">Australian</option>
-                    <option value="Canadian">Canadian</option>
-                    <option value="Indian">Indian</option>
-                    <option value="Random">Random</option>
-                  </select>
+                <div class="interviewer-style-controls">
+                  <div>
+                    <label for="interviewer-voice">Jim's voice</label>
+                    <select id="interviewer-voice">
+                      <option value="">Default</option>
+                      <option value="Puck">Puck</option>
+                      <option value="Charon">Charon</option>
+                      <option value="Kore">Kore</option>
+                      <option value="Orus">Orus</option>
+                      <option value="Random">Random</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label for="interviewer-accent">English accent</label>
+                    <select id="interviewer-accent">
+                      <option value="">Default</option>
+                      <option value="American">American</option>
+                      <option value="British">British</option>
+                      <option value="Australian">Australian</option>
+                      <option value="Canadian">Canadian</option>
+                      <option value="Indian">Indian</option>
+                      <option value="Random">Random</option>
+                    </select>
+                  </div>
                 </div>
-              </div>
-              <p class="muted small">Random is chosen once per interview.</p>
+                <p class="muted small">Random is chosen once per interview.</p>
 
-              <div class="audio-check-step" id="audio-step-examples">
-                <p>
-                  <label for="hide-examples">
-                    <input type="checkbox" id="hide-examples" />
-                    Hide the worked examples
-                  </label>
-                </p>
-                <p class="muted small">
-                  The Problem tab shows the scenario without Example 1 and 2, so
-                  the cases you walk through in the Example step are your own.
-                </p>
-              </div>
-              <h3 class="preflight-section-title">Presenting</h3>
-              <!-- Decided here, not in the sidebar: it changes which tracks the
+                <div
+                  class="audio-check-step preflight-option"
+                  id="audio-step-examples"
+                >
+                  <p>
+                    <label for="hide-examples">
+                      <input type="checkbox" id="hide-examples" />
+                      Hide the worked examples
+                    </label>
+                  </p>
+                  <details id="examples-help" class="preflight-help">
+                    <summary aria-label="About hiding worked examples">
+                      ?
+                    </summary>
+                    <p class="muted small">
+                      The Problem tab shows the scenario without Example 1 and
+                      2, so the cases you walk through in the Example step are
+                      your own.
+                    </p>
+                  </details>
+                </div>
+                <h3 class="preflight-section-title presenting-title">
+                  Presenting &amp; recording
+                </h3>
+                <!-- Decided here, not in the sidebar: it changes which tracks the
                    interview publishes, so it has to be settled before the room
                    starts. -->
-              <div class="audio-check-step" id="audio-step-meet">
-                <p>
-                  <label for="meet-presentation">
-                    <input type="checkbox" id="meet-presentation" />
-                    I will present this interview in Google Meet
-                  </label>
-                </p>
-                <p class="muted small">
-                  CodeTrial hands the camera to Meet after this check and stops
-                  watching it, so camera integrity is off for this interview and
-                  the report says so. Your microphone stays with CodeTrial.
-                </p>
-              </div>
-              <!-- Off unless asked for: only a candidate recording the screen
+                <div
+                  class="audio-check-step preflight-option"
+                  id="audio-step-meet"
+                >
+                  <p>
+                    <label for="meet-presentation">
+                      <input type="checkbox" id="meet-presentation" />
+                      I will present this interview in Google Meet
+                    </label>
+                  </p>
+                  <details id="meet-help" class="preflight-help">
+                    <summary aria-label="About presenting in Google Meet">
+                      ?
+                    </summary>
+                    <p class="muted small">
+                      CodeTrial stops watching your camera after the handoff.
+                    </p>
+                  </details>
+                  <p
+                    id="meet-consequence"
+                    class="preflight-consequence muted small"
+                  >
+                    If you present in Meet, CodeTrial hands the camera to Meet
+                    when you join, camera integrity is off and the report says
+                    so; your microphone stays with CodeTrial.
+                  </p>
+                </div>
+                <!-- Off unless asked for: only a candidate recording the screen
                    needs their own face on it, and everyone else would spend the
                    interview watching themselves beside the code. -->
-              <div class="audio-check-step" id="audio-step-recorder">
-                <p>
-                  <label for="screen-recording">
-                    <input type="checkbox" id="screen-recording" />
-                    I am recording this interview with a screen recorder
-                  </label>
-                </p>
-                <p class="muted small">
-                  Your camera then shows below Jim, so the recording includes
-                  you, unless you present in Meet or continue without a camera.
-                  Leave the recorder's own camera off: the browser already holds
-                  it.
-                </p>
-              </div>
-            </div>
-            <div
-              class="preflight-column"
-              role="group"
-              aria-labelledby="devices-title"
-            >
-              <h3 id="devices-title" class="preflight-section-title">
-                Devices
-              </h3>
-              <div class="audio-check-step" id="audio-step-output">
-                <div class="meet-mode-output">
-                  <label for="preflight-output">Output device</label>
-                  <select
-                    id="preflight-output"
-                    aria-describedby="preflight-output-note"
-                  >
-                    <option value="">System default</option>
-                  </select>
-                </div>
-                <p
-                  id="preflight-output-note"
-                  class="muted small"
-                  role="status"
-                  hidden
-                ></p>
-                <p>
-                  <span class="step-mark" aria-hidden="true"></span
-                  ><strong>Sound</strong> —
-                  <span id="audio-output-state" aria-live="polite"
-                    >play a test sound to check your audio, or click "I heard
-                    it" if it already works.</span
-                  >
-                </p>
-                <div class="audio-check-actions">
-                  <button
-                    id="audio-test-tone"
-                    class="pill-button"
-                    type="button"
-                  >
-                    Play test tone
-                  </button>
-                  <button
-                    id="audio-test-speech"
-                    class="pill-button"
-                    type="button"
-                  >
-                    Can't hear the tone?
-                  </button>
-                  <button
-                    id="audio-heard"
-                    class="pill-button waiting"
-                    type="button"
-                    aria-disabled="true"
-                  >
-                    I heard it
-                  </button>
-                </div>
-                <audio
-                  id="audio-test-voice"
-                  src="./audio/test-voice.wav"
-                  preload="none"
-                  hidden
-                ></audio>
-                <p class="muted small">
-                  If the tone is silent, try the test voice. Playback noise
-                  reduction or audio enhancements may filter test sounds. If
-                  both are silent, check your output device and volume, or try
-                  turning those effects off in your audio settings.
-                </p>
-              </div>
-
-              <div class="audio-check-step" id="audio-step-mic">
-                <div class="meet-mode-output">
-                  <label for="preflight-input">Microphone device</label>
-                  <select
-                    id="preflight-input"
-                    aria-describedby="preflight-input-note"
-                  >
-                    <option value="">System default</option>
-                  </select>
-                </div>
-                <p
-                  id="preflight-input-note"
-                  class="muted small"
-                  role="status"
-                  hidden
-                ></p>
-                <p>
-                  <span class="step-mark" aria-hidden="true"></span
-                  ><strong>Microphone</strong> — say something and watch the
-                  level.
-                </p>
                 <div
-                  class="audio-meter"
-                  role="img"
-                  aria-label="Microphone input level"
+                  class="audio-check-step preflight-option"
+                  id="audio-step-recorder"
                 >
-                  <span id="audio-meter-fill"></span>
+                  <p>
+                    <label for="screen-recording">
+                      <input type="checkbox" id="screen-recording" />
+                      I am recording this interview with a screen recorder
+                    </label>
+                  </p>
+                  <details id="recorder-help" class="preflight-help">
+                    <summary aria-label="About using a screen recorder">
+                      ?
+                    </summary>
+                    <p class="muted small">
+                      The browser already holds the camera.
+                    </p>
+                  </details>
+                  <p
+                    id="recorder-consequence"
+                    class="preflight-consequence muted small"
+                  >
+                    If you record the screen, your camera appears below Jim
+                    unless you present in Meet or choose Continue without
+                    camera. Leave the screen recorder's own camera off.
+                  </p>
                 </div>
-                <!-- Off unless ticked, and for this interview only: it is the one
+              </div>
+              <div
+                class="preflight-column"
+                role="group"
+                aria-labelledby="devices-title"
+              >
+                <h3 id="devices-title" class="preflight-section-title">
+                  Devices
+                </h3>
+                <div class="audio-check-step" id="audio-step-output">
+                  <div class="meet-mode-output">
+                    <label for="preflight-output">Output device</label>
+                    <select
+                      id="preflight-output"
+                      aria-describedby="preflight-output-note"
+                    >
+                      <option value="">System default</option>
+                    </select>
+                  </div>
+                  <p
+                    id="preflight-output-note"
+                    class="muted small"
+                    role="status"
+                    hidden
+                  ></p>
+                  <p>
+                    <span class="step-mark" aria-hidden="true"></span
+                    ><strong>Sound</strong> —
+                    <span id="audio-output-state" aria-live="polite"
+                      >Confirm your audio</span
+                    >
+                  </p>
+                  <div class="audio-check-actions">
+                    <button
+                      id="audio-test-tone"
+                      class="pill-button"
+                      type="button"
+                    >
+                      Play test tone
+                    </button>
+                    <button
+                      id="audio-test-speech"
+                      class="pill-button"
+                      type="button"
+                    >
+                      Can't hear the tone?
+                    </button>
+                    <button
+                      id="audio-heard"
+                      class="pill-button waiting"
+                      type="button"
+                      aria-disabled="true"
+                    >
+                      I heard it
+                    </button>
+                  </div>
+                  <audio
+                    id="audio-test-voice"
+                    src="./audio/test-voice.wav"
+                    preload="none"
+                    hidden
+                  ></audio>
+                  <details id="output-help" class="preflight-help">
+                    <summary aria-label="Sound check help">?</summary>
+                    <p class="muted small">
+                      Play a test sound, or choose "I heard it" if your audio
+                      already works. If the tone is silent, try the test voice.
+                      Playback noise reduction or audio enhancements may filter
+                      test sounds. If both are silent, check your output device
+                      and volume, or try turning those effects off in your audio
+                      settings.
+                    </p>
+                  </details>
+                </div>
+
+                <div class="audio-check-step" id="audio-step-mic">
+                  <div class="meet-mode-output">
+                    <label for="preflight-input">Microphone device</label>
+                    <select
+                      id="preflight-input"
+                      aria-describedby="preflight-input-note"
+                    >
+                      <option value="">System default</option>
+                    </select>
+                  </div>
+                  <p
+                    id="preflight-input-note"
+                    class="muted small"
+                    role="status"
+                    hidden
+                  ></p>
+                  <p>
+                    <span class="step-mark" aria-hidden="true"></span
+                    ><strong>Microphone</strong> —
+                    <span class="preflight-mic-prompt"
+                      >Say something to test it.</span
+                    ><span class="preflight-mic-ready">Ready</span>
+                  </p>
+                  <div
+                    class="audio-meter"
+                    role="img"
+                    aria-label="Microphone input level"
+                  >
+                    <span id="audio-meter-fill"></span>
+                  </div>
+                  <!-- Off unless ticked, and for this interview only: it is the one
                      thing that reads the microphone while Mic says Muted.
                      `autocomplete="off"` keeps the browser from restoring the
                      tick into a later visit to this page. -->
-                <p>
-                  <label for="muted-speech-consent">
-                    <input
-                      type="checkbox"
-                      id="muted-speech-consent"
-                      autocomplete="off"
-                      aria-describedby="muted-speech-consent-note"
-                    />
-                    Remind me if I speak while muted
-                  </label>
-                </p>
-                <p id="muted-speech-consent-note" class="muted small">
-                  While muted, this page checks the microphone level for speech.
-                  The audio is not sent to Jim, recorded or transcribed, and the
-                  check stops at the first reminder or when you unmute.
-                </p>
-              </div>
-
-              <div class="audio-check-step" id="audio-step-camera">
-                <p>
-                  <span class="step-mark" aria-hidden="true"></span
-                  ><strong>Camera</strong> —
-                  <span id="camera-state" aria-live="polite"
-                    >grant access and keep video on.</span
-                  >
-                </p>
-                <div class="camera-preview-container" hidden>
-                  <video
-                    id="camera-preview"
-                    autoplay
-                    muted
-                    playsinline
-                    aria-label="Live camera preview"
-                  ></video>
+                  <p>
+                    <label for="muted-speech-consent">
+                      <input
+                        type="checkbox"
+                        id="muted-speech-consent"
+                        autocomplete="off"
+                        aria-describedby="muted-speech-consent-note"
+                      />
+                      Remind me if I speak while muted
+                    </label>
+                  </p>
+                  <p id="muted-speech-consent-note" class="muted small">
+                    While muted, this page checks the microphone level for
+                    speech. The audio is not sent to Jim, recorded or
+                    transcribed, and the check stops at the first reminder or
+                    when you unmute.
+                  </p>
+                  <details id="mic-help" class="preflight-help">
+                    <summary aria-label="Microphone check help">?</summary>
+                    <p class="muted small">
+                      Say a few words and watch the input level. Choose another
+                      microphone if no sound is detected.
+                    </p>
+                  </details>
                 </div>
 
-                <p id="camera-name-disclosure" class="muted small">
-                  The camera's name is recorded in your report so a reviewer can
-                  see which device was opened. On Apple devices that name often
-                  contains your own, for example "Alex's iPhone". CodeTrial
-                  opens whichever camera your browser treats as the default, so
-                  change that default in your browser or system settings before
-                  starting if you would rather it did not.
-                </p>
-                <div class="audio-check-actions">
-                  <button
-                    id="camera-skip"
-                    class="pill-button"
-                    type="button"
-                    hidden
-                  >
-                    Continue without camera
-                  </button>
+                <div class="audio-check-step" id="audio-step-camera">
+                  <p>
+                    <span class="step-mark" aria-hidden="true"></span
+                    ><strong>Camera</strong> —
+                    <span id="camera-state" aria-live="polite"
+                      >grant access and keep video on.</span
+                    >
+                  </p>
+                  <div class="camera-preview-container" hidden>
+                    <video
+                      id="camera-preview"
+                      autoplay
+                      muted
+                      playsinline
+                      aria-label="Live camera preview"
+                    ></video>
+                  </div>
+
+                  <div id="camera-name-disclosure" class="camera-privacy">
+                    <p class="muted small">
+                      Camera device name is included in your report and may
+                      contain your name.
+                    </p>
+                    <details id="camera-help" class="preflight-help">
+                      <summary aria-label="About camera privacy and devices">
+                        ?
+                      </summary>
+                      <p class="muted small">
+                        The camera's name is recorded in your report so a
+                        reviewer can see which device was opened. On Apple
+                        devices that name often contains your own, for example
+                        "Alex's iPhone". CodeTrial opens whichever camera your
+                        browser treats as the default, so change that default in
+                        your browser or system settings before starting if you
+                        would rather it did not.
+                      </p>
+                    </details>
+                  </div>
+                  <div class="audio-check-actions">
+                    <button
+                      id="camera-skip"
+                      class="pill-button"
+                      type="button"
+                      hidden
+                    >
+                      Continue without camera
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>

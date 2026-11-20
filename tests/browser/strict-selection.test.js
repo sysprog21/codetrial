@@ -1824,6 +1824,7 @@ test("the lobby defaults to Practice and starts Strict without a selected proble
     await page.locator(".problem-card.selected").getAttribute("data-problem"),
     savedProblem,
   );
+  await page.locator(".advanced-settings > summary").click();
   for (const option of [
     "highlight",
     "execution",
@@ -1832,7 +1833,7 @@ test("the lobby defaults to Practice and starts Strict without a selected proble
     "monospace",
   ])
     await page.locator(`[name="editor-option"][value="${option}"]`).uncheck();
-  assert.equal(await page.locator(".setup-panel").count(), 3);
+  assert.equal(await page.locator(".setup-panel").count(), 2);
   assert.equal(
     await page
       .locator('[aria-labelledby="challenge-heading"] #selection-mode')
