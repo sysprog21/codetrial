@@ -385,3 +385,40 @@ test("Java locations without columns use the pending run snapshot and newer runs
     await page.close();
   }
 });
+
+test("Copy results preserves compiler diagnostics as displayed plain text", async (t) => {
+  compilerReply = (source) => locationsIn(source, ["missing_name"]);
+  const context = await interviewPage(t, "c");
+  if (!context) return;
+  const { page, errors } = context;
+  try {
+    await page
+      .context()
+      .grantPermissions(["clipboard-read", "clipboard-write"]);
+    await replaceCode(
+      page,
+      "bool canSpellFromTiles(char* message, char* tiles) {\n  return missing_name;\n}",
+    );
+    await page.click("#run-tests");
+    await waitForLocations(page, 1);
+    const text = (await page.locator("#results-content").innerText()).trim();
+    assert.match(text, /Couldn't run your code/);
+    assert.match(text, /error: missing_name\n/);
+    assert.match(text, /note: external header/);
+    await page
+      .getByRole("button", { name: "Copy results", exact: true })
+      .click();
+    await page.waitForFunction(
+      () =>
+        document.querySelector("[data-copy-results-status]").textContent ===
+        "Copied!",
+    );
+    assert.equal(
+      await page.evaluate(() => navigator.clipboard.readText()),
+      text,
+    );
+    assert.deepEqual(errors, []);
+  } finally {
+    await page.close();
+  }
+});

@@ -191,6 +191,50 @@ export function resultsMarkup(
   };
 }
 
+export function mountResultsCopy(root, content) {
+  const actions = root.querySelector("[data-copy-results-actions]");
+  const button = root.querySelector("[data-copy-results]");
+  const status = root.querySelector("[data-copy-results-status]");
+  let pending = false;
+  let revision = 0;
+  let reset;
+  button.addEventListener("click", async () => {
+    if (pending || actions.hidden) return;
+    // innerText keeps rendered block breaks and preformatted diagnostics,
+    // and follows the filter without serializing a second results model.
+    const text = content.innerText.trim();
+    if (!text) return;
+    const copiedRevision = revision;
+    pending = true;
+    clearTimeout(reset);
+    button.setAttribute("aria-disabled", "true");
+    status.textContent = "Copying...";
+    try {
+      await globalThis.navigator.clipboard.writeText(text);
+      if (copiedRevision !== revision) return;
+      status.textContent = "Copied!";
+      reset = setTimeout(() => {
+        status.textContent = "";
+      }, 2000);
+    } catch {
+      if (copiedRevision === revision)
+        status.textContent =
+          "Could not copy results. Select the results and copy them manually.";
+    } finally {
+      pending = false;
+      button.removeAttribute("aria-disabled");
+    }
+  });
+  return (available) => {
+    revision++;
+    clearTimeout(reset);
+    status.textContent = "";
+    if (!available && actions.contains(root.ownerDocument.activeElement))
+      root.ownerDocument.querySelector("#results-toggle").focus();
+    actions.hidden = !available;
+  };
+}
+
 export function feedbackMarkup(title, section) {
   const list = (items) =>
     orPlaceholder(items)
