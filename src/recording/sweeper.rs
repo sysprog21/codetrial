@@ -13,10 +13,11 @@ use super::{
 /// Moves the row and then stops the provider, in that order.
 ///
 /// The order matters and is not obvious. Calling the provider first meant two
-/// callers racing on one recording, `/end` and a `room_finished` webhook say,
-/// both sent a stop, and a process that died between a successful stop and the
-/// write left a row that stayed active forever. Moving first makes the row the
-/// record of intent, and only the caller that moved it talks to the provider.
+/// callers racing on one recording, a `room_finished` webhook and the sweeper
+/// say, both sent a stop, and a process that died between a successful stop and
+/// the write left a row that stayed active forever. Moving first makes the row
+/// the record of intent, and only the caller that moved it talks to the
+/// provider.
 ///
 /// A failed stop leaves the row where it was moved to and the job still
 /// running, which the sweeper finds once the row goes stale. That is the cost
@@ -132,9 +133,9 @@ pub async fn start_and_record_egress(
 
     if stored {
         // A stop can land while the provider is still answering: consent
-        // withdrawn, the room finished, the candidate closed the tab. The row
-        // keeps the id whatever state it is in, and this is where a job that
-        // outlived its recording gets stopped.
+        // withdrawn or the room finished. The row keeps the id whatever state
+        // it is in, and this is where a job that outlived its recording gets
+        // stopped.
         settle_new_egress(accounts, recorder, &recording.id, &egress_id).await;
     } else {
         // Either the row already names another job, from the other caller

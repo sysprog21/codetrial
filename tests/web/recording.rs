@@ -1993,6 +1993,56 @@ async fn a_replay_read_that_fails_is_not_reported_as_missing() {
     remove_database(path).await;
 }
 
+/// The template is told when the replay it asks for has expired.
+///
+/// This route has no `gone_response` ahead of it, so the `410` comes from the
+/// shared replay answer alone. The recording template stops polling on it,
+/// which makes it the status a recording past its deadline depends on.
+#[tokio::test]
+async fn the_recorder_is_told_when_the_replay_has_expired() {
+    let (base, server, path, client, cookie) = recorded_server("replay-room-expired").await;
+    let interview = start_interview(&client, &base, &cookie).await;
+    let room = "interview-abc12345";
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "
+        INSERT INTO recordings (
+            id, account_id, interview_id, room_name, idempotency_key,
+            recipient_email, state, created_at, updated_at, expires_at
+        ) VALUES ('rec-expired', 1, ?1, ?2, ?1, 'one@example.test', 'ready', 10, 10, 1)
+        ",
+            [&interview, &room.to_string()],
+        )
+        .unwrap();
+    let token = codetrial::token::livekit_token(codetrial::token::LivekitTokenInput {
+        api_key: "devkey",
+        api_secret: "devsecret",
+        identity: "EG_recorder",
+        name: "recorder",
+        room,
+        metadata: "",
+        agent: false,
+        now_seconds: codetrial::current_epoch_seconds(),
+    })
+    .unwrap();
+
+    let expired = client
+        .get(format!("{base}/api/recording/replay"))
+        .header("authorization", token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(expired.status(), 410);
+    assert_eq!(
+        expired.json::<Value>().await.unwrap()["code"],
+        "replay_expired"
+    );
+
+    server.shutdown().await;
+    remove_database(path).await;
+}
+
 /// The history a candidate reads about their own interviews.
 #[tokio::test]
 async fn history_lists_own_recordings_only() {
@@ -2331,165 +2381,6 @@ async fn history_events_avatar_history_returns_every_state() {
         ],
         "and the tail is still the tail, which is why the page does not use it"
     );
-
-    server.shutdown().await;
-    remove_database(path).await;
-}
-
-/// A late join reads the snapshot, and only its own.
-#[tokio::test]
-async fn replay_snapshot_is_owner_scoped() {
-    let (base, server, path, client, cookie) = recorded_server("replay-snapshot").await;
-    let interview = start_interview(&client, &base, &cookie).await;
-    let event = |kind: &str, text: &str| envelope(kind, json!({ "text": text }));
-    let posted = client
-        .post(format!("{base}/api/interviews/{interview}/events"))
-        .header("cookie", cookie.clone())
-        .json(&json!({ "events": [
-            event("editor", "first draft"),
-            event("transcript", "hello"),
-            event("editor", "second draft"),
-        ] }))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(posted.status(), 200);
-
-    let snapshot = client
-        .get(format!("{base}/api/interviews/{interview}/snapshot"))
-        .header("cookie", cookie.clone())
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(snapshot.status(), 200);
-    let body = snapshot.json::<Value>().await.unwrap();
-    assert_eq!(body["seq"], 2, "the last event the snapshot accounts for");
-    assert_eq!(body["quotaExceeded"], false);
-    assert_eq!(
-        body["events"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|event| (
-                event["seq"].as_i64().unwrap(),
-                event["kind"].as_str().unwrap()
-            ))
-            .collect::<Vec<_>>(),
-        vec![(1, "transcript"), (2, "editor")],
-        "the superseded editor snapshot is dropped and the transcript line is not"
-    );
-
-    {
-        let connection = rusqlite::Connection::open(&path).unwrap();
-        connection
-            .execute_batch(
-                "INSERT INTO users (id, github_id, login, email, email_verified, created_at, updated_at)
-                   VALUES (2, 202, 'two', 'two@example.test', 1, 1, 1);
-                 INSERT INTO interviews (id, account_id, consent_version, consent_at)
-                   VALUES ('int-theirs', 2, '2026-08-21', 1);",
-            )
-            .unwrap();
-    }
-    let theirs = client
-        .get(format!("{base}/api/interviews/int-theirs/snapshot"))
-        .header("cookie", cookie.clone())
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(theirs.status(), 404);
-
-    // Past the retention deadline the replay is gone rather than missing: this
-    // account owns the interview and is owed the difference.
-    rusqlite::Connection::open(&path)
-        .unwrap()
-        .execute(
-            "
-        INSERT INTO recordings (
-            id, account_id, interview_id, room_name, idempotency_key,
-            recipient_email, state, expires_at, created_at, updated_at
-        ) VALUES ('rec-snap', 1, ?1, 'interview-abc12345', ?1,
-            'one@example.test', 'ready', 1, 1, 1)
-        ",
-            [&interview],
-        )
-        .unwrap();
-    let expired = client
-        .get(format!("{base}/api/interviews/{interview}/snapshot"))
-        .header("cookie", cookie.clone())
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(expired.status(), 410);
-    assert_eq!(
-        expired.json::<Value>().await.unwrap()["code"],
-        "replay_expired"
-    );
-
-    // And a deleted recording, which is the other half of the same promise and
-    // was asserted nowhere: this route has no `gone_response` ahead of it, so
-    // `SnapshotView::Deleted` reaches the response mapping directly here. The
-    // status was free to become a `404` without a test noticing, which is the
-    // difference between "taken away" and "never yours" going missing.
-    rusqlite::Connection::open(&path)
-        .unwrap()
-        .execute(
-            "
-        UPDATE recordings SET state = 'deleted', deleted_at = 5, expires_at = NULL,
-            room_name = NULL, recipient_email = NULL WHERE id = 'rec-snap'
-        ",
-            [],
-        )
-        .unwrap();
-    let deleted = client
-        .get(format!("{base}/api/interviews/{interview}/snapshot"))
-        .header("cookie", cookie)
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(deleted.status(), 410);
-    assert_eq!(
-        deleted.json::<Value>().await.unwrap()["code"],
-        "recording_deleted"
-    );
-
-    let signed_out = client
-        .get(format!("{base}/api/interviews/{interview}/snapshot"))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(signed_out.status(), 401);
-
-    server.shutdown().await;
-    remove_database(path).await;
-}
-
-/// Ending an interview that recorded nothing says so, rather than failing.
-///
-/// 204 and no body: the interview ending is the candidate's news whether or
-/// not a recording was running, so there is nothing to report and nothing to
-/// stop. A 404 would tell them the interview was never theirs.
-#[tokio::test]
-async fn ending_an_interview_without_a_recording_is_a_no_op() {
-    let (base, server, path, client, cookie) = recorded_server("end-no-recording").await;
-    let interview = start_interview(&client, &base, &cookie).await;
-
-    let ended = client
-        .post(format!("{base}/api/interviews/{interview}/end"))
-        .header("cookie", cookie.clone())
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(ended.status(), 204);
-    assert!(ended.bytes().await.unwrap().is_empty());
-
-    // Idempotent, because the browser sends this on unload and on the button.
-    let again = client
-        .post(format!("{base}/api/interviews/{interview}/end"))
-        .header("cookie", cookie)
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(again.status(), 204);
 
     server.shutdown().await;
     remove_database(path).await;

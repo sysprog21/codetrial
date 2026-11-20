@@ -145,7 +145,7 @@ Only session members may export a saved transcript or audio; each member reads
 their own AI suggestions. Either member can delete the shared saved transcript
 or stop/delete shared audio. Deleting audio stops its writer before unlinking
 files. This does not stop the previously agreed temporary AI processing and
-suggestions; terminate the session to stop the interview. A downloaded copy
+suggestions; cancel the session to stop the interview. A downloaded copy
 cannot be recalled by deleting the server copy. A withdrawal made before capture
 starts is recorded, and the observer then declines to record that audio.
 
@@ -289,7 +289,7 @@ actual transcripts or audio to a public issue.
    completion, confirm 24-hour expiry blocks reads and cleanup removes files.
 9. Opt out of availability and expire a heartbeat; confirm the roster and
    pending requests disappear. Abandon a confirmed availability proposal and
-   verify ten-minute cleanup. Terminate an active session and confirm LiveKit
+   verify ten-minute cleanup. Cancel an active session and confirm LiveKit
    room deletion.
 10. Allow a short round and hard deadline to expire with no polling; confirm
     final capture and settlement continue even while room deletion is stalled.

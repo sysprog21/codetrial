@@ -1,5 +1,5 @@
-//! The interview record itself: creating one, ending it, the consent that
-//! gates recording, the replay events it accumulates, and the reports written
+//! The interview record itself: creating one, the consent that gates
+//! recording, the replay events it accumulates, and the reports written
 //! against it.
 
 use std::time::Instant;
@@ -7,7 +7,7 @@ use std::time::Instant;
 use axum::body::Body;
 use axum::extract::{Path as UriPath, State};
 use axum::http::{Request, StatusCode};
-use axum::response::{IntoResponse, Response};
+use axum::response::Response;
 use serde_json::{Value, json};
 
 use crate::accounts::{
@@ -17,12 +17,8 @@ use crate::accounts::{
 use crate::current_epoch_seconds_i64;
 
 use super::auth::Owner;
-use super::recordings::finish_recording;
 use super::token::{read_body_or_refuse, read_body_with};
-use super::{
-    AppState, MAX_BODY_BYTES, MAX_REPORT_BYTES, json_response, rate_limited_response,
-    replay_response,
-};
+use super::{AppState, MAX_BODY_BYTES, MAX_REPORT_BYTES, json_response, rate_limited_response};
 
 /// What one account posting replay events may spend in a window.
 ///
@@ -221,43 +217,6 @@ pub(crate) async fn create_interview_handler(
     }
 }
 
-/// The interview is over.
-///
-/// One of the two ways a recording stops normally, and neither is optional: the
-/// browser can be closed and the `room_finished` webhook can be lost, so the
-/// pipeline has to survive either arriving alone and both arriving in any
-/// order.
-pub(crate) async fn end_interview_handler(
-    State(state): State<AppState>,
-    UriPath(interview_id): UriPath<String>,
-    Owner { accounts, user }: Owner,
-) -> Response {
-    let Some(recorder) = state.recorder.clone() else {
-        return StatusCode::NO_CONTENT.into_response();
-    };
-    let found = {
-        let accounts = std::sync::Arc::clone(&accounts);
-        let interview_id = interview_id.clone();
-        blocking(move || {
-            crate::recording::recording_for_interview(&accounts, &interview_id, user.id)
-        })
-        .await
-    };
-    match found {
-        // Nothing recorded, so there is nothing to stop. Not a 404: the
-        // interview ending is the candidate's news either way.
-        Ok(None) => StatusCode::NO_CONTENT.into_response(),
-        Ok(Some(recording)) => finish_recording(&accounts, &recorder, &recording).await,
-        Err(error) => {
-            eprintln!("could not read a recording while ending an interview: {error}");
-            json_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                json!({ "error": "Could not end the interview." }),
-            )
-        }
-    }
-}
-
 /// The replay, arriving one batch at a time.
 ///
 /// Authenticated and owner-scoped like everything else about an interview, and
@@ -380,35 +339,4 @@ pub(crate) async fn replay_events_handler(
             )
         }
     }
-}
-
-/// Where a late join starts.
-///
-/// The snapshot is the replay with the superseded frames dropped, and `seq` is
-/// where the caller carries on from. Nothing is stored to produce it and there
-/// is no cadence to configure.
-pub(crate) async fn replay_snapshot_handler(
-    State(state): State<AppState>,
-    UriPath(interview_id): UriPath<String>,
-    Owner { accounts, user }: Owner,
-) -> Response {
-    let missing = || {
-        json_response(
-            StatusCode::NOT_FOUND,
-            json!({ "code": "recording_not_found", "error": "No replay for that interview." }),
-        )
-    };
-    if state.recorder.is_none() {
-        return missing();
-    }
-    let now = current_epoch_seconds_i64();
-    let view =
-        blocking(move || crate::recording::replay_snapshot(&accounts, &interview_id, user.id, now))
-            .await;
-
-    // Gone rather than not-found on an expired or deleted replay: this account
-    // owns the interview and is owed the difference between "never yours" and
-    // "not any more". That distinction, and the two sentences carrying it, are
-    // `replay_response`'s, shared with the two recording routes.
-    replay_response(view, missing, "could not read a replay snapshot")
 }

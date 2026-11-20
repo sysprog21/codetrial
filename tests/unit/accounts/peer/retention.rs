@@ -112,7 +112,7 @@ fn rounds_snapshots_feedback_and_invites_go_with_their_session() {
 }
 
 #[test]
-fn a_terminated_session_and_its_paired_lobby_entry_are_pruned() {
+fn a_finalizing_session_and_its_paired_lobby_entry_are_pruned() {
     let a = fixture();
     let now = 100 * DAY;
     let old = session(&a, 1, now - RETENTION_SECONDS - 1, "finalizing");
