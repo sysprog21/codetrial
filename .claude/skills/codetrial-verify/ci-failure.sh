@@ -19,7 +19,13 @@
 #               finished check run on main), or, for a check outside GitHub
 #               Actions, its link only. current and on_main are null when the
 #               lookup behind them failed, and gates, errors and excerpt when
-#               the job log could not be read.
+#               the job log could not be read. untouched is true when every
+#               gate the job failed reads only the paths its entry in the
+#               confined table below names, the PR changes none of them,
+#               renames nothing and its file list is whole: no change in the branch can have made
+#               that failure, so it is a flake or main's, never the author's
+#               (#785 was asked to fix a desktop test that hit "Text file
+#               busy" on a change to web/ alone). False otherwise.
 #   stale_base  legacy portable-audit runs only; the independent audit job
 #               reports inherited findings without failing. True when every
 #               failing lane failed only gates that read
@@ -48,7 +54,8 @@ esac
 # most 100 files, and cut says the list may hide one.
 meta=$(gh pr view "$pr" --repo "$repo" --json headRefOid,files,changedFiles --jq \
     '{head: .headRefOid, files: [.files[].path],
-      cut: (.changedFiles > (.files | length))}')
+      cut: (.changedFiles > (.files | length)),
+      renamed: any(.files[]; .changeType == "RENAMED")}')
 head=$(printf '%s\n' "$meta" | jq -r .head)
 
 # gh pr checks exits non-zero when a check fails, and still prints them all, so
@@ -167,6 +174,21 @@ printf '%s\n' "$checks" | jq --argjson failing "$failing" --arg head "$head" \
   # its failure even when main passes.
   {"cargo-audit": "(^|/)Cargo\\.(lock|toml)$|^\\.cargo/|^scripts/test\\.sh$|^\\.github/"}
     as $outside |
+  # Gates whose every input sits under these paths: the desktop crate builds on
+  # its own (desktop/Cargo.toml, its ui/ frontend) and reads from the root only
+  # the toolchain, the lint and format configs, the gate script, CI and the
+  # root manifest, whose workspace exclude lets it build alone. A gate
+  # missing here reads more than a list can bound, as clippy reads src/, so its
+  # failure is never ruled out by the files a PR changes. rustfmt and clippy
+  # also read the dot-prefixed names of their configs. A rename is listed under
+  # its new path only, so a PR with one is never untouched: the file it moved
+  # may have left desktop/.
+  ("^desktop/|^vendor/|^\\.cargo/|^Cargo\\.toml$|^(rust-toolchain|\\.?rustfmt|\\.?clippy)\\.toml$|^scripts/test\\.sh$|^\\.github/"
+    as $desktop | {"desktop": $desktop, "desktop-fmt": $desktop}) as $confined |
+  def untouched: ($meta.cut | not) and ($meta.renamed | not)
+    and ((.gates // []) | length > 0)
+    and all(.gates[]; $confined[.] != null)
+    and all(.gates[]; $confined[.] as $re | all($meta.files[]; test($re) | not));
   [($jobs // [])[] | select(.conclusion == "success") | .name] as $passed |
   [$failing[] | select(.name != "check")] as $lanes |
   ([$lanes[] | (.gates // [])[]] | unique) as $gates |
@@ -175,7 +197,8 @@ printf '%s\n' "$checks" | jq --argjson failing "$failing" --arg head "$head" \
   pr: $pr, head: $head,
   pending: [.[] | select(.bucket == "pending" and (failed | not)) | .name],
   held: [.[] | select(.state == "ACTION_REQUIRED") | .name],
-  failing: ([$failing[] | del(.before_main)] + [$apps[] | {name, link}]),
+  failing: ([$failing[] | del(.before_main) | .untouched = untouched]
+    + [$apps[] | {name, link}]),
   stale_base: (($meta.cut | not) and ($lanes | length > 0)
     and ($apps | length == 0)
     and ([.[] | select((.bucket == "pending" and (failed | not))

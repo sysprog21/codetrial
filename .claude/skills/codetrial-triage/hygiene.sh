@@ -182,9 +182,12 @@ jq -n -L "$(dirname "$0")" --slurpfile p "$work/pr.json" --slurpfile c "$work/co
      then $pr.additions + $pr.deletions else null end) as $lines
   | ($pr.mergeable != "UNKNOWN" and ($has_merge | not) and $lines != null) as $decidable
   # A CI failure the branch made, which rebase.md answers, and which that text
-  # asks the same rework for.
+  # asks the same rework for. A job whose failed gates no changed file can reach
+  # (untouched in ci-failure.sh) is a flake, not the branch: #785 got this
+  # request for a desktop test that hit "Text file busy" on a web-only change.
   | ($pr.mergeable == "MERGEABLE" and ($ci.stale_base != true)
-     and any($failing[]; .on_main == false and .gates != ["indent"])) as $regression
+     and any($failing[]; .on_main == false and .gates != ["indent"]
+       and .untouched != true)) as $regression
   # Every request, with whether the evidence for it holds at this head.
   | def item($key; $when; $marker; $text):
       {key: $key, when: $when, marker: $marker, text: $text};
