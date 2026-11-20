@@ -134,11 +134,16 @@ known='["Rebase latest `main` and resolve conflicts",
 # which can run ahead and make every later request look stale, is used only for
 # a head with no check suite. A PR force-pushed back to its base has no commit
 # at all, and dates only its force push.
+#
+# Ten pull requests a page: GitHub answers 504 to a GraphQL request still
+# running after about ten seconds, and all 25 open ones in a single page took
+# 8.5 to 11.7 s, failing 4 of 14 tries (2026-11-20). Pages of ten take 1.7 to
+# 5.9 s each and failed none of 14.
 # shellcheck disable=SC2016
 query='query($owner: String!, $name: String!, $endCursor: String) {
   repository(owner: $owner, name: $name) {
     defaultBranchRef { name }
-    pullRequests(states: OPEN, first: 50, after: $endCursor) {
+    pullRequests(states: OPEN, first: 10, after: $endCursor) {
       pageInfo { hasNextPage endCursor }
       nodes {
         number title body isDraft authorAssociation headRefOid mergeable
