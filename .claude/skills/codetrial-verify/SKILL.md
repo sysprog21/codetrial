@@ -176,7 +176,11 @@ Read its `failing` entries in this order. `current` false is history, not the
 current failure: say so and stop there. `current` or `on_main` null means its
 lookup failed, and `gates`, `errors` and `excerpt` null mean the job log could
 not be read; check either with the raw calls below. `on_main` true means the
-latest finished run on `main` fails the same job. Read whether the cause is
+latest finished run on `main` fails the same job. `untouched` true means every
+gate the job failed reads only paths the PR does not change (the confined table
+in the script, `desktop` and `desktop-fmt` today, and never a PR that renames a
+file), so the branch cannot have caused it: rerun the job rather than ask the
+author, as #785's desktop "Text file busy" flake showed. Read whether the cause is
 shared before asking the author for a fix: the PR `audit` compares added
 findings, while main runs a full scan, so both can fail for different reasons.
 Otherwise `gates` names what `scripts/test.sh` failed and `errors` the lines

@@ -1728,6 +1728,80 @@ class VerifyScriptTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertIs(json.loads(result.stdout)["stale_base"], stale)
 
+    def test_a_failed_gate_the_change_cannot_reach_is_marked_untouched(self):
+        # #785 changed only web/ and its browser tests, and the desktop gate
+        # failed on "Text file busy" in a desktop/ test main had passed: a
+        # flake no file the PR changed can reach.
+        checks = [
+            {
+                "name": "gates (rust)",
+                "state": "FAILURE",
+                "bucket": "fail",
+                "link": "https://github.com/sysprog21/codetrial/actions/runs/7/job/70",
+            }
+        ]
+
+        def pr_with(*paths, changed=None, renamed=()):
+            return json.dumps(
+                {
+                    "headRefOid": "h1",
+                    "files": [
+                        {"path": path, "changeType": "MODIFIED"} for path in paths
+                    ]
+                    + [{"path": path, "changeType": "RENAMED"} for path in renamed],
+                    "changedFiles": len(paths) + len(renamed)
+                    if changed is None
+                    else changed,
+                }
+            )
+
+        web = ("web/interview.js", "tests/browser/candidate-cases.test.js")
+        cases = {
+            "web only": ("desktop", pr_with(*web), True),
+            "both desktop gates": ("desktop desktop-fmt", pr_with(*web), True),
+            "changes desktop": ("desktop", pr_with(*web, "desktop/src/main.rs"), False),
+            "changes the toolchain": (
+                "desktop",
+                pr_with("rust-toolchain.toml"),
+                False,
+            ),
+            # The root workspace's exclude is what lets desktop/ build alone.
+            "changes the root manifest": ("desktop", pr_with("Cargo.toml"), False),
+            "changes the gate": ("desktop", pr_with("scripts/test.sh"), False),
+            # rustfmt and clippy read the dot-prefixed config names too.
+            "adds .rustfmt.toml": ("desktop-fmt", pr_with(".rustfmt.toml"), False),
+            "adds .clippy.toml": ("desktop", pr_with(".clippy.toml"), False),
+            # gh lists a rename under its new path only, so a file moved out
+            # of desktop/ reads as web/ here.
+            "renames a file": (
+                "desktop",
+                pr_with(*web, renamed=("web/moved.rs",)),
+                False,
+            ),
+            # gh read 100 of 101 files, so a desktop file may be the one cut.
+            "more files than read": (
+                "desktop",
+                pr_with(*(f"web/f{n}.js" for n in range(100)), changed=101),
+                False,
+            ),
+            # clippy reads src/, so no file list rules the change out.
+            "a gate with no scope": ("desktop clippy", pr_with(*web), False),
+            "no gate named": ("", pr_with(*web), False),
+        }
+        for name, (gates, pr, untouched) in cases.items():
+            with self.subTest(name):
+                log = CI_LOG.replace("cargo-audit indent", gates)
+                result = run_fake(
+                    VERIFY / "ci-failure.sh",
+                    [5],
+                    FAKE_GH_CI,
+                    {"FAKE_CHECKS": json.dumps(checks), "FAKE_LOG": log},
+                    env={"FAKE_PR": pr},
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                lane = json.loads(result.stdout)["failing"][0]
+                self.assertIs(lane["untouched"], untouched)
+
     def test_a_checks_lookup_that_fails_is_not_read_as_a_clean_pr(self):
         # gh can fail without JSON; whitespace must not count as a response.
         for checks in ("", " \n\t", "null", "{}", "broken", "[]\n[]"):
@@ -3742,6 +3816,13 @@ class HygieneTests(unittest.TestCase):
         self.assertEqual(keys(job(["clippy"]), head="h0"), [])
         self.assertEqual(keys(job(["clippy"]), mergeable="CONFLICTING"), [])
         self.assertEqual(keys(job(["clippy"]), mergeable="UNKNOWN"), [])
+        # Only gates the change cannot reach failed (#785's desktop flake):
+        # nothing in the branch made it, so nobody is asked to rework it.
+        self.assertEqual(keys(job(["desktop"]) | {"untouched": True}), [])
+        self.assertEqual(
+            keys(job(["desktop"]) | {"untouched": True}, job(["clippy"])),
+            ["ci_regression"],
+        )
 
     def test_a_ci_regression_is_asked_in_the_fixed_rebase_text(self):
         ci = {"head": "h1", "stale_base": False, "failing": [failing_job(["clippy"])]}
