@@ -43,6 +43,15 @@ again. A PR whose only open threads are the maintainer's own, with nothing new
 to say, still gets its review: an empty draft is a result, and recording it is
 what stops the next sweep from reading the same head again.
 
+An author's reply that says a change was made is checked against the head, not
+believed: look for the named test, entry or line at the head, and compare the
+reply's time with the head commit's. A reply posted after the head was pushed (its first check suite, not the
+commit's own timestamp, which an author controls) that names code the head
+lacks usually means a local commit that was never pushed.
+Answer the thread once, saying what is missing at that head (the test name, the
+map entries, the case) and leave it open; a repeat on the same head adds
+nothing. Resolve a thread only when the head shows the fix.
+
 ## One agent per PR, all in one message
 
 Before the agents start, run codetrial-review's bounded `ensure` once for the
