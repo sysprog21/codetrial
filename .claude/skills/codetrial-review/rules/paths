@@ -45,6 +45,9 @@ web/*.js browser.md
 web/*.html browser.md
 web/*.html styles.md
 web/*.css styles.md
+tests/golden/task-posed.json judge.md
+tests/web/contract.rs judge.md
+tests/browser/compiler-explorer.test.js judge.md
 tests/* tests.md
 scripts/test.sh tests.md
 scripts/browser-check.cjs tests.md
