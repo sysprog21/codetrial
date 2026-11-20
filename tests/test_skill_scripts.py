@@ -306,6 +306,32 @@ class IssueSweepTests(SweepCase):
         )
         self.assertEqual([entry["issue"] for entry in swept["waiting"]], [1])
 
+    def test_an_issue_handed_to_another_contributor_is_not_overdue_for_its_reporter(
+        self,
+    ):
+        swept = self.run_issues(
+            issue(
+                1,
+                "Body" + FILLER,
+                assignees=listed({"login": "taker"}),
+                comments=listed(comment("maint", 10, "You are assigned.")),
+            ),
+            issue(2, "Body" + FILLER, comments=listed(comment("maint", 10))),
+            issue(
+                3,
+                "Body" + FILLER,
+                assignees=listed({"login": "taker"}, {"login": "reporter"}),
+                comments=listed(comment("maint", 10)),
+            ),
+        )
+        entries = {e["issue"]: e for e in swept["waiting"]}
+        self.assertTrue(entries[1]["handed_over"])
+        self.assertFalse(entries[1]["overdue"])
+        self.assertFalse(entries[2]["handed_over"])
+        self.assertTrue(entries[2]["overdue"])
+        self.assertFalse(entries[3]["handed_over"])
+        self.assertTrue(entries[3]["overdue"])
+
     def test_reporter_edit_hidden_by_a_later_maintainer_edit_still_answers(self):
         edits = listed(
             {"editedAt": ago(2), "editor": {"login": "maint"}},
