@@ -21,6 +21,8 @@ nothing.
 
 [snapshot.sh](snapshot.sh) runs the sweep against the last snapshot, which
 fills `moved` and `gone`, and replaces it only with a whole sweep. When it
+fails, run it again up to three times with a pause between: a GitHub 504 or
+`unexpected end of JSON input` usually passes on the next try. If it still
 fails, stop and say so: a report from the old snapshot would read as today's.
 Then read the fields the report needs from the snapshot file:
 

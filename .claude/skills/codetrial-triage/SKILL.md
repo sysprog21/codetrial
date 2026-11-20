@@ -53,6 +53,16 @@ announce themselves when done: do not poll their output files or sleep-loop,
 handle each PR when its notification arrives, and say in one line what is still
 running if a long wait leaves the user without news.
 
+The PR sweep fails now and then on a GitHub 504 or `unexpected end of JSON
+input`, and `snapshot.sh` then keeps the old baseline and exits 1. Run it again,
+up to three times with a pause between, before reporting a coverage gap; never
+read the kept baseline as today's state. A run whose `moved` and `gone` are empty, whose
+titles, descriptions and routing match the last snapshot, with no new hygiene
+action and the same issue lists as the last report, is reported in a few lines
+saying so, plus what still waits on the maintainer: a second table of the same
+open PRs only hides that nothing changed. `moved` does not cover a title or
+description edit, so compare those before calling a run unchanged.
+
 How work moves on this tracker (who the maintainers are, how a PR is scoped,
 what the one-line review requests mean) is in
 [collaboration.md](../codetrial-contribute/collaboration.md). Recheck linked PR

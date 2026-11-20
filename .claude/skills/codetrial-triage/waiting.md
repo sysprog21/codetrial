@@ -57,6 +57,16 @@ neither a reminder nor a first answer on the issue (#370 and #385 sat in
   is posted, since a comment alone does not reopen it and the sweep reads only
   open issues. An issue a maintainer opened is left out of `waiting`, because
   its author already knows the rule.
+  Read the newest comments of the thread before proposing any reminder, since
+  the sweep sees only who spoke last. A `handed_over` entry is held by another
+  non-maintainer, so the reporter is not who it waits on and it is never
+  `overdue` (#445 stayed in `waiting` for a reporter after the maintainer had
+  assigned the issue to another contributor, #512 after a contributor took it
+  over): read that assignee under `claimed` instead. Likewise leave an entry
+  alone when its newest comment is a contributor's own question or proposal,
+  such as asking whether a narrower acceptance bar is acceptable: that is the
+  maintainer's move, so answer it rather than reminding, and say in the report
+  that the entry was dropped for this reason.
 - `linked`, with `merged` set: a merged pull request referenced the issue after
   it was filed, and GitHub did not close it, so that PR only touched it, or its
   closing line named another issue. Read the PR and the issue. When the PR does

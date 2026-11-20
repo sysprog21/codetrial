@@ -69,3 +69,34 @@ Seen: 4 PRs. A "no stored words" case that never calls `search`, so a broken
 
 Not a finding: a C starter that returns a string literal with no malloc note.
 That note applies only to arrays returned through `returnSize`.
+
+## A judge-gap fix must make each wrong answer fail by name, in every derived file
+
+Applies to: `problem-bank/judges.json`, `web/judges/*.json`,
+`tests/golden/task-posed.json`, `tests/web/contract.rs`,
+`tests/browser/compiler-explorer.test.js`, `scripts/problem_bank/rules.py`
+
+A pull request that closes a hole in a judge (a wrong solution the cases let
+pass) is only as good as the wrong solutions it was checked against. Run every
+plausible wrong variant of the technique against the cases, not only the one the
+report names: the full hop, the farthest nonzero, the largest range with the
+earlier or the later pick on a tie, the first match, the greedy order. A case
+that rejects one of them and lets another through is half a fix, so each wrong
+variant needs a case that rejects it and the other cases still pass a correct
+solution. The label of each new case must not match `REVEALING_LABEL` (run
+`rules.check_labels`, which rejects a match): it describes the situation and
+never names the trick.
+The files the judge feeds move together: `web/judges/<page>.json`
+regenerated from `problem-bank/judges.json`, the digest in
+`tests/golden/task-posed.json`, and the tricky-case labels `tests/web/contract.rs`
+pins. The browser test runs the wrong implementations by name and looks each
+pinned case up by label, asserting the case exists and the wrong answer differs
+from `expected`; a `.some(...)` over all cases passes when one of three cases is
+removed and names none.
+
+Seen: 5 PRs. A new case for one wrong chooser while the same chooser with a tie
+rule flipped still passes all eight cases.
+
+Not a finding: a wrong implementation the problem's contract allows, such as an
+unspecified tie order or another valid path to the same answer. It needs no
+rejecting case.

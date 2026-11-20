@@ -20,6 +20,10 @@
 #               the reporter did since, comment or body edit; overdue once it
 #               is older than wait-days. Issues a maintainer opened are left
 #               out; claimed marks a reporter who also holds the issue, and
+#               handed_over an issue held only by other non-maintainers
+#               (false while maintainers_known is false): the
+#               reporter is no longer who the work waits on, so it is never
+#               overdue and its assignee is read under claimed instead;
 #               closing_prs is as in unanswered
 #   linked      issues a pull request cross-referenced after the issue opened,
 #               split into merged and still open; a PR from another
@@ -211,10 +215,13 @@ def claim: . as $i | maint as $m
   waiting: [$issues[] | select(.author != null and (staff | not))
     | .number as $n | .author.login as $a
     | (maint | max_by(.createdAt | ts)) as $ask
+    | [$claims[] | select(.issue == $n) | .assignee] as $holders
+    | ($pushers != null and ($holders | length > 0 and all(. != $a))) as $handed
     | select($ask != null and ($ask.createdAt | ts) > mine)
     | {issue: .number, author: .author.login, asked_by: $ask.author.login,
        asked_at: $ask.createdAt, idle_days: ($ask.createdAt | age),
-       overdue: (($ask.createdAt | age) >= $days),
+       handed_over: $handed,
+       overdue: ((($ask.createdAt | age) >= $days) and ($handed | not)),
        claimed: any($claims[]; .issue == $n and .assignee == $a),
        closing_prs: closing}]
     | sort_by(-.idle_days),
