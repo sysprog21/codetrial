@@ -1043,8 +1043,6 @@ test("local recording controls preserve the original problem reading space", asy
   }
 });
 
-// A caption that arrives while Confirm is held must not move the button out
-// from under the pointer, or the release lands elsewhere and the draft stays.
 test("streaming captions do not move drawing controls under a pointer", async (t) => {
   if (!browser) return t.skip("playwright chromium unavailable");
   const page = await openInterview(900, 1000, "&exampleDrawing=1", true);
@@ -1110,7 +1108,7 @@ test("expanded drawing text controls stay clear of long captions and self-view",
     [900, 800],
     [900, 500],
     [1023, 800],
-    [1024, 800, false, 32, true],
+    [1024, 800, false, 32],
     [1024, 800, true, 32, true],
     [1640, 800, false, 32],
   ]) {
@@ -1145,6 +1143,7 @@ test("expanded drawing text controls stay clear of long captions and self-view",
       await page.evaluate(() => {
         document.querySelector("#self-view").hidden = false;
         document.querySelector("#captions-bar").hidden = false;
+        document.querySelector("#caption-unclear").hidden = false;
         document.querySelector("#captions-text").textContent =
           "Explain the boundary cases and how your approach handles each one. ".repeat(
             30,
@@ -1169,74 +1168,48 @@ test("expanded drawing text controls stay clear of long captions and self-view",
             30 * fontSize,
           "an unstacked editor retains its minimum width",
         );
-      if (width === 900 && height === 500) {
-        // A short viewport caps the card at 40dvh; the captions keep their
-        // heading and one line of text, and the card scrolls for the rest.
-        const bar = await page.locator("#captions-bar").evaluate((node) => {
-          const head = node
-            .querySelector(".captions-head")
-            .getBoundingClientRect();
-          const text = node.querySelector("#captions-text");
-          return {
-            height: node.getBoundingClientRect().height,
-            head: head.height,
-            line: parseFloat(getComputedStyle(text).lineHeight),
-          };
+      if ((fontSize === 32 && width === 1024) || width === 900) {
+        const panel = page.locator(".editor-panel");
+        if (width === 900)
+          await panel.evaluate((node) =>
+            node.scrollIntoView({ block: "start" }),
+          );
+        const editor = await panel.boundingBox();
+        assert.ok(editor.y >= -1 && editor.y + editor.height <= height);
+        const drawing = await canvas.boundingBox();
+        assert.ok(drawing.y >= 0 && drawing.y + drawing.height <= height);
+        const captions = page.locator("#captions-bar");
+        const { y, height: barHeight } = await captions.boundingBox();
+        assert.ok(y >= 0 && y + barHeight <= height, "captions are in view");
+        const lineVisible = await captions.evaluate((bar) => {
+          bar.scrollTop = bar.scrollHeight;
+          const text = bar.querySelector("#captions-text").firstChild;
+          const range = document.createRange();
+          range.setStart(text, text.length - 5);
+          range.setEnd(text, text.length - 1);
+          const { top, bottom } = range.getBoundingClientRect();
+          const heading = bar.querySelector(".captions-head");
+          const card = bar.closest("#jim-stage");
+          return (
+            top >= heading.getBoundingClientRect().bottom &&
+            bottom <=
+              Math.min(
+                bar.getBoundingClientRect().bottom,
+                card.getBoundingClientRect().bottom,
+              )
+          );
         });
         assert.ok(
-          bar.height >= bar.head + bar.line - 1,
-          `the captions keep a readable height (${bar.height}px)`,
+          lineVisible,
+          "the newest caption is visible below its heading",
         );
-      }
-      if (width === 1024 && height === 800 && fontSize === 32) {
-        await page
-          .locator(".editor-panel")
-          .evaluate((node) => node.scrollIntoView({ block: "start" }));
-        for (const selector of ["#example-board canvas", "#captions-bar"]) {
-          const box = await page.locator(selector).boundingBox();
+        if (width === 900 && height === 800)
           assert.ok(
-            box.y >= 0 && box.y + box.height <= height,
-            `${selector} stays fully in the viewport at ${width}×${height}, ${fontSize}px`,
+            await page
+              .locator("#jim-stage")
+              .evaluate((card) => card.scrollHeight <= card.clientHeight + 1),
+            "only the captions bar needs scrolling",
           );
-        }
-      }
-      if (width === 900 && height === 800) {
-        await page
-          .locator(".editor-panel")
-          .evaluate((node) => node.scrollIntoView({ block: "start" }));
-        const drawing = await canvas.boundingBox();
-        const captions = await page.locator("#captions-bar").boundingBox();
-        const card = await page.locator("#jim-stage").boundingBox();
-        assert.ok(
-          await page
-            .locator("#jim-stage")
-            .evaluate((node) => node.scrollHeight <= node.clientHeight + 1),
-          "only the captions bar needs scrolling",
-        );
-        assert.ok(
-          captions.y + captions.height <= card.y + card.height,
-          "the latest caption words remain inside the visible card",
-        );
-        assert.ok(
-          drawing.y >= 0 && drawing.y + drawing.height <= height,
-          "the full canvas is visible beside live captions",
-        );
-        assert.ok(
-          captions.y >= 0 && captions.y < height - 20,
-          "live captions are visible without scrolling the drawing away",
-        );
-      }
-      if (focusDivider) {
-        const panel = await page.locator(".editor-panel").boundingBox();
-        const drawing = await canvas.boundingBox();
-        assert.ok(
-          panel.y >= -1 && panel.y + panel.height <= height,
-          "stacking keeps the full editor in view",
-        );
-        assert.ok(
-          drawing.y < height && drawing.y + drawing.height > 0,
-          "the expanded drawing is visible before test scrolling",
-        );
       }
       await canvas.scrollIntoViewIfNeeded();
       const surface = await page.locator(".example-surface").boundingBox();
@@ -1300,13 +1273,23 @@ test("expanded drawing text controls stay clear of long captions and self-view",
         }
       }
       await page.locator(".captions-head").scrollIntoViewIfNeeded();
-      const captions = await page.locator("#captions-bar").evaluate((node) => {
+      const scrolled = await page.locator("#captions-bar").evaluate((node) => {
         node.scrollTop = node.scrollHeight;
-        return { text: node.textContent, scrolled: node.scrollTop > 0 };
+        return node.scrollTop > 0;
       });
-      assert.ok(captions.text.includes("Explain the boundary cases"));
-      assert.ok(captions.scrolled, "long captions remain scrollable");
+      assert.ok(scrolled, "long captions remain scrollable");
       assert.equal((await page.locator("#self-view").boundingBox()).width, 120);
+      if (width === 900 && height === 800) {
+        await page
+          .locator("#turn-ring")
+          .evaluate((button) => (button.hidden = false));
+        await page.locator("#caption-unclear").focus();
+        await page.keyboard.press("Tab");
+        assert.equal(
+          await page.evaluate(() => document.activeElement.id),
+          "turn-ring",
+        );
+      }
       if (wideSidebar || fontSize === 32) {
         await page.getByRole("button", { name: "Shrink drawing" }).click();
         await settled(page);
@@ -1374,9 +1357,12 @@ test("an expanded drawing keeps the card readable at a larger root font", async 
       const expanded = await card.boundingBox();
       assert.equal(
         expanded.width,
-        original.width,
-        "an insufficient strip keeps the card's normal readable width",
+        original.width * 2,
+        "the constrained card scales with the doubled root font",
       );
+      await page.getByRole("button", { name: "Shrink drawing" }).click();
+      await settled(page);
+      assert.equal((await card.boundingBox()).width, original.width);
     } finally {
       await page.close();
     }

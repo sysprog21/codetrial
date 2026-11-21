@@ -2366,7 +2366,8 @@ table.phase-scores {
   display: flex;
   flex-direction: column;
   justify-self: end;
-  width: min(var(--jim-card-width), 100%);
+  /* Scale the normal 260px card with enlarged root fonts. */
+  width: min(max(var(--jim-card-width), 16.25rem), 100%);
   max-height: 40dvh;
   overflow: auto;
   pointer-events: auto;
@@ -2376,11 +2377,10 @@ table.phase-scores {
   flex-shrink: 0;
 }
 
-/* Keep captions first and readable when the rest of the card needs scrolling. */
+/* Keep the taller Unclear control and one caption line readable. */
 .drawing-captions-below .jim-stage .captions-bar {
-  min-height: 3lh;
+  min-height: calc(3lh + 0.5rem);
   flex: 0 1 auto;
-  order: -1;
 }
 
 /* Keep the tools on a scrollable row so enlarged text leaves canvas space. */
@@ -2398,6 +2398,10 @@ table.phase-scores {
 
 .drawing-captions-below .example-pane .board-toolbar > * {
   flex-shrink: 0;
+}
+
+.drawing-captions-below .example-pane .board-toolbar :focus-visible {
+  outline-offset: -2px;
 }
 
 .drawing-captions-below .example-pane > p {
