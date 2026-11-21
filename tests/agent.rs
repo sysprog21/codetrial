@@ -1429,6 +1429,9 @@ fn stored_types(state: &RuntimeState) -> Vec<&str> {
 #[path = "agent/prompts.rs"]
 mod prompts;
 
+#[path = "agent/report_grounding.rs"]
+mod report_grounding;
+
 #[path = "agent/framework.rs"]
 mod framework;
 
