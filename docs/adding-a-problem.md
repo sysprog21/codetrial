@@ -24,6 +24,12 @@ the same technique exactly one level harder, so an Easy problem names a
 Medium one and a Medium problem a Hard one. The card generator writes it onto
 the card by page name, so no problem id reaches the page.
 
+An optional `sibling` names another problem at the same level that uses the
+same technique. After the candidate chooses a practice focus from a report on
+this problem, the lobby offers the sibling as a new problem to try that focus
+on. It is written onto the card by page name the same way, and a pair usually
+names each other.
+
 An imported LeetCode exercise keeps `title` and published `examples` in
 `problems.json`, and carries its LeetCode number (filled by `fetch.py`). It
 belongs to `scripts/top-interview-150.json`, and is checked against the
@@ -77,6 +83,9 @@ source file to fix; do not edit generated output to silence them.
 - `sequel must name a problem one level harder` comes from a `sequel` in
   `problems.json` that is not a string, names no problem in the bank, or
   names one that is not exactly one level harder.
+- `sibling must name another problem at the same level` comes from a
+  `sibling` that is not a string, names no problem in the bank, names the
+  problem itself, or names one at a different level.
 - `variants must list every problem once, in bank order`, `a variant has
   exactly`, `a function problem declares a new entry`, and `a class problem
   declares a new className` name the scenario record to repair.

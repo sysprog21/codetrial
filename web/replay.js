@@ -521,7 +521,10 @@ async function loadReport(interviewId, recordingId) {
   });
   for (const button of nodes.report.querySelectorAll("[data-practice-focus]")) {
     button.addEventListener("click", () => {
-      if (!storeReportPracticeFocus(tabStorage, report, button)) return;
+      if (
+        !storeReportPracticeFocus(tabStorage, report, button, saved.problemId)
+      )
+        return;
       window.location.href = "/";
     });
   }

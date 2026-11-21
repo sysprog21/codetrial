@@ -58,15 +58,16 @@ class TaskSidecarTests(unittest.TestCase):
         for name in ("customized", "uncustomized"):
             data = fixture(name)
             self.assertEqual(
-                len(validated_problem_data([data["problem"]], sequels=False)), 1
+                len(validated_problem_data([data["problem"]], lobby_links=False)), 1
             )
             validated_variant(data["problem"], data["judge"], data["variant"])
         data = fixture("uncustomized")
         bank = json.loads((ROOT / "problem-bank/problems.json").read_text())
-        # The sequel is the lobby's, and a task does not carry it.
+        # The sequel and sibling are the lobby's, and a task carries neither.
         row = next(row for row in bank if row["id"] == "two-sum")
         self.assertEqual(
-            data["problem"], {key: row[key] for key in row if key != "sequel"}
+            data["problem"],
+            {key: row[key] for key in row if key not in {"sequel", "sibling"}},
         )
         for name in ("judges", "variants"):
             source = json.loads((ROOT / "problem-bank" / f"{name}.json").read_text())

@@ -117,7 +117,14 @@ test("replay Practice this stores the selected item and stays on failure", async
 
     assert.deepEqual(
       stored,
-      storageFails ? [] : [["codetrial.selectedPracticeFocus", second]],
+      storageFails
+        ? []
+        : [
+            [
+              "codetrial.selectedPracticeFocus",
+              { ...second, problemId: "example" },
+            ],
+          ],
     );
     assert.equal(fakeWindow.location.href, storageFails ? "" : "/");
     assert.equal(

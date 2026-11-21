@@ -160,6 +160,12 @@
                 Practice it
               </button>
             </p>
+            <p id="sibling-suggestion" class="muted small" hidden>
+              <span id="sibling-suggestion-text"></span>
+              <button id="sibling-suggestion-pick" type="button">
+                Practice it
+              </button>
+            </p>
           </div>
           <div class="practice-list-picker">
             <button
@@ -272,7 +278,7 @@
                 </label>
               </div>
               <div class="problem-entry" id="problem-entry-chargeback-pair-match">
-                <button class="problem-card" type="button" data-problem="chargeback-pair-match" data-difficulty="Easy" data-sequel="gift-card-bundle-pair">
+                <button class="problem-card" type="button" data-problem="chargeback-pair-match" data-difficulty="Easy" data-sequel="gift-card-bundle-pair" data-sibling="recent-card-repeat-alert">
                   <span class="problem-title">Chargeback Pair Match</span>
                   <span class="problem-source" hidden></span>
                   <span class="problem-meta">Easy</span>
@@ -572,7 +578,7 @@
                 </label>
               </div>
               <div class="problem-entry" id="problem-entry-firmware-checksum-settling">
-                <button class="problem-card" type="button" data-problem="firmware-checksum-settling" data-difficulty="Easy">
+                <button class="problem-card" type="button" data-problem="firmware-checksum-settling" data-difficulty="Easy" data-sibling="workflow-handoff-loop">
                   <span class="problem-title">Firmware Checksum Settling</span>
                   <span class="problem-source" hidden></span>
                   <span class="problem-meta">Easy</span>
@@ -592,7 +598,7 @@
                 </label>
               </div>
               <div class="problem-entry" id="problem-entry-required-marker-span">
-                <button class="problem-card" type="button" data-problem="required-marker-span" data-difficulty="Hard">
+                <button class="problem-card" type="button" data-problem="required-marker-span" data-difficulty="Hard" data-sibling="packet-chunk-block-offsets">
                   <span class="problem-title">Required Marker Span</span>
                   <span class="problem-source" hidden></span>
                   <span class="problem-meta">Hard</span>
@@ -602,7 +608,7 @@
                 </label>
               </div>
               <div class="problem-entry" id="problem-entry-packet-chunk-block-offsets">
-                <button class="problem-card" type="button" data-problem="packet-chunk-block-offsets" data-difficulty="Hard">
+                <button class="problem-card" type="button" data-problem="packet-chunk-block-offsets" data-difficulty="Hard" data-sibling="required-marker-span">
                   <span class="problem-title">Packet Chunk Block Offsets</span>
                   <span class="problem-source" hidden></span>
                   <span class="problem-meta">Hard</span>
@@ -672,7 +678,7 @@
                 </label>
               </div>
               <div class="problem-entry" id="problem-entry-marquee-letter-tiles">
-                <button class="problem-card" type="button" data-problem="marquee-letter-tiles" data-difficulty="Easy">
+                <button class="problem-card" type="button" data-problem="marquee-letter-tiles" data-difficulty="Easy" data-sibling="scrambled-label-match">
                   <span class="problem-title">Marquee Letter Tiles</span>
                   <span class="problem-source" hidden></span>
                   <span class="problem-meta">Easy</span>
@@ -682,7 +688,7 @@
                 </label>
               </div>
               <div class="problem-entry" id="problem-entry-anonymizer-substitution-audit">
-                <button class="problem-card" type="button" data-problem="anonymizer-substitution-audit" data-difficulty="Easy">
+                <button class="problem-card" type="button" data-problem="anonymizer-substitution-audit" data-difficulty="Easy" data-sibling="log-line-shape-template">
                   <span class="problem-title">Anonymizer Substitution Audit</span>
                   <span class="problem-source" hidden></span>
                   <span class="problem-meta">Easy</span>
@@ -692,7 +698,7 @@
                 </label>
               </div>
               <div class="problem-entry" id="problem-entry-log-line-shape-template">
-                <button class="problem-card" type="button" data-problem="log-line-shape-template" data-difficulty="Easy">
+                <button class="problem-card" type="button" data-problem="log-line-shape-template" data-difficulty="Easy" data-sibling="anonymizer-substitution-audit">
                   <span class="problem-title">Log Line Shape Template</span>
                   <span class="problem-source" hidden></span>
                   <span class="problem-meta">Easy</span>
@@ -702,7 +708,7 @@
                 </label>
               </div>
               <div class="problem-entry" id="problem-entry-scrambled-label-match">
-                <button class="problem-card" type="button" data-problem="scrambled-label-match" data-difficulty="Easy">
+                <button class="problem-card" type="button" data-problem="scrambled-label-match" data-difficulty="Easy" data-sibling="marquee-letter-tiles">
                   <span class="problem-title">Scrambled Label Match</span>
                   <span class="problem-source" hidden></span>
                   <span class="problem-meta">Easy</span>
@@ -722,7 +728,7 @@
                 </label>
               </div>
               <div class="problem-entry" id="problem-entry-recent-card-repeat-alert">
-                <button class="problem-card" type="button" data-problem="recent-card-repeat-alert" data-difficulty="Easy">
+                <button class="problem-card" type="button" data-problem="recent-card-repeat-alert" data-difficulty="Easy" data-sibling="chargeback-pair-match">
                   <span class="problem-title">Recent Card Repeat Alert</span>
                   <span class="problem-source" hidden></span>
                   <span class="problem-meta">Easy</span>
@@ -752,7 +758,7 @@
                 </label>
               </div>
               <div class="problem-entry" id="problem-entry-room-booking-busy-blocks">
-                <button class="problem-card" type="button" data-problem="room-booking-busy-blocks" data-difficulty="Medium">
+                <button class="problem-card" type="button" data-problem="room-booking-busy-blocks" data-difficulty="Medium" data-sibling="maintenance-window-consolidation">
                   <span class="problem-title">Room Booking Busy Blocks</span>
                   <span class="problem-source" hidden></span>
                   <span class="problem-meta">Medium</span>
@@ -812,7 +818,7 @@
                 </label>
               </div>
               <div class="problem-entry" id="problem-entry-workflow-handoff-loop">
-                <button class="problem-card" type="button" data-problem="workflow-handoff-loop" data-difficulty="Easy">
+                <button class="problem-card" type="button" data-problem="workflow-handoff-loop" data-difficulty="Easy" data-sibling="firmware-checksum-settling">
                   <span class="problem-title">Workflow Handoff Loop</span>
                   <span class="problem-source" hidden></span>
                   <span class="problem-meta">Easy</span>
@@ -932,7 +938,7 @@
                 </label>
               </div>
               <div class="problem-entry" id="problem-entry-staging-drift-check">
-                <button class="problem-card" type="button" data-problem="staging-drift-check" data-difficulty="Easy">
+                <button class="problem-card" type="button" data-problem="staging-drift-check" data-difficulty="Easy" data-sibling="kiosk-panel-mirror-audit">
                   <span class="problem-title">Staging Drift Check</span>
                   <span class="problem-source" hidden></span>
                   <span class="problem-meta">Easy</span>
@@ -952,7 +958,7 @@
                 </label>
               </div>
               <div class="problem-entry" id="problem-entry-kiosk-panel-mirror-audit">
-                <button class="problem-card" type="button" data-problem="kiosk-panel-mirror-audit" data-difficulty="Easy">
+                <button class="problem-card" type="button" data-problem="kiosk-panel-mirror-audit" data-difficulty="Easy" data-sibling="staging-drift-check">
                   <span class="problem-title">Kiosk Panel Mirror Audit</span>
                   <span class="problem-source" hidden></span>
                   <span class="problem-meta">Easy</span>
@@ -1082,7 +1088,7 @@
                 </label>
               </div>
               <div class="problem-entry" id="problem-entry-rollout-wave-planner">
-                <button class="problem-card" type="button" data-problem="rollout-wave-planner" data-difficulty="Medium">
+                <button class="problem-card" type="button" data-problem="rollout-wave-planner" data-difficulty="Medium" data-sibling="serpentine-tier-sweep">
                   <span class="problem-title">Rollout Wave Planner</span>
                   <span class="problem-source" hidden></span>
                   <span class="problem-meta">Medium</span>
@@ -1092,7 +1098,7 @@
                 </label>
               </div>
               <div class="problem-entry" id="problem-entry-serpentine-tier-sweep">
-                <button class="problem-card" type="button" data-problem="serpentine-tier-sweep" data-difficulty="Medium">
+                <button class="problem-card" type="button" data-problem="serpentine-tier-sweep" data-difficulty="Medium" data-sibling="rollout-wave-planner">
                   <span class="problem-title">Serpentine Tier Sweep</span>
                   <span class="problem-source" hidden></span>
                   <span class="problem-meta">Medium</span>
@@ -1132,7 +1138,7 @@
                 </label>
               </div>
               <div class="problem-entry" id="problem-entry-copper-pad-continuity">
-                <button class="problem-card" type="button" data-problem="copper-pad-continuity" data-difficulty="Medium">
+                <button class="problem-card" type="button" data-problem="copper-pad-continuity" data-difficulty="Medium" data-sibling="sealed-air-pocket-backfill">
                   <span class="problem-title">Copper Pad Continuity</span>
                   <span class="problem-source" hidden></span>
                   <span class="problem-meta">Medium</span>
@@ -1142,7 +1148,7 @@
                 </label>
               </div>
               <div class="problem-entry" id="problem-entry-sealed-air-pocket-backfill">
-                <button class="problem-card" type="button" data-problem="sealed-air-pocket-backfill" data-difficulty="Medium">
+                <button class="problem-card" type="button" data-problem="sealed-air-pocket-backfill" data-difficulty="Medium" data-sibling="copper-pad-continuity">
                   <span class="problem-title">Sealed Air Pocket Backfill</span>
                   <span class="problem-source" hidden></span>
                   <span class="problem-meta">Medium</span>
@@ -1172,7 +1178,7 @@
                 </label>
               </div>
               <div class="problem-entry" id="problem-entry-onboarding-track-feasibility">
-                <button class="problem-card" type="button" data-problem="onboarding-track-feasibility" data-difficulty="Medium">
+                <button class="problem-card" type="button" data-problem="onboarding-track-feasibility" data-difficulty="Medium" data-sibling="migration-run-order">
                   <span class="problem-title">Onboarding Track Feasibility</span>
                   <span class="problem-source" hidden></span>
                   <span class="problem-meta">Medium</span>
@@ -1182,7 +1188,7 @@
                 </label>
               </div>
               <div class="problem-entry" id="problem-entry-migration-run-order">
-                <button class="problem-card" type="button" data-problem="migration-run-order" data-difficulty="Medium">
+                <button class="problem-card" type="button" data-problem="migration-run-order" data-difficulty="Medium" data-sibling="onboarding-track-feasibility">
                   <span class="problem-title">Migration Run Order</span>
                   <span class="problem-source" hidden></span>
                   <span class="problem-meta">Medium</span>
@@ -1222,7 +1228,7 @@
                 </label>
               </div>
               <div class="problem-entry" id="problem-entry-command-palette-index">
-                <button class="problem-card" type="button" data-problem="command-palette-index" data-difficulty="Medium">
+                <button class="problem-card" type="button" data-problem="command-palette-index" data-difficulty="Medium" data-sibling="crossword-pattern-matcher">
                   <span class="problem-title">Command Palette Index</span>
                   <span class="problem-source" hidden></span>
                   <span class="problem-meta">Medium</span>
@@ -1232,7 +1238,7 @@
                 </label>
               </div>
               <div class="problem-entry" id="problem-entry-crossword-pattern-matcher">
-                <button class="problem-card" type="button" data-problem="crossword-pattern-matcher" data-difficulty="Medium">
+                <button class="problem-card" type="button" data-problem="crossword-pattern-matcher" data-difficulty="Medium" data-sibling="command-palette-index">
                   <span class="problem-title">Crossword Pattern Matcher</span>
                   <span class="problem-source" hidden></span>
                   <span class="problem-meta">Medium</span>
@@ -1332,7 +1338,7 @@
                 </label>
               </div>
               <div class="problem-entry" id="problem-entry-maintenance-window-consolidation">
-                <button class="problem-card" type="button" data-problem="maintenance-window-consolidation" data-difficulty="Medium">
+                <button class="problem-card" type="button" data-problem="maintenance-window-consolidation" data-difficulty="Medium" data-sibling="room-booking-busy-blocks">
                   <span class="problem-title">Maintenance Window Consolidation</span>
                   <span class="problem-source" hidden></span>
                   <span class="problem-meta">Medium</span>
@@ -1352,7 +1358,7 @@
                 </label>
               </div>
               <div class="problem-entry" id="problem-entry-sorted-schedule-slot">
-                <button class="problem-card" type="button" data-problem="sorted-schedule-slot" data-difficulty="Easy" data-sequel="log-timestamp-span">
+                <button class="problem-card" type="button" data-problem="sorted-schedule-slot" data-difficulty="Easy" data-sequel="log-timestamp-span" data-sibling="integer-magnitude-estimator">
                   <span class="problem-title">Sorted Schedule Slot</span>
                   <span class="problem-source" hidden></span>
                   <span class="problem-meta">Easy</span>
@@ -1412,7 +1418,7 @@
                 </label>
               </div>
               <div class="problem-entry" id="problem-entry-integer-magnitude-estimator">
-                <button class="problem-card" type="button" data-problem="integer-magnitude-estimator" data-difficulty="Easy">
+                <button class="problem-card" type="button" data-problem="integer-magnitude-estimator" data-difficulty="Easy" data-sibling="sorted-schedule-slot">
                   <span class="problem-title">Integer Magnitude Estimator</span>
                   <span class="problem-source" hidden></span>
                   <span class="problem-meta">Easy</span>
@@ -1492,7 +1498,7 @@
                 </label>
               </div>
               <div class="problem-entry" id="problem-entry-shifted-price-snapshot">
-                <button class="problem-card" type="button" data-problem="shifted-price-snapshot" data-difficulty="Medium">
+                <button class="problem-card" type="button" data-problem="shifted-price-snapshot" data-difficulty="Medium" data-sibling="ring-buffer-dump-lookup">
                   <span class="problem-title">Shifted Price Snapshot</span>
                   <span class="problem-source" hidden></span>
                   <span class="problem-meta">Medium</span>
@@ -1602,7 +1608,7 @@
                 </label>
               </div>
               <div class="problem-entry" id="problem-entry-ring-buffer-dump-lookup">
-                <button class="problem-card" type="button" data-problem="ring-buffer-dump-lookup" data-difficulty="Medium">
+                <button class="problem-card" type="button" data-problem="ring-buffer-dump-lookup" data-difficulty="Medium" data-sibling="shifted-price-snapshot">
                   <span class="problem-title">Ring Buffer Dump Lookup</span>
                   <span class="problem-source" hidden></span>
                   <span class="problem-meta">Medium</span>
@@ -1652,7 +1658,7 @@
                 </label>
               </div>
               <div class="problem-entry" id="problem-entry-spot-capacity-round-trips">
-                <button class="problem-card" type="button" data-problem="spot-capacity-round-trips" data-difficulty="Hard">
+                <button class="problem-card" type="button" data-problem="spot-capacity-round-trips" data-difficulty="Hard" data-sibling="freight-slot-trading-limit">
                   <span class="problem-title">Spot Capacity Round Trips</span>
                   <span class="problem-source" hidden></span>
                   <span class="problem-meta">Hard</span>
@@ -1662,7 +1668,7 @@
                 </label>
               </div>
               <div class="problem-entry" id="problem-entry-freight-slot-trading-limit">
-                <button class="problem-card" type="button" data-problem="freight-slot-trading-limit" data-difficulty="Hard">
+                <button class="problem-card" type="button" data-problem="freight-slot-trading-limit" data-difficulty="Hard" data-sibling="spot-capacity-round-trips">
                   <span class="problem-title">Freight Slot Trading Limit</span>
                   <span class="problem-source" hidden></span>
                   <span class="problem-meta">Hard</span>

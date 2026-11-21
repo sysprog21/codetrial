@@ -9,6 +9,7 @@ import {
   practiceFocus,
   practiceFocusFrom,
   sequelSuggestion,
+  siblingSuggestion,
   storeSelectedPracticeFocus,
   storeSharedFocus,
   suggestDifficulty,
@@ -886,4 +887,80 @@ test("the latest interview decides the offer whatever order the reports arrive i
 test("a sequel the lobby has no card for is not offered", () => {
   const cards = [{ id: "pair", difficulty: "Easy", sequel: "retired" }];
   assert.equal(sequelSuggestion(cards, [attempt("pair", 2, "HIRE")]), null);
+});
+
+test("a report focus keeps the problem it came from through the lobby handoff", () => {
+  const values = new Map();
+  const storage = {
+    getItem: (key) => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, String(value)),
+    removeItem: (key) => values.delete(key),
+  };
+  const item = {
+    phase: "Test",
+    weakness: "Test boundaries",
+    drill: "Build a test table",
+    successCriterion: "Predict each output",
+  };
+
+  assert.equal(practiceFocusFrom(item, "pair").problemId, "pair");
+  // No page, or not a page, carries no problem rather than a wrong one.
+  for (const page of [undefined, "", 7, ["pair"]])
+    assert.equal("problemId" in practiceFocusFrom(item, page), false);
+  assert.equal(storeSelectedPracticeFocus(storage, item, "pair"), true);
+  assert.deepEqual(consumeSelectedPracticeFocus(storage), {
+    ...item,
+    problemId: "pair",
+  });
+});
+
+const siblings = [
+  { id: "pair", difficulty: "Easy", sibling: "repeat" },
+  { id: "repeat", difficulty: "Easy", sibling: "pair" },
+  { id: "alone", difficulty: "Easy", sibling: null },
+  { id: "gone", difficulty: "Easy", sibling: "retired" },
+];
+const focusOn = (problemId) => ({
+  phase: "Test",
+  weakness: "Test boundaries",
+  drill: "Build a test table",
+  successCriterion: "Predict each output",
+  ...(problemId ? { problemId } : {}),
+});
+const siblingOffered = (focus, reports = []) => {
+  const suggestion = siblingSuggestion(siblings, reports, focus);
+  return suggestion && [suggestion.from.id, suggestion.to.id];
+};
+
+test("a focus chosen from a report offers that problem's sibling", () => {
+  assert.deepEqual(siblingOffered(focusOn("pair")), ["pair", "repeat"]);
+  // Whatever the report decided: the focus is the reason, not the verdict.
+  assert.deepEqual(
+    siblingOffered(focusOn("repeat"), [attempt("repeat", 2, "HIRE")]),
+    ["repeat", "pair"],
+  );
+});
+
+test("no sibling is offered without a chosen focus, a sibling or a card for it", () => {
+  assert.equal(siblingOffered(null), null);
+  // The carry-forward focus names no problem.
+  assert.equal(siblingOffered(focusOn()), null);
+  assert.equal(siblingOffered(focusOn("alone")), null);
+  assert.equal(siblingOffered(focusOn("gone")), null);
+  assert.equal(siblingOffered(focusOn("retired")), null);
+});
+
+test("a sibling already passed is not offered", () => {
+  assert.equal(
+    siblingOffered(focusOn("pair"), [attempt("repeat", 1, "HIRE")]),
+    null,
+  );
+  // A failed or unscored attempt at the sibling is not a pass.
+  assert.deepEqual(
+    siblingOffered(focusOn("pair"), [
+      attempt("repeat", 1, "NO_HIRE"),
+      attempt("repeat", 2),
+    ]),
+    ["pair", "repeat"],
+  );
 });

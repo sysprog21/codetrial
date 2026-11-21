@@ -178,9 +178,9 @@ def validate_package(package):
         }
         if len(compact(row)) > task_bytes:
             raise ValueError("task exceeds size limit")
-    # A task set holds some of the bank's problems, so a sequel the lobby
-    # follows may name one the set does not carry.
-    validated_problem_data(problems, sequels=False)
+    # A task set holds some of the bank's problems, so a sequel or sibling
+    # the lobby follows may name one the set does not carry.
+    validated_problem_data(problems, lobby_links=False)
     sidecars = validated_sidecars(
         problems, package["judges"], package["variants"], package["sidecars"]
     )
