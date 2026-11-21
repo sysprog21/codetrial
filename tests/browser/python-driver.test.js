@@ -85,19 +85,27 @@ test(
 );
 
 test(
-  "a list kept on self and a failed case do not reach the next case",
+  "each case runs on a new Solution that __init__ built for it",
   { skip },
   () => {
+    // Each case reports how many times __init__ has run, whether self is the
+    // newest object it ran on and was never run on before, and the attributes
+    // self already had. A driver that shares, copies, re-initializes or
+    // prebuilds an instance gets at least one of the three wrong.
     const reply = runDriver(
       `class Solution:
+    built = []
+
     def __init__(self):
-        self.seen = []
+        Solution.built.append(self)
 
     def count(self, value):
-        self.seen.append(value)
+        newest = Solution.built[-1] is self and Solution.built.count(self) == 1
+        seen = [len(Solution.built), newest, list(vars(self))]
+        self.value = value
         if value == 2:
             raise ValueError("two")
-        return len(self.seen)
+        return seen
 `,
       {
         kind: "function",
@@ -107,7 +115,7 @@ test(
     );
     assert.deepEqual(
       reply.results.map((result) => result.actual ?? result.error),
-      [1, "ValueError: two", 1],
+      [[1, true, []], "ValueError: two", [3, true, []]],
     );
   },
 );
@@ -131,33 +139,6 @@ test(
     assert.deepEqual(
       reply.results.map((result) => result.error),
       spec.cases.map(() => "KeyError: 0"),
-    );
-  },
-);
-
-test(
-  "__init__ runs once per case and a class attribute carries over",
-  { skip },
-  () => {
-    const reply = runDriver(
-      `class Solution:
-    built = 0
-
-    def __init__(self):
-        Solution.built += 1
-
-    def count(self, value):
-        return Solution.built
-`,
-      {
-        kind: "function",
-        entry: "count",
-        cases: [{ input: [1] }, { input: [2] }, { input: [3] }],
-      },
-    );
-    assert.deepEqual(
-      reply.results.map((result) => result.actual),
-      [1, 2, 3],
     );
   },
 );
