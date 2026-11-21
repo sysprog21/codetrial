@@ -1635,8 +1635,14 @@ p {
   position: absolute;
   inset: 0 0 0 var(--editor-gutter);
   margin: 0;
+  /* What Jim's stage covers, measured by interview.js. A border, not right
+     padding, which a textarea leaves out of its scroll range, nor a narrower
+     box, which would not take a click beside the code; the bottom is padded
+     so the text area never resizes as the card grows with the captions. */
   border: 0;
+  border-right: var(--jim-stage-reserve-right, 0px) solid transparent;
   padding: 1rem;
+  padding-bottom: calc(1rem + var(--jim-stage-reserve-bottom, 0px));
   font-family: var(--editor-font-family);
   font-size: var(--editor-font-size);
   line-height: 1.5;
@@ -1646,6 +1652,14 @@ p {
      scroll. Auto wrap (.wrap, below) hides the gutter and wraps instead. */
   white-space: pre;
   overflow: auto;
+}
+
+/* Forced colors paint a transparent border; a system color is kept. */
+@media (forced-colors: active) {
+  #editor,
+  #editor-highlight {
+    border-right-color: Canvas;
+  }
 }
 
 #editor-highlight {
@@ -1691,6 +1705,8 @@ p {
   width: var(--editor-gutter);
   margin: 0;
   padding: 1rem 0.5rem;
+  /* Follows the text layers' scrollTop, so it reserves the same bottom. */
+  padding-bottom: calc(1rem + var(--jim-stage-reserve-bottom, 0px));
   overflow: hidden;
   color: var(--code-gutter-ink);
   background-color: var(--code-gutter);
@@ -1711,10 +1727,20 @@ p {
      past what they can follow and the painted text would sit a line above the
      caret near the end of a long file. Wheel, keys, and the caret still scroll. */
   scrollbar-width: none;
+  /* Keeps the caret above the compact card while typing. */
+  scroll-padding-bottom: calc(1rem + var(--jim-stage-reserve-bottom, 0px));
   background: transparent;
   /* Transparent glyphs: the overlay supplies the visible, colored ones. */
   color: transparent;
   caret-color: var(--code-caret);
+}
+
+/* What a card across the editor, as on a phone, covers of the window, from
+   interview.js: room past the page's end to scroll the last rows above it,
+   and where the page stops a caret it scrolls into view. */
+html {
+  padding-bottom: var(--jim-stage-reserve-page, 0px);
+  scroll-padding-bottom: var(--jim-stage-reserve-page, 0px);
 }
 
 #editor::-webkit-scrollbar {

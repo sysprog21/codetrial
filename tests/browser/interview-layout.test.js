@@ -823,6 +823,278 @@ test("a narrow window and a narrow panel both make the stage compact", async (t)
   }
 });
 
+/// Says where the last character of the buffer is painted, where the stage and
+/// the editor stack are, and how far each editor layer has scrolled.
+const measure = (page) =>
+  page.evaluate(() => {
+    const [editor, layer, lines, stage] = [
+      "#editor",
+      "#editor-highlight",
+      "#editor-lines",
+      "#jim-stage",
+    ].map((selector) => document.querySelector(selector));
+    const walker = document.createTreeWalker(layer, NodeFilter.SHOW_TEXT);
+    let last = null;
+    for (let node = walker.nextNode(); node; node = walker.nextNode())
+      if (node.data.trim()) last = node;
+    const end = last.data.trimEnd().length;
+    const glyph = document.createRange();
+    glyph.setStart(last, end - 1);
+    glyph.setEnd(last, end);
+    return {
+      glyph: glyph.getBoundingClientRect().toJSON(),
+      stage: stage.getBoundingClientRect().toJSON(),
+      editor: editor.parentElement.getBoundingClientRect().toJSON(),
+      compact: stage.classList.contains("compact"),
+      text: editor.clientWidth,
+      drift: [
+        layer.scrollLeft - editor.scrollLeft,
+        layer.scrollTop - editor.scrollTop,
+        lines.scrollTop - editor.scrollTop,
+      ],
+    };
+  });
+
+/// Types `text` over the buffer, so the caret ends after it, and measures.
+async function typeToEnd(page, text) {
+  await page
+    .locator("#editor")
+    .evaluate((node) => node.setSelectionRange(0, node.value.length));
+  await page.locator("#editor").focus();
+  await page.keyboard.insertText(text);
+  await settled(page);
+  return measure(page);
+}
+
+// The stage floats at 1920 and 1366 and is the compact card below 1200, where
+// the long row is the last one. The smallest drawer, a caption and self-view
+// growing the card, and a resize while scrolled each move what it covers. At
+// 1000 the sidebar stacks and the row is edited beside the card, three above
+// the end, where the browser has no reason to scroll the page. The widest
+// sidebar leaves the tall card over half the editor, in the desktop shell.
+for (const [width, height, rows, side, setup] of [
+  [1920, 1080, 2, "right"],
+  [1366, 900, 2, "right"],
+  [1100, 800, 80, "bottom"],
+  [1100, 600, 60, "right", "tall"],
+  [1100, 520, 80, "bottom", "scrolled"],
+  [1000, 700, 80, "right", "beside"],
+  [1100, 800, 80, "bottom", "sidebar"],
+]) {
+  test(`at ${width}x${height}${setup ? ` (${setup})` : ""} the caret at the end of a long line scrolls clear of Jim's stage`, async (t) => {
+    if (!browser) return t.skip("playwright chromium unavailable");
+    const page = await openInterview(width, height);
+    try {
+      await closeSetupCheck(page);
+      const beside = setup === "beside" ? ["", "", ""] : [];
+      if (width < 1200 && !beside.length) {
+        await page.focus("#test-drawer-resizer");
+        await page.keyboard.press("Home");
+      }
+      if (setup === "sidebar") {
+        await page.focus("#sidebar-resizer");
+        await page.keyboard.press("End");
+      }
+      if (setup === "tall" || setup === "sidebar")
+        await page.evaluate(() => {
+          document.querySelector("#captions-bar").append("Jim. ".repeat(400));
+          document.querySelector("#self-view").hidden = false;
+        });
+      const above = Array.from({ length: rows }, (_, row) => `# row ${row}`);
+      await typeToEnd(
+        page,
+        [...above, `# ${"0123456789".repeat(30)}`, ...beside].join("\n"),
+      );
+      if (setup === "scrolled")
+        assert.ok(
+          await page.evaluate(() => {
+            scrollTo(0, document.documentElement.scrollHeight);
+            const by = scrollY;
+            dispatchEvent(new Event("resize"));
+            scrollTo(0, 0);
+            return by;
+          }),
+          "the page scrolls at this size",
+        );
+      for (const key of [...beside.map(() => "ArrowUp"), "Home"])
+        await page.keyboard.press(key);
+      await settled(page);
+      const start = await measure(page);
+      assert.ok(
+        start.glyph.right > start.editor.right,
+        "the line is longer than the editor",
+      );
+      assert.ok(
+        start.stage.left < start.editor.right &&
+          start.stage.top < start.editor.bottom,
+        "the stage covers the editor, or this proves nothing",
+      );
+      await page.keyboard.press("End");
+      await settled(page);
+      const { glyph, stage, editor, compact, text, drift } =
+        await measure(page);
+      assert.equal(compact, width < 1200, "the stage this width shows");
+      assert.ok(
+        glyph.right + 3 <= stage.left ||
+          glyph.bottom <= stage.top ||
+          glyph.top >= stage.bottom,
+        `the line ends at (${glyph.right}, ${glyph.bottom}), not 3 px clear of the stage from (${stage.left}, ${stage.top})`,
+      );
+      // Taking the width where the bottom is cheaper leaves about half of it.
+      assert.ok(
+        text > editor.width * (side === "bottom" ? 0.8 : 0.5),
+        `the ${side} is reserved, yet the text is ${text} of ${editor.width} px wide`,
+      );
+      // The overlay and the gutter scroll exactly as far as the caret's textarea.
+      assert.deepEqual(drift, [0, 0, 0]);
+      // Only a card across the editor, where the page scrolls it, adds room.
+      assert.equal(
+        await page.evaluate(
+          () => getComputedStyle(document.documentElement).paddingBottom,
+        ),
+        "0px",
+        "the page adds no room past its end",
+      );
+    } finally {
+      await page.close();
+    }
+  });
+}
+
+// So tall a window that the bottom would be the cheaper side, were it taken.
+test("on a phone the card across the editor reserves neither its width nor its bottom", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const page = await openInterview(481, 1400);
+  try {
+    await closeSetupCheck(page);
+    const rows = Array.from({ length: 80 }, (_, row) => `# row ${row}`);
+    const seen = await typeToEnd(
+      page,
+      [...rows, `# ${"0123456789".repeat(30)}`].join("\n"),
+    );
+    assert.ok(
+      seen.stage.right - seen.stage.left > seen.editor.width / 2,
+      "the card spans most of the editor",
+    );
+    assert.ok(seen.text > seen.editor.width / 2, "the editor keeps its width");
+    assert.ok(
+      seen.glyph.bottom > seen.editor.bottom - 40,
+      `the last row ends at y ${seen.glyph.bottom}, above the editor's end at y ${seen.editor.bottom}`,
+    );
+  } finally {
+    await page.close();
+  }
+});
+
+// The self-view alone makes the card taller than the room the page had below
+// the editor, so typing on the last row left the caret under it.
+test("on a phone the caret typing on the last row scrolls the page clear of the card", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const page = await openInterview(390, 844);
+  try {
+    await closeSetupCheck(page);
+    await page.evaluate(() => {
+      document.querySelector("#self-view").hidden = false;
+    });
+    const rows = Array.from({ length: 60 }, (_, row) => `x${row} = ${row}`);
+    await typeToEnd(page, rows.join("\n"));
+    await page.evaluate(() => {
+      scrollTo(0, 0);
+      document.querySelector("#editor").scrollTop = 0;
+    });
+    await page.keyboard.press("Control+End");
+    await page.keyboard.type("\nlast = 1");
+    await settled(page);
+    const { glyph, stage, editor } = await measure(page);
+    assert.ok(
+      stage.right - stage.left > editor.width / 2,
+      "the card spans most of the editor",
+    );
+    assert.ok(
+      glyph.bottom + 3 <= stage.top,
+      `the caret's row ends at y ${glyph.bottom}, not 3 px clear of the card from y ${stage.top}`,
+    );
+  } finally {
+    await page.close();
+  }
+});
+
+// Under the toolbar the stage covers no end of the page, so the page's length
+// must not follow where the stage happened to be in the window.
+test("a stage that scrolls with the page adds no room below it, wherever the page is", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const page = await openInterview(481, 400);
+  try {
+    await closeSetupCheck(page);
+    await page.evaluate(() => {
+      document.querySelector("#self-view").hidden = false;
+      document.querySelector("#captions-text").textContent = "Jim. ".repeat(
+        800,
+      );
+      document.querySelector("#captions-bar").hidden = false;
+    });
+    await settled(page);
+    const before = await page.evaluate(() => ({
+      scrollable: document
+        .querySelector("#jim-stage")
+        .classList.contains("scrollable"),
+      length: document.documentElement.scrollHeight,
+    }));
+    assert.ok(before.scrollable, "the stage does not fit in the window");
+    await page.evaluate(() => {
+      const stage = document.querySelector("#jim-stage");
+      scrollTo(
+        0,
+        stage.getBoundingClientRect().top + scrollY - innerHeight / 2,
+      );
+      dispatchEvent(new Event("resize"));
+    });
+    await settled(page);
+    assert.equal(
+      await page.evaluate(() => document.documentElement.scrollHeight),
+      before.length,
+    );
+  } finally {
+    await page.close();
+  }
+});
+
+test("the strip beside Jim's floating stage takes a click and stays blank in forced colors", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const page = await openInterview(1366, 900);
+  try {
+    await closeSetupCheck(page);
+    const rows = Array.from({ length: 30 }, (_, row) => `x${row} = ${row}`);
+    const seen = await typeToEnd(page, rows.join("\n"));
+    await page
+      .locator("#editor")
+      .evaluate((node) => node.setSelectionRange(0, 0));
+    // Right of the short rows, in the strip the stage reserves, under it.
+    const x = Math.round((seen.stage.left + seen.editor.right) / 2);
+    const y = Math.round(seen.stage.bottom + 60);
+    assert.ok(y < seen.editor.bottom, "the click lands on a row of code");
+    await page.mouse.click(x, y);
+    const after = await page.evaluate(() => ({
+      focused: document.activeElement?.id,
+      caret: document.querySelector("#editor").selectionStart,
+    }));
+    assert.equal(after.focused, "editor", "the click keeps the editor focused");
+    assert.ok(after.caret > 0, "the click moves the caret to that row");
+    await page.emulateMedia({ forcedColors: "active" });
+    const colors = await page.evaluate(() =>
+      ["#editor", "#editor-highlight", ".editor-stack"].map((selector) => {
+        const style = getComputedStyle(document.querySelector(selector));
+        return selector === ".editor-stack"
+          ? style.backgroundColor
+          : style.borderRightColor;
+      }),
+    );
+    assert.deepEqual(colors, [colors[2], colors[2], colors[2]]);
+  } finally {
+    await page.close();
+  }
+});
+
 test("the report is a modal dialog with one primary action", async (t) => {
   if (!browser) return t.skip("playwright chromium unavailable");
   const page = await openInterview(1280, 800);
