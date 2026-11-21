@@ -124,3 +124,58 @@ test(
     });
   },
 );
+
+test("a class judge calls a case's methods on one instance", { skip }, () => {
+  const reply = runDriver(
+    `class Counter:
+    def __init__(self):
+        self.count = 0
+
+    def add(self):
+        self.count += 1
+        return self.count
+`,
+    {
+      kind: "class",
+      className: "Counter",
+      cases: [
+        {
+          input: [
+            ["Counter", "add", "add"],
+            [[], [], []],
+          ],
+        },
+        {
+          input: [
+            ["Counter", "add"],
+            [[], []],
+          ],
+        },
+      ],
+    },
+  );
+  assert.deepEqual(
+    reply.results.map((result) => result.actual),
+    [
+      [null, 1, 2],
+      [null, 1],
+    ],
+  );
+});
+
+test("an answer written as a plain function still runs", { skip }, () => {
+  const reply = runDriver(
+    `def double(value):
+    return value * 2
+`,
+    {
+      kind: "function",
+      entry: "double",
+      cases: [{ input: [2] }, { input: [5] }],
+    },
+  );
+  assert.deepEqual(
+    reply.results.map((result) => result.actual),
+    [4, 10],
+  );
+});
