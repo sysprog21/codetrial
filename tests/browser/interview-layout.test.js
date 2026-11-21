@@ -494,10 +494,10 @@ test("an expanded Example drawing stays under the setup check, the ending wait a
 });
 
 // On the real page, wide and narrow: expanding makes Jim's stage the compact
-// card a narrow window already has, so the captions stay on top of the board
+// card a narrow window already has, keeping its captions accessible
 // while the avatar and Hide avatar go; shrinking gives the wide window its full
 // stage back.
-test("an expanded Example drawing turns Jim's stage into the compact card over the board", async (t) => {
+test("an expanded Example drawing keeps Jim's compact card accessible", async (t) => {
   if (!browser) return t.skip("playwright chromium unavailable");
   for (const [width, height, docked] of [
     [1440, 900, false],
@@ -515,8 +515,9 @@ test("an expanded Example drawing turns Jim's stage into the compact card over t
           .locator("#jim-stage")
           .evaluate((node) => node.classList.contains("compact"));
       // Whether the element at the centre of `selector` is inside it.
-      const onTop = (selector) =>
-        page.evaluate((selector) => {
+      const onTop = async (selector) => {
+        await page.locator(selector).scrollIntoViewIfNeeded();
+        return page.evaluate((selector) => {
           const node = document.querySelector(selector);
           const box = node.getBoundingClientRect();
           return node.contains(
@@ -526,6 +527,7 @@ test("an expanded Example drawing turns Jim's stage into the compact card over t
             ),
           );
         }, selector);
+      };
       assert.equal(await compact(), docked, size);
       // The avatar's mount has no width, which is what stops its drawing, and
       // Hide avatar goes with it; a wide window has both before expanding.
@@ -576,6 +578,38 @@ test("an expanded Example drawing turns Jim's stage into the compact card over t
       await page.evaluate(
         () => (document.querySelector("#audio-playback-notice").hidden = true),
       );
+      for (const [selector, inert] of [
+        ["#ending-overlay", false],
+        ["#report-modal", true],
+      ]) {
+        await page.locator(selector).evaluate((node) => (node.hidden = false));
+        await settled(page);
+        assert.deepEqual(
+          await page
+            .locator("#jim-stage")
+            .evaluate((node) => [
+              getComputedStyle(node).position,
+              node.inert,
+              node
+                .closest(".interview-shell")
+                .classList.contains("drawing-captions-below"),
+            ]),
+          ["fixed", inert, false],
+          selector,
+        );
+        if (!inert)
+          assert.ok(
+            await onTop("#captions-bar"),
+            "closing captions stay above the ending overlay",
+          );
+        await page.locator(selector).evaluate((node) => (node.hidden = true));
+        await settled(page);
+        assert.equal(
+          await page.locator("#jim-stage").evaluate((node) => node.inert),
+          false,
+          "closing the overlay restores caption controls",
+        );
+      }
       assert.equal(
         await page
           .getByRole("button", { name: "Shrink drawing" })
@@ -587,6 +621,14 @@ test("an expanded Example drawing turns Jim's stage into the compact card over t
           }),
         docked,
         "the stage is restored before the shrink handler returns",
+      );
+      await settled(page);
+      assert.equal(
+        await page
+          .locator("#jim-stage")
+          .evaluate((node) => getComputedStyle(node).position),
+        "fixed",
+        "shrinking restores the floating card",
       );
     } finally {
       await page.close();
@@ -1273,11 +1315,62 @@ test("local recording controls preserve the original problem reading space", asy
   }
 });
 
+// A caption that arrives while Confirm is held must not move the button out
+// from under the pointer, or the release lands elsewhere and the draft stays.
+test("streaming captions do not move drawing controls under a pointer", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const page = await openInterview(900, 1000, "&exampleDrawing=1", true);
+  try {
+    await closeSetupCheck(page);
+    await page.locator("#example-board").evaluate((node) => (node.open = true));
+    await page.getByRole("button", { name: "Expand drawing" }).click();
+    await page.evaluate(() => {
+      document.querySelector("#self-view").hidden = false;
+      document.querySelector("#captions-bar").hidden = false;
+      document.querySelector("#captions-text").textContent = "Short caption.";
+    });
+    await settled(page);
+    const canvas = page.locator("#example-board canvas");
+    await canvas.scrollIntoViewIfNeeded();
+    await page.getByRole("button", { name: "Text", exact: true }).click();
+    const rect = await canvas.boundingBox();
+    await page.mouse.click(rect.x + rect.width / 2, rect.y + rect.height / 2);
+    await page
+      .getByRole("textbox", { name: "Label text" })
+      .fill("held confirm");
+    const confirm = page.getByRole("button", { name: "Confirm", exact: true });
+    const before = await confirm.boundingBox();
+    const x = before.x + before.width / 2;
+    const y = before.y + before.height / 2;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.evaluate(() => {
+      document.querySelector("#captions-text").textContent =
+        "Explain the boundary cases and how your approach handles each one. ".repeat(
+          30,
+        );
+    });
+    await settled(page);
+    const after = await confirm.boundingBox();
+    assert.equal(after.y, before.y, "Confirm stays where the pointer pressed");
+    await page.mouse.up();
+    await page.locator(".board-text-draft").waitFor({ state: "hidden" });
+  } finally {
+    await page.close();
+  }
+});
+
 // Room admission is outside this layout check; the real page and drawing
 // handlers run with an editable board, without joining a provider.
-test("expanded drawing text controls stay reachable beside long captions and self-view", async (t) => {
+test("expanded drawing text controls stay clear of long captions and self-view", async (t) => {
   if (!browser) return t.skip("playwright chromium unavailable");
-  for (const [width, height, wideSidebar] of [
+  for (const [
+    width,
+    height,
+    wideSidebar,
+    fontSize = 16,
+    focusDivider = false,
+  ] of [
     [1280, 800],
     [1440, 900],
     [1920, 1080],
@@ -1285,10 +1378,22 @@ test("expanded drawing text controls stay reachable beside long captions and sel
     [1024, 768],
     [1024, 768, true],
     [1280, 800, true],
+    [481, 800],
+    [900, 800],
+    [900, 500],
+    [1023, 800],
+    [1024, 800, false, 32, true],
+    [1024, 800, true, 32, true],
+    [1640, 800, false, 32],
   ]) {
     const page = await openInterview(width, height, "&exampleDrawing=1", true);
     try {
       await closeSetupCheck(page);
+      await page.evaluate((size) => {
+        document.documentElement.style.fontSize = `${size}px`;
+      }, fontSize);
+      await settled(page);
+      const shell = page.locator(".interview-shell");
       if (wideSidebar) {
         await page.locator("#sidebar-resizer").focus();
         await page.keyboard.press("End");
@@ -1298,7 +1403,17 @@ test("expanded drawing text controls stay reachable beside long captions and sel
         .evaluate((node) => (node.open = true));
       await page.locator(".drawer-resizer").focus();
       await page.keyboard.press("End");
-      await page.getByRole("button", { name: "Expand drawing" }).click();
+      const originalColumns = await shell.evaluate(
+        (node) => getComputedStyle(node).gridTemplateColumns,
+      );
+      if (focusDivider) {
+        await page.locator("#sidebar-resizer").focus();
+        await page
+          .locator("#example-board [data-action=expand]")
+          .evaluate((node) => node.click());
+      } else {
+        await page.getByRole("button", { name: "Expand drawing" }).click();
+      }
       await page.evaluate(() => {
         document.querySelector("#self-view").hidden = false;
         document.querySelector("#captions-bar").hidden = false;
@@ -1308,15 +1423,108 @@ test("expanded drawing text controls stay reachable beside long captions and sel
           );
       });
       await settled(page);
+      if (focusDivider)
+        assert.equal(
+          await page.evaluate(() => document.activeElement.dataset.action),
+          "expand",
+          "stacking moves focus before hiding the resizer",
+        );
+      const canvas = page.locator("#example-board canvas");
+      if (
+        width >= 1024 &&
+        !(await shell.evaluate((node) =>
+          node.classList.contains("drawing-stack"),
+        ))
+      )
+        assert.ok(
+          (await page.locator(".editor-panel").boundingBox()).width >=
+            30 * fontSize,
+          "an unstacked editor retains its minimum width",
+        );
+      if (width === 900 && height === 500) {
+        // A short viewport caps the card at 40dvh; the captions keep their
+        // heading and one line of text, and the card scrolls for the rest.
+        const bar = await page.locator("#captions-bar").evaluate((node) => {
+          const head = node
+            .querySelector(".captions-head")
+            .getBoundingClientRect();
+          const text = node.querySelector("#captions-text");
+          return {
+            height: node.getBoundingClientRect().height,
+            head: head.height,
+            line: parseFloat(getComputedStyle(text).lineHeight),
+          };
+        });
+        assert.ok(
+          bar.height >= bar.head + bar.line - 1,
+          `the captions keep a readable height (${bar.height}px)`,
+        );
+      }
+      if (width === 1024 && height === 800 && fontSize === 32) {
+        await page
+          .locator(".editor-panel")
+          .evaluate((node) => node.scrollIntoView({ block: "start" }));
+        for (const selector of ["#example-board canvas", "#captions-bar"]) {
+          const box = await page.locator(selector).boundingBox();
+          assert.ok(
+            box.y >= 0 && box.y + box.height <= height,
+            `${selector} stays fully in the viewport at ${width}×${height}, ${fontSize}px`,
+          );
+        }
+      }
+      if (width === 900 && height === 800) {
+        await page
+          .locator(".editor-panel")
+          .evaluate((node) => node.scrollIntoView({ block: "start" }));
+        const drawing = await canvas.boundingBox();
+        const captions = await page.locator("#captions-bar").boundingBox();
+        const card = await page.locator("#jim-stage").boundingBox();
+        assert.ok(
+          await page
+            .locator("#jim-stage")
+            .evaluate((node) => node.scrollHeight <= node.clientHeight + 1),
+          "only the captions bar needs scrolling",
+        );
+        assert.ok(
+          captions.y + captions.height <= card.y + card.height,
+          "the latest caption words remain inside the visible card",
+        );
+        assert.ok(
+          drawing.y >= 0 && drawing.y + drawing.height <= height,
+          "the full canvas is visible beside live captions",
+        );
+        assert.ok(
+          captions.y >= 0 && captions.y < height - 20,
+          "live captions are visible without scrolling the drawing away",
+        );
+      }
+      if (focusDivider) {
+        const panel = await page.locator(".editor-panel").boundingBox();
+        const drawing = await canvas.boundingBox();
+        assert.ok(
+          panel.y >= -1 && panel.y + panel.height <= height,
+          "stacking keeps the full editor in view",
+        );
+        assert.ok(
+          drawing.y < height && drawing.y + drawing.height > 0,
+          "the expanded drawing is visible before test scrolling",
+        );
+      }
+      await canvas.scrollIntoViewIfNeeded();
       const surface = await page.locator(".example-surface").boundingBox();
+      assert.ok(
+        (await canvas.boundingBox()).width >= 280,
+        `${width}×${height}/${fontSize}px: the canvas stays usable`,
+      );
       assert.ok(
         surface.width >= 280,
         `${width}px: text controls fit at full width`,
       );
       const card = await page.locator("#jim-stage").boundingBox();
       assert.ok(
-        surface.x + surface.width <= card.x,
-        `${width}px: the caption card stays beside the drawing`,
+        surface.x + surface.width <= card.x ||
+          surface.y + surface.height <= card.y,
+        `${width}px/${fontSize}px: the caption card stays outside the drawing`,
       );
       if (width === 1280 && !wideSidebar) {
         await page.evaluate(() =>
@@ -1335,7 +1543,6 @@ test("expanded drawing text controls stay reachable beside long captions and sel
         );
       }
       await page.getByRole("button", { name: "Text", exact: true }).click();
-      const canvas = page.locator("#example-board canvas");
       for (const [x, y] of [
         [0.05, 0.05],
         [0.5, 0.5],
@@ -1347,6 +1554,7 @@ test("expanded drawing text controls stay reachable beside long captions and sel
           await canvas.evaluate((node) => {
             node.parentElement.scrollTop = 0;
           });
+          await canvas.scrollIntoViewIfNeeded();
           const rect = await canvas.boundingBox();
           await page.mouse.click(
             rect.x + rect.width * x,
@@ -1363,7 +1571,15 @@ test("expanded drawing text controls stay reachable beside long captions and sel
           await page.locator(".board-text-draft").waitFor({ state: "hidden" });
         }
       }
-      if (wideSidebar) {
+      await page.locator(".captions-head").scrollIntoViewIfNeeded();
+      const captions = await page.locator("#captions-bar").evaluate((node) => {
+        node.scrollTop = node.scrollHeight;
+        return { text: node.textContent, scrolled: node.scrollTop > 0 };
+      });
+      assert.ok(captions.text.includes("Explain the boundary cases"));
+      assert.ok(captions.scrolled, "long captions remain scrollable");
+      assert.equal((await page.locator("#self-view").boundingBox()).width, 120);
+      if (wideSidebar || fontSize === 32) {
         await page.getByRole("button", { name: "Shrink drawing" }).click();
         await settled(page);
         assert.equal(
@@ -1372,6 +1588,13 @@ test("expanded drawing text controls stay reachable beside long captions and sel
             .evaluate((node) => node.style.maxWidth),
           "",
           "shrinking restores the normal caption card width",
+        );
+        assert.equal(
+          await shell.evaluate(
+            (node) => getComputedStyle(node).gridTemplateColumns,
+          ),
+          originalColumns,
+          "shrinking restores the original columns",
         );
       }
     } finally {
@@ -1459,6 +1682,77 @@ test("a constrained caption card keeps the self view inside its padding at a sma
       };
     });
     assert.ok(layout.viewRight <= layout.contentRight, JSON.stringify(layout));
+  } finally {
+    await page.close();
+  }
+});
+
+test("resizing an expanded drawing into a stack preserves problem reading position", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const page = await openInterview(1840, 800, "&exampleDrawing=1");
+  try {
+    await closeSetupCheck(page);
+    await page.evaluate(() => {
+      document.documentElement.style.fontSize = "32px";
+      document.querySelector("#example-board").open = true;
+    });
+    await page.getByRole("button", { name: "Expand drawing" }).click();
+    await settled(page);
+    const top = await page.locator("#problem-panel").evaluate((node) => {
+      node.append(
+        "Consider each boundary case before choosing an approach. ".repeat(80),
+      );
+      node.scrollTop = 100;
+      return node.scrollTop;
+    });
+    assert.ok(top > 0, "the problem is scrolled before resizing");
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await page.setViewportSize({ width: 1500, height: 800 });
+    await settled(page);
+    assert.deepEqual(
+      await page.evaluate(() => ({
+        stacked: document
+          .querySelector(".interview-shell")
+          .classList.contains("drawing-stack"),
+        pageTop: window.scrollY,
+        problemTop: document.querySelector("#problem-panel").scrollTop,
+      })),
+      { stacked: true, pageTop: 0, problemTop: top },
+      "resizing stacks the drawing without changing the reading position",
+    );
+  } finally {
+    await page.close();
+  }
+});
+
+test("resizing into a stack keeps relocated keyboard focus in view", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const page = await openInterview(1840, 500, "&exampleDrawing=1");
+  try {
+    await closeSetupCheck(page);
+    await page.evaluate(() => {
+      document.documentElement.style.fontSize = "32px";
+      document.querySelector("#example-board").open = true;
+      document
+        .querySelector("#problem-panel")
+        .append(
+          "Consider each boundary case before choosing an approach. ".repeat(
+            80,
+          ),
+        );
+    });
+    await page.getByRole("button", { name: "Expand drawing" }).click();
+    await page.locator("#sidebar-resizer").focus();
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await page.setViewportSize({ width: 1500, height: 500 });
+    await settled(page);
+    const focus = await page.evaluate(() => {
+      const node = document.activeElement;
+      const { top, bottom } = node.getBoundingClientRect();
+      return { action: node.dataset.action, top, bottom };
+    });
+    assert.equal(focus.action, "expand");
+    assert.ok(focus.top >= 0 && focus.bottom <= 500, JSON.stringify(focus));
   } finally {
     await page.close();
   }

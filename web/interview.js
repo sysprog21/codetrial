@@ -1018,7 +1018,7 @@ async function init() {
       const paintDrawer = mountInterviewDrawer(nodes.editorPanel);
     }
   }
-  placeJimStageBelowToolbar(
+  const placeJimStage = placeJimStageBelowToolbar(
     whiteboard ? nodes.boardToolbar : nodes.editorToolbar,
   );
   // After initWhiteboard, so the bounds measure the panel that stayed.
@@ -1050,6 +1050,7 @@ async function init() {
   }
   const fitJimStage = compactJimStageBesideNarrowPanel(
     whiteboard ? nodes.boardPanel : nodes.editorPanel,
+    placeJimStage,
   );
   // No enumeration here. Before the preflight grant the browser reports only a
   // blank placeholder, so the list is discarded and repainted a few lines down;
@@ -5859,41 +5860,76 @@ function testDrawerBounds() {
 /// the captions. The window's width alone stopped being enough to tell once
 /// the sidebar could be widened: at 1280px the editor can be 592px with the
 /// avatar still over it. An expanded Example drawing takes the panel's room
-/// the same way, so Jim's captions stay over a corner of the board. One class
+/// the same way, so Jim's compact card stays clear of the drawing. One class
 /// for all three, so the stylesheet says what compact looks like once, and
 /// the avatar's own width observer pauses and resumes its drawing from the
-/// result. On desktop, an expanded drawing also caps the card to the strip
-/// beside the reserved drawing, unless that strip cannot hold a readable card.
-function compactJimStageBesideNarrowPanel(panel) {
+/// result. Expanded drawings put a cramped card in its own row, and stack the
+/// workspace when the sidebar's current width and the editor's minimum cannot
+/// fit beside each other.
+function compactJimStageBesideNarrowPanel(panel, place) {
   const narrowWindow = matchMedia(JIM_STAGE_NARROW_WINDOW);
   const desktopDrawing = matchMedia(JIM_DRAWING_DESKTOP_WINDOW);
   const example = document.querySelector("#example-board");
+  const shell = panel.closest(".interview-shell");
+  let wasExpanded = example?.hasAttribute("data-expanded") === true;
   const fit = () => {
     const rem = Number.parseFloat(
       getComputedStyle(document.documentElement).fontSize,
     );
     const panelWidth = panel.getBoundingClientRect().width;
     const cardWidth = panelWidth - JIM_DRAWING_RESERVED_REM * rem;
-    nodes.jimStage.style.maxWidth =
-      example?.hasAttribute("data-expanded") &&
+    const drawingExpanded = example?.hasAttribute("data-expanded") === true;
+    const justExpanded = drawingExpanded && !wasExpanded;
+    wasExpanded = drawingExpanded;
+    const expanded =
+      drawingExpanded && nodes.ending.hidden && nodes.report.hidden;
+    const sidebar =
+      Number.parseFloat(shell.style.getPropertyValue("--sidebar-width")) ||
+      22.5 * rem;
+    // Use the unchanged viewport budget so stacking cannot undo its own trigger.
+    const stacked =
+      expanded &&
       desktopDrawing.matches &&
-      cardWidth >= JIM_SELF_VIEW_WIDTH_PX + 1.25 * rem + 2
-        ? `${cardWidth}px`
-        : "";
+      // Two 1rem shell paddings and the 1rem divider track in styles.css.
+      innerWidth < sidebar + (SIDEBAR_NEIGHBOUR_MIN_REM + 3) * rem;
+    const below =
+      expanded &&
+      (!desktopDrawing.matches ||
+        stacked ||
+        cardWidth < JIM_SELF_VIEW_WIDTH_PX + 1.25 * rem + 2);
+    const movedFocus =
+      stacked && document.activeElement === nodes.sidebarResizer;
+    if (movedFocus)
+      example
+        .querySelector('[data-action="expand"]')
+        .focus({ preventScroll: true });
+    shell.classList.toggle("drawing-captions-below", below);
+    shell.classList.toggle("drawing-stack", stacked);
+    if (stacked && (justExpanded || movedFocus))
+      panel.scrollIntoView({ block: "start" });
+    nodes.jimStage.style.maxWidth = expanded && !below ? `${cardWidth}px` : "";
     const compact =
       narrowWindow.matches ||
       panelWidth < JIM_AVATAR_PANEL_MIN_REM * rem ||
-      example?.hasAttribute("data-expanded") === true;
+      drawingExpanded;
     nodes.jimStage.classList.toggle("compact", compact);
     // Hide avatar goes with the avatar, so focus left on it moves to the
     // stage, as when an automatic turn-off hides the button.
     if (compact && document.activeElement === nodes.hideAvatar)
       nodes.jimStage.focus({ preventScroll: true });
+    place();
   };
   if (window.ResizeObserver) new window.ResizeObserver(fit).observe(panel);
   else window.addEventListener("resize", fit);
   narrowWindow.addEventListener("change", fit);
   desktopDrawing.addEventListener("change", fit);
+  // Expanding or shrinking the drawing refits through `onExpandedChange`; the
+  // ending and report overlays reveal or hide themselves with no callback.
+  for (const target of [nodes.ending, nodes.report])
+    new MutationObserver(fit).observe(target, {
+      attributes: true,
+      attributeFilter: ["hidden"],
+    });
   fit();
   return fit;
 }
@@ -5928,7 +5964,8 @@ function placeJimStageBelowToolbar(toolbar) {
     );
     nodes.jimStage.classList.toggle(
       "scrollable",
-      stage.top < 0 || stage.bottom > window.innerHeight,
+      !nodes.jimStage.closest(".drawing-captions-below") &&
+        (stage.top < 0 || stage.bottom > window.innerHeight),
     );
     // Measured again: becoming scrollable can move the stage.
     reserveJimStageInEditor(nodes.jimStage.getBoundingClientRect());
@@ -5940,6 +5977,7 @@ function placeJimStageBelowToolbar(toolbar) {
   if (nodes.editorStack.isConnected) observer.observe(nodes.editorStack);
   window.addEventListener("resize", place);
   place();
+  return place;
 }
 
 /// Tells the editor how much of it Jim's stage covers, so the end of a long

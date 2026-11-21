@@ -2381,6 +2381,109 @@ table.phase-scores {
   }
 }
 
+/* Constrained expanded drawings share no pixels with the caption card.
+   Keep its DOM position outside the editor so ending/report inertness works. */
+.interview-shell.drawing-captions-below {
+  height: auto;
+}
+
+.drawing-captions-below .jim-stage.compact {
+  position: static;
+  display: flex;
+  flex-direction: column;
+  justify-self: end;
+  width: min(var(--jim-card-width), 100%);
+  max-height: 40dvh;
+  overflow: auto;
+  pointer-events: auto;
+}
+
+.drawing-captions-below .jim-stage > :not(.captions-bar) {
+  flex-shrink: 0;
+}
+
+/* Keep captions first and readable when the rest of the card needs scrolling. */
+.drawing-captions-below .jim-stage .captions-bar {
+  min-height: 3lh;
+  flex: 0 1 auto;
+  order: -1;
+}
+
+/* Keep the tools on a scrollable row so enlarged text leaves canvas space. */
+.drawing-captions-below .example-board[data-expanded] .example-pane {
+  gap: 0.25rem;
+  padding: 0.2rem 0.5rem;
+}
+
+.drawing-captions-below .example-pane .board-toolbar {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  padding: 0;
+  flex-shrink: 0;
+}
+
+.drawing-captions-below .example-pane .board-toolbar > * {
+  flex-shrink: 0;
+}
+
+.drawing-captions-below .example-pane > p {
+  margin: 0;
+}
+
+.drawing-captions-below .example-board[data-expanded] .example-surface {
+  margin-right: 0;
+}
+
+/* Reserve the card's 40dvh cap, not its live height: captions that stream in
+   must not move the drawing controls under a pointer. */
+.drawing-captions-below .editor-panel[data-example-drawing="true"] {
+  min-height: 0;
+  height: calc(60dvh - 3rem);
+}
+
+@media (min-width: 1024px) {
+  .drawing-captions-below .editor-panel {
+    grid-area: 1 / 3;
+  }
+
+  .drawing-captions-below .jim-stage {
+    grid-area: 2 / 3;
+  }
+
+  .drawing-captions-below .interview-sidebar,
+  .drawing-captions-below #sidebar-resizer {
+    grid-row: 1 / span 2;
+    position: sticky;
+    top: 1rem;
+    align-self: start;
+    max-height: calc(100dvh - 2rem);
+  }
+
+  .drawing-captions-below #sidebar-resizer {
+    grid-column: 2;
+    height: calc(100dvh - 2rem);
+  }
+}
+
+.interview-shell.drawing-stack {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.drawing-stack .interview-sidebar,
+.drawing-stack .editor-panel,
+.drawing-stack .jim-stage {
+  grid-area: auto;
+}
+
+.drawing-stack .interview-sidebar {
+  position: static;
+  max-height: 80dvh;
+}
+
+.drawing-stack #sidebar-resizer {
+  display: none;
+}
+
 /* The whiteboard, in place of the editor. The surface scrolls inside the
    panel rather than fitting itself to the window: the board is a fixed size in
    its own coordinates, so what the candidate draws is where the interviewer
