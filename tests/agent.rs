@@ -662,14 +662,25 @@ fn prompt_samples() -> Value {
         "phaseJudge": phase_judge_prompt(&PhaseJudgeInput {
             problem,
             open: &["repeat", "optimizations"],
+            restated: false,
             transcript_window: "Candidate: I return the indices of the two numbers.",
             code: "seen = {}",
+            language: "python",
+            interview_mode: InterviewMode::Coding,
+        }),
+        "phaseJudgeRestated": phase_judge_prompt(&PhaseJudgeInput {
+            problem,
+            open: &["repeat", "example", "algorithm"],
+            restated: true,
+            transcript_window: "Candidate: I return the indices of the two numbers.",
+            code: "# each index is used once\nseen = {}",
             language: "python",
             interview_mode: InterviewMode::Coding,
         }),
         "phaseJudgeBoard": phase_judge_prompt(&PhaseJudgeInput {
             problem,
             open: &["repeat", "algorithm"],
+            restated: false,
             transcript_window: "Candidate: I draw the array and sweep it once.",
             code: "",
             language: "python",
@@ -1434,6 +1445,9 @@ mod report_grounding;
 
 #[path = "agent/framework.rs"]
 mod framework;
+
+#[path = "agent/restatement_comments.rs"]
+mod restatement_comments;
 
 #[path = "agent/wire.rs"]
 mod wire;

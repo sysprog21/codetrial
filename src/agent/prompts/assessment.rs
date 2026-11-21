@@ -215,6 +215,9 @@ pub struct PhaseJudgeInput<'a> {
     pub problem: &'a Problem,
     /// The open steps it may record, in the id spelling the checklist uses.
     pub open: &'a [&'static str],
+    /// Whether Repeat is open although already recorded, so only a comment
+    /// that adds to the restatement can record it again.
+    pub restated: bool,
     /// The tail of the transcript, unrecognized turns already marked. Not
     /// only the lines since the last call: a restatement an earlier call missed
     /// is still the candidate's restatement.
@@ -343,7 +346,7 @@ pub fn phase_judge_prompt(input: &PhaseJudgeInput<'_>) -> String {
 Contract: {}
 Constraints: {}
 
-OPEN STEPS: {}
+OPEN STEPS: {}{}
 
 {}"#,
         variant.title,
@@ -351,6 +354,11 @@ OPEN STEPS: {}
         variant.contract,
         variant.constraints.join("; "),
         input.open.join(", "),
+        if input.restated {
+            "\nRepeat is already recorded: record it again only with a quote from a comment in\nthe editor that adds an input, output or rule the restatement left out."
+        } else {
+            ""
+        },
         untrusted_blocks(
             input
                 .interview_mode
@@ -800,15 +808,18 @@ pub fn report_system_instruction_for_examples(mode: InterviewMode, enabled: bool
     // only where it shows the restatement as it stood when the candidate moved
     // on: at an editor a comment in the code, since the code itself shows what
     // was built, not what was restated, and only one a `repeat` phase row
-    // quotes, which the phase judge writes while Repeat is open; a pause-time
-    // note is not bounded that way, so it does not date a comment. At a
-    // whiteboard it is what the Repeat checkpoint image shows. That image is
-    // taken once, when Repeat is first recorded, so writing added after it is
-    // in no image, a known limit the value names. The reviewer sees only the
-    // final code, and a board with no Repeat checkpoint only images taken after
-    // the candidate moved on, since the browser takes that image only when
-    // Repeat is recorded; either way `written_late` says that something seen
-    // only there was not shown to be there before. Each breaks its own lines.
+    // quotes, which the phase judge writes while Repeat is the latest step
+    // recorded; a pause-time note is not bounded that way, so it does not date
+    // a comment. The row's quote takes six words but may run across the comment
+    // lines, which the judge reads joined, so a shorter comment counts only
+    // quoted with its neighbors. At a whiteboard it is what the Repeat
+    // checkpoint image shows. That image is taken once, when Repeat is first
+    // recorded, so writing added after it is in no image, a known limit the
+    // value names. The reviewer sees only the final code, and a board with no
+    // Repeat checkpoint only images taken after the candidate moved on, since
+    // the browser takes that image only when Repeat is recorded; either way
+    // `written_late` says that something seen only there was not shown to be
+    // there before. Each breaks its own lines.
     let (scoring, cited_in, material, observed, assessable, written, written_late) = if mode
         .is_whiteboard()
     {
@@ -832,7 +843,9 @@ pub fn report_system_instruction_for_examples(mode: InterviewMode, enabled: bool
             "recorded observation, code behavior, or test event",
             "the final code,\nor the test account",
             "as a comment in\n  the code that a `repeat` phase row in the rolling assessment \
-                 quotes\n  (a pause-time note does not date a comment)",
+                 quotes\n  (a pause-time note does not date a comment, and a comment under six \
+                 words is\n  not recorded on its own and counts only when a row quotes it with \
+                 the comment\n  lines around it)",
             " A comment present only in the final code does\n  not show it was \
                  there before they moved on.\n ",
         )

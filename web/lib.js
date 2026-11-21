@@ -901,7 +901,7 @@ const textEncoder = new TextEncoder();
 /// branch no longer rendering, which is the defect a local constant invites.
 export const ACTIVE_CONTRACT = {
   bundleVersion: 49,
-  livePromptVersion: 36,
+  livePromptVersion: 37,
   reportPromptVersion: 27,
   reportSchemaVersion: 4,
   rubricVersion: 1,

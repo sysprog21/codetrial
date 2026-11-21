@@ -94,7 +94,10 @@ pub fn phase_judge_open(state: &RuntimeState) -> Vec<&'static str> {
     let unrecorded = JUDGED_PHASES
         .into_iter()
         .chain(traced.then_some(FrameworkPhase::Test))
-        .filter(|phase| !phases_evidenced(state, &[*phase]))
+        .filter(|phase| {
+            !phases_evidenced(state, &[*phase])
+                || (*phase == FrameworkPhase::Repeat && restatement_open(state))
+        })
         .filter(|phase| phase.needs_code() || !coded || !tool)
         .collect::<Vec<_>>();
 
@@ -117,6 +120,27 @@ pub fn phase_judge_open(state: &RuntimeState) -> Vec<&'static str> {
         return Vec::new();
     }
     open.into_iter().map(phase_id).collect()
+}
+
+/// Whether a recorded Repeat is still open to a comment that adds to it: at an
+/// editor, while it is the latest step recorded. The report credits a rule
+/// written as a comment only when a `repeat` phase row quotes it, and a
+/// comment typed after the first record, before the candidate moves on, would
+/// otherwise never get one.
+fn restatement_open(state: &RuntimeState) -> bool {
+    !state.interview_mode.is_whiteboard()
+        && state
+            .framework_evidence
+            .iter()
+            .rfind(|item| item.kind != EvidenceKind::Skipped)
+            .is_some_and(|item| item.phase == FrameworkPhase::Repeat)
+}
+
+/// Whether open step `id` is that recorded Repeat, which nothing the candidate
+/// says can record again, so speech neither calls the judge for it nor counts
+/// it as a step still to be heard.
+pub(crate) fn reopened_restatement(state: &RuntimeState, id: &str) -> bool {
+    id == phase_id(FrameworkPhase::Repeat) && phases_evidenced(state, &[FrameworkPhase::Repeat])
 }
 
 /// The candidate's latest turn, which the recognizer keeps rewriting in place
@@ -158,7 +182,7 @@ pub fn phase_judge_need(state: &RuntimeState) -> PhaseJudgeDue {
         return PhaseJudgeDue::No;
     }
     let open = phase_judge_open(state);
-    if spoke && !open.is_empty() {
+    if spoke && open.iter().any(|id| !reopened_restatement(state, id)) {
         PhaseJudgeDue::Spoken
     } else if typed
         && (open.contains(&"coding")
@@ -213,6 +237,7 @@ pub fn take_phase_judge_window(state: &mut RuntimeState, problem: &Problem) -> S
     let prompt = phase_judge_prompt(&PhaseJudgeInput {
         problem,
         open: &open,
+        restated: open.iter().any(|id| reopened_restatement(state, id)),
         transcript_window: &window,
         code: &code,
         language: &state.language,
@@ -425,7 +450,25 @@ pub fn apply_phase_judgment(state: &mut RuntimeState, text: &str) -> Vec<Framewo
     let mut turns = None;
     let mut code_current = None;
     let mut recorded = Vec::new();
-    for step in steps.iter().take(JUDGEABLE.len()) {
+
+    // A first restatement is the first Repeat entry actually recorded, so one
+    // the server refuses does not take its place: while Repeat is unrecorded
+    // the answer's Repeat entries are tried first, in order, and once anything
+    // is recorded the Repeat entries still waiting go behind the other steps,
+    // where they start when Repeat was recorded before. Another step recorded
+    // from the same answer then moves the candidate on whatever order the judge
+    // listed the steps in.
+    let repeat = |step: &&serde_json::Value| {
+        step.get("step").and_then(serde_json::Value::as_str) == Some("repeat")
+    };
+    let (repeats, others): (Vec<_>, Vec<_>) = steps.iter().take(JUDGEABLE.len()).partition(repeat);
+    let mut queue =
+        std::collections::VecDeque::from(if phases_evidenced(state, &[FrameworkPhase::Repeat]) {
+            [others, repeats].concat()
+        } else {
+            [repeats, others].concat()
+        });
+    while let Some(step) = queue.pop_front() {
         let (Some(id), Some(quote)) = (
             step.get("step").and_then(serde_json::Value::as_str),
             step.get("quote").and_then(serde_json::Value::as_str),
@@ -435,7 +478,13 @@ pub fn apply_phase_judgment(state: &mut RuntimeState, text: &str) -> Vec<Framewo
         let Some(phase) = JUDGEABLE.into_iter().find(|phase| phase_id(*phase) == id) else {
             continue;
         };
-        if !open.contains(&id) || phases_evidenced(state, &[phase]) {
+
+        // A recorded Repeat is judged again only while no other step has been
+        // recorded since, this answer's included.
+        let again = phases_evidenced(state, &[phase]);
+        if !open.contains(&id)
+            || (again && (phase != FrameworkPhase::Repeat || !restatement_open(state)))
+        {
             continue;
         }
         if phase.needs_code()
@@ -453,6 +502,12 @@ pub fn apply_phase_judgment(state: &mut RuntimeState, text: &str) -> Vec<Framewo
         let Some((source, spoken_at)) = quote_is_grounded(state, turns, phase, quote) else {
             continue;
         };
+
+        // Then only a comment adds to it: speech is the restatement already
+        // recorded, and a quote a Repeat row already holds adds nothing.
+        if again && (source != EvidenceSource::EditorSnapshot || restatement_quoted(state, quote)) {
+            continue;
+        }
         let summary = step
             .get("summary")
             .and_then(serde_json::Value::as_str)
@@ -483,9 +538,35 @@ pub fn apply_phase_judgment(state: &mut RuntimeState, text: &str) -> Vec<Framewo
             let latest = &mut state.hint_attempt.quoted_turn_start;
             *latest = (*latest).max(spoken_at);
             recorded.push(evidence);
+            let (left, rest): (Vec<_>, Vec<_>) = queue.drain(..).partition(repeat);
+            queue.extend(rest.into_iter().chain(left));
         }
     }
     recorded
+}
+
+/// Whether a Repeat row already quotes `quote`, matched as `quote_is_grounded`
+/// matches it and cut as the row keeps it, so a long comment is found too.
+/// Only the row's quote is read: the judge's summary beside it is not the
+/// candidate's words.
+fn restatement_quoted(state: &RuntimeState, quote: &str) -> bool {
+    let needle = format!(
+        " {} ",
+        quote_words(&bounded_model_text(
+            quote.trim(),
+            MAX_PHASE_JUDGE_QUOTE_CHARS
+        ))
+    );
+    state
+        .framework_evidence
+        .iter()
+        .filter(|item| item.phase == FrameworkPhase::Repeat)
+        .map(|item| {
+            item.summary
+                .rsplit_once("Quote: ")
+                .map_or("", |(_, quoted)| quoted)
+        })
+        .any(|quoted| format!(" {} ", quote_words(quoted)).contains(&needle))
 }
 
 /// One line of what a pause-time reviewer saw, bounded the way a summary is.
