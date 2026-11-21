@@ -13206,6 +13206,30 @@
           ]
         ],
         "expected": true
+      },
+      {
+        "label": "term inside a longer term",
+        "input": [
+          "catsdog",
+          [
+            "cat",
+            "cats",
+            "dog"
+          ]
+        ],
+        "expected": true
+      },
+      {
+        "label": "one letter repeated",
+        "input": [
+          "aaaaa",
+          [
+            "aa",
+            "aaa",
+            "aaaa"
+          ]
+        ],
+        "expected": true
       }
     ],
     "paramNames": [

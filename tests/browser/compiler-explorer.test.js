@@ -432,6 +432,53 @@ test("jump-game cases reject each hop-by-hop shortcut", () => {
   }
 });
 
+test("word-break cases reject each split that never revisits a cut", () => {
+  const split = (pick, fromEnd) => (s, vocabulary) => {
+    const flip = (text) => (fromEnd ? [...text].reverse().join("") : text);
+    const tag = flip(s);
+    const terms = vocabulary.map(flip);
+    let at = 0;
+    while (at < tag.length) {
+      const fits = terms.filter((term) => tag.startsWith(term, at));
+      if (fits.length === 0) return false;
+      at += pick(fits).length;
+    }
+    return true;
+  };
+  const shortest = (fits) =>
+    fits.reduce((best, term) => (term.length < best.length ? term : best));
+  const longest = (fits) =>
+    fits.reduce((best, term) => (term.length > best.length ? term : best));
+  const first = (fits) => fits[0];
+  const last = (fits) => fits.at(-1);
+  const byLabel = Object.fromEntries(
+    judges["word-break"].cases.map(
+      ({ label, input: [s, vocabulary], expected }) => [
+        label,
+        { s, vocabulary, expected },
+      ],
+    ),
+  );
+  for (const [name, pick, fromEnd, label] of [
+    ["the shortest term", shortest, false, "term inside a longer term"],
+    ["the longest term", longest, false, "overlapping words"],
+    ["the first listed term", first, false, "overlapping words"],
+    ["the last listed term", last, false, "one letter repeated"],
+    ["the shortest term from the end", shortest, true, "one letter repeated"],
+    ["the longest term from the end", longest, true, "one letter repeated"],
+    ["the first listed term from the end", first, true, "one letter repeated"],
+    ["the last listed term from the end", last, true, "one letter repeated"],
+  ]) {
+    const pinned = byLabel[label];
+    assert.ok(pinned, `the built-in cases must keep "${label}"`);
+    assert.notEqual(
+      split(pick, fromEnd)(pinned.s, pinned.vocabulary),
+      pinned.expected,
+      `"${label}" must reject always cutting ${name}`,
+    );
+  }
+});
+
 test("harness generator covers every function problem without network access", () => {
   for (const [id, spec] of Object.entries(judges)) {
     if (spec.kind !== "function") continue;
