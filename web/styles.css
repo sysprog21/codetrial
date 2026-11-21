@@ -2376,10 +2376,32 @@ table.phase-scores {
   flex-shrink: 0;
 }
 
-/* The heading and one line of text stay readable; past that the card scrolls. */
+/* Keep captions first and readable when the rest of the card needs scrolling. */
 .drawing-captions-below .jim-stage .captions-bar {
   min-height: 3lh;
   flex: 0 1 auto;
+  order: -1;
+}
+
+/* Keep the tools on a scrollable row so enlarged text leaves canvas space. */
+.drawing-captions-below .example-board[data-expanded] .example-pane {
+  gap: 0.25rem;
+  padding: 0.2rem 0.5rem;
+}
+
+.drawing-captions-below .example-pane .board-toolbar {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  padding: 0;
+  flex-shrink: 0;
+}
+
+.drawing-captions-below .example-pane .board-toolbar > * {
+  flex-shrink: 0;
+}
+
+.drawing-captions-below .example-pane > p {
+  margin: 0;
 }
 
 .drawing-captions-below .example-board[data-expanded] .example-surface {
@@ -2389,7 +2411,8 @@ table.phase-scores {
 /* Reserve the card's 40dvh cap, not its live height: captions that stream in
    must not move the drawing controls under a pointer. */
 .drawing-captions-below .editor-panel[data-example-drawing="true"] {
-  height: max(34rem, calc(60dvh - 3rem));
+  min-height: 0;
+  height: calc(60dvh - 3rem);
 }
 
 @media (min-width: 1024px) {

@@ -1189,24 +1189,16 @@ test("expanded drawing text controls stay clear of long captions and self-view",
         );
       }
       if (width === 1024 && height === 800 && fontSize === 32) {
-        // At 32px the editor's 34rem floor alone is taller than the viewport,
-        // so the canvas and the captions cannot share it. What the stacked
-        // layout owes is that the card follows the editor directly, not a
-        // viewport below it.
         await page
           .locator(".editor-panel")
           .evaluate((node) => node.scrollIntoView({ block: "start" }));
-        const panel = await page.locator(".editor-panel").boundingBox();
-        const drawing = await canvas.boundingBox();
-        const card = await page.locator("#jim-stage").boundingBox();
-        assert.ok(
-          drawing.y >= 0 && drawing.y < height,
-          "the canvas starts in view after one scroll to the editor",
-        );
-        assert.ok(
-          card.y - (panel.y + panel.height) <= 2 * fontSize,
-          "the caption card follows the editor instead of sitting a viewport below",
-        );
+        for (const selector of ["#example-board canvas", "#captions-bar"]) {
+          const box = await page.locator(selector).boundingBox();
+          assert.ok(
+            box.y >= 0 && box.y + box.height <= height,
+            `${selector} stays fully in the viewport at ${width}×${height}, ${fontSize}px`,
+          );
+        }
       }
       if (width === 900 && height === 800) {
         await page
@@ -1238,8 +1230,8 @@ test("expanded drawing text controls stay clear of long captions and self-view",
         const panel = await page.locator(".editor-panel").boundingBox();
         const drawing = await canvas.boundingBox();
         assert.ok(
-          panel.y >= -1 && panel.y <= 1,
-          "stacking brings the editor into view",
+          panel.y >= -1 && panel.y + panel.height <= height,
+          "stacking keeps the full editor in view",
         );
         assert.ok(
           drawing.y < height && drawing.y + drawing.height > 0,
@@ -1250,7 +1242,7 @@ test("expanded drawing text controls stay clear of long captions and self-view",
       const surface = await page.locator(".example-surface").boundingBox();
       assert.ok(
         (await canvas.boundingBox()).width >= 280,
-        "the canvas stays usable",
+        `${width}×${height}/${fontSize}px: the canvas stays usable`,
       );
       assert.ok(
         surface.width >= 280,
@@ -1456,6 +1448,39 @@ test("resizing an expanded drawing into a stack preserves problem reading positi
       { stacked: true, pageTop: 0, problemTop: top },
       "resizing stacks the drawing without changing the reading position",
     );
+  } finally {
+    await page.close();
+  }
+});
+
+test("resizing into a stack keeps relocated keyboard focus in view", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const page = await openInterview(1840, 500, "&exampleDrawing=1");
+  try {
+    await closeSetupCheck(page);
+    await page.evaluate(() => {
+      document.documentElement.style.fontSize = "32px";
+      document.querySelector("#example-board").open = true;
+      document
+        .querySelector("#problem-panel")
+        .append(
+          "Consider each boundary case before choosing an approach. ".repeat(
+            80,
+          ),
+        );
+    });
+    await page.getByRole("button", { name: "Expand drawing" }).click();
+    await page.locator("#sidebar-resizer").focus();
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await page.setViewportSize({ width: 1500, height: 500 });
+    await settled(page);
+    const focus = await page.evaluate(() => {
+      const node = document.activeElement;
+      const { top, bottom } = node.getBoundingClientRect();
+      return { action: node.dataset.action, top, bottom };
+    });
+    assert.equal(focus.action, "expand");
+    assert.ok(focus.top >= 0 && focus.bottom <= 500, JSON.stringify(focus));
   } finally {
     await page.close();
   }

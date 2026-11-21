@@ -5894,19 +5894,21 @@ function compactJimStageBesideNarrowPanel(panel, place) {
       (!desktopDrawing.matches ||
         stacked ||
         cardWidth < JIM_SELF_VIEW_WIDTH_PX + 1.25 * rem + 2);
-    if (stacked && document.activeElement === nodes.sidebarResizer)
+    const movedFocus =
+      stacked && document.activeElement === nodes.sidebarResizer;
+    if (movedFocus)
       example
         .querySelector('[data-action="expand"]')
         .focus({ preventScroll: true });
     shell.classList.toggle("drawing-captions-below", below);
     shell.classList.toggle("drawing-stack", stacked);
-    if (stacked && justExpanded) panel.scrollIntoView({ block: "start" });
-    if (below) nodes.jimStage.classList.remove("scrollable");
+    if (stacked && (justExpanded || movedFocus))
+      panel.scrollIntoView({ block: "start" });
     nodes.jimStage.style.maxWidth = expanded && !below ? `${cardWidth}px` : "";
     const compact =
       narrowWindow.matches ||
       panelWidth < JIM_AVATAR_PANEL_MIN_REM * rem ||
-      example?.hasAttribute("data-expanded") === true;
+      drawingExpanded;
     nodes.jimStage.classList.toggle("compact", compact);
     // Hide avatar goes with the avatar, so focus left on it moves to the
     // stage, as when an automatic turn-off hides the button.
