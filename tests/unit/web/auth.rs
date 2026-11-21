@@ -5,8 +5,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 fn return_cookie_ttl_boundary() {
     let now = 100_000;
 
-    for (age, expected) in [(3599, true), (3600, true), (3601, false)] {
-        let payload = format!("{}:state:/peer-lobby", now - age);
+    for (age, expected) in [(-1, false), (3599, true), (3600, true), (3601, false)] {
+        let state = oauth_state_token(now - age).unwrap();
+        let payload = format!("{state}:/peer-lobby");
 
         assert_eq!(
             unexpired_return(&payload, now).is_some(),

@@ -127,7 +127,18 @@ services are unavailable or OAuth is not configured, the callback
 returns a JSON error response.
 
 A signed return cookie can preserve the Peer Lobby or a valid task
-destination for retry; the new login still requires fresh OAuth state.
+destination for retry. Its independent lifetime is one hour for new
+sign-ins. Retrying starts a fresh OAuth authorization. A successful
+callback from before an upgrade can still use its original destination
+while its signed state is valid. A failed callback from before an upgrade can
+preserve the destination for retry while the signed state cookie is still
+valid and matches the callback state.
+
+A reverse proxy must allow the full response headers on both
+`/api/login` and `/api/callback`. Long task destinations can put the
+redirect headers over 4 KiB on either route, including on older servers.
+For nginx, use an upstream `proxy_buffer_size` of at least 8 KiB for
+these routes.
 A server reached at two hosts signs people in only at the one its app
 names. Sign-in at both takes one OAuth App per host and a server for
 each, with that app's client ID and secret in its own config. With

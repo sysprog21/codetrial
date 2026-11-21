@@ -2,6 +2,14 @@
 
 use super::*;
 
+fn timestamped_state(issued: i64, seed: u8) -> String {
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+
+    let mut state = [seed; 23];
+    state[..4].copy_from_slice(&u32::try_from(issued).unwrap().to_be_bytes());
+    URL_SAFE_NO_PAD.encode(state)
+}
+
 fn oauth_test_config(path: &std::path::Path) -> WebServerConfig {
     initialize_account_database(path).unwrap();
 
@@ -113,7 +121,7 @@ async fn github_callback_cancelled_from_peer_lobby_has_retry_link() {
         .as_secs() as i64;
     let stale_return = signed_cookie(
         "codetrial_oauth_return",
-        &format!("{issued}:another-state:/peer-lobby"),
+        &format!("{}:/peer-lobby", timestamped_state(issued, 1)),
         "session-secret",
     );
 
@@ -136,21 +144,23 @@ async fn github_callback_cancelled_from_peer_lobby_has_retry_link() {
     // correctly signed.
     let expired_issued = issued - 10 * 60 - 1;
 
+    let expired_token = timestamped_state(expired_issued, 2);
     let expired_state = signed_cookie(
         "codetrial_oauth_state",
-        &format!("{expired_issued}:expired-state"),
+        &format!("{expired_issued}:{expired_token}"),
         "session-secret",
     );
 
     // An older callback must not use a newer sign-in's return destination.
+    let newer_token = timestamped_state(issued, 3);
     let newer_state = signed_cookie(
         "codetrial_oauth_state",
-        &format!("{issued}:newer-state"),
+        &format!("{issued}:{newer_token}"),
         "session-secret",
     );
     let newer_return = signed_cookie(
         "codetrial_oauth_return",
-        &format!("{issued}:newer-state:/peer-lobby"),
+        &format!("{newer_token}:/peer-lobby"),
         "session-secret",
     );
 
@@ -175,13 +185,13 @@ async fn github_callback_cancelled_from_peer_lobby_has_retry_link() {
 
     let matching_return = signed_cookie(
         "codetrial_oauth_return",
-        &format!("{expired_issued}:expired-state:/peer-lobby"),
+        &format!("{expired_token}:/peer-lobby"),
         "session-secret",
     );
 
     let expired = client
         .get(format!(
-            "{base}/api/callback?code=unused&state=expired-state"
+            "{base}/api/callback?code=unused&state={expired_token}"
         ))
         .header(
             "cookie",
@@ -265,7 +275,7 @@ async fn github_callback_cancelled_from_peer_lobby_has_retry_link() {
             "old signed return cookie",
             signed_cookie(
                 "codetrial_oauth_return",
-                &format!("{}:orphan:/peer-lobby", issued - 10 * 60 - 1),
+                &format!("{}:/peer-lobby", timestamped_state(issued - 10 * 60 - 1, 4)),
                 "session-secret",
             ),
             "/api/login?next=peer-join",
@@ -274,7 +284,7 @@ async fn github_callback_cancelled_from_peer_lobby_has_retry_link() {
             "expired signed return cookie",
             signed_cookie(
                 "codetrial_oauth_return",
-                &format!("{}:orphan:/peer-lobby", issued - 60 * 60 - 1),
+                &format!("{}:/peer-lobby", timestamped_state(issued - 60 * 60 - 1, 4)),
                 "session-secret",
             ),
             "/api/login",
@@ -283,7 +293,7 @@ async fn github_callback_cancelled_from_peer_lobby_has_retry_link() {
             "invalid return cookie signature",
             signed_cookie(
                 "codetrial_oauth_return",
-                &format!("{issued}:orphan:/peer-lobby"),
+                &format!("{}:/peer-lobby", timestamped_state(issued, 4)),
                 "wrong-session-secret",
             ),
             "/api/login",
@@ -351,6 +361,82 @@ async fn github_callback_cancelled_from_peer_lobby_has_retry_link() {
 
     server.shutdown().await;
     github_server.shutdown().await;
+    remove_database(path).await;
+}
+
+#[tokio::test]
+async fn legacy_oauth_retry_requires_matching_unexpired_signed_state() {
+    let path = account_db_path("oauth-legacy-retry");
+    let (base, server) = spawn_web_server(oauth_test_config(&path)).await;
+    let client = http_client();
+    let state = "a".repeat(32);
+    let return_cookie = signed_cookie(
+        "codetrial_oauth_return",
+        &format!("{state}:/peer-lobby"),
+        "session-secret",
+    );
+    for (why, callback_state, state_cookie, expected_retry) in [
+        (
+            "matching state",
+            state.as_str(),
+            Some(state_cookie(&state, "session-secret")),
+            "/api/login?next=peer-join",
+        ),
+        ("missing state cookie", state.as_str(), None, "/api/login"),
+        (
+            "expired state cookie",
+            state.as_str(),
+            Some(state_cookie_aged(&state, "session-secret", 601)),
+            "/api/login",
+        ),
+        (
+            "invalid state signature",
+            state.as_str(),
+            Some(state_cookie(&state, "wrong-secret")),
+            "/api/login",
+        ),
+        (
+            "mismatched state cookie",
+            state.as_str(),
+            Some(state_cookie(&"b".repeat(32), "session-secret")),
+            "/api/login",
+        ),
+        (
+            "mismatched callback state",
+            "other-state",
+            Some(state_cookie(&state, "session-secret")),
+            "/api/login",
+        ),
+        (
+            "missing callback state",
+            "",
+            Some(state_cookie(&state, "session-secret")),
+            "/api/login",
+        ),
+    ] {
+        let mut cookies = format!("codetrial_oauth_return={return_cookie}");
+        if let Some(value) = state_cookie {
+            cookies.push_str(&format!("; codetrial_oauth_state={value}"));
+        }
+        let response = client
+            .get(format!("{base}/api/callback"))
+            .query(&[("error", "access_denied"), ("state", callback_state)])
+            .header("cookie", cookies)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 400, "{why}");
+        assert!(
+            response
+                .text()
+                .await
+                .unwrap()
+                .contains(&format!("href=\"{expected_retry}\"")),
+            "{why}"
+        );
+    }
+
+    server.shutdown().await;
     remove_database(path).await;
 }
 
@@ -492,7 +578,7 @@ async fn github_callback_sets_session_and_clears_oauth_state() {
 ),
 signed_cookie(
     "codetrial_oauth_return",
-    &format!("{issued}:task-state:/t/classroom/delimiter-closer?site=https%3A%2F%2Fteacher.github.io%2Fcourse&version=7"),
+    "task-state:/t/classroom/delimiter-closer?site=https%3A%2F%2Fteacher.github.io%2Fcourse&version=7",
     "session-secret",
 ),
             ),
@@ -519,7 +605,7 @@ signed_cookie(
                 ),
                 signed_cookie(
                     "codetrial_oauth_return",
-                    &format!("{issued}:digit-state:/t/classroom/3sum"),
+                    "digit-state:/t/classroom/3sum",
                     "session-secret",
                 ),
             ),
@@ -542,7 +628,7 @@ signed_cookie(
                 ),
                 signed_cookie(
                     "codetrial_oauth_return",
-                    &format!("{issued}:task-state:/t/classroom/delimiter-closer"),
+                    "task-state:/t/classroom/delimiter-closer",
                     "session-secret",
                 ),
             ),
@@ -582,7 +668,7 @@ async fn github_callback_rate_limit_uses_html_error_page() {
 
     let return_cookie = signed_cookie(
         "codetrial_oauth_return",
-        &format!("{issued}:rate-limited-state:/peer-lobby"),
+        &format!("{}:/peer-lobby", timestamped_state(issued, 5)),
         "session-secret",
     );
 
@@ -730,6 +816,188 @@ async fn github_callback_session_creation_failure_shows_html_retry_page() {
     let body = response.text().await.unwrap();
     assert!(body.contains("Could not create account session. Please try again."));
     assert!(body.contains("href=\"/api/login\""));
+
+    server.shutdown().await;
+    github_server.shutdown().await;
+    remove_database(path).await;
+}
+
+#[tokio::test]
+async fn github_login_return_cookie_fits_chromium_limit() {
+    let path = account_db_path("oauth-return-cookie-size");
+    let mut config = oauth_test_config(&path);
+    config.github_client_id = Some("c".repeat(20));
+    config.production = true;
+    let (base, server) = spawn_web_server(config).await;
+    let client = http_client_builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+
+    let prefix = "/t/classroom/3sum?site=https%3A%2F%2Fteacher.github.io%2F";
+    let suffix = "&version=7";
+    for (destination_size, expected_size) in [(2880, 2978), (3997, 4095), (3998, 4096)] {
+        let site_path = "a".repeat(destination_size - prefix.len() - suffix.len());
+        let destination = format!("{prefix}{site_path}{suffix}");
+        let response = client
+            .get(format!("{base}/api/login"))
+            .query(&[("returnTo", &destination)])
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), 302);
+        // Count the upstream HTTP/1.1 response nginx has to buffer.
+        let header_bytes = "HTTP/1.1 302 Found\r\n\r\n".len()
+            + response
+                .headers()
+                .iter()
+                .map(|(name, value)| name.as_str().len() + ": \r\n".len() + value.as_bytes().len())
+                .sum::<usize>();
+        assert_eq!(header_bytes, destination_size + 1168);
+        assert_eq!(header_bytes <= 4096, destination_size == 2880);
+
+        let pair = response
+            .headers()
+            .get_all("set-cookie")
+            .iter()
+            .map(|value| value.to_str().unwrap())
+            .find(|cookie| cookie.split("; ").any(|part| part == "Max-Age=3600"))
+            .expect("login must set a return cookie")
+            .split(';')
+            .next()
+            .unwrap();
+        let (name, value) = pair.split_once('=').unwrap();
+        assert_eq!(name, "codetrial_oauth_return");
+        let (payload, _) = value.rsplit_once('.').unwrap();
+        assert!(payload.ends_with(&format!(":{destination}")));
+        assert_eq!(
+            name.len() + value.len(),
+            expected_size,
+            "{destination_size}-byte destination"
+        );
+    }
+
+    server.shutdown().await;
+    remove_database(path).await;
+}
+
+#[tokio::test]
+async fn github_oauth_return_cookie_keeps_legacy_wire_format_and_survives_upgrade() {
+    let (github_base, github_server) = spawn_mock_github().await;
+    let path = account_db_path("oauth-legacy-return-cookie");
+    let mut config = oauth_test_config(&path);
+    config.github_oauth_base_url = Some(github_base.clone());
+    config.github_api_base_url = Some(github_base);
+    config.production = true;
+    let (base, server) = spawn_web_server(config).await;
+    let client = http_client_builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+
+    let prefix = "/t/classroom/3sum?site=https%3A%2F%2Fteacher.github.io%2F";
+    let suffix = "&version=7";
+    let site_path = "a".repeat(3997 - prefix.len() - suffix.len());
+    let legacy_destination = format!("{prefix}{site_path}{suffix}");
+    let destination = format!("{prefix}{site_path}a{suffix}");
+    let legacy_name = "codetrial_oauth_return";
+    let legacy_value = signed_cookie(
+        legacy_name,
+        &format!("{}:{legacy_destination}", "a".repeat(32)),
+        "session-secret",
+    );
+    let legacy_pair = format!("{legacy_name}={legacy_value}");
+    let login = client
+        .get(format!("{base}/api/login"))
+        .query(&[("returnTo", &destination)])
+        .header("cookie", &legacy_pair)
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(login.status(), 302);
+    let authorize = reqwest::Url::parse(login.headers()["location"].to_str().unwrap()).unwrap();
+    let state = authorize
+        .query_pairs()
+        .find(|(key, _)| key == "state")
+        .unwrap()
+        .1;
+    let cookies: Vec<_> = login
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .map(|header| header.to_str().unwrap())
+        .collect();
+    assert_eq!(cookies.len(), 2, "login must not add a migration header");
+    let new_return = cookies
+        .iter()
+        .find(|cookie| cookie.starts_with("codetrial_oauth_return="))
+        .unwrap();
+    assert!(new_return.ends_with("; Path=/; HttpOnly; SameSite=Lax; Secure"));
+    let new_pair = new_return.split(';').next().unwrap();
+    let expected = signed_cookie(
+        legacy_name,
+        &format!("{state}:{destination}"),
+        "session-secret",
+    );
+    assert_eq!(new_pair, format!("{legacy_name}={expected}"));
+
+    let legacy_state = "a".repeat(32);
+    let legacy_state_pair = format!(
+        "codetrial_oauth_state={}",
+        state_cookie(&legacy_state, "session-secret")
+    );
+    let new_state_pair = cookies
+        .iter()
+        .find(|cookie| cookie.starts_with("codetrial_oauth_state="))
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap();
+    for (first, second, state, state_pair, destination) in [
+        (
+            legacy_pair.as_str(),
+            new_pair,
+            state.as_ref(),
+            new_state_pair,
+            destination.as_str(),
+        ),
+        (
+            new_pair,
+            legacy_pair.as_str(),
+            legacy_state.as_str(),
+            legacy_state_pair.as_str(),
+            legacy_destination.as_str(),
+        ),
+    ] {
+        let mut jar = std::collections::BTreeMap::new();
+        for pair in [first, second, state_pair] {
+            jar.insert(pair.split_once('=').unwrap().0, pair);
+        }
+        assert_eq!(jar.len(), 2);
+        let header = jar.values().copied().collect::<Vec<_>>().join("; ");
+        assert!(header.len() + "Cookie: \r\n".len() <= 8192);
+        assert!(header.len() + "Cookie: ; \r\n".len() + first.len() > 8192);
+
+        let callback = client
+            .get(format!("{base}/api/callback"))
+            .query(&[("code", "ok"), ("state", state)])
+            .header("cookie", header)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(callback.status(), 302);
+        assert_eq!(callback.headers()["location"], destination);
+        let header_bytes = "HTTP/1.1 302 Found\r\n\r\n".len()
+            + callback
+                .headers()
+                .iter()
+                .map(|(name, value)| name.as_str().len() + ": \r\n".len() + value.as_bytes().len())
+                .sum::<usize>();
+        assert_eq!(header_bytes, destination.len() + 1050);
+        assert!((4097..=8192).contains(&header_bytes));
+    }
 
     server.shutdown().await;
     github_server.shutdown().await;
