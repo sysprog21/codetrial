@@ -1043,6 +1043,51 @@ test("local recording controls preserve the original problem reading space", asy
   }
 });
 
+// A caption that arrives while Confirm is held must not move the button out
+// from under the pointer, or the release lands elsewhere and the draft stays.
+test("streaming captions do not move drawing controls under a pointer", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const page = await openInterview(900, 1000, "&exampleDrawing=1", true);
+  try {
+    await closeSetupCheck(page);
+    await page.locator("#example-board").evaluate((node) => (node.open = true));
+    await page.getByRole("button", { name: "Expand drawing" }).click();
+    await page.evaluate(() => {
+      document.querySelector("#self-view").hidden = false;
+      document.querySelector("#captions-bar").hidden = false;
+      document.querySelector("#captions-text").textContent = "Short caption.";
+    });
+    await settled(page);
+    const canvas = page.locator("#example-board canvas");
+    await canvas.scrollIntoViewIfNeeded();
+    await page.getByRole("button", { name: "Text", exact: true }).click();
+    const rect = await canvas.boundingBox();
+    await page.mouse.click(rect.x + rect.width / 2, rect.y + rect.height / 2);
+    await page
+      .getByRole("textbox", { name: "Label text" })
+      .fill("held confirm");
+    const confirm = page.getByRole("button", { name: "Confirm", exact: true });
+    const before = await confirm.boundingBox();
+    const x = before.x + before.width / 2;
+    const y = before.y + before.height / 2;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.evaluate(() => {
+      document.querySelector("#captions-text").textContent =
+        "Explain the boundary cases and how your approach handles each one. ".repeat(
+          30,
+        );
+    });
+    await settled(page);
+    const after = await confirm.boundingBox();
+    assert.equal(after.y, before.y, "Confirm stays where the pointer pressed");
+    await page.mouse.up();
+    await page.locator(".board-text-draft").waitFor({ state: "hidden" });
+  } finally {
+    await page.close();
+  }
+});
+
 // Room admission is outside this layout check; the real page and drawing
 // handlers run with an editable board, without joining a provider.
 test("expanded drawing text controls stay clear of long captions and self-view", async (t) => {
@@ -1063,6 +1108,7 @@ test("expanded drawing text controls stay clear of long captions and self-view",
     [1280, 800, true],
     [481, 800],
     [900, 800],
+    [900, 500],
     [1023, 800],
     [1024, 800, false, 32, true],
     [1024, 800, true, 32, true],
@@ -1123,6 +1169,45 @@ test("expanded drawing text controls stay clear of long captions and self-view",
             30 * fontSize,
           "an unstacked editor retains its minimum width",
         );
+      if (width === 900 && height === 500) {
+        // A short viewport caps the card at 40dvh; the captions keep their
+        // heading and one line of text, and the card scrolls for the rest.
+        const bar = await page.locator("#captions-bar").evaluate((node) => {
+          const head = node
+            .querySelector(".captions-head")
+            .getBoundingClientRect();
+          const text = node.querySelector("#captions-text");
+          return {
+            height: node.getBoundingClientRect().height,
+            head: head.height,
+            line: parseFloat(getComputedStyle(text).lineHeight),
+          };
+        });
+        assert.ok(
+          bar.height >= bar.head + bar.line - 1,
+          `the captions keep a readable height (${bar.height}px)`,
+        );
+      }
+      if (width === 1024 && height === 800 && fontSize === 32) {
+        // At 32px the editor's 34rem floor alone is taller than the viewport,
+        // so the canvas and the captions cannot share it. What the stacked
+        // layout owes is that the card follows the editor directly, not a
+        // viewport below it.
+        await page
+          .locator(".editor-panel")
+          .evaluate((node) => node.scrollIntoView({ block: "start" }));
+        const panel = await page.locator(".editor-panel").boundingBox();
+        const drawing = await canvas.boundingBox();
+        const card = await page.locator("#jim-stage").boundingBox();
+        assert.ok(
+          drawing.y >= 0 && drawing.y < height,
+          "the canvas starts in view after one scroll to the editor",
+        );
+        assert.ok(
+          card.y - (panel.y + panel.height) <= 2 * fontSize,
+          "the caption card follows the editor instead of sitting a viewport below",
+        );
+      }
       if (width === 900 && height === 800) {
         await page
           .locator(".editor-panel")

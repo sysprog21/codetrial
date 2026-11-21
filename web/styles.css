@@ -2376,8 +2376,9 @@ table.phase-scores {
   flex-shrink: 0;
 }
 
+/* The heading and one line of text stay readable; past that the card scrolls. */
 .drawing-captions-below .jim-stage .captions-bar {
-  min-height: 0;
+  min-height: 3lh;
   flex: 0 1 auto;
 }
 
@@ -2385,10 +2386,10 @@ table.phase-scores {
   margin-right: 0;
 }
 
-@media (max-width: 1023px) {
-  .drawing-captions-below .editor-panel[data-example-drawing="true"] {
-    height: max(34rem, calc(100dvh - 3rem - var(--jim-stage-height, 0px)));
-  }
+/* Reserve the card's 40dvh cap, not its live height: captions that stream in
+   must not move the drawing controls under a pointer. */
+.drawing-captions-below .editor-panel[data-example-drawing="true"] {
+  height: max(34rem, calc(60dvh - 3rem));
 }
 
 @media (min-width: 1024px) {
