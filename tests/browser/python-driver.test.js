@@ -85,6 +85,34 @@ test(
 );
 
 test(
+  "a list kept on self and a failed case do not reach the next case",
+  { skip },
+  () => {
+    const reply = runDriver(
+      `class Solution:
+    def __init__(self):
+        self.seen = []
+
+    def count(self, value):
+        self.seen.append(value)
+        if value == 2:
+            raise ValueError("two")
+        return len(self.seen)
+`,
+      {
+        kind: "function",
+        entry: "count",
+        cases: [{ input: [1] }, { input: [2] }, { input: [3] }],
+      },
+    );
+    assert.deepEqual(
+      reply.results.map((result) => result.actual ?? result.error),
+      [1, "ValueError: two", 1],
+    );
+  },
+);
+
+test(
   "an exception from __init__ fails each case with its own message",
   { skip },
   () => {
@@ -103,6 +131,33 @@ test(
     assert.deepEqual(
       reply.results.map((result) => result.error),
       spec.cases.map(() => "KeyError: 0"),
+    );
+  },
+);
+
+test(
+  "__init__ runs once per case and a class attribute carries over",
+  { skip },
+  () => {
+    const reply = runDriver(
+      `class Solution:
+    built = 0
+
+    def __init__(self):
+        Solution.built += 1
+
+    def count(self, value):
+        return Solution.built
+`,
+      {
+        kind: "function",
+        entry: "count",
+        cases: [{ input: [1] }, { input: [2] }, { input: [3] }],
+      },
+    );
+    assert.deepEqual(
+      reply.results.map((result) => result.actual),
+      [1, 2, 3],
     );
   },
 );
