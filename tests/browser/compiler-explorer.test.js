@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 
+import { evaluate as calculate } from "../../web/calculator.js";
 import {
   ALL_LANGUAGES,
   COMPILED_LANGUAGES,
@@ -429,6 +430,119 @@ test("jump-game cases reject each hop-by-hop shortcut", () => {
       pinned.expected,
       `"${label}" must reject always hopping to ${name}`,
     );
+  }
+});
+
+test("basic-calculator cases reject parsers without a unary minus", () => {
+  // One recursive-descent parser for the wrong ones, which differ only in when
+  // a "-" that starts a term is read as a sign, and in what that sign negates.
+  // web/calculator.js has no such switch, so it only checks the values below.
+  const digit = (c) => c >= "0" && c <= "9";
+  const evaluate = (
+    s,
+    { sign = () => false, rest = false, spaces = false, one = false } = {},
+  ) => {
+    const text = spaces ? s : s.replaceAll(" ", "");
+    let at = 0;
+    const skip = () => {
+      while (text[at] === " ") at += 1;
+    };
+    const term = () => {
+      skip();
+      if (text[at] === "-" && sign(text[at + 1])) {
+        at += 1;
+        if (one && digit(text[at])) return -Number(text[at++]);
+        return rest ? -expression() : -term();
+      }
+      if (text[at] === "(") {
+        at += 1;
+        const value = expression();
+        skip();
+        if (text[at] !== ")") throw new Error(`no ")" at ${at}`);
+        at += 1;
+        return value;
+      }
+      const start = at;
+      while (digit(text[at])) at += 1;
+      if (at === start) throw new Error(`no number at ${start}`);
+      return Number(text.slice(start, at));
+    };
+    const expression = () => {
+      let value = term();
+      skip();
+      while (text[at] === "+" || text[at] === "-") {
+        const op = text[at];
+        at += 1;
+        value = op === "+" ? value + term() : value - term();
+        skip();
+      }
+      return value;
+    };
+    const value = expression();
+    if (at !== text.length) throw new Error(`unread input at ${at}`);
+    return value;
+  };
+  const byLabel = Object.fromEntries(
+    judges["basic-calculator"].cases.map(({ label, input: [s], expected }) => [
+      label,
+      { s, expected },
+    ]),
+  );
+  for (const [name, parse, label] of [
+    [
+      "the binary-minus-only parser",
+      (s) => evaluate(s),
+      "minus before a group",
+    ],
+    [
+      "the parser that prepends 0 for a leading minus",
+      (s) => evaluate(s.trim().startsWith("-") ? `0${s.trim()}` : s),
+      "minus inside a group",
+    ],
+    [
+      "the parser whose minus negates the rest of the expression",
+      (s) => evaluate(s, { sign: () => true, rest: true }),
+      "minus on the first number only",
+    ],
+    [
+      "the parser whose unary minus only precedes a number",
+      (s) => evaluate(s, { sign: digit }),
+      "minus before a group",
+    ],
+    [
+      "the parser whose unary minus must touch its operand",
+      (s) => evaluate(s, { sign: (c) => c === "(" || digit(c), spaces: true }),
+      "space after a leading minus",
+    ],
+    [
+      "the parser whose unary minus reads one digit",
+      (s) => evaluate(s, { sign: () => true, one: true }),
+      "minus before a two-digit number",
+    ],
+  ]) {
+    const pinned = byLabel[label];
+    assert.ok(
+      pinned,
+      `the built-in cases must keep "${label}" to reject ${name}`,
+    );
+    let value;
+    try {
+      value = parse(pinned.s);
+    } catch (error) {
+      value = error.message;
+    }
+    assert.notEqual(value, pinned.expected, `"${label}" must reject ${name}`);
+  }
+  // The task workspace's calculator checks every expected value, and refuses
+  // an unclosed group or input left unread. It also reads `*`, functions and a
+  // plus sign of its own, which the contract leaves out, so each input is held
+  // to the contract's characters first. The shared parser, with its minus
+  // always a sign, must agree, so breaking it cannot reject every wrong one.
+  for (const { input, expected, label } of judges["basic-calculator"].cases) {
+    assert.match(input[0], /^[\d ()+-]+$/, label);
+    assert.doesNotMatch(input[0], /(^|[(+-]) *\+/, label);
+    assert.equal(calculate(input[0]), expected, label);
+    assert.equal(evaluate(input[0], { sign: () => true }), expected, label);
   }
 });
 
