@@ -292,18 +292,21 @@ why CI caches `target` keyed on the lockfile and links with mold, and it is why
 a local run that suddenly takes twenty minutes has usually just had its cache
 invalidated rather than got slower.
 
-An earlier macOS comparison measured relink times of 7.5s and 8.1s with the
-system linker. CI continues to set `CARGO_PROFILE_DEV_DEBUG` and
-`CARGO_PROFILE_TEST_DEBUG` to `line-tables-only` for the whole profile,
-with a measured 40% reduction in relink time. That timing improvement was
-not observed in the macOS comparison.
+CI uses `CARGO_PROFILE_DEV_DEBUG` and `CARGO_PROFILE_TEST_DEBUG` to keep
+only line tables across the entire dev and test profiles. After a
+one-file edit, relinking the test suite took 16.6s with full debug
+information and 9.9s with line tables only, about 40% less time. The
+macOS comparison with the system linker measured 7.5s and 8.1s. The
+reason to use line tables in local builds is to save disk space.
 
-Locally, `[profile.dev.package."*"]` and `[profile.test.package."*"]` use
-`debug = "line-tables-only"` to reduce dependency build output on disk while
-retaining file and line information in backtraces. The Apple Silicon
-measurement in PR #769 reduced a clean web-test target directory by
-49.3 MiB (1.06%). Workspace packages keep full debug information by default
-in local builds.
+Local dev and test builds use `debug = "line-tables-only"` in their
+`package."*"` overrides. Dependencies retain file and line information
+for backtraces, and workspace packages keep full debug information. In
+the Linux measurement from issue #755, a clean
+`cargo test --no-run --all-targets` used 8.0 GB with line tables only,
+down from 9.9 GB with full debug information. Its `web` test executable
+shrunk from 404 MB to 270 MB. On Apple Silicon, a clean build of the
+`web` test alone used 49.3 MiB (1.06%) less target directory space.
 
 ## Environment check
 
