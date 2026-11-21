@@ -547,6 +547,7 @@ const state = {
   candidateCases: [],
   candidateCaseAddition: null,
   candidateCaseEdit: null,
+  removedCandidateCase: null,
   testHistory: [],
   /// The judge's first input, shown as the Add a case placeholder unless the
   /// worked examples are hidden: it is a worked case in its own right.
@@ -695,6 +696,10 @@ const nodes = {
   candidateCaseAdd: document.querySelector("#candidate-case-add"),
   candidateCaseCancel: document.querySelector("#candidate-case-cancel"),
   candidateCaseStatus: document.querySelector("#candidate-case-status"),
+  candidateCaseUndoNotice: document.querySelector(
+    "#candidate-case-undo-notice",
+  ),
+  candidateCaseUndo: document.querySelector("#candidate-case-undo"),
   candidateCaseList: document.querySelector("#candidate-case-list"),
   resultsLabel: document.querySelector("#results-label"),
   resultsBody: document.querySelector("#results-body"),
@@ -1385,6 +1390,8 @@ function bindEvents() {
     cancelCandidateCaseEdit();
   });
 
+  nodes.candidateCaseUndo.addEventListener("click", undoCandidateCaseRemoval);
+
   nodes.candidateCaseList.addEventListener("click", (event) => {
     const button = event.target.closest("[data-edit-case]");
     if (!button || button.disabled) return;
@@ -1396,7 +1403,7 @@ function bindEvents() {
   // remove several cases. A removal re-renders synchronously, which puts the
   // next case's Remove button under the pointer already armed, so a removal
   // click arriving before the next animation frame is ignored -- an
-  // accidental double-click must not delete two cases with no undo.
+  // accidental double-click must not delete two cases with only one undo.
   let removeCaseArmed = true;
   nodes.candidateCaseList.addEventListener("click", (event) => {
     const button = event.target.closest("[data-remove-case]");
@@ -2916,6 +2923,7 @@ const reportRecovery = createReportRecovery({
   },
   offer: (ready, cooldown, cause) => {
     state.phase = "report_recovery";
+    clearCandidateCaseUndo();
     if (strict) updateRunAvailability();
     if (!ready) stopEndingEscape();
     globalThis.clearTimeout(frameworkHintTimer);
@@ -4146,6 +4154,7 @@ async function runTests() {
     }
   }
 
+  clearCandidateCaseUndo();
   const codeSnapshot = currentCode();
   const languageSnapshot = state.language;
   const startedAt = new Date();
@@ -4309,6 +4318,7 @@ async function addCandidateCaseNow() {
     }
     const testCase = candidateCaseFromForm(spec);
     state.candidateCases.push(testCase);
+    clearCandidateCaseUndo();
     writeStored(
       candidateCaseStorageKey,
       JSON.stringify(state.candidateCases),
@@ -4371,6 +4381,7 @@ async function saveCandidateCaseEdit() {
 
     const replacement = candidateCaseFromForm(spec);
     state.candidateCases[edit.index] = replacement;
+    clearCandidateCaseUndo();
 
     writeStored(
       candidateCaseStorageKey,
@@ -4464,6 +4475,10 @@ function cancelCandidateCaseEdit({
   }
 }
 
+function candidateCaseReadyStatus() {
+  return `${state.candidateCases.length}/${CANDIDATE_CASE_LIMIT} cases ready.`;
+}
+
 function renderCandidateCases() {
   const editing = state.candidateCaseEdit !== null;
 
@@ -4481,11 +4496,12 @@ function renderCandidateCases() {
   // the live region blank; removeCandidateCase writes the count itself, which
   // is what lets a removal down to zero still announce "0/5 cases ready."
   if (state.candidateCases.length) {
-    nodes.candidateCaseStatus.textContent = `${state.candidateCases.length}/${CANDIDATE_CASE_LIMIT} cases ready.`;
+    nodes.candidateCaseStatus.textContent = candidateCaseReadyStatus();
   }
 }
 
 function clearCandidateCases() {
+  clearCandidateCaseUndo();
   cancelCandidateCaseEdit({
     restoreDraft: false,
     returnFocus: false,
@@ -4503,6 +4519,11 @@ function clearCandidateCases() {
 /// the interviewer already holds from the run's topics.tests payload, which
 /// nothing here republishes or recalls.
 function removeCandidateCase(index) {
+  if (codingClosed()) {
+    nodes.candidateCaseStatus.textContent =
+      "Cases cannot be removed right now.";
+    return;
+  }
   if (state.candidateCaseEdit) {
     nodes.candidateCaseStatus.textContent =
       "Save or cancel the current edit before removing a case.";
@@ -4519,6 +4540,15 @@ function removeCandidateCase(index) {
       "Wait for the test run to finish before removing a case.";
     return;
   }
+  if (state.candidateCaseAddition) {
+    nodes.candidateCaseStatus.textContent =
+      "Wait for the case addition to finish before removing a case.";
+    return;
+  }
+  const testCase = state.candidateCases[index];
+  if (!testCase) return;
+  state.removedCandidateCase = { testCase, index };
+  nodes.candidateCaseUndoNotice.hidden = false;
   state.candidateCases = state.candidateCases.filter(
     (_, current) => current !== index,
   );
@@ -4531,13 +4561,50 @@ function removeCandidateCase(index) {
   // renderCandidateCases leaves the status alone on an empty list, so the
   // removal path writes the count itself and a removal down to zero is still
   // announced.
-  nodes.candidateCaseStatus.textContent = `${state.candidateCases.length}/${CANDIDATE_CASE_LIMIT} cases ready.`;
+  nodes.candidateCaseStatus.textContent = `${candidateCaseReadyStatus()} Undo available.`;
   invalidateCandidateCaseResults();
   const remaining =
     nodes.candidateCaseList.querySelectorAll("[data-remove-case]");
   (
     remaining[Math.min(index, remaining.length - 1)] || nodes.candidateCaseAdd
   ).focus();
+}
+
+function clearCandidateCaseUndo() {
+  if (state.removedCandidateCase)
+    nodes.candidateCaseStatus.textContent =
+      nodes.candidateCaseStatus.textContent.replace(/ Undo available\.$/, "");
+  state.removedCandidateCase = null;
+  if (document.activeElement === nodes.candidateCaseUndo)
+    (nodes.candidateCaseAdd.disabled
+      ? nodes.candidateCaseInput
+      : nodes.candidateCaseAdd
+    ).focus();
+  nodes.candidateCaseUndoNotice.hidden = true;
+}
+
+function undoCandidateCaseRemoval() {
+  const removed = state.removedCandidateCase;
+  if (!removed || codingClosed()) return;
+  if (state.candidateCaseEdit || state.candidateCaseAddition) {
+    nodes.candidateCaseStatus.textContent = state.candidateCaseEdit
+      ? "Save or cancel the current edit before restoring a case."
+      : "Wait for the case addition to finish before restoring a case.";
+    return;
+  }
+  clearCandidateCaseUndo();
+  state.candidateCases.splice(removed.index, 0, removed.testCase);
+  writeStored(
+    candidateCaseStorageKey,
+    JSON.stringify(state.candidateCases),
+    strict ? null : tabStorage,
+  );
+  renderCandidateCases();
+  invalidateCandidateCaseResults();
+  nodes.candidateCaseStatus.textContent = `Case ${removed.index + 1} restored. ${candidateCaseReadyStatus()}`;
+  nodes.candidateCaseList
+    .querySelector(`[data-edit-case="${removed.index}"]`)
+    .focus();
 }
 
 function updateRunAvailability() {
@@ -4548,7 +4615,10 @@ function updateRunAvailability() {
   if (restoreOff && document.activeElement === nodes.restoreStarter)
     nodes.languageSelect.focus({ preventScroll: true });
   nodes.restoreStarter.disabled = restoreOff;
-  if (restoreOff) clearRestoreStatus();
+  if (restoreOff) {
+    clearRestoreStatus();
+    clearCandidateCaseUndo();
+  }
   // Off wherever a press would do nothing: another tab, a locked editor.
   const formatOff = !formatAvailable();
   if (formatOff && document.activeElement === nodes.formatButton)

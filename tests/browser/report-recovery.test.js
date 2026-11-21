@@ -290,6 +290,7 @@ function pageHarness(phase = "live") {
       timers.clearTimeout(scope.deliveryGrace);
       scope.deliveryGrace = 0;
     },
+    clearCandidateCaseUndo: () => {},
     stopAvatar: () => events.push("stop-avatar"),
     stopLocalMedia: () => events.push("stop-media"),
     localRecording: { dispose() {}, stop: async () => {} },
