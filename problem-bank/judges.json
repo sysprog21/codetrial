@@ -4960,6 +4960,22 @@
             6
           ]
         ]
+      },
+      {
+        "label": "no existing blocks",
+        "input": [
+          [],
+          [
+            4,
+            8
+          ]
+        ],
+        "expected": [
+          [
+            4,
+            8
+          ]
+        ]
       }
     ],
     "paramNames": [
