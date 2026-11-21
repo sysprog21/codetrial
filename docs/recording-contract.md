@@ -1251,10 +1251,10 @@ the next retention pass takes the row.
 A recording is only due while it is `ready`, `failed` or `cleanup_failed`. One
 still `transferring` is being uploaded, and withdrawal moves it out of that
 state on its own. A recording that failed for some other reason and was never
-delivered has no deadline at all: its staged object is the bucket's lifecycle
+delivered has no retention deadline unless `--expire` marks it (when any `failed` row is due by `expires_at`): its staged object is the bucket's lifecycle
 rule to collect, which is why that rule is provisioned rather than optional.
 The one failure that can leave a Drive file, `drive_failed`, is the exception:
-its row is due the retention window after its last failure, which is also how
+its row is due the retention window after its last failure whatever its `expires_at`, which is also how
 long an operator has to retry the delivery before the deletion pass takes the
 file, the address and the replay. A retry that fails again starts the window
 over.
@@ -1384,7 +1384,7 @@ failure that has no symptom until it has a bad one.
 | `duration_seconds` | INTEGER | yes | from the provider, once the recording ends |
 | `created_at`, `updated_at` | INTEGER | no | epoch seconds |
 | `started_at`, `ended_at`, `ready_at` | INTEGER | yes | each null until it happens |
-| `expires_at` | INTEGER | yes | the retention deadline |
+| `expires_at` | INTEGER | yes | the Drive grant's expiry until the row is `ready`, then the retention deadline |
 | `stopped_at` | INTEGER | yes | when the provider agreed to stop; an egress id with no `stopped_at` is a job still running |
 | `deleted_at` | INTEGER | yes | when the media was deleted |
 | `delete_error` | TEXT | yes | a short machine code for a partial failure |
