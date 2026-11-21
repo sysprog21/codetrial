@@ -426,6 +426,42 @@ test("jump-game cases reject each hop-by-hop shortcut", () => {
   }
 });
 
+test("insert-interval cases reject reading the last block before checking for one", () => {
+  const merge = (intervals, [start, end]) => {
+    const before = intervals.filter(([, b]) => b < start);
+    const after = intervals.filter(([a]) => a > end);
+    const overlapping = intervals.filter(([a, b]) => b >= start && a <= end);
+    return [
+      ...before,
+      [
+        Math.min(start, ...overlapping.map(([a]) => a)),
+        Math.max(end, ...overlapping.map(([, b]) => b)),
+      ],
+      ...after,
+    ];
+  };
+  const lastBlockFirst = (intervals, block) =>
+    block[0] > intervals[intervals.length - 1][1]
+      ? [...intervals, block]
+      : merge(intervals, block);
+  const label = "no existing blocks";
+  const { cases } = judges["insert-interval"];
+  for (const { label: name, input, expected } of cases) {
+    assert.deepEqual(
+      merge(...structuredClone(input)),
+      expected,
+      `"${name}" must expect the merged blocks`,
+    );
+  }
+  const pinned = cases.find(({ label: name }) => name === label);
+  assert.ok(pinned, `the built-in cases must keep "${label}"`);
+  assert.throws(
+    () => lastBlockFirst(...structuredClone(pinned.input)),
+    TypeError,
+    `"${label}" must reject reading the last block before checking for one`,
+  );
+});
+
 test("harness generator covers every function problem without network access", () => {
   for (const [id, spec] of Object.entries(judges)) {
     if (spec.kind !== "function") continue;
