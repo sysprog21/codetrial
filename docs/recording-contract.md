@@ -1148,6 +1148,14 @@ DELETE https://www.googleapis.com/drive/v3/files/{fileId}?supportsAllDrives=true
 
 ## The history routes
 
+The signed-in `GET /api/session` response includes a boolean
+`recordingAvailable` from `state.recorder.is_some()`. A value of `true` means
+the server has configured a recorder. A candidate's recording list can still
+be empty. This is server state, independent of the frontend deployment flag.
+The signed-out response omits the field. Clients must handle an absent field
+and offer recording history only when the session confirms sign-in and the
+field is `true`.
+
 What a candidate reads about their own interviews, all three signed in and all
 three scoped to the account.
 

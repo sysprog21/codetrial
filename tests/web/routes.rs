@@ -316,6 +316,61 @@ async fn a_server_that_does_not_record_caps_nothing_beyond_the_range() {
     server.shutdown().await;
 }
 
+#[tokio::test]
+async fn session_reports_recording_availability_for_signed_in_accounts() {
+    for available in [false, true] {
+        let (config, cookie, path) = signed_in_web_config("session-recording");
+
+        // Inject the recorder with no recording config on the router, so a
+        // check against configuration instead of the running service fails.
+        let (base, server) = if available {
+            let recorder = codetrial::recording::Recorder {
+                provider: std::sync::Arc::new(FakeRecordingProvider::default()),
+                clock: std::sync::Arc::new(codetrial::recording::SystemClock),
+                delivery: None,
+                config: recording_config(),
+            };
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let base = format!("http://{}", listener.local_addr().unwrap());
+            let service = codetrial::web::web_service_with_recorder(config, None, recorder);
+            (base, spawn_test_server(listener, service))
+        } else {
+            spawn_web_server(config).await
+        };
+        let client = http_client();
+        let url = format!("{base}/api/session");
+        let signed_in = client
+            .get(&url)
+            .header("cookie", cookie)
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json::<Value>()
+            .await
+            .unwrap();
+        assert_eq!(signed_in["signedIn"], true);
+        assert_eq!(signed_in["user"]["login"], "one");
+        assert_eq!(signed_in["recordingAvailable"], available);
+
+        let signed_out = client
+            .get(&url)
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json::<Value>()
+            .await
+            .unwrap();
+        assert_eq!(signed_out["signedIn"], false);
+        assert!(signed_out.get("recordingAvailable").is_none());
+        server.shutdown().await;
+        remove_database(path).await;
+    }
+}
+
 #[test]
 fn router_routes_match_a_fixed_allowlist() {
     let routes = declared_routes();
