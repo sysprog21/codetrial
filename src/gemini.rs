@@ -494,14 +494,14 @@ impl GeminiLiveSession {
             // ownership evidence if the enclosing startup future is cancelled.
             writer.feed(message).await?;
             *queued_audio = audio;
+            #[cfg(test)]
+            tests::live_startup::pause_startup_write(audio).await;
             writer.flush().await
         })
         .await
         else {
-            // Every caller in the room loop logs a failed write and waits for
-            // `next_event` to report the close, which a peer that stopped
-            // answering never sends. Ending the reader drops its sender, and
-            // that is the close the loop is waiting for.
+            // A stalled peer never sends the close `next_event` waits for.
+            // Ending the reader drops its sender and wakes the room loop.
             eprintln!(
                 "Gemini write stalled for {}s, ending the session",
                 WRITE_TIMEOUT.as_secs()
