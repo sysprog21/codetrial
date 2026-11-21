@@ -12258,6 +12258,108 @@ lobbyTest(
 );
 
 lobbyTest(
+  "Practice this on a past report offers that problem's sibling, and taking it selects the sibling",
+  async (page) => {
+    const [reported, sibling] = ["two-sum", "contains-duplicate-ii"].map(
+      pageOf,
+    );
+    reports = [focusedAttempt(reported)];
+    // A fixed draw, so the selection the offer sits beside is never the sibling.
+    await page.addInitScript(() => {
+      Math.random = () => 0;
+    });
+    await lobby(page);
+    await awaitReady(page);
+
+    const offer = page.locator("#sibling-suggestion");
+    const selected = () =>
+      page.$eval(
+        '[data-problem][aria-pressed="true"]',
+        (card) => card.dataset.problem,
+      );
+    // The carry-forward focus was chosen by no one report, so it offers none.
+    assert.equal(await offer.isVisible(), false);
+
+    const history = page.locator("#attempt-history");
+    await history.getByRole("button", { name: "Open report" }).first().click();
+    await history
+      .getByRole("button", { name: "Practice this: Build a test table" })
+      .click();
+    assert.equal(await offer.isVisible(), true);
+    assert.equal(
+      await page.textContent("#sibling-suggestion-text"),
+      "Try your practice focus on a new problem: Recent Card Repeat Alert (Easy).",
+    );
+    const before = await selected();
+    assert.notEqual(before, sibling, "the offer selects nothing on its own");
+
+    await page.click("#sibling-suggestion-pick");
+    assert.equal(await selected(), sibling);
+    assert.equal(
+      await page.textContent("#recommendation"),
+      "Selected problem: Recent Card Repeat Alert (Easy).",
+    );
+    assert.equal(await offer.isVisible(), false);
+    // The offer hid its own button; focus stays on a visible control.
+    assert.equal(
+      await page.evaluate(() => document.activeElement.id),
+      "random-problem",
+    );
+  },
+);
+
+lobbyTest(
+  "a focus chosen on the report page offers its sibling once it reaches the lobby",
+  async (page) => {
+    await lobby(page);
+    await page.evaluate((problemId) => {
+      sessionStorage.setItem(
+        "codetrial.selectedPracticeFocus",
+        JSON.stringify({
+          phase: "Test",
+          weakness: "Test boundaries",
+          drill: "Build a test table",
+          successCriterion: "Predict each output",
+          problemId,
+        }),
+      );
+    }, pageOf("valid-anagram"));
+    await lobby(page);
+    await awaitReady(page);
+    assert.equal(
+      await page.textContent("#sibling-suggestion-text"),
+      "Try your practice focus on a new problem: Marquee Letter Tiles (Easy).",
+    );
+
+    // Strict assigns the problem, so nothing may offer one to choose.
+    await page.selectOption("#selection-mode", "strict");
+    assert.equal(await page.locator("#sibling-suggestion").isVisible(), false);
+    await page.selectOption("#selection-mode", "practice");
+    assert.equal(await page.locator("#sibling-suggestion").isVisible(), true);
+  },
+);
+
+lobbyTest("a sibling already passed is not offered", async (page) => {
+  reports = [
+    focusedAttempt(pageOf("two-sum")),
+    hired(pageOf("contains-duplicate-ii"), { createdAt: 50 }),
+  ];
+  await lobby(page);
+  await awaitReady(page);
+  // The newest row is the report that carries the plan.
+  const history = page.locator("#attempt-history");
+  await history.getByRole("button", { name: "Open report" }).first().click();
+  await history
+    .getByRole("button", { name: "Practice this: Build a test table" })
+    .click();
+  assert.match(
+    await page.textContent("#practice-focus"),
+    /^Selected practice focus/,
+  );
+  assert.equal(await page.locator("#sibling-suggestion").isVisible(), false);
+});
+
+lobbyTest(
   "the lobby offers change keys only when its server can save them",
   async (page) => {
     await lobby(page);
