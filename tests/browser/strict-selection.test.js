@@ -1976,6 +1976,7 @@ for (const selection of ["strict", "practice"]) {
     if (!page) return;
     await preflight(page);
     await page.locator("#editor:not([disabled])").waitFor();
+    await page.waitForFunction(() => window.roomJoins.length >= 1);
     await page.locator("#editor").fill("active attempt must survive");
     await page.waitForFunction(() => {
       const event = new Event("beforeunload", { cancelable: true });
