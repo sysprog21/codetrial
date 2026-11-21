@@ -426,6 +426,42 @@ test("jump-game cases reject each hop-by-hop shortcut", () => {
   }
 });
 
+test("insert-interval cases reject reading the last block before checking for one", () => {
+  const merge = (intervals, [start, end]) => {
+    const before = intervals.filter(([, b]) => b < start);
+    const after = intervals.filter(([a]) => a > end);
+    const overlapping = intervals.filter(([a, b]) => b >= start && a <= end);
+    return [
+      ...before,
+      [
+        Math.min(start, ...overlapping.map(([a]) => a)),
+        Math.max(end, ...overlapping.map(([, b]) => b)),
+      ],
+      ...after,
+    ];
+  };
+  const lastBlockFirst = (intervals, block) =>
+    block[0] > intervals[intervals.length - 1][1]
+      ? [...intervals, block]
+      : merge(intervals, block);
+  const label = "no existing blocks";
+  const { cases } = judges["insert-interval"];
+  for (const { label: name, input, expected } of cases) {
+    assert.deepEqual(
+      merge(...structuredClone(input)),
+      expected,
+      `"${name}" must expect the merged blocks`,
+    );
+  }
+  const pinned = cases.find(({ label: name }) => name === label);
+  assert.ok(pinned, `the built-in cases must keep "${label}"`);
+  assert.throws(
+    () => lastBlockFirst(...structuredClone(pinned.input)),
+    TypeError,
+    `"${label}" must reject reading the last block before checking for one`,
+  );
+});
+
 test("harness generator covers every function problem without network access", () => {
   for (const [id, spec] of Object.entries(judges)) {
     if (spec.kind !== "function") continue;
@@ -2432,6 +2468,85 @@ public:
     ["cpp", noGpp],
     ["java", noJava],
   ];
+
+  // The empty block list reaches a compiled harness as a matrix with no rows,
+  // which the JavaScript model in the insert-interval test never builds or
+  // prints. A correct solution in each language must return the new block
+  // there, and every other case unchanged.
+  const insertBlock = {
+    c: `int** addBusyBlock(int** intervals, int intervalsSize, int* intervalsColSize, int* newInterval, int newIntervalSize, int* returnSize, int** returnColumnSizes) {
+    int** out = malloc(sizeof(int*) * (intervalsSize + 1));
+    *returnColumnSizes = malloc(sizeof(int) * (intervalsSize + 1));
+    int n = 0, i = 0, start = newInterval[0], end = newInterval[1];
+    while (i < intervalsSize && intervals[i][1] < start) out[n++] = intervals[i++];
+    for (; i < intervalsSize && intervals[i][0] <= end; i++) {
+        if (intervals[i][0] < start) start = intervals[i][0];
+        if (intervals[i][1] > end) end = intervals[i][1];
+    }
+    out[n] = malloc(2 * sizeof(int));
+    out[n][0] = start;
+    out[n++][1] = end;
+    while (i < intervalsSize) out[n++] = intervals[i++];
+    for (int k = 0; k < n; k++) (*returnColumnSizes)[k] = 2;
+    *returnSize = n;
+    return out;
+}`,
+    cpp: `class Solution {
+public:
+    vector<vector<int>> addBusyBlock(vector<vector<int>>& intervals, vector<int>& newInterval) {
+        vector<vector<int>> out;
+        size_t i = 0;
+        int start = newInterval[0], end = newInterval[1];
+        while (i < intervals.size() && intervals[i][1] < start) out.push_back(intervals[i++]);
+        for (; i < intervals.size() && intervals[i][0] <= end; i++) {
+            start = min(start, intervals[i][0]);
+            end = max(end, intervals[i][1]);
+        }
+        out.push_back({start, end});
+        while (i < intervals.size()) out.push_back(intervals[i++]);
+        return out;
+    }
+};`,
+    java: `class Solution {
+    public int[][] addBusyBlock(int[][] intervals, int[] newInterval) {
+        int[][] out = new int[intervals.length + 1][];
+        int n = 0, i = 0, start = newInterval[0], end = newInterval[1];
+        while (i < intervals.length && intervals[i][1] < start) out[n++] = intervals[i++];
+        for (; i < intervals.length && intervals[i][0] <= end; i++) {
+            start = Math.min(start, intervals[i][0]);
+            end = Math.max(end, intervals[i][1]);
+        }
+        out[n++] = new int[] {start, end};
+        while (i < intervals.length) out[n++] = intervals[i++];
+        int[][] result = new int[n][];
+        for (int k = 0; k < n; k++) result[k] = out[k];
+        return result;
+    }
+}`,
+  };
+  for (const [language, skip] of flattenLanguages) {
+    it(
+      `${language} harness passes a correct insert-interval solution, no existing blocks included`,
+      { skip },
+      async () => {
+        const { cases } = judges["insert-interval"];
+        assert.ok(
+          cases.some(({ label }) => label === "no existing blocks"),
+          'the built-in cases must keep "no existing blocks"',
+        );
+        const results = await runJudge(
+          language,
+          "insert-interval",
+          insertBlock[language],
+        );
+        assert.equal(results.length, cases.length);
+        cases.forEach(({ label, expected }, index) => {
+          assert.equal(results[index].error, undefined, label);
+          assert.deepEqual(results[index].actual, expected, label);
+        });
+      },
+    );
+  }
 
   // A Morris-style flatten that leaves its last thread in place links the
   // chain back to the root. The serializer used to follow that link forever,

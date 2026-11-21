@@ -628,6 +628,7 @@ fn static_problem_bank_and_judges_cover_each_problem() {
         ("longest-consecutive-sequence", "duplicates in long run"),
         ("summary-ranges", "negative to positive range"),
         ("insert-interval", "touching endpoints merge"),
+        ("insert-interval", "no existing blocks"),
         (
             "minimum-number-of-arrows-to-burst-balloons",
             "touching endpoints share check",
