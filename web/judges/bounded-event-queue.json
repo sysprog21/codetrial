@@ -62,7 +62,7 @@
         ],
         [
           [
-            3
+            2
           ],
           [
             4
@@ -160,6 +160,51 @@
       "expected": [
         null,
         0
+      ]
+    },
+    {
+      "label": "rejected push keeps later order",
+      "input": [
+        [
+          "EventQueue",
+          "push",
+          "push",
+          "push",
+          "pop",
+          "push",
+          "pop",
+          "pop"
+        ],
+        [
+          [
+            2
+          ],
+          [
+            7
+          ],
+          [
+            9
+          ],
+          [
+            11
+          ],
+          [],
+          [
+            13
+          ],
+          [],
+          []
+        ]
+      ],
+      "expected": [
+        null,
+        true,
+        true,
+        false,
+        7,
+        true,
+        9,
+        13
       ]
     }
   ],

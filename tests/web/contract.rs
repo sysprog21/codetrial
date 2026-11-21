@@ -562,6 +562,14 @@ fn static_problem_bank_and_judges_cover_each_problem() {
         "balancedBst"
     );
     for (id, label) in [
+        (
+            "fixed-capacity-ring-buffer",
+            "wrap after removing the oldest",
+        ),
+        (
+            "fixed-capacity-ring-buffer",
+            "rejected push keeps later order",
+        ),
         ("two-sum", "duplicates"),
         ("merge-sorted-array", "duplicates"),
         ("remove-element", "remove every"),
