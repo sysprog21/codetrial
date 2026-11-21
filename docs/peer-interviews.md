@@ -108,11 +108,28 @@ Give the app exactly one callback URL. The server does not name one when it
 sends people to GitHub, so GitHub returns every sign-in to the first URL
 registered. The state cookie belongs to the host the sign-in started at, not
 to its port, so a sign-in started at another host, such as `localhost` against
-a registered `127.0.0.1`, or a tunnel against loopback, comes back without it
-and fails with `Login state is missing or expired.`, or with
-`Login state did not match.` when an earlier attempt left a cookie at the
-registered host. A server reached at two hosts signs people in only at the one
-its app names. Sign-in at both takes one OAuth App per host and a server for
+a registered `127.0.0.1`, or a tunnel against loopback, comes back without it.
+With account services and GitHub OAuth configured, the browser shows
+a `GitHub sign-in failed` page telling the user to
+open the site at the address where sign-in started and try again. This can
+happen when the state cookie is missing or expired, including when the OAuth
+callback returns to a different host.
+If an earlier attempt left a valid, unexpired state cookie at the
+registered host, but its state differs from the callback state, the
+page instead explains that the sign-in state did not match. Both pages
+provide a link to try signing in again.
+When account services and GitHub OAuth are configured, cancellation,
+missing or expired state, upstream failures, session creation failures,
+and rate limiting show readable HTML retry pages. Rate limiting returns
+an HTML 429 response even if account services or OAuth are unavailable,
+because it is checked before the configuration. Otherwise, if account
+services are unavailable or OAuth is not configured, the callback
+returns a JSON error response.
+
+A signed return cookie can preserve the Peer Lobby or a valid task
+destination for retry; the new login still requires fresh OAuth state.
+A server reached at two hosts signs people in only at the one its app
+names. Sign-in at both takes one OAuth App per host and a server for
 each, with that app's client ID and secret in its own config. With
 `NODE_ENV=production` the server marks its cookies `Secure`, so the origin
 and the callback URL have to be `https://`.
