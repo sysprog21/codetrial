@@ -60,6 +60,31 @@
         ]
       ],
       "expected": true
+    },
+    {
+      "label": "term inside a longer term",
+      "input": [
+        "catsdog",
+        [
+          "cat",
+          "cats",
+          "dog",
+          "sd"
+        ]
+      ],
+      "expected": true
+    },
+    {
+      "label": "one different letter in a run",
+      "input": [
+        "aaabaaa",
+        [
+          "a",
+          "aa",
+          "aabaa"
+        ]
+      ],
+      "expected": true
     }
   ],
   "paramNames": [

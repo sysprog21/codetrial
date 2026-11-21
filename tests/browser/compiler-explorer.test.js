@@ -374,6 +374,20 @@ test("valid-anagram cases reject equal-length character-digest shortcuts", () =>
   }
 });
 
+/// The built-in case `label` of `problem`, which a test pinning a wrong
+/// solution to it must still find, so dropping the case fails by its name.
+const pinnedCase = (problem, label) => {
+  const row = judges[problem].cases.find((item) => item.label === label);
+  assert.ok(row, `the built-in cases must keep "${label}"`);
+  return row;
+};
+
+/// Asserts that `run`, a wrong solution, misses the answer case `label` expects.
+const assertRejects = (problem, label, run, message) => {
+  const { input, expected } = pinnedCase(problem, label);
+  assert.notEqual(run(...structuredClone(input)), expected, message);
+};
+
 test("jump-game cases reject each hop-by-hop shortcut", () => {
   const travel = (choose) => (nums) => {
     let at = 0;
@@ -394,12 +408,6 @@ test("jump-game cases reject each hop-by-hop shortcut", () => {
     }
     return best;
   };
-  const byLabel = Object.fromEntries(
-    judges["jump-game"].cases.map(({ label, input: [nums], expected }) => [
-      label,
-      { nums, expected },
-    ]),
-  );
   for (const [name, choose, label] of [
     [
       "the full range",
@@ -426,11 +434,10 @@ test("jump-game cases reject each hop-by-hop shortcut", () => {
       "far small relay beats a near big one",
     ],
   ]) {
-    const pinned = byLabel[label];
-    assert.ok(pinned, `the built-in cases must keep "${label}"`);
-    assert.notEqual(
-      travel(choose)(pinned.nums),
-      pinned.expected,
+    assertRejects(
+      "jump-game",
+      label,
+      travel(choose),
       `"${label}" must reject always hopping to ${name}`,
     );
   }
@@ -643,6 +650,119 @@ test("basic-calculator cases reject parsers without a unary minus", () => {
     if (input[0].length <= MAX_EXPRESSION_LENGTH)
       assert.ok(calculate(input[0]) === expected, label);
     assert.ok(evaluate(input[0], { sign: () => true }) === expected, label);
+  }
+});
+
+test("word-break cases reject each split that never revisits a cut", () => {
+  // Cuts one term at a time and never goes back. With `lookahead` it only
+  // takes a term that the rest of the tag can start another term after.
+  const split =
+    (pick, fromEnd, lookahead = false) =>
+    (s, vocabulary) => {
+      const flip = (text) => (fromEnd ? [...text].reverse().join("") : text);
+      const tag = flip(s);
+      const terms = vocabulary.map(flip);
+      const followed = (at) =>
+        at === tag.length || terms.some((term) => tag.startsWith(term, at));
+      let at = 0;
+      while (at < tag.length) {
+        const fits = terms.filter(
+          (term) =>
+            tag.startsWith(term, at) &&
+            (!lookahead || followed(at + term.length)),
+        );
+        if (fits.length === 0) return false;
+        at += pick(fits).length;
+      }
+      return true;
+    };
+  const shortest = (fits) =>
+    fits.reduce((best, term) => (term.length < best.length ? term : best));
+  const longest = (fits) =>
+    fits.reduce((best, term) => (term.length > best.length ? term : best));
+  const first = (fits) => fits[0];
+  const last = (fits) => fits.at(-1);
+  const choices = [
+    ["the shortest term", shortest],
+    ["the longest term", longest],
+    ["the first listed term", first],
+    ["the last listed term", last],
+  ].flatMap(([term, pick]) =>
+    [false, true].flatMap((lookahead) =>
+      [false, true].map((fromEnd) => [
+        `${term}${lookahead ? " another term can follow" : ""}${fromEnd ? " from the end" : ""}`,
+        split(pick, fromEnd, lookahead),
+      ]),
+    ),
+  );
+  const run = "one different letter in a run";
+  for (const [name, cut] of choices) {
+    assertRejects(
+      "word-break",
+      run,
+      cut,
+      `"${run}" must reject always cutting ${name}`,
+    );
+  }
+  const inside = "term inside a longer term";
+  for (const lookahead of [false, true]) {
+    assertRejects(
+      "word-break",
+      inside,
+      split(shortest, false, lookahead),
+      `"${inside}" must reject always cutting the shortest term${lookahead ? " another term can follow" : ""}`,
+    );
+  }
+
+  // Both strings of the run case read the same reversed, so only a case that
+  // does not shows the cuts from the end are made from the end. The lookahead
+  // rows fail the new cases whether or not they look ahead, so only a case
+  // where looking ahead changes the answer shows that they look. Every row
+  // misses the run case whichever term it cuts, so the term each one picks is
+  // pinned on overlapping words, which lists car before ca: from the front
+  // the shortest and the last listed term split it, while the longest and
+  // the first listed term stop at s.
+  const { input, expected } = pinnedCase("word-break", inside);
+  assert.equal(
+    split(shortest, true)(...input),
+    expected,
+    `"${inside}" must split when the shortest term is cut from the end`,
+  );
+  const cars = pinnedCase("word-break", "overlapping words");
+  assert.equal(
+    split(longest, false, true)(...cars.input),
+    cars.expected,
+    `"overlapping words" must split when the longest term another term can follow is cut`,
+  );
+  for (const [name, pick, splits] of [
+    ["the shortest term", shortest, true],
+    ["the last listed term", last, true],
+    ["the longest term", longest, false],
+    ["the first listed term", first, false],
+  ]) {
+    assert.equal(
+      split(pick, false)(...cars.input) === cars.expected,
+      splits,
+      `"overlapping words" must ${splits ? "split" : "reject"} when ${name} is cut`,
+    );
+  }
+
+  // A wrong solution missing an answer says nothing if the answer is wrong, so
+  // each new case carries a split that shows it is true.
+  for (const [label, pieces] of [
+    [inside, ["cats", "dog"]],
+    [run, ["a", "aabaa", "a"]],
+  ]) {
+    const {
+      input: [s, vocabulary],
+      expected,
+    } = pinnedCase("word-break", label);
+    assert.equal(expected, true, `"${label}" must expect a split`);
+    assert.ok(
+      pieces.every((piece) => vocabulary.includes(piece)) &&
+        pieces.join("") === s,
+      `"${label}" must split as ${pieces.join(" + ")}`,
+    );
   }
 });
 
