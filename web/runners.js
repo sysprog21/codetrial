@@ -941,7 +941,9 @@ function runWorker(code, spec) {
   });
 }
 
-const pythonDriver = `
+/// Exported so tests/browser/python-driver.test.js can run it on CPython,
+/// which needs no Pyodide download.
+export const pythonDriver = `
 import json, math, time
 from typing import List, Optional
 
@@ -1223,7 +1225,13 @@ def _codetrial_run(user_code, spec_json):
         else:
             entry = spec["entry"]
             if "Solution" in ns and hasattr(ns["Solution"], entry):
-                target = getattr(ns["Solution"](), entry)
+                solution = ns["Solution"]
+                # A new instance for every case, as the C++ and Java harnesses
+                # build one: what an answer keeps on self must not reach the
+                # next case, and an exception from __init__ fails the case it
+                # was raised in instead of reading as a missing method.
+                def target(*args):
+                    return getattr(solution(), entry)(*args)
             elif entry in ns and callable(ns[entry]):
                 target = ns[entry]
             else:
