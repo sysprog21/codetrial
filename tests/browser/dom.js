@@ -194,6 +194,10 @@ class Element {
     return property in this ? String(this[property]) : null;
   }
 
+  removeAttribute(name) {
+    delete this[name.replace(/-([a-z])/g, (_, letter) => letter.toUpperCase())];
+  }
+
   addEventListener(name, handler) {
     (this.listeners[name] ||= []).push(handler);
   }

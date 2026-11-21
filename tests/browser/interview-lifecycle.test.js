@@ -812,6 +812,7 @@ test("Practice this stores the selected item and stays on failure", async () => 
       "localRecording",
       "storeReportPracticeFocus",
       "tabStorage",
+      "problem",
       `${body}\n}\nreturn leaveRoom;`,
     )(
       {
@@ -834,11 +835,21 @@ test("Practice this stores the selected item and stays on failure", async () => 
       { stop: async () => {} },
       storeReportPracticeFocus,
       storage,
+      { page: "pair-match" },
     );
     await leaveRoom(button);
+    // The report's own problem goes with the item, so the lobby can offer
+    // that problem's sibling.
     assert.deepEqual(
       stored,
-      storageFails ? [] : [["codetrial.selectedPracticeFocus", item]],
+      storageFails
+        ? []
+        : [
+            [
+              "codetrial.selectedPracticeFocus",
+              { ...item, problemId: "pair-match" },
+            ],
+          ],
     );
     assert.equal(windowMock.location.href, storageFails ? "" : "/");
     assert.equal(

@@ -501,9 +501,13 @@ async function loadReport(interviewId, recordingId) {
   // Matched on the interview id the report carries, which is why
   // `web/interview.js` puts it there. Reports are keyed by their own id and
   // recordings by theirs, and the clock is not a key.
-  const saved = (body.reports || [])
-    .map((row) => row.payload)
-    .find((payload) => payload?.interviewId === interviewId);
+  const row = (body.reports || []).find(
+    (row) => row?.payload?.interviewId === interviewId,
+  );
+  const saved = row?.payload;
+  // Only the row is guaranteed to carry the problem id, which is why
+  // `web/progress.js` falls back to it as well.
+  const problemId = saved?.problemId ?? row?.problemId;
   const report = saved && sanitizeReport(saved.report);
   if (!report) {
     nodes.report.textContent = "No report was saved for this interview.";
@@ -521,14 +525,15 @@ async function loadReport(interviewId, recordingId) {
   });
   for (const button of nodes.report.querySelectorAll("[data-practice-focus]")) {
     button.addEventListener("click", () => {
-      if (!storeReportPracticeFocus(tabStorage, report, button)) return;
+      if (!storeReportPracticeFocus(tabStorage, report, button, problemId))
+        return;
       window.location.href = "/";
     });
   }
   mountFinalCodeCopy(nodes.report, final.code);
   void loadOriginalProblem(
     nodes.report,
-    saved.problemId,
+    problemId,
     () => selected === recordingId,
   );
 }

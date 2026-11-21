@@ -56,6 +56,7 @@
       "Hash Table"
     ],
     "sequel": "two-sum-ii-input-array-is-sorted",
+    "sibling": "contains-duplicate-ii",
     "statement": [
       "Given an array of integers nums and an integer target, return the indices of the two numbers such that they add up to target.",
       "You may assume that each input has exactly one solution, and you may not use the same element twice.",
@@ -1288,6 +1289,7 @@
       "Math",
       "Two Pointers"
     ],
+    "sibling": "linked-list-cycle",
     "statement": [
       "Repeatedly replace a positive integer with the sum of the squares of its digits.",
       "Return true if the process reaches 1, and false if it enters a cycle that never reaches 1."
@@ -1370,6 +1372,7 @@
       "String",
       "Sliding Window"
     ],
+    "sibling": "substring-with-concatenation-of-all-words",
     "statement": [
       "Given strings s and t, return the shortest substring of s containing every character from t with the required multiplicity.",
       "Return the empty string if no such window exists."
@@ -1414,6 +1417,7 @@
       "String",
       "Sliding Window"
     ],
+    "sibling": "minimum-window-substring",
     "statement": [
       "Given a string and a list of equal-length words, return every starting index where a substring is formed by concatenating each word exactly once.",
       "The words may be used in any order, but every listed word and its multiplicity must be used."
@@ -1707,6 +1711,7 @@
       "String",
       "Counting"
     ],
+    "sibling": "valid-anagram",
     "statement": [
       "Given two strings, ransomNote and magazine, return whether ransomNote can be built using letters from magazine.",
       "Each character from magazine may be used at most once."
@@ -1749,6 +1754,7 @@
       "Hash Table",
       "String"
     ],
+    "sibling": "word-pattern",
     "statement": [
       "Given two strings s and t, return whether s can be transformed into t by replacing each character consistently.",
       "Each character in s must always map to the same character in t, and no two different characters in s may map to the same character in t."
@@ -1792,6 +1798,7 @@
       "Hash Table",
       "String"
     ],
+    "sibling": "isomorphic-strings",
     "statement": [
       "Given a pattern and a space-separated string s, return whether s follows the same pattern.",
       "There must be a one-to-one mapping between each pattern character and each word in s."
@@ -1837,6 +1844,7 @@
       "String",
       "Sorting"
     ],
+    "sibling": "ransom-note",
     "statement": [
       "Given two strings s and t, return whether t is an anagram of s.",
       "An anagram uses exactly the same characters with exactly the same counts, in any order."
@@ -1921,6 +1929,7 @@
       "Hash Table",
       "Sliding Window"
     ],
+    "sibling": "two-sum",
     "statement": [
       "Given an integer array nums and an integer k, return whether two equal values appear at indices whose distance is at most k.",
       "The pair must use different indices."
@@ -2044,6 +2053,7 @@
     "topics": [
       "Array"
     ],
+    "sibling": "merge-intervals",
     "statement": [
       "Given sorted non-overlapping intervals and one new interval, insert the new interval and merge overlaps.",
       "Return sorted non-overlapping intervals covering the original intervals plus the new one."
@@ -2300,6 +2310,7 @@
       "Linked List",
       "Two Pointers"
     ],
+    "sibling": "happy-number",
     "statement": [
       "Given the head of a singly linked list, determine whether the list contains a cycle.",
       "A cycle exists if following next pointers can revisit a node already seen."
@@ -2791,6 +2802,7 @@
       "BFS",
       "Binary Tree"
     ],
+    "sibling": "symmetric-tree",
     "statement": [
       "Given the roots of two binary trees, determine whether the trees are structurally identical and have the same node values."
     ],
@@ -2877,6 +2889,7 @@
       "BFS",
       "Binary Tree"
     ],
+    "sibling": "same-tree",
     "statement": [
       "Check whether a binary tree mirrors itself around its center line.",
       "For every position on the left side, the matching position on the right side must exist and carry the same value."
@@ -3431,6 +3444,7 @@
       "BFS",
       "Binary Tree"
     ],
+    "sibling": "binary-tree-zigzag-level-order-traversal",
     "statement": [
       "Return the values of a binary tree grouped by depth from top to bottom.",
       "Within each level, preserve left-to-right order."
@@ -3474,6 +3488,7 @@
       "BFS",
       "Binary Tree"
     ],
+    "sibling": "binary-tree-level-order-traversal",
     "statement": [
       "Return the values of a binary tree level by level, alternating direction each row.",
       "The first level is read left to right, the next right to left, and so on."
@@ -3640,6 +3655,7 @@
       "BFS",
       "Union Find"
     ],
+    "sibling": "surrounded-regions",
     "statement": [
       "Given an m x n 2D binary grid which represents a map of '1's (land) and '0's (water), return the number of islands.",
       "An island is surrounded by water and is formed by connecting adjacent lands horizontally or vertically. You may assume all four edges of the grid are surrounded by water."
@@ -3681,6 +3697,7 @@
       "BFS",
       "Union Find"
     ],
+    "sibling": "number-of-islands",
     "statement": [
       "Given an m x n board of 'X' and 'O', flip every 'O' region that is fully enclosed by 'X'.",
       "An 'O' connected to a border 'O' horizontally or vertically remains unchanged; modify the board in place."
@@ -3816,6 +3833,7 @@
       "Graph",
       "Topological Sort"
     ],
+    "sibling": "course-schedule-ii",
     "statement": [
       "Given a number of courses and prerequisite pairs, determine whether all courses can be finished.",
       "Each pair [course, prerequisite] means the prerequisite must be taken before that course."
@@ -3859,6 +3877,7 @@
       "Graph",
       "Topological Sort"
     ],
+    "sibling": "course-schedule",
     "statement": [
       "Given a number of courses and prerequisite pairs, return an order in which all courses can be completed.",
       "Return an empty array when no ordering exists. Any valid ordering is acceptable."
@@ -4029,6 +4048,7 @@
       "Design",
       "Trie"
     ],
+    "sibling": "design-add-and-search-words-data-structure",
     "statement": [
       "Implement a Trie with insert, search, and startsWith operations for lowercase words.",
       "search returns true only for a complete inserted word, while startsWith returns true for any prefix of an inserted word."
@@ -4066,6 +4086,7 @@
       "Design",
       "Trie"
     ],
+    "sibling": "implement-trie-prefix-tree",
     "statement": [
       "Design a word dictionary that supports adding words and searching words later.",
       "A search pattern may contain dots, where each dot matches exactly one lowercase letter."
@@ -4462,6 +4483,7 @@
       "Array",
       "Sorting"
     ],
+    "sibling": "insert-interval",
     "statement": [
       "Given an array of intervals where intervals[i] = [start_i, end_i], merge all overlapping intervals.",
       "Return an array of the non-overlapping intervals that cover all the intervals in the input, sorted by start."
@@ -4544,6 +4566,7 @@
       "Binary Search"
     ],
     "sequel": "find-first-and-last-position-of-element-in-sorted-array",
+    "sibling": "sqrtx",
     "statement": [
       "Given a sorted array of distinct integers and a target, return the index where the target is found.",
       "If the target is absent, return the index where it should be inserted to keep the array sorted."
@@ -4795,6 +4818,7 @@
       "Math",
       "Binary Search"
     ],
+    "sibling": "search-insert-position",
     "statement": [
       "Given a non-negative integer x, return the integer part of its square root.",
       "The result is rounded down to the nearest integer."
@@ -5120,6 +5144,7 @@
       "Array",
       "Binary Search"
     ],
+    "sibling": "search-in-rotated-sorted-array",
     "statement": [
       "Given a sorted array of unique values that was rotated, return its minimum value.",
       "The array may have been rotated any number of times, including zero."
@@ -5576,6 +5601,7 @@
       "Array",
       "Binary Search"
     ],
+    "sibling": "find-minimum-in-rotated-sorted-array",
     "statement": [
       "Given a unique sorted array that was rotated, return the index of target or -1 when it is absent.",
       "The array may be rotated by any offset, including zero."
@@ -5792,6 +5818,7 @@
       "Array",
       "Dynamic Programming"
     ],
+    "sibling": "best-time-to-buy-and-sell-stock-iv",
     "statement": [
       "Given daily stock prices, return the maximum profit from at most two buy-sell transactions.",
       "You may hold at most one share at a time, so a new buy must happen after the previous sell."
@@ -5834,6 +5861,7 @@
       "Array",
       "Dynamic Programming"
     ],
+    "sibling": "best-time-to-buy-and-sell-stock-iii",
     "statement": [
       "Given at most k stock transactions and daily prices, return the maximum profit.",
       "Each transaction is one buy followed by one later sell, and only one share can be held at a time."
