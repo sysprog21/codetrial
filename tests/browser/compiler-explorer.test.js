@@ -432,6 +432,38 @@ test("jump-game cases reject each hop-by-hop shortcut", () => {
   }
 });
 
+test("jump-game-ii cases reject subtracting a final hop unconditionally", () => {
+  const reported = (nums) => {
+    let jumps = 0;
+    let end = 0;
+    let far = 0;
+    for (let i = 0; i < nums.length; i += 1) {
+      far = Math.max(far, i + nums[i]);
+      if (i === end) {
+        jumps += 1;
+        end = far;
+      }
+    }
+    return nums.length > 1 ? jumps - 1 : 0;
+  };
+  const byLabel = Object.fromEntries(
+    judges["jump-game-ii"].cases.map((testCase) => [testCase.label, testCase]),
+  );
+  for (const label of [
+    "two pads with room to spare",
+    "three pads with room to spare",
+    "range grows after the first pad",
+  ]) {
+    const pinned = byLabel[label];
+    assert.ok(pinned, `the built-in cases must keep "${label}"`);
+    assert.notEqual(
+      reported(pinned.input[0]),
+      pinned.expected,
+      `"${label}" must reject the reported final-hop subtraction`,
+    );
+  }
+});
+
 test("harness generator covers every function problem without network access", () => {
   for (const [id, spec] of Object.entries(judges)) {
     if (spec.kind !== "function") continue;
