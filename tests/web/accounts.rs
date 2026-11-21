@@ -495,221 +495,6 @@ async fn login_rejects_a_body_that_is_not_json() {
     remove_database(path).await;
 }
 
-#[tokio::test]
-async fn github_callback_sets_session_and_clears_oauth_state() {
-    let (github_base, github_server) = spawn_mock_github().await;
-    let path = std::env::temp_dir().join(format!(
-        "codetrial-callback-accounts-{}-{}.db",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    let mut config = web_config();
-    config.github_client_id = Some("client".to_string());
-    config.github_client_secret = Some("secret".to_string());
-    config.session_secret = Some("session-secret".to_string());
-    config.db_path = Some(path.clone());
-    config.github_oauth_base_url = Some(github_base.clone());
-    config.github_api_base_url = Some(github_base);
-
-    // The schema is created once at startup, not per request, so a caller that
-    // builds the router directly has to do what `main` does.
-    initialize_account_database(&path).unwrap();
-    let (base, server) = spawn_web_server(config).await;
-    let client = http_client_builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .unwrap();
-
-    let assignment =
-        "/t/classroom/delimiter-closer?site=https%3A%2F%2Fteacher.github.io%2Fcourse&version=7";
-    for (return_to, expected) in [
-        (assignment, assignment),
-        (
-            "/t/classroom/delimiter-closer?site=https://teacher.github.io/a;b,c%20d&version=7",
-            "/t/classroom/delimiter-closer?site=https%3A%2F%2Fteacher.github.io%2Fa%3Bb%2Cc%20d&version=7",
-        ),
-        (
-            "/t/classroom/delimiter-closer?site=https://teacher.github.io/course&version=7&ref=x",
-            "/",
-        ),
-        ("//attacker.example/t/set/task", "/"),
-        (
-            "/t/classroom/delimiter-closer?site=https%3A%2F%2Fteacher.github.io&version=7&version=8",
-            "/",
-        ),
-        (
-            "/t/classroom/delimiter-closer?site=https%3A%2F%2Fteacher.github.io&version=0",
-            "/",
-        ),
-    ] {
-        let login = client
-            .get(format!("{base}/api/login"))
-            .query(&[("returnTo", return_to)])
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(login.status(), 302);
-        let authorize = reqwest::Url::parse(login.headers()["location"].to_str().unwrap()).unwrap();
-        let state = authorize
-            .query_pairs()
-            .find(|(key, _)| key == "state")
-            .unwrap()
-            .1
-            .into_owned();
-        let cookies = login
-            .headers()
-            .get_all("set-cookie")
-            .iter()
-            .map(|cookie| cookie.to_str().unwrap().split(';').next().unwrap())
-            .collect::<Vec<_>>()
-            .join("; ");
-        let callback = client
-            .get(format!("{base}/api/callback"))
-            .query(&[("code", "ok"), ("state", state.as_str())])
-            .header("cookie", cookies)
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(callback.status(), 302);
-        assert_eq!(callback.headers()["location"], expected);
-    }
-
-    let response = client
-        .get(format!("{base}/api/callback?code=ok&state=state-token"))
-        .header(
-            "cookie",
-            format!(
-                "codetrial_oauth_state={}",
-                state_cookie("state-token", "session-secret")
-            ),
-        )
-        .send()
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), 302);
-    let cookies = response
-        .headers()
-        .get_all("set-cookie")
-        .iter()
-        .map(|value| value.to_str().unwrap().to_string())
-        .collect::<Vec<_>>();
-    assert_eq!(cookies.len(), 3);
-    assert!(cookies.iter().any(
-        |cookie| cookie.starts_with("codetrial_oauth_return=") && cookie.contains("Max-Age=0")
-    ));
-    let session_cookie = cookies
-        .iter()
-        .find(|cookie| cookie.starts_with("codetrial_session="))
-        .expect("callback should set session cookie")
-        .split(';')
-        .next()
-        .unwrap()
-        .to_string();
-    assert!(
-        clears_state_cookie(response.headers()),
-        "callback should clear oauth state cookie"
-    );
-
-    let session = http_client()
-        .get(format!("{base}/api/session"))
-        .header("cookie", session_cookie)
-        .send()
-        .await
-        .unwrap()
-        .json::<Value>()
-        .await
-        .unwrap();
-    assert_eq!(session["signedIn"], true);
-    assert_eq!(session["user"]["login"], "octocat");
-    assert_eq!(session["githubSignedIn"], true);
-
-    let task_return = client
-        .get(format!("{base}/api/callback?code=ok&state=task-state"))
-        .header(
-            "cookie",
-            format!(
-                "codetrial_oauth_state={}; codetrial_oauth_return={}",
-                signed_cookie("codetrial_oauth_state", &format!("{}:task-state", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs()), "session-secret"),
-                signed_cookie("codetrial_oauth_return", "task-state:/t/classroom/delimiter-closer?site=https%3A%2F%2Fteacher.github.io%2Fcourse&version=7", "session-secret")
-            ),
-        )
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(task_return.status(), 302);
-    assert_eq!(
-        task_return.headers()["location"],
-        "/t/classroom/delimiter-closer?site=https%3A%2F%2Fteacher.github.io%2Fcourse&version=7"
-    );
-    // Bank ids such as `3sum` start with a digit and still return.
-    let digit_return = client
-        .get(format!("{base}/api/callback?code=ok&state=digit-state"))
-        .header(
-            "cookie",
-            format!(
-                "codetrial_oauth_state={}; codetrial_oauth_return={}",
-                signed_cookie(
-                    "codetrial_oauth_state",
-                    &format!(
-                        "{}:digit-state",
-                        std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap()
-                            .as_secs()
-                    ),
-                    "session-secret"
-                ),
-                signed_cookie(
-                    "codetrial_oauth_return",
-                    "digit-state:/t/classroom/3sum",
-                    "session-secret"
-                )
-            ),
-        )
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(digit_return.status(), 302);
-    assert_eq!(digit_return.headers()["location"], "/t/classroom/3sum");
-    let mismatched = client
-        .get(format!("{base}/api/callback?code=ok&state=other-state"))
-        .header(
-            "cookie",
-            format!(
-                "codetrial_oauth_state={}; codetrial_oauth_return={}",
-                signed_cookie(
-                    "codetrial_oauth_state",
-                    &format!(
-                        "{}:other-state",
-                        std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap()
-                            .as_secs()
-                    ),
-                    "session-secret"
-                ),
-                signed_cookie(
-                    "codetrial_oauth_return",
-                    "task-state:/t/classroom/delimiter-closer",
-                    "session-secret"
-                )
-            ),
-        )
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(mismatched.status(), 302);
-    assert_eq!(mismatched.headers()["location"], "/");
-
-    server.shutdown().await;
-    github_server.shutdown().await;
-    remove_database(path).await;
-}
-
 /// A cookie nobody signed is not a session.
 ///
 /// `sessions.id` holds a digest of the cookie payload, so the payload is the
@@ -1536,11 +1321,22 @@ async fn a_failed_email_lookup_does_not_unverify_an_account() {
     // would still pass here if the token exchange had broken and the profile
     // request were never reached. The message is what says this run got as far
     // as the leg the test is about.
-    let failed = failed.json::<Value>().await.unwrap();
-    assert_eq!(
-        failed["error"], "GitHub profile request failed.",
-        "the rate limit fails the profile request, not the token exchange"
+
+    assert!(
+        failed.headers()["content-type"]
+            .to_str()
+            .unwrap()
+            .starts_with("text/html"),
+        "OAuth callback failures must return HTML"
     );
+    assert_eq!(failed.headers()["cache-control"], "no-store");
+
+    let body = failed.text().await.unwrap();
+    assert!(
+        body.contains("GitHub profile request failed."),
+        "the rate limit must fail the profile request, not the token exchange"
+    );
+    assert!(body.contains("href=\"/api/login\""));
 
     let (email, verified): (Option<String>, i64) = rusqlite::Connection::open(&path)
         .unwrap()

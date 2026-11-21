@@ -1426,6 +1426,9 @@ mod peer_auth;
 #[path = "web/accounts.rs"]
 mod accounts;
 
+#[path = "web/oauth_callback.rs"]
+mod oauth_callback;
+
 #[path = "web/login_form.rs"]
 mod login_form;
 

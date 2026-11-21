@@ -10,7 +10,7 @@ use axum::body::Body;
 use axum::extract::{ConnectInfo, FromRequestParts, State};
 use axum::http::request::Parts;
 use axum::http::{HeaderValue, Request, StatusCode, header};
-use axum::response::{AppendHeaders, IntoResponse, Response};
+use axum::response::{AppendHeaders, Html, IntoResponse, Response};
 use serde_json::{Value, json};
 
 use crate::accounts::{
@@ -33,6 +33,7 @@ const OAUTH_STATE_COOKIE: &str = "codetrial_oauth_state";
 /// the polls that redeem it.
 const DEVICE_COOKIE: &str = "codetrial_device";
 const OAUTH_STATE_TTL_SECONDS: i64 = 60 * 10;
+const OAUTH_RETURN_TTL_SECONDS: i64 = 60 * 60;
 
 /// `read:user` alone returns whatever address the person made public, which is
 /// usually none. Delivery needs the primary verified one, and that is a
@@ -110,11 +111,14 @@ pub(crate) async fn login_handler(
             json!({ "error": "Could not create login state." }),
         );
     };
+
+    let issued = crate::current_epoch_seconds_i64();
+
     let cookie = set_cookie(
         OAUTH_STATE_COOKIE,
         &signed_cookie_value(
             OAUTH_STATE_COOKIE,
-            &format!("{}:{state_token}", crate::current_epoch_seconds_i64()),
+            &format!("{issued}:{state_token}"),
             &accounts.config().session_secret,
         ),
         OAUTH_STATE_TTL_SECONDS,
@@ -152,10 +156,10 @@ pub(crate) async fn login_handler(
                     OAUTH_RETURN_COOKIE,
                     &signed_cookie_value(
                         OAUTH_RETURN_COOKIE,
-                        &format!("{state_token}:{return_path}"),
+                        &format!("{issued}:{state_token}:{return_path}"),
                         &accounts.config().session_secret,
                     ),
-                    OAUTH_STATE_TTL_SECONDS,
+                    OAUTH_RETURN_TTL_SECONDS,
                     state.config.production,
                 ),
             ),
@@ -191,9 +195,11 @@ pub(crate) async fn record_login_handler(
         );
     }
     let client = client_ip(request.headers(), peer, state.config.trusted_proxy_hops);
+
     if !state.login_limit.allow(client, Instant::now()) {
         return rate_limited_response("Too many login attempts. Wait a minute and try again.");
     }
+
     let body = match read_body_or_refuse(request.into_body(), MAX_BODY_BYTES).await {
         Ok(body) => body,
         Err(refusal) => return refusal,
@@ -277,7 +283,33 @@ pub(crate) async fn callback_handler(
     // client secret, so it is charged to the login bucket before any call.
     let client = client_ip(request.headers(), peer, state.config.trusted_proxy_hops);
     if !state.login_limit.allow(client, Instant::now()) {
-        return rate_limited_response("Too many login attempts. Wait a minute and try again.");
+        let retry_href = state
+            .accounts
+            .as_ref()
+            .map(|accounts| {
+                let query = query_pairs(request.uri().query().unwrap_or(""));
+                oauth_retry_href(
+                    request.headers(),
+                    &accounts.config().session_secret,
+                    query
+                        .get("state")
+                        .filter(|state| !state.is_empty())
+                        .map(String::as_str),
+                )
+            })
+            .unwrap_or_else(|| "/api/login".to_owned());
+
+        let mut response = oauth_callback_error_page(
+            StatusCode::TOO_MANY_REQUESTS,
+            "Too many login attempts. Wait a minute and try again.",
+            retry_href,
+        );
+
+        response
+            .headers_mut()
+            .insert(header::RETRY_AFTER, HeaderValue::from_static("60"));
+
+        return response;
     }
     let production = state.config.production;
     let mut response = callback_response(state, request).await;
@@ -285,6 +317,70 @@ pub(crate) async fn callback_handler(
         response.headers_mut().append(header::SET_COOKIE, cookie);
     }
     response
+}
+
+fn oauth_retry_href(
+    headers: &header::HeaderMap,
+    secret: &str,
+    callback_state: Option<&str>,
+) -> String {
+    let fallback = || "/api/login".to_owned();
+
+    let Some(return_payload) = verified_cookie(headers, OAUTH_RETURN_COOKIE, secret) else {
+        return fallback();
+    };
+
+    // Return cookie: issued:state_token:return_path
+    let Some(rest) = unexpired_return(&return_payload, crate::current_epoch_seconds_i64()) else {
+        return fallback();
+    };
+
+    let Some((return_state, return_path)) = rest.split_once(':') else {
+        return fallback();
+    };
+
+    if callback_state.is_some_and(|state| state != return_state) {
+        return fallback();
+    }
+
+    if return_path == "/peer-lobby" {
+        return "/api/login?next=peer-join".to_owned();
+    }
+
+    // Only preserve valid task destinations.
+    super::tasks::task_return_path(return_path)
+        .map(|path| format!("/api/login?returnTo={}", percent_encode_component(&path)))
+        .unwrap_or_else(fallback)
+}
+
+fn oauth_callback_error_page(
+    status: StatusCode,
+    message: &'static str,
+    retry_href: impl AsRef<str>,
+) -> Response {
+    let retry_href = retry_href.as_ref();
+    (
+        status,
+        [(axum::http::header::CACHE_CONTROL, "no-store")],
+        Html(format!(
+            r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>GitHub sign-in failed</title>
+</head>
+<body>
+    <main>
+        <h1>GitHub sign-in failed</h1>
+        <p>{message}</p>
+        <a href="{retry_href}">Try signing in again</a>
+    </main>
+</body>
+</html>"#
+        )),
+    )
+        .into_response()
 }
 
 async fn callback_response(state: AppState, request: Request<Body>) -> Response {
@@ -296,64 +392,106 @@ async fn callback_response(state: AppState, request: Request<Body>) -> Response 
         return oauth_not_configured_response();
     };
     let query = query_pairs(request.uri().query().unwrap_or(""));
+
+    let retry_href = oauth_retry_href(
+        request.headers(),
+        &accounts.config().session_secret,
+        query
+            .get("state")
+            .filter(|state| !state.is_empty())
+            .map(String::as_str),
+    );
+
     let Some(code) = query.get("code").filter(|value| !value.is_empty()) else {
-        return json_response(
-            StatusCode::BAD_REQUEST,
-            json!({ "error": "Missing GitHub callback code." }),
-        );
+        let message = if query
+            .get("error")
+            .is_some_and(|error| error == "access_denied")
+        {
+            "GitHub sign-in was cancelled."
+        } else {
+            "GitHub did not return an authorization code."
+        };
+
+        return oauth_callback_error_page(StatusCode::BAD_REQUEST, message, retry_href);
     };
+
     let Some(state_token) = query.get("state").filter(|value| !value.is_empty()) else {
-        return json_response(
+        return oauth_callback_error_page(
             StatusCode::BAD_REQUEST,
-            json!({ "error": "Missing GitHub callback state." }),
+            "The GitHub sign-in verification state is missing. Please try again.",
+            retry_href,
         );
     };
+
     let Some(cookie_state) = verified_cookie(
         request.headers(),
         OAUTH_STATE_COOKIE,
         &accounts.config().session_secret,
     )
     .and_then(|payload| unexpired_state(&payload, crate::current_epoch_seconds_i64())) else {
-        return json_response(
+        return oauth_callback_error_page(
             StatusCode::UNAUTHORIZED,
-            json!({ "error": "Login state is missing or expired." }),
+            "Your GitHub sign-in expired, or it started at a different address of this site. Open the site at the address you started from and try again.",
+            retry_href,
         );
     };
+
     if cookie_state != *state_token {
-        return json_response(
+        return oauth_callback_error_page(
             StatusCode::UNAUTHORIZED,
-            json!({ "error": "Login state did not match." }),
+            "The GitHub sign-in verification state did not match. Please try signing in again.",
+            retry_href,
         );
     }
 
     let access_token = match github_access_token(accounts.config(), &oauth, code).await {
         Ok(access_token) => access_token,
-        Err(error) => return github_failure("GitHub token exchange failed", error),
+        Err(error) => {
+            eprintln!("GitHub token exchange failed: {error}");
+            return oauth_callback_error_page(
+                StatusCode::BAD_GATEWAY,
+                "GitHub token exchange failed. Please try again.",
+                retry_href,
+            );
+        }
     };
-    let return_path = cookie_value(request.headers(), OAUTH_RETURN_COOKIE)
-        .and_then(|value| {
-            verified_cookie_value(
-                OAUTH_RETURN_COOKIE,
-                &value,
-                &accounts.config().session_secret,
-            )
-        })
-        .and_then(|value| {
-            value
-                .strip_prefix(&format!("{state_token}:"))
-                .map(str::to_owned)
-        })
-        .and_then(|path| {
-            if path == "/peer-lobby" {
-                Some(path)
-            } else {
-                super::tasks::task_return_path(&path)
-            }
-        })
-        .unwrap_or_else(|| "/".to_owned());
+
+    let return_path = verified_cookie(
+        request.headers(),
+        OAUTH_RETURN_COOKIE,
+        &accounts.config().session_secret,
+    )
+    .and_then(|return_payload| {
+        let state_payload = verified_cookie(
+            request.headers(),
+            OAUTH_STATE_COOKIE,
+            &accounts.config().session_secret,
+        )?;
+
+        return_payload
+            .strip_prefix(&format!("{state_payload}:"))
+            .map(str::to_owned)
+    })
+    .and_then(|path| {
+        if path == "/peer-lobby" {
+            Some(path)
+        } else {
+            super::tasks::task_return_path(&path)
+        }
+    })
+    .unwrap_or_else(|| "/".to_owned());
+
     let session = match sign_in(&state, accounts, &access_token).await {
         Ok(session) => session,
-        Err(refusal) => return refusal,
+        Err(refusal) => {
+            let message = if refusal.status() == StatusCode::BAD_GATEWAY {
+                "GitHub profile request failed. Please try again."
+            } else {
+                "Could not create account session. Please try again."
+            };
+
+            return oauth_callback_error_page(refusal.status(), message, retry_href);
+        }
     };
 
     (
@@ -943,7 +1081,14 @@ fn unexpired_state(payload: &str, now: i64) -> Option<String> {
         .contains(&age)
         .then(|| token.to_string())
 }
+fn unexpired_return(payload: &str, now: i64) -> Option<&str> {
+    let (issued, rest) = payload.split_once(':')?;
+    let age = now.checked_sub(issued.parse::<i64>().ok()?)?;
 
+    (0..=OAUTH_RETURN_TTL_SECONDS)
+        .contains(&age)
+        .then_some(rest)
+}
 /// The payload of cookie `name`, if it is present and signed for that name.
 fn verified_cookie(headers: &header::HeaderMap, name: &str, secret: &str) -> Option<String> {
     verified_cookie_value(name, &cookie_value(headers, name)?, secret)
@@ -1000,4 +1145,24 @@ fn with_peer_flags(state: &AppState, mut session: Value) -> Value {
             .is_some_and(|config| config.audio_dir.is_some())
     );
     session
+}
+
+#[cfg(test)]
+mod oauth_return_ttl_tests {
+    use super::*;
+
+    #[test]
+    fn return_cookie_ttl_boundary() {
+        let now = 100_000;
+
+        for (age, expected) in [(3599, true), (3600, true), (3601, false)] {
+            let payload = format!("{}:state:/peer-lobby", now - age);
+
+            assert_eq!(
+                unexpired_return(&payload, now).is_some(),
+                expected,
+                "unexpected result at age {age}"
+            );
+        }
+    }
 }
