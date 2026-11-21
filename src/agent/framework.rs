@@ -582,9 +582,10 @@ pub fn record_hint(state: &mut RuntimeState, requested: bool) -> String {
             state
                 .evidence_ledger
                 .record_hint(receipt_timestamp_ms, requested, false);
-            let spoken = phase_judge_open(state)
-                .into_iter()
-                .any(|id| id != phase_id(FrameworkPhase::Coding));
+            let spoken = phase_judge_open(state).into_iter().any(|id| {
+                id != phase_id(FrameworkPhase::Coding)
+                    && !phase_judge::reopened_restatement(state, id)
+            });
             return prompts::hint_rung_held_text(state.hints_used, spoken);
         }
         let last = state.hint_rungs_given + 1 == state.hint_ladder.len();

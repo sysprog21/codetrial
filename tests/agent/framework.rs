@@ -3784,13 +3784,13 @@ fn a_held_run_keeps_its_reconciliation_and_released_follow_ups() {
     assert_eq!(framework_progress(&state), ["optimizations", "test"]);
 }
 
-fn judged(steps: Value) -> String {
+pub(super) fn judged(steps: Value) -> String {
     json!({ "steps": steps }).to_string()
 }
 
 /// A judgment as the room makes one: the window is taken, which records what
 /// the judge was shown, and the answer is applied to the state as it is then.
-fn judge(state: &mut RuntimeState, steps: Value) -> Vec<FrameworkEvidence> {
+pub(super) fn judge(state: &mut RuntimeState, steps: Value) -> Vec<FrameworkEvidence> {
     take_phase_judge_window(state, get_problem(Some("insert-interval")));
     apply_phase_judgment(state, &judged(steps))
 }
@@ -4456,10 +4456,10 @@ fn steps_in_one_judgment_are_judged_against_the_steps_open_when_it_was_asked() {
     let phases = recorded.iter().map(|row| row.phase).collect::<Vec<_>>();
     assert_eq!(
         phases,
-        [FrameworkPhase::Coding, FrameworkPhase::Repeat],
+        [FrameworkPhase::Repeat, FrameworkPhase::Coding],
         "{recorded:?}"
     );
-    assert!(recorded[1].summary.starts_with("Restated."), "{recorded:?}");
+    assert!(recorded[0].summary.starts_with("Restated."), "{recorded:?}");
 
     // A later call, with Coding and Optimizations recorded, no longer records a
     // spoken step; with Optimizations still open it does.
