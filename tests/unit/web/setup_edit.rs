@@ -120,6 +120,7 @@ fn only_a_loopback_launch_with_a_code_and_without_a_proxy_may_change_keys() {
             BTreeMap::new(),
             bound.parse().unwrap(),
             standalone.then(|| "code".to_string()),
+            AfterSave::Operator,
             hops,
         )
     };
@@ -224,6 +225,14 @@ impl Server {
     /// A running server whose config names the LiveKit project at `livekit`
     /// with keys that project refuses, so a save has to bring the new pair.
     async fn start(livekit: &str, dispatcher: Option<Arc<dyn RoomDispatcher>>) -> Self {
+        Self::start_after(livekit, dispatcher, AfterSave::Operator).await
+    }
+
+    async fn start_after(
+        livekit: &str,
+        dispatcher: Option<Arc<dyn RoomDispatcher>>,
+        after_save: AfterSave,
+    ) -> Self {
         let scratch = Scratch::new();
         let contents = format!(
             "# keep this\nLIVEKIT_URL={livekit}\nLIVEKIT_API_KEY=old-key\n\
@@ -236,8 +245,15 @@ impl Server {
             .unwrap()
             .into_iter()
             .collect();
-        let context =
-            SetupContext::new(path.clone(), values, bound, Some("code".to_string()), 0).unwrap();
+        let context = SetupContext::new(
+            path.clone(),
+            values,
+            bound,
+            Some("code".to_string()),
+            after_save,
+            0,
+        )
+        .unwrap();
         let code = context.code().to_string();
         let config = super::super::WebServerConfig {
             web_dir: PathBuf::new(),
@@ -534,6 +550,99 @@ async fn an_edit_saved_while_the_keys_are_checked_is_kept() {
         server.contents.replace("keep-session", "edited-session")
     );
     assert_eq!(std::fs::read_dir(&server.scratch.0).unwrap().count(), 1);
+}
+
+/// Running nothing until told otherwise, and remembering whether admission
+/// was closed.
+#[derive(Default)]
+struct Closable {
+    busy: std::sync::atomic::AtomicBool,
+    closed: std::sync::atomic::AtomicBool,
+}
+
+impl RoomDispatcher for Closable {
+    fn is_idle(&self) -> bool {
+        !self.busy.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    fn close_admission(&self) {
+        self.closed.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    fn supports_guest_admission(&self) -> bool {
+        Idle.supports_guest_admission()
+    }
+
+    fn ensure_agent(
+        &self,
+        room: &str,
+        provider: &Provider,
+        job: super::super::AgentJob,
+    ) -> Result<(), super::super::DispatchRefusal> {
+        Idle.ensure_agent(room, provider, job)
+    }
+
+    fn ensure_guest_agent(
+        &self,
+        room: &str,
+        provider: &Provider,
+        candidate: &str,
+    ) -> Result<(), super::super::DispatchRefusal> {
+        Idle.ensure_guest_agent(room, provider, candidate)
+    }
+}
+
+/// The desktop app restarts its child as soon as a save is announced, so that
+/// child stops admitting interviews at the save. A server the operator
+/// restarts by hand keeps admitting them on the keys it runs on.
+#[tokio::test]
+async fn only_a_launchers_child_stops_admitting_interviews_once_it_saves() {
+    let (livekit, _livekit) = livekit().await;
+    for (after_save, closes) in [(AfterSave::Launcher, true), (AfterSave::Operator, false)] {
+        let dispatcher = Arc::new(Closable::default());
+        let server = Server::start_after(
+            &livekit,
+            Some(Arc::clone(&dispatcher) as Arc<dyn RoomDispatcher>),
+            after_save,
+        )
+        .await;
+        let (status, body) = server
+            .save(json!({
+                "code": server.code,
+                "livekitApiKey": NEW_KEY,
+                "livekitApiSecret": NEW_SECRET,
+            }))
+            .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let closed = || dispatcher.closed.load(std::sync::atomic::Ordering::SeqCst);
+        let began = std::time::Instant::now();
+        while !closed() && began.elapsed() < std::time::Duration::from_secs(2) {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert_eq!(closed(), closes);
+    }
+}
+
+/// An interview admitted between the save's own check and the close still runs
+/// to its end, report included, before the restart is announced.
+#[tokio::test(start_paused = true)]
+async fn the_restart_waits_for_an_interview_admitted_before_the_close() {
+    let dispatcher = Closable::default();
+    dispatcher
+        .busy
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let drained = drain(Some(&dispatcher));
+    tokio::pin!(drained);
+    let hour = std::time::Duration::from_secs(3600);
+    assert!(tokio::time::timeout(hour, &mut drained).await.is_err());
+    assert!(dispatcher.closed.load(std::sync::atomic::Ordering::SeqCst));
+
+    dispatcher
+        .busy
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    tokio::time::timeout(std::time::Duration::from_secs(1), drained)
+        .await
+        .unwrap();
 }
 
 #[cfg(windows)]

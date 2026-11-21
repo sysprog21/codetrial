@@ -18,6 +18,22 @@ use serde_json::{Value, json};
 
 use super::{AppState, RoomDispatcher, json_response};
 
+/// What a launcher's child prints once a save has rewritten its config and no
+/// interview is left running, for the launcher to restart it on the new keys.
+const RESTART_LINE: &str = "codetrial: keys saved and no interview running: restart now";
+
+/// Who restarts the server onto keys a save wrote.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum AfterSave {
+    /// The operator, by hand and whenever they choose. Until then the server
+    /// admits interviews on the keys it started with.
+    Operator,
+    /// The launcher that owns this child, as soon as it reads `RESTART_LINE`.
+    /// Interviews that were already admitted finish first, and no new one is
+    /// admitted in the meantime, so the restart cuts nothing off.
+    Launcher,
+}
+
 /// What Change keys needs of the launch serving it. No `Debug`: it holds keys.
 pub struct SetupContext {
     /// The config file this launch read, and what it held then.
@@ -27,6 +43,7 @@ pub struct SetupContext {
     values: BTreeMap<String, String>,
     port: u16,
     code: String,
+    after_save: AfterSave,
     /// One save at a time. The next one finds the file changed and is refused.
     saving: tokio::sync::Mutex<()>,
 }
@@ -51,6 +68,7 @@ impl SetupContext {
         values: BTreeMap<String, String>,
         bound: SocketAddr,
         code: Option<String>,
+        after_save: AfterSave,
         trusted_proxy_hops: u32,
     ) -> Option<Self> {
         let code = code.filter(|_| bound.ip().is_loopback() && trusted_proxy_hops == 0)?;
@@ -61,6 +79,7 @@ impl SetupContext {
             values,
             port: bound.port(),
             code,
+            after_save,
             saving: tokio::sync::Mutex::new(()),
         })
     }
@@ -361,9 +380,32 @@ pub(super) async fn save_handler(
     headers: HeaderMap,
     Json(submission): Json<Value>,
 ) -> Response {
-    match allowed(&state, &headers) {
-        Ok(context) => context.save(&submission, state.dispatcher.as_deref()).await,
-        Err(refusal) => refusal,
+    let context = match allowed(&state, &headers) {
+        Ok(context) => context,
+        Err(refusal) => return refusal,
+    };
+    let response = context.save(&submission, state.dispatcher.as_deref()).await;
+    if response.status() == StatusCode::OK && context.after_save == AfterSave::Launcher {
+        // The save refused while anything ran, but an interview can be admitted
+        // between that check and this one.
+        let dispatcher = state.dispatcher.clone();
+        tokio::spawn(async move {
+            drain(dispatcher.as_deref()).await;
+            let _ = writeln!(std::io::stdout(), "{RESTART_LINE}");
+        });
+    }
+    response
+}
+
+/// Returns once `dispatcher` admits nothing new and runs nothing it admitted,
+/// report included.
+async fn drain(dispatcher: Option<&dyn RoomDispatcher>) {
+    let Some(dispatcher) = dispatcher else {
+        return;
+    };
+    dispatcher.close_admission();
+    while !dispatcher.is_idle() {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
 }
 

@@ -52,7 +52,7 @@ pub use recordings::READ_RATE_LIMIT;
 const PEER_RATE_LIMIT: u32 = 120;
 const PEER_SNAPSHOT_RATE_LIMIT: u32 = 30;
 pub use setup::{config_from_values, setup_service};
-pub use setup_edit::SetupContext;
+pub use setup_edit::{AfterSave, SetupContext};
 pub use token::{TOKEN_RATE_LIMIT, TokenConfig, TokenResponse, token_response};
 
 pub const MAX_BODY_BYTES: usize = 8 * 1024;

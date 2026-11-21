@@ -223,7 +223,8 @@ async fn change_keys_rewrites_the_config_the_launch_read() {
 
 /// Change keys for a launcher's child, as the desktop app starts it: the code
 /// comes in `CODETRIAL_CHANGE_KEYS_CODE`, a save with it rewrites the config,
-/// and the code never reaches stdout, which the app writes to a log file.
+/// and the code never reaches stdout, which the app writes to a log file. What
+/// does reach it after the save is the line the app restarts the child on.
 #[test]
 fn a_child_saves_with_the_code_its_launcher_handed_over_and_never_prints_it() {
     use std::io::{BufRead, BufReader};
@@ -260,11 +261,11 @@ fn a_child_saves_with_the_code_its_launcher_handed_over_and_never_prints_it() {
         command
     });
     let stdout = server.stdout.take().unwrap();
-    let lines = thread::spawn(move || {
-        BufReader::new(stdout)
-            .lines()
-            .map_while(Result::ok)
-            .collect::<Vec<_>>()
+    let (sender, lines) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            let _ = sender.send(line);
+        }
     });
 
     let save = |code: &str| {
@@ -281,13 +282,29 @@ fn a_child_saves_with_the_code_its_launcher_handed_over_and_never_prints_it() {
     let refused = save("ffffffffffffffffffffffffffffffff");
     let saved = save(CODE);
     let written = std::fs::read_to_string(&config).unwrap();
+
+    // Printed once nothing is running, which here is at once, but after the
+    // response rather than before it.
+    let mut printed = Vec::new();
+    while let Ok(line) = lines.recv_timeout(Duration::from_secs(10)) {
+        let restart = line == "codetrial: keys saved and no interview running: restart now";
+        printed.push(line);
+        if restart {
+            break;
+        }
+    }
     drop(server);
-    let printed = lines.join().unwrap();
+    printed.extend(lines.try_iter());
     let _ = std::fs::remove_dir_all(&dir);
 
     assert!(refused.starts_with("HTTP/1.1 403"), "{refused}");
     assert!(saved.starts_with("HTTP/1.1 200 OK"), "{saved}");
     assert_eq!(written, contents("new-key"));
+    assert_eq!(
+        printed.last().map(String::as_str),
+        Some("codetrial: keys saved and no interview running: restart now"),
+        "{printed:?}"
+    );
     assert!(
         printed.iter().all(|line| !line.contains(CODE)),
         "{printed:?}"

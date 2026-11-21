@@ -63,7 +63,7 @@ const CLOSE_PROBE: &str = r#"(() => {
   }
 })()"#;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Phase {
     /// Waiting for both the server to be ready and the starting page to say
     /// whether this web view has WebRTC. See `open_server`.
@@ -76,6 +76,25 @@ enum Phase {
     /// this window cannot make the call.
     InBrowser,
     Failed,
+}
+
+impl Phase {
+    /// Where a restart leaves the shell, or `None` when no server is serving
+    /// this window: still starting, or failed. A second request while starting
+    /// cannot follow a save, since the first save leaves the config changed and
+    /// a second is refused. WebRTC is already known from the launch being
+    /// replaced, so `open_server` acts on the new server's ready line alone.
+    fn restarting(self) -> Option<Phase> {
+        let webrtc = match self {
+            Phase::Serving => true,
+            Phase::InBrowser => false,
+            Phase::Starting { .. } | Phase::Failed => return None,
+        };
+        Some(Phase::Starting {
+            server_ready: false,
+            webrtc: Some(webrtc),
+        })
+    }
 }
 
 /// Where a close stands. One value rather than two flags, so "quitting but not
@@ -358,6 +377,7 @@ fn launch(app: &AppHandle) {
                 }
                 open_server(app);
             }
+            server::Status::Restart => restart(app),
             server::Status::Exited(message) => {
                 if !app.state::<Shell>().quitting() {
                     show_failure(app, &message, Some(data_dir.as_path()));
@@ -371,6 +391,37 @@ fn launch(app: &AppHandle) {
         }
         Err(message) => show_failure(app, &message, Some(launch.data_dir.as_path())),
     }
+}
+
+/// Starts the server again on the keys Change keys saved, which only a new
+/// launch reads, then shows the lobby where the old one was shown. The server
+/// asks only once nothing is running and nothing new will start.
+///
+/// Back to `Starting` with WebRTC already known, so `open_server` acts on the
+/// new server's ready line alone, and so `on_navigation` keeps the window off
+/// the port while no server is behind it. On a thread of its own: the stop can
+/// take up to `STOP_GRACE`, and this was called from the thread reading the
+/// server's output, which has to keep reading until the server is gone.
+fn restart(app: &AppHandle) {
+    let shell = app.state::<Shell>();
+    {
+        let mut phase = shell.phase.lock().expect("phase lock");
+        let Some(next) = phase.restarting() else {
+            return;
+        };
+        *phase = next;
+    }
+    note("Change keys saved: starting the server again");
+    let server = shell.server.lock().expect("server lock").take();
+    let app = app.clone();
+    std::thread::spawn(move || {
+        if let Some(server) = server {
+            server.stop(STOP_GRACE);
+        }
+        if !app.state::<Shell>().quitting() {
+            launch(&app);
+        }
+    });
 }
 
 /// The script that puts `code`, hex digits only, into the Setup page's code
@@ -557,3 +608,7 @@ fn quit(app: &AppHandle) {
         app.exit(0);
     });
 }
+
+#[cfg(test)]
+#[path = "../tests/unit/phase.rs"]
+mod tests;
