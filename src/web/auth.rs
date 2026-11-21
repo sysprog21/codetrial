@@ -11,12 +11,13 @@ use axum::extract::{ConnectInfo, FromRequestParts, State};
 use axum::http::request::Parts;
 use axum::http::{HeaderValue, Request, StatusCode, header};
 use axum::response::{AppendHeaders, Html, IntoResponse, Response};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde_json::{Value, json};
 
 use crate::accounts::{
     Accounts, GitHubLoginConfig, GitHubOauth, GitHubProfile, SESSION_TTL_SECONDS, SignedInUser,
-    blocking, create_session, delete_session, normalized_github_login, random_token,
-    recorded_account_id, session_user, valid_github_login,
+    blocking, create_session, delete_session, normalized_github_login, recorded_account_id,
+    session_user, valid_github_login,
 };
 
 use super::token::read_body_or_refuse;
@@ -105,14 +106,13 @@ pub(crate) async fn login_handler(
     let Some(oauth) = &accounts.config().oauth else {
         return oauth_not_configured_response();
     };
-    let Ok(state_token) = random_token(24) else {
+    let issued = crate::current_epoch_seconds_i64();
+    let Some(state_token) = oauth_state_token(issued) else {
         return json_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             json!({ "error": "Could not create login state." }),
         );
     };
-
-    let issued = crate::current_epoch_seconds_i64();
 
     let cookie = set_cookie(
         OAUTH_STATE_COOKIE,
@@ -156,7 +156,7 @@ pub(crate) async fn login_handler(
                     OAUTH_RETURN_COOKIE,
                     &signed_cookie_value(
                         OAUTH_RETURN_COOKIE,
-                        &format!("{issued}:{state_token}:{return_path}"),
+                        &format!("{state_token}:{return_path}"),
                         &accounts.config().session_secret,
                     ),
                     OAUTH_RETURN_TTL_SECONDS,
@@ -330,12 +330,15 @@ fn oauth_retry_href(
         return fallback();
     };
 
-    // Return cookie: issued:state_token:return_path
-    let Some(rest) = unexpired_return(&return_payload, crate::current_epoch_seconds_i64()) else {
-        return fallback();
-    };
-
-    let Some((return_state, return_path)) = rest.split_once(':') else {
+    let now = crate::current_epoch_seconds_i64();
+    let Some((return_state, return_path)) = unexpired_return(&return_payload, now).or_else(|| {
+        let (state, path) = return_payload.split_once(':')?;
+        if state.len() != 32 || callback_state != Some(state) {
+            return None;
+        }
+        let payload = verified_cookie(headers, OAUTH_STATE_COOKIE, secret)?;
+        (unexpired_state(&payload, now).as_deref() == Some(state)).then_some((state, path))
+    }) else {
         return fallback();
     };
 
@@ -461,15 +464,9 @@ async fn callback_response(state: AppState, request: Request<Body>) -> Response 
         OAUTH_RETURN_COOKIE,
         &accounts.config().session_secret,
     )
-    .and_then(|return_payload| {
-        let state_payload = verified_cookie(
-            request.headers(),
-            OAUTH_STATE_COOKIE,
-            &accounts.config().session_secret,
-        )?;
-
-        return_payload
-            .strip_prefix(&format!("{state_payload}:"))
+    .and_then(|payload| {
+        payload
+            .strip_prefix(&format!("{state_token}:"))
             .map(str::to_owned)
     })
     .and_then(|path| {
@@ -1081,14 +1078,30 @@ fn unexpired_state(payload: &str, now: i64) -> Option<String> {
         .contains(&age)
         .then(|| token.to_string())
 }
-fn unexpired_return(payload: &str, now: i64) -> Option<&str> {
-    let (issued, rest) = payload.split_once(':')?;
-    let age = now.checked_sub(issued.parse::<i64>().ok()?)?;
+
+// The old callback treats state as opaque. A 23-byte token distinguishes
+// timestamped state from legacy 24-byte tokens and leaves 152 random bits.
+fn oauth_state_token(issued: i64) -> Option<String> {
+    let mut token = [0_u8; 23];
+    token[..4].copy_from_slice(&u32::try_from(issued).ok()?.to_be_bytes());
+    ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut token[4..]).ok()?;
+    Some(URL_SAFE_NO_PAD.encode(token))
+}
+
+fn unexpired_return(payload: &str, now: i64) -> Option<(&str, &str)> {
+    let (state, path) = payload.split_once(':')?;
+    if state.len() != 31 {
+        return None;
+    }
+    let token = URL_SAFE_NO_PAD.decode(state).ok()?;
+    let issued = u32::from_be_bytes(token.get(..4)?.try_into().ok()?);
+    let age = now.checked_sub(i64::from(issued))?;
 
     (0..=OAUTH_RETURN_TTL_SECONDS)
         .contains(&age)
-        .then_some(rest)
+        .then_some((state, path))
 }
+
 /// The payload of cookie `name`, if it is present and signed for that name.
 fn verified_cookie(headers: &header::HeaderMap, name: &str, secret: &str) -> Option<String> {
     verified_cookie_value(name, &cookie_value(headers, name)?, secret)
