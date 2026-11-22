@@ -1267,8 +1267,11 @@ test("expanded drawing text controls stay clear of long captions and self-view",
           await canvas.evaluate((node) => {
             node.parentElement.scrollTop = 0;
           });
-          await canvas.scrollIntoViewIfNeeded();
+          await canvas.evaluate((node) =>
+            node.scrollIntoView({ block: "center" }),
+          );
           const rect = await canvas.boundingBox();
+          assert.ok(rect.y >= 0 && rect.y + rect.height <= height);
           await page.mouse.click(
             rect.x + rect.width * x,
             rect.y + rect.height * y,
