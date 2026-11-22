@@ -604,10 +604,18 @@ test("an expanded Example drawing keeps Jim's compact card accessible", async (t
           );
         await page.locator(selector).evaluate((node) => (node.hidden = true));
         await settled(page);
-        assert.equal(
-          await page.locator("#jim-stage").evaluate((node) => node.inert),
-          false,
-          "closing the overlay restores caption controls",
+        assert.deepEqual(
+          await page
+            .locator("#jim-stage")
+            .evaluate((node) => [
+              node.inert,
+              getComputedStyle(node).position,
+              node
+                .closest(".interview-shell")
+                .classList.contains("drawing-captions-below"),
+            ]),
+          [false, docked ? "static" : "fixed", docked],
+          "closing the overlay restores caption controls and placement",
         );
       }
       assert.equal(
@@ -1107,6 +1115,7 @@ test("expanded drawing text controls stay clear of long captions and self-view",
     [481, 800],
     [900, 800],
     [900, 500],
+    [900, 320, false, 32],
     [1023, 800],
     [1024, 800, false, 32],
     [1024, 800, true, 32, true],
@@ -1168,7 +1177,10 @@ test("expanded drawing text controls stay clear of long captions and self-view",
             30 * fontSize,
           "an unstacked editor retains its minimum width",
         );
-      if ((fontSize === 32 && width === 1024) || width === 900) {
+      if (
+        (fontSize === 32 && width === 1024) ||
+        (width === 900 && height >= 500)
+      ) {
         const panel = page.locator(".editor-panel");
         if (width === 900)
           await panel.evaluate((node) =>

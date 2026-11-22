@@ -2415,7 +2415,7 @@ table.phase-scores {
 /* Reserve the card's 40dvh cap, not its live height: captions that stream in
    must not move the drawing controls under a pointer. */
 .drawing-captions-below .editor-panel[data-example-drawing="true"] {
-  min-height: 0;
+  min-height: calc(6rem + 175px);
   height: calc(60dvh - 3rem);
 }
 
