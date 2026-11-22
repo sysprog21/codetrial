@@ -1,0 +1,47 @@
+# Labels the open pull requests whose author has resolved every review thread,
+# with green checks and no conflict, "ready for maintainer review", and takes
+# the label off one that stops qualifying; scripts/ready-label.py says how.
+name: ready label
+
+# Resolving a review thread starts no workflow, so this cannot answer the
+# resolve itself: it rescans every open pull request on a schedule instead, and
+# a push or a review is answered on the next tick too. Starting it from the end
+# of a check run would answer a push sooner, but only pr-description.yml may
+# hold a trigger that runs with the base's token on a pull request's event
+# (tests/test_check_workflow.py). A schedule runs this file as main has it,
+# with a token that can label a pull request from a fork; the job checks out
+# main and never anything from a pull request.
+on:
+  schedule:
+    - cron: '4,19,34,49 * * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+# Every run rescans everything, so only the newest one is worth finishing.
+concurrency:
+  group: ready-label
+  cancel-in-progress: true
+
+jobs:
+  label:
+    # Only trusted main code may write to the repository, and a fork's
+    # schedule has nothing to label.
+    if: github.repository == 'sysprog21/codetrial' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+      checks: read
+      statuses: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Label the pull requests ready for review
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: python3 scripts/ready-label.py "$GH_REPO"
