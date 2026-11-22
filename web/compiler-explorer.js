@@ -1150,11 +1150,26 @@ function cNeedsSize(type) {
   );
 }
 
+/// A string element gets a `char` array of its own, as a string argument
+/// does: a solution may edit an input string where it stands, and an element
+/// written as a literal is read-only. The "Item" in the name keeps the first
+/// string of `Row1` from being spelled like `Row10`.
 function cArrayDeclaration(name, value, itemType) {
   const values = value || [];
   const type = compilerType(itemType, "c");
-  const literal = values.length ? arrayLiteral(values, itemType, "c") : "{0}";
-  return `    ${type} ${name}[] = ${literal};\n    int ${name}Size = ${values.length};`;
+  let strings = "";
+  let literal = values.length ? arrayLiteral(values, itemType, "c") : "{0}";
+  if (itemType === "string" && values.length) {
+    const names = values.map((_, index) => `${name}Item${index}`);
+    strings = values
+      .map(
+        (item, index) =>
+          `    static char ${names[index]}[] = ${nativeLiteral(item, itemType, "c")};\n`,
+      )
+      .join("");
+    literal = `{${names.join(", ")}}`;
+  }
+  return `${strings}    ${type} ${name}[] = ${literal};\n    int ${name}Size = ${values.length};`;
 }
 
 function cMatrixDeclaration(name, value, itemType) {
