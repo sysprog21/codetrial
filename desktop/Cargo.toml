@@ -24,7 +24,7 @@ all = "deny"
 # reach before, and the trust boundary in docs/desktop.md is written against
 # this one.
 [build-dependencies]
-tauri-build = { version = "=2.7.4", features = [] }
+tauri-build = { version = "=2.7.6", features = [] }
 
 [dependencies]
 # Already in the tree through tauri; the Change keys code is read from it.
