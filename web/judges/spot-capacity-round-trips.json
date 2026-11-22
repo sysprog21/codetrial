@@ -97,6 +97,20 @@
         ]
       ],
       "expected": 13
+    },
+    {
+      "label": "small rise then two equal rises",
+      "input": [
+        [
+          1,
+          2,
+          0,
+          3,
+          1,
+          4
+        ]
+      ],
+      "expected": 6
     }
   ],
   "paramNames": [

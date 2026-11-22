@@ -853,6 +853,97 @@ test("word-break cases reject splits that go back no further than the last cut a
   }
 });
 
+test("stock III cases reject the two-runs shortcut and its greedy join", () => {
+  const best = (prices) => {
+    let [buy1, sell1, buy2, sell2] = [-Infinity, 0, -Infinity, 0];
+    for (const p of prices) {
+      buy1 = Math.max(buy1, -p);
+      sell1 = Math.max(sell1, buy1 + p);
+      buy2 = Math.max(buy2, sell1 - p);
+      sell2 = Math.max(sell2, buy2 + p);
+    }
+    return sell2;
+  };
+  // Each maximal non-falling stretch that ends higher than it starts.
+  const runs = (prices) => {
+    const found = [];
+    for (let i = 0; i < prices.length - 1;) {
+      let j = i;
+      while (j + 1 < prices.length && prices[j + 1] >= prices[j]) j += 1;
+      if (prices[j] > prices[i]) found.push([prices[i], prices[j]]);
+      i = j + 1;
+    }
+    return found;
+  };
+  const twoLargest = (found) =>
+    found
+      .map(([low, high]) => high - low)
+      .sort((a, b) => b - a)
+      .slice(0, 2)
+      .reduce((a, b) => a + b, 0);
+  // The patch a candidate tries after the two-runs shortcut fails: fold two
+  // neighbouring runs into one trade whenever that trade gains more than
+  // either run (or at least as much, on a tie), rescanning from the left
+  // after each fold, until two runs remain or no pair gains from a fold.
+  const joined = (foldOnTie) => (prices) => {
+    const found = runs(prices);
+    for (let k = 0; found.length > 2 && k < found.length - 1;) {
+      const [[a, b], [c, d]] = [found[k], found[k + 1]];
+      const joint = d - a;
+      const single = Math.max(b - a, d - c);
+      if (foldOnTie ? joint >= single : joint > single) {
+        found.splice(k, 2, [a, d]);
+        k = 0;
+      } else {
+        k += 1;
+      }
+    }
+    return twoLargest(found);
+  };
+  const { cases } = judges["best-time-to-buy-and-sell-stock-iii"];
+  for (const {
+    label,
+    input: [prices],
+    expected,
+  } of cases) {
+    assert.equal(
+      best(prices),
+      expected,
+      `"${label}" must expect the best two trades`,
+    );
+  }
+  for (const [name, solve, label] of [
+    [
+      "the two largest rising runs",
+      (prices) => twoLargest(runs(prices)),
+      "best trades span a dip",
+    ],
+    [
+      "runs joined whenever the joined trade beats each run",
+      joined(false),
+      "small rise then two equal rises",
+    ],
+    [
+      "runs joined whenever the joined trade ties or beats each run",
+      joined(true),
+      "small rise then two equal rises",
+    ],
+  ]) {
+    assertRejects(
+      "best-time-to-buy-and-sell-stock-iii",
+      label,
+      solve,
+      `"${label}" must reject ${name}`,
+    );
+  }
+  // Both joining rows miss the same case, so only an input where they part
+  // shows that `foldOnTie` decides anything. On [0,1,0,3,1,4] the tie variant
+  // folds the first two runs and keeps the best two trades, which is also
+  // why that input is not a judge case.
+  assert.equal(joined(false)([0, 1, 0, 3, 1, 4]), 5);
+  assert.equal(joined(true)([0, 1, 0, 3, 1, 4]), 6);
+});
+
 test("harness generator covers every function problem without network access", () => {
   for (const [id, spec] of Object.entries(judges)) {
     if (spec.kind !== "function") continue;

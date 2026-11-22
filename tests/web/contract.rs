@@ -750,6 +750,10 @@ fn static_problem_bank_and_judges_cover_each_problem() {
             "best-time-to-buy-and-sell-stock-iii",
             "best trades span a dip",
         ),
+        (
+            "best-time-to-buy-and-sell-stock-iii",
+            "small rise then two equal rises",
+        ),
     ] {
         let labels = judges[id]["cases"]
             .as_array()
