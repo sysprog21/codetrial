@@ -5906,8 +5906,10 @@ function compactJimStageBesideNarrowPanel(panel, place) {
     // Match keyboard order to the docked card without reordering the floating card.
     if (below !== (captions.nextElementSibling === turnRow)) {
       const focused = document.activeElement;
+      const scrollTop = captions.scrollTop;
       if (below) turnRow.before(captions);
       else turnRow.after(captions);
+      captions.scrollTop = scrollTop;
       if (captions.contains(focused)) focused.focus({ preventScroll: true });
     }
     shell.classList.toggle("drawing-stack", stacked);

@@ -1289,8 +1289,15 @@ test("expanded drawing text controls stay clear of long captions and self-view",
           await page.evaluate(() => document.activeElement.id),
           "turn-ring",
         );
+        const bar = page.locator("#captions-bar");
+        await bar.evaluate((node) => (node.scrollTop = 120));
         await page.getByRole("button", { name: "Shrink drawing" }).click();
+        await settled(page);
+        assert.equal(await bar.evaluate((node) => node.scrollTop), 120);
         assert.ok(await page.locator(".turn-row + #captions-bar").count());
+        await page.getByRole("button", { name: "Expand drawing" }).click();
+        await settled(page);
+        assert.equal(await bar.evaluate((node) => node.scrollTop), 120);
       }
       if (wideSidebar || fontSize === 32) {
         await page.getByRole("button", { name: "Shrink drawing" }).click();
