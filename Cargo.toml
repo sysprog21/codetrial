@@ -80,7 +80,7 @@ futures-util = { version = "0.3.34", default-features = false, features = ["sink
 # builds these features.
 hyper-util = { version = "0.1.21", default-features = false, features = ["client-legacy", "client-proxy", "tokio"] }
 jpeg-encoder = "0.7.1"
-livekit = { version = "0.10.0", features = ["rustls-tls-webpki-roots"] }
+livekit = { version = "0.12.0", features = ["rustls-tls-webpki-roots"] }
 ring = "0.17.14"
 # Mozilla's roots compiled in, one rustls configuration shared by this HTTP
 # client and the Gemini WebSocket, so the binary verifies every host it talks
@@ -131,9 +131,9 @@ sha2 = "0.11.1"
 # Borrowed socket inspection for real loopback transport fixtures, and the
 # bounded loopback startup backpressure that avoids oversized microphone frames.
 socket2 = "0.6.5"
-livekit-protocol = "0.8.2"
+livekit-protocol = "0.9.0"
 # LiveKit's transport, reached directly to check the vendored proxy path.
-livekit-net = "0.1.4"
+livekit-net = "0.2.0"
 # The paused clock, so the Live socket's keepalive and idle limits are tested
 # at their real values instead of waiting them out; signals, so the serving
 # fixture can treat TERM as a stop request.
