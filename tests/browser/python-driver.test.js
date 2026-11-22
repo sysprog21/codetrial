@@ -170,3 +170,76 @@ test(
     ]);
   },
 );
+
+test(
+  "a Solution without the entry method is still a setup error",
+  { skip },
+  () => {
+    const reply = runDriver(
+      `class Solution:
+    def maxPathSum(self, root: Optional[TreeNode]) -> int:
+        return 0
+`,
+      maxPathSum(),
+    );
+    assert.deepEqual(reply, {
+      setupError:
+        "Could not find bestRouteYield in your code - keep the starter signature.",
+    });
+  },
+);
+
+test("a class judge calls a case's methods on one instance", { skip }, () => {
+  const reply = runDriver(
+    `class Counter:
+    def __init__(self):
+        self.count = 0
+
+    def add(self):
+        self.count += 1
+        return self.count
+`,
+    {
+      kind: "class",
+      className: "Counter",
+      cases: [
+        {
+          input: [
+            ["Counter", "add", "add"],
+            [[], [], []],
+          ],
+        },
+        {
+          input: [
+            ["Counter", "add"],
+            [[], []],
+          ],
+        },
+      ],
+    },
+  );
+  assert.deepEqual(
+    reply.results.map((result) => result.actual),
+    [
+      [null, 1, 2],
+      [null, 1],
+    ],
+  );
+});
+
+test("an answer written as a plain function still runs", { skip }, () => {
+  const reply = runDriver(
+    `def double(value):
+    return value * 2
+`,
+    {
+      kind: "function",
+      entry: "double",
+      cases: [{ input: [2] }, { input: [5] }],
+    },
+  );
+  assert.deepEqual(
+    reply.results.map((result) => result.actual),
+    [4, 10],
+  );
+});
