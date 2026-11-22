@@ -12,7 +12,7 @@
 [package]
 edition = "2021"
 name = "livekit-net"
-version = "0.1.4"
+version = "0.2.0"
 build = false
 autolib = false
 autobins = false
@@ -38,6 +38,7 @@ native = [
     "dep:reqwest",
     "dep:tokio",
     "dep:futures-util",
+    "dep:bytes",
     "dep:base64",
 ]
 native-tls = [
@@ -87,6 +88,13 @@ version = "0.1"
 version = "0.21"
 features = ["std"]
 optional = true
+
+[dependencies.bytes]
+version = "1.10"
+optional = true
+
+[dependencies.flate2]
+version = "1"
 
 [dependencies.futures-util]
 version = "0.3"

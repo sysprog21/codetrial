@@ -133,7 +133,7 @@ sha2 = "0.11.1"
 socket2 = "0.6.5"
 livekit-protocol = "0.9.0"
 # LiveKit's transport, reached directly to check the vendored proxy path.
-livekit-net = "0.1.4"
+livekit-net = "0.2.0"
 # The paused clock, so the Live socket's keepalive and idle limits are tested
 # at their real values instead of waiting them out; signals, so the serving
 # fixture can treat TERM as a stop request.
