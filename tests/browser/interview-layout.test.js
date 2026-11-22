@@ -1415,73 +1415,46 @@ test("a constrained caption card keeps the self view inside its padding at a sma
   }
 });
 
-test("resizing an expanded drawing into a stack preserves problem reading position", async (t) => {
+test("resizing into a drawing stack preserves reading or reveals relocated focus", async (t) => {
   if (!browser) return t.skip("playwright chromium unavailable");
-  const page = await openInterview(1840, 800, "&exampleDrawing=1");
-  try {
-    await closeSetupCheck(page);
-    await page.evaluate(() => {
-      document.documentElement.style.fontSize = "32px";
-      document.querySelector("#example-board").open = true;
-    });
-    await page.getByRole("button", { name: "Expand drawing" }).click();
-    await settled(page);
-    const top = await page.locator("#problem-panel").evaluate((node) => {
-      node.append(
-        "Consider each boundary case before choosing an approach. ".repeat(80),
+  for (const height of [800, 500]) {
+    const page = await openInterview(1840, height, "&exampleDrawing=1");
+    try {
+      await closeSetupCheck(page);
+      await page.evaluate(() => {
+        document.documentElement.style.fontSize = "32px";
+        document.querySelector("#example-board").open = true;
+      });
+      await page.getByRole("button", { name: "Expand drawing" }).click();
+      const problem = page.locator("#problem-panel");
+      const top = await problem.evaluate((node) => {
+        node.append("Consider each boundary case. ".repeat(160));
+        node.scrollTop = 100;
+        return node.scrollTop;
+      });
+      if (height === 500) await page.locator("#sidebar-resizer").focus();
+      await page.evaluate(() => window.scrollTo(0, 0));
+      await page.setViewportSize({ width: 1500, height });
+      await settled(page);
+      assert.ok(
+        await page
+          .locator(".interview-shell")
+          .evaluate((shell) => shell.classList.contains("drawing-stack")),
       );
-      node.scrollTop = 100;
-      return node.scrollTop;
-    });
-    assert.ok(top > 0, "the problem is scrolled before resizing");
-    await page.evaluate(() => window.scrollTo(0, 0));
-    await page.setViewportSize({ width: 1500, height: 800 });
-    await settled(page);
-    assert.deepEqual(
-      await page.evaluate(() => ({
-        stacked: document
-          .querySelector(".interview-shell")
-          .classList.contains("drawing-stack"),
-        pageTop: window.scrollY,
-        problemTop: document.querySelector("#problem-panel").scrollTop,
-      })),
-      { stacked: true, pageTop: 0, problemTop: top },
-      "resizing stacks the drawing without changing the reading position",
-    );
-  } finally {
-    await page.close();
-  }
-});
-
-test("resizing into a stack keeps relocated keyboard focus in view", async (t) => {
-  if (!browser) return t.skip("playwright chromium unavailable");
-  const page = await openInterview(1840, 500, "&exampleDrawing=1");
-  try {
-    await closeSetupCheck(page);
-    await page.evaluate(() => {
-      document.documentElement.style.fontSize = "32px";
-      document.querySelector("#example-board").open = true;
-      document
-        .querySelector("#problem-panel")
-        .append(
-          "Consider each boundary case before choosing an approach. ".repeat(
-            80,
-          ),
+      if (height === 500) {
+        const shrink = page.getByRole("button", { name: "Shrink drawing" });
+        assert.ok(
+          await shrink.evaluate((node) => node === document.activeElement),
         );
-    });
-    await page.getByRole("button", { name: "Expand drawing" }).click();
-    await page.locator("#sidebar-resizer").focus();
-    await page.evaluate(() => window.scrollTo(0, 0));
-    await page.setViewportSize({ width: 1500, height: 500 });
-    await settled(page);
-    const focus = await page.evaluate(() => {
-      const node = document.activeElement;
-      const { top, bottom } = node.getBoundingClientRect();
-      return { action: node.dataset.action, top, bottom };
-    });
-    assert.equal(focus.action, "expand");
-    assert.ok(focus.top >= 0 && focus.bottom <= 500, JSON.stringify(focus));
-  } finally {
-    await page.close();
+        const { y, height: size } = await shrink.boundingBox();
+        assert.ok(y >= 0 && y + size <= height, "relocated focus is in view");
+      } else {
+        assert.ok(top > 0);
+        assert.equal(await problem.evaluate((node) => node.scrollTop), top);
+        assert.equal(await page.evaluate(() => window.scrollY), 0);
+      }
+    } finally {
+      await page.close();
+    }
   }
 });
