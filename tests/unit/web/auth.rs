@@ -1,22 +1,6 @@
 use super::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-#[test]
-fn return_cookie_ttl_boundary() {
-    let now = 100_000;
-
-    for (age, expected) in [(-1, false), (3599, true), (3600, true), (3601, false)] {
-        let state = oauth_state_token(now - age).unwrap();
-        let payload = format!("{state}:/peer-lobby");
-
-        assert_eq!(
-            unexpired_return(&payload, now).is_some(),
-            expected,
-            "unexpected result at age {age}"
-        );
-    }
-}
-
 async fn serve(router: axum::Router) -> (GitHubLoginConfig, tokio::task::JoinHandle<()>) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());

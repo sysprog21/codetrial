@@ -11,7 +11,6 @@ use axum::extract::{ConnectInfo, FromRequestParts, State};
 use axum::http::request::Parts;
 use axum::http::{HeaderValue, Request, StatusCode, header};
 use axum::response::{AppendHeaders, Html, IntoResponse, Response};
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde_json::{Value, json};
 
 use crate::accounts::{
@@ -107,7 +106,7 @@ pub(crate) async fn login_handler(
         return oauth_not_configured_response();
     };
     let issued = crate::current_epoch_seconds_i64();
-    let Some(state_token) = oauth_state_token(issued) else {
+    let Ok(state_token) = crate::accounts::random_token(24) else {
         return json_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             json!({ "error": "Could not create login state." }),
@@ -145,6 +144,20 @@ pub(crate) async fn login_handler(
             .and_then(|path| super::tasks::task_return_path(path))
             .unwrap_or_else(|| "/".to_owned())
     };
+    let mut return_cookie_value = signed_cookie_value(
+        OAUTH_RETURN_COOKIE,
+        &format!("{state_token}:{return_path}"),
+        &accounts.config().session_secret,
+    );
+
+    // Chromium limits the cookie name and value to 4096 bytes.
+    if OAUTH_RETURN_COOKIE.len() + return_cookie_value.len() > 4096 {
+        return_cookie_value = signed_cookie_value(
+            OAUTH_RETURN_COOKIE,
+            &format!("{state_token}:/"),
+            &accounts.config().session_secret,
+        );
+    }
     (
         StatusCode::FOUND,
         [(header::LOCATION, location)],
@@ -154,11 +167,7 @@ pub(crate) async fn login_handler(
                 header::SET_COOKIE,
                 set_cookie(
                     OAUTH_RETURN_COOKIE,
-                    &signed_cookie_value(
-                        OAUTH_RETURN_COOKIE,
-                        &format!("{state_token}:{return_path}"),
-                        &accounts.config().session_secret,
-                    ),
+                    &return_cookie_value,
                     OAUTH_RETURN_TTL_SECONDS,
                     state.config.production,
                 ),
@@ -282,23 +291,12 @@ pub(crate) async fn callback_handler(
     // Each pass that reaches GitHub spends the OAuth app's quota with its
     // client secret, so it is charged to the login bucket before any call.
     let client = client_ip(request.headers(), peer, state.config.trusted_proxy_hops);
+    let retry_href = state
+        .accounts
+        .as_ref()
+        .map(|accounts| oauth_retry_href(request.headers(), &accounts.config().session_secret))
+        .unwrap_or_else(|| "/api/login".to_owned());
     if !state.login_limit.allow(client, Instant::now()) {
-        let retry_href = state
-            .accounts
-            .as_ref()
-            .map(|accounts| {
-                let query = query_pairs(request.uri().query().unwrap_or(""));
-                oauth_retry_href(
-                    request.headers(),
-                    &accounts.config().session_secret,
-                    query
-                        .get("state")
-                        .filter(|state| !state.is_empty())
-                        .map(String::as_str),
-                )
-            })
-            .unwrap_or_else(|| "/api/login".to_owned());
-
         let mut response = oauth_callback_error_page(
             StatusCode::TOO_MANY_REQUESTS,
             "Too many login attempts. Wait a minute and try again.",
@@ -312,39 +310,23 @@ pub(crate) async fn callback_handler(
         return response;
     }
     let production = state.config.production;
-    let mut response = callback_response(state, request).await;
+    let mut response = callback_response(state, request, retry_href).await;
     if let Ok(cookie) = HeaderValue::from_str(&clear_cookie(OAUTH_STATE_COOKIE, production)) {
         response.headers_mut().append(header::SET_COOKIE, cookie);
     }
     response
 }
 
-fn oauth_retry_href(
-    headers: &header::HeaderMap,
-    secret: &str,
-    callback_state: Option<&str>,
-) -> String {
+fn oauth_retry_href(headers: &header::HeaderMap, secret: &str) -> String {
     let fallback = || "/api/login".to_owned();
 
     let Some(return_payload) = verified_cookie(headers, OAUTH_RETURN_COOKIE, secret) else {
         return fallback();
     };
 
-    let now = crate::current_epoch_seconds_i64();
-    let Some((return_state, return_path)) = unexpired_return(&return_payload, now).or_else(|| {
-        let (state, path) = return_payload.split_once(':')?;
-        if state.len() != 32 || callback_state != Some(state) {
-            return None;
-        }
-        let payload = verified_cookie(headers, OAUTH_STATE_COOKIE, secret)?;
-        (unexpired_state(&payload, now).as_deref() == Some(state)).then_some((state, path))
-    }) else {
+    let Some((_, return_path)) = return_payload.split_once(':') else {
         return fallback();
     };
-
-    if callback_state.is_some_and(|state| state != return_state) {
-        return fallback();
-    }
 
     if return_path == "/peer-lobby" {
         return "/api/login?next=peer-join".to_owned();
@@ -386,7 +368,11 @@ fn oauth_callback_error_page(
         .into_response()
 }
 
-async fn callback_response(state: AppState, request: Request<Body>) -> Response {
+async fn callback_response(
+    state: AppState,
+    request: Request<Body>,
+    retry_href: String,
+) -> Response {
     let Some(accounts) = state.accounts.clone() else {
         return state.accounts_error();
     };
@@ -395,15 +381,6 @@ async fn callback_response(state: AppState, request: Request<Body>) -> Response 
         return oauth_not_configured_response();
     };
     let query = query_pairs(request.uri().query().unwrap_or(""));
-
-    let retry_href = oauth_retry_href(
-        request.headers(),
-        &accounts.config().session_secret,
-        query
-            .get("state")
-            .filter(|state| !state.is_empty())
-            .map(String::as_str),
-    );
 
     let Some(code) = query.get("code").filter(|value| !value.is_empty()) else {
         let message = if query
@@ -1077,29 +1054,6 @@ fn unexpired_state(payload: &str, now: i64) -> Option<String> {
     (0..=OAUTH_STATE_TTL_SECONDS)
         .contains(&age)
         .then(|| token.to_string())
-}
-
-// The old callback treats state as opaque. A 23-byte token distinguishes
-// timestamped state from legacy 24-byte tokens and leaves 152 random bits.
-fn oauth_state_token(issued: i64) -> Option<String> {
-    let mut token = [0_u8; 23];
-    token[..4].copy_from_slice(&u32::try_from(issued).ok()?.to_be_bytes());
-    ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut token[4..]).ok()?;
-    Some(URL_SAFE_NO_PAD.encode(token))
-}
-
-fn unexpired_return(payload: &str, now: i64) -> Option<(&str, &str)> {
-    let (state, path) = payload.split_once(':')?;
-    if state.len() != 31 {
-        return None;
-    }
-    let token = URL_SAFE_NO_PAD.decode(state).ok()?;
-    let issued = u32::from_be_bytes(token.get(..4)?.try_into().ok()?);
-    let age = now.checked_sub(i64::from(issued))?;
-
-    (0..=OAUTH_RETURN_TTL_SECONDS)
-        .contains(&age)
-        .then_some((state, path))
 }
 
 /// The payload of cookie `name`, if it is present and signed for that name.

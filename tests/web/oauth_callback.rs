@@ -151,7 +151,8 @@ async fn github_callback_cancelled_from_peer_lobby_has_retry_link() {
         "session-secret",
     );
 
-    // An older callback must not use a newer sign-in's return destination.
+    // A mismatched callback state still fails authentication, but a valid
+    // signed return cookie can preserve the retry destination.
     let newer_token = timestamped_state(issued, 3);
     let newer_state = signed_cookie(
         "codetrial_oauth_state",
@@ -180,8 +181,7 @@ async fn github_callback_cancelled_from_peer_lobby_has_retry_link() {
     assert_eq!(older_callback.status(), 401);
 
     let body = older_callback.text().await.unwrap();
-    assert!(body.contains("href=\"/api/login\""));
-    assert!(!body.contains("href=\"/api/login?next=peer-join\""));
+    assert!(body.contains("href=\"/api/login?next=peer-join\""));
 
     let matching_return = signed_cookie(
         "codetrial_oauth_return",
@@ -281,13 +281,13 @@ async fn github_callback_cancelled_from_peer_lobby_has_retry_link() {
             "/api/login?next=peer-join",
         ),
         (
-            "expired signed return cookie",
+            "older signed return cookie supplied manually",
             signed_cookie(
                 "codetrial_oauth_return",
                 &format!("{}:/peer-lobby", timestamped_state(issued - 60 * 60 - 1, 4)),
                 "session-secret",
             ),
-            "/api/login",
+            "/api/login?next=peer-join",
         ),
         (
             "invalid return cookie signature",
@@ -361,82 +361,6 @@ async fn github_callback_cancelled_from_peer_lobby_has_retry_link() {
 
     server.shutdown().await;
     github_server.shutdown().await;
-    remove_database(path).await;
-}
-
-#[tokio::test]
-async fn legacy_oauth_retry_requires_matching_unexpired_signed_state() {
-    let path = account_db_path("oauth-legacy-retry");
-    let (base, server) = spawn_web_server(oauth_test_config(&path)).await;
-    let client = http_client();
-    let state = "a".repeat(32);
-    let return_cookie = signed_cookie(
-        "codetrial_oauth_return",
-        &format!("{state}:/peer-lobby"),
-        "session-secret",
-    );
-    for (why, callback_state, state_cookie, expected_retry) in [
-        (
-            "matching state",
-            state.as_str(),
-            Some(state_cookie(&state, "session-secret")),
-            "/api/login?next=peer-join",
-        ),
-        ("missing state cookie", state.as_str(), None, "/api/login"),
-        (
-            "expired state cookie",
-            state.as_str(),
-            Some(state_cookie_aged(&state, "session-secret", 601)),
-            "/api/login",
-        ),
-        (
-            "invalid state signature",
-            state.as_str(),
-            Some(state_cookie(&state, "wrong-secret")),
-            "/api/login",
-        ),
-        (
-            "mismatched state cookie",
-            state.as_str(),
-            Some(state_cookie(&"b".repeat(32), "session-secret")),
-            "/api/login",
-        ),
-        (
-            "mismatched callback state",
-            "other-state",
-            Some(state_cookie(&state, "session-secret")),
-            "/api/login",
-        ),
-        (
-            "missing callback state",
-            "",
-            Some(state_cookie(&state, "session-secret")),
-            "/api/login",
-        ),
-    ] {
-        let mut cookies = format!("codetrial_oauth_return={return_cookie}");
-        if let Some(value) = state_cookie {
-            cookies.push_str(&format!("; codetrial_oauth_state={value}"));
-        }
-        let response = client
-            .get(format!("{base}/api/callback"))
-            .query(&[("error", "access_denied"), ("state", callback_state)])
-            .header("cookie", cookies)
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(response.status(), 400, "{why}");
-        assert!(
-            response
-                .text()
-                .await
-                .unwrap()
-                .contains(&format!("href=\"{expected_retry}\"")),
-            "{why}"
-        );
-    }
-
-    server.shutdown().await;
     remove_database(path).await;
 }
 
@@ -836,9 +760,14 @@ async fn github_login_return_cookie_fits_chromium_limit() {
 
     let prefix = "/t/classroom/3sum?site=https%3A%2F%2Fteacher.github.io%2F";
     let suffix = "&version=7";
-    for (destination_size, expected_size) in [(2880, 2978), (3997, 4095), (3998, 4096)] {
+    for destination_size in [2880, 3997, 3998] {
         let site_path = "a".repeat(destination_size - prefix.len() - suffix.len());
         let destination = format!("{prefix}{site_path}{suffix}");
+        let expected_path = if destination_size == 3998 {
+            "/"
+        } else {
+            destination.as_str()
+        };
         let response = client
             .get(format!("{base}/api/login"))
             .query(&[("returnTo", &destination)])
@@ -854,8 +783,8 @@ async fn github_login_return_cookie_fits_chromium_limit() {
                 .iter()
                 .map(|(name, value)| name.as_str().len() + ": \r\n".len() + value.as_bytes().len())
                 .sum::<usize>();
-        assert_eq!(header_bytes, destination_size + 1168);
-        assert_eq!(header_bytes <= 4096, destination_size == 2880);
+        assert_eq!(header_bytes, expected_path.len() + 1171);
+        assert_eq!(header_bytes <= 4096, destination_size != 3997);
 
         let pair = response
             .headers()
@@ -870,11 +799,13 @@ async fn github_login_return_cookie_fits_chromium_limit() {
         let (name, value) = pair.split_once('=').unwrap();
         assert_eq!(name, "codetrial_oauth_return");
         let (payload, _) = value.rsplit_once('.').unwrap();
-        assert!(payload.ends_with(&format!(":{destination}")));
-        assert_eq!(
-            name.len() + value.len(),
-            expected_size,
-            "{destination_size}-byte destination"
+        assert!(payload.ends_with(&format!(":{expected_path}")));
+
+        let cookie_size = name.len() + value.len();
+        assert_eq!(cookie_size, expected_path.len() + 99);
+        assert!(
+            cookie_size <= 4096,
+            "{destination_size}-byte destination produced a {cookie_size}-byte cookie"
         );
     }
 
@@ -898,7 +829,7 @@ async fn github_oauth_return_cookie_keeps_legacy_wire_format_and_survives_upgrad
 
     let prefix = "/t/classroom/3sum?site=https%3A%2F%2Fteacher.github.io%2F";
     let suffix = "&version=7";
-    let site_path = "a".repeat(3997 - prefix.len() - suffix.len());
+    let site_path = "a".repeat(3996 - prefix.len() - suffix.len());
     let legacy_destination = format!("{prefix}{site_path}{suffix}");
     let destination = format!("{prefix}{site_path}a{suffix}");
     let legacy_name = "codetrial_oauth_return";

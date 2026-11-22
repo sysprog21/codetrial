@@ -127,12 +127,8 @@ services are unavailable or OAuth is not configured, the callback
 returns a JSON error response.
 
 A signed return cookie can preserve the Peer Lobby or a valid task
-destination for retry. Its independent lifetime is one hour for new
-sign-ins. Retrying starts a fresh OAuth authorization. A successful
-callback from before an upgrade can still use its original destination
-while its signed state is valid. A failed callback from before an upgrade can
-preserve the destination for retry while the signed state cookie is still
-valid and matches the callback state.
+destination for retry. The browser retains it for up to one hour
+(`Max-Age=3600`). Retrying starts a fresh OAuth authorization.
 
 A reverse proxy must allow the full response headers on both
 `/api/login` and `/api/callback`. Long task destinations can put the
