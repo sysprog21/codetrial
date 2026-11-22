@@ -1176,26 +1176,6 @@
         ></span>
         <!-- Jim's subtitles belong under Jim's face, not across the room in the
              sidebar: the candidate is already looking here when he speaks. -->
-        <div id="captions-bar" class="captions-bar">
-          <div class="captions-head">
-            <span class="captions-label">Live CC:</span>
-            <button
-              id="caption-unclear"
-              type="button"
-              class="caption-unclear"
-              aria-pressed="false"
-              hidden
-            >
-              Unclear
-            </button>
-          </div>
-          <span
-            id="captions-text"
-            aria-live="polite"
-            aria-label="Real-time closed captions"
-            >Listening...</span
-          >
-        </div>
         <div class="turn-row">
           <!-- Fills while the candidate is silent and resets when they speak,
                so the moment Jim takes the turn is visible before it comes.
@@ -1221,6 +1201,26 @@
           <p id="turn-shortcut" class="muted small">
             Alt+Enter (&#8997;Enter on a Mac).
           </p>
+        </div>
+        <div id="captions-bar" class="captions-bar">
+          <div class="captions-head">
+            <span class="captions-label">Live CC:</span>
+            <button
+              id="caption-unclear"
+              type="button"
+              class="caption-unclear"
+              aria-pressed="false"
+              hidden
+            >
+              Unclear
+            </button>
+          </div>
+          <span
+            id="captions-text"
+            aria-live="polite"
+            aria-label="Real-time closed captions"
+            >Listening...</span
+          >
         </div>
       </aside>
 

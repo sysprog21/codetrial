@@ -1289,6 +1289,8 @@ test("expanded drawing text controls stay clear of long captions and self-view",
           await page.evaluate(() => document.activeElement.id),
           "turn-ring",
         );
+        await page.getByRole("button", { name: "Shrink drawing" }).click();
+        assert.ok(await page.locator(".turn-row + #captions-bar").count());
       }
       if (wideSidebar || fontSize === 32) {
         await page.getByRole("button", { name: "Shrink drawing" }).click();

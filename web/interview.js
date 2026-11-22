@@ -5868,6 +5868,8 @@ function compactJimStageBesideNarrowPanel(panel, place) {
   const desktopDrawing = matchMedia(JIM_DRAWING_DESKTOP_WINDOW);
   const example = document.querySelector("#example-board");
   const shell = panel.closest(".interview-shell");
+  const captions = nodes.captionsBar;
+  const turnRow = nodes.jimStage.querySelector(".turn-row");
   let wasExpanded = example?.hasAttribute("data-expanded") === true;
   const fit = () => {
     const rem = Number.parseFloat(
@@ -5901,6 +5903,13 @@ function compactJimStageBesideNarrowPanel(panel, place) {
         .querySelector('[data-action="expand"]')
         .focus({ preventScroll: true });
     shell.classList.toggle("drawing-captions-below", below);
+    // Match keyboard order to the docked card without reordering the floating card.
+    if (below !== (captions.nextElementSibling === turnRow)) {
+      const focused = document.activeElement;
+      if (below) turnRow.before(captions);
+      else turnRow.after(captions);
+      if (captions.contains(focused)) focused.focus({ preventScroll: true });
+    }
     shell.classList.toggle("drawing-stack", stacked);
     if (stacked && (justExpanded || movedFocus))
       panel.scrollIntoView({ block: "start" });
