@@ -353,6 +353,91 @@ def check_judge_case_coverage(problem_id: str, judge: dict) -> None:
         raise RuntimeError(f"{problem_id}: judge needs a boundary case")
 
 
+# A constraint that opens with a lower bound on parameters, on their lengths
+# or on the node count, written as the bank writes them: "1 <= n <= 8",
+# "1 <= haystack.length, needle.length <= 10^4", "1 <= number of nodes <= 10^5".
+SUBJECT = r"[A-Za-z_]\w*(?:\.length)?"
+LOWER_BOUND = re.compile(rf"(-?\d+) <= ((?:{SUBJECT}, )*{SUBJECT}|number of nodes) <")
+# `Node` is left out: it also names graph and random-pointer nodes, whose
+# inputs are not one value per node.
+TREE_TYPES = {"binarytree", "treenode"}
+NODE_TYPES = TREE_TYPES | {"linkedlist", "listnode"}
+
+
+def tree_size(values: list | None) -> int:
+    """The nodes the runners build from a level-order array.
+
+    A value whose parent is null is never read, so `[1, null, null, 2]` is a
+    single node and `[null, 1]` none.
+    """
+    if not values or values[0] is None:
+        return 0
+    size = parents = 1
+    index = 1
+    while parents and index < len(values):
+        children = sum(
+            value is not None for value in values[index : index + 2 * parents]
+        )
+        index += 2 * parents
+        size += children
+        parents = children
+    return size
+
+
+def case_arguments(judge: dict, case: dict) -> list:
+    """The values a case passes: a class case's are its constructor's."""
+    if judge["kind"] == "class":
+        arguments = case["input"][1]
+        return arguments[0] if arguments else []
+    return case["input"]
+
+
+def check_judge_case_bounds(problem: dict, judge: dict) -> None:
+    """No judge case falls below a lower bound the constraints state.
+
+    The interviewer gives those bounds when asked, so a case below one fails a
+    candidate who relied on the answer. A class judge names no constructor
+    parameter, so a bound such as `1 <= capacity` on one is not checked.
+    """
+    names = judge.get("paramNames", [])
+    types = judge.get("paramTypes") or judge.get("constructorArgTypes", [])
+    nodes = [index for index, name in enumerate(types) if name.lower() in NODE_TYPES]
+    for constraint in problem.get("constraints", []):
+        bound = LOWER_BOUND.match(constraint)
+        if not bound:
+            continue
+        lowest = int(bound[1])
+        for subject in bound[2].split(", "):
+            name = subject.removesuffix(".length")
+            if subject == "number of nodes":
+                # With two trees the count could be either one's, or their sum.
+                if len(nodes) != 1:
+                    continue
+                index = nodes[0]
+            elif name in names:
+                index = names.index(name)
+            else:
+                continue
+            for case in judge["cases"]:
+                arguments = case_arguments(judge, case)
+                # A Python task package may leave a defaulted argument out.
+                if index >= len(arguments):
+                    continue
+                value = arguments[index]
+                if subject == "number of nodes" and types[index].lower() in TREE_TYPES:
+                    size = tree_size(value)
+                elif subject == "number of nodes" or subject != name:
+                    # A length, or the node count of a linked list. A null
+                    # array counts as empty rather than failing on len().
+                    size = len(value or [])
+                else:
+                    size = value
+                if size < lowest:
+                    raise RuntimeError(
+                        f"{problem['id']}: case {case['label']!r} is below {constraint!r}"
+                    )
+
+
 JUDGE_CASE_GAPS_SOURCE = ROOT / "problem-bank" / "judge-case-gaps.txt"
 
 
@@ -799,6 +884,7 @@ def validated_variant(problem: dict, judge: dict, variant: object) -> dict:
     shows them.
     """
     judge_options(judge)
+    check_judge_case_bounds(problem, judge)
     problem_id = problem["id"]
     text = checked_text(problem_id, variant)
     check_new_names(problem, judge, variant)

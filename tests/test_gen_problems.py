@@ -1,6 +1,7 @@
 import importlib.util
 import io
 import json
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -578,6 +579,117 @@ class VariantValidationTests(unittest.TestCase):
             ):
                 with self.assertRaisesRegex(RuntimeError, "now passes"):
                     GEN.check_judge_case_gaps({"coin-change": accepted})
+
+    def test_a_case_below_a_stated_lower_bound_is_refused(self):
+        # The interviewer repeats the constraints when asked, so a candidate
+        # told "at least one coin" can fail a case with none.
+        bounded = {
+            **self.problem,
+            "constraints": ["1 <= coins.length <= 12", "1 <= amount <= 10^4"],
+        }
+        GEN.check_judge_case_bounds(bounded, self.judge)
+        no_coins = {"label": "no coins", "input": [[], 3], "expected": -1}
+        zero_amount = {"label": "zero amount", "input": [[1], 0], "expected": 0}
+        for case, constraint in (
+            (no_coins, "1 <= coins.length <= 12"),
+            (zero_amount, "1 <= amount <= 10^4"),
+        ):
+            judge = {**self.judge, "cases": [*self.judge["cases"], case]}
+            with self.assertRaisesRegex(
+                RuntimeError,
+                re.escape(f"case '{case['label']}' is below '{constraint}'"),
+            ):
+                GEN.check_judge_case_bounds(bounded, judge)
+        # The variant check runs it, so `--check` refuses such a case.
+        with self.assertRaisesRegex(RuntimeError, "is below"):
+            GEN.validated_variant(
+                bounded,
+                {**self.judge, "cases": [*self.judge["cases"], zero_amount]},
+                self.variant,
+            )
+
+        iterator = {
+            "kind": "class",
+            "className": "BSTIterator",
+            "constructorArgTypes": ["binaryTree"],
+            "cases": [
+                {
+                    "label": "single node",
+                    "input": [["BSTIterator", "next"], [[[1]], []]],
+                    "expected": [None, 1],
+                }
+            ],
+        }
+        nodes = {"id": "bst-iterator", "constraints": ["1 <= number of nodes <= 10^5"]}
+        GEN.check_judge_case_bounds(nodes, iterator)
+        for label, tree in (
+            ("empty tree", []),
+            ("null root", [None]),
+            # The runners build nothing under a null root.
+            ("child of a null root", [None, 1]),
+        ):
+            empty = {
+                **iterator,
+                "cases": [{"label": label, "input": [["BSTIterator"], [[tree]]]}],
+            }
+            with self.assertRaisesRegex(RuntimeError, f"case '{label}' is below"):
+                GEN.check_judge_case_bounds(nodes, empty)
+
+    def test_a_bound_above_one_counts_only_the_nodes_the_runners_build(self):
+        problem = {
+            "id": "bst-pairs",
+            "constraints": ["2 <= nums.length <= 10^4", "2 <= number of nodes <= 10^4"],
+        }
+        judge = {
+            "kind": "function",
+            "paramNames": ["nums", "root"],
+            "paramTypes": ["list<integer>", "TreeNode"],
+            "cases": [
+                {"label": "pair", "input": [[1, 2], [1, None, 2]], "expected": 1},
+                {"label": "triple", "input": [[1, 2, 3], [1, 2, 3]], "expected": 1},
+            ],
+        }
+        GEN.check_judge_case_bounds(problem, judge)
+        # In the orphan, 2 sits under the root's null left child: one node.
+        for label, args in (
+            ("single", [[1], [1, 2]]),
+            ("orphan", [[1, 2], [1, None, None, 2]]),
+        ):
+            bad = {**judge, "cases": [{"label": label, "input": args, "expected": 1}]}
+            with self.assertRaisesRegex(RuntimeError, f"case '{label}' is below"):
+                GEN.check_judge_case_bounds(problem, bad)
+
+    def test_each_name_in_a_listed_lower_bound_is_checked(self):
+        problem = {
+            "id": "find-the-index-of-the-first-occurrence-in-a-string",
+            "constraints": ["1 <= haystack.length, needle.length <= 10^4"],
+        }
+        judge = {
+            "kind": "function",
+            "paramNames": ["haystack", "needle"],
+            "paramTypes": ["string", "string"],
+            "cases": [{"label": "found", "input": ["sadbutsad", "sad"], "expected": 0}],
+        }
+        GEN.check_judge_case_bounds(problem, judge)
+        for label, args in (("empty haystack", ["", "a"]), ("empty needle", ["a", ""])):
+            bad = {**judge, "cases": [{"label": label, "input": args, "expected": -1}]}
+            with self.assertRaisesRegex(RuntimeError, f"case '{label}' is below"):
+                GEN.check_judge_case_bounds(problem, bad)
+
+    def test_an_omitted_or_null_argument_is_judged_without_crashing(self):
+        problem = {"id": "pairs", "constraints": ["1 <= n <= 8", "1 <= s.length <= 9"]}
+        judge = {
+            "kind": "function",
+            "paramNames": ["n", "s"],
+            "paramTypes": ["integer", "string"],
+            # A Python task package may leave a defaulted argument out.
+            "cases": [{"label": "defaults", "input": [], "expected": ["()"]}],
+        }
+        GEN.check_judge_case_bounds(problem, judge)
+        for label, args in (("zero pairs", [0]), ("null string", [1, None])):
+            bad = {**judge, "cases": [{"label": label, "input": args, "expected": []}]}
+            with self.assertRaisesRegex(RuntimeError, f"case '{label}' is below"):
+                GEN.check_judge_case_bounds(problem, bad)
 
     def test_the_source_title_and_site_stay_out_of_what_the_candidate_reads(self):
         self.rejects("names the source title", title="Coin Change Kiosk")
