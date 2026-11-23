@@ -1,4 +1,8 @@
-import { frameworkPhases, IMPROVEMENT_PLAN_TEXT_MAX } from "./lib.js";
+import {
+  frameworkPhases,
+  IMPROVEMENT_PLAN_TEXT_MAX,
+  reportContractStatus,
+} from "./lib.js";
 
 export const LEVELS = ["Easy", "Medium", "Hard"];
 
@@ -91,7 +95,10 @@ export function consumeSharedFocus(storage) {
   }
 }
 
-export function practiceFocusFrom(item) {
+/// `problemId` is the page of the problem whose report the item came from, kept
+/// so the lobby can offer that problem's sibling; a focus without one offers
+/// none.
+export function practiceFocusFrom(item, problemId) {
   if (!item || typeof item !== "object" || Array.isArray(item)) return null;
 
   const { phase, weakness, drill, successCriterion } = item;
@@ -110,14 +117,15 @@ export function practiceFocusFrom(item) {
     weakness,
     drill,
     successCriterion,
+    ...(typeof problemId === "string" && problemId ? { problemId } : {}),
   };
 }
 
 /// Store only the one explicit report choice needed to reach the lobby.
 /// The lobby consumes this value once; persistence beyond that lobby session
 /// is deliberately outside this feature's scope.
-export function storeSelectedPracticeFocus(storage, item) {
-  const focus = practiceFocusFrom(item);
+export function storeSelectedPracticeFocus(storage, item, problemId) {
+  const focus = practiceFocusFrom(item, problemId);
   if (!focus) return false;
 
   try {
@@ -128,9 +136,9 @@ export function storeSelectedPracticeFocus(storage, item) {
   }
 }
 
-export function storeReportPracticeFocus(storage, report, button) {
+export function storeReportPracticeFocus(storage, report, button, problemId) {
   const item = report?.improvementPlan?.[Number(button.dataset.practiceFocus)];
-  if (storeSelectedPracticeFocus(storage, item)) return true;
+  if (storeSelectedPracticeFocus(storage, item, problemId)) return true;
   const status = button.parentElement?.querySelector(
     "[data-practice-focus-status]",
   );
@@ -144,7 +152,8 @@ export function consumeSelectedPracticeFocus(storage) {
     storage.removeItem(selectedPracticeFocusKey);
     if (!raw) return null;
 
-    return practiceFocusFrom(JSON.parse(raw));
+    const stored = JSON.parse(raw);
+    return practiceFocusFrom(stored, stored?.problemId);
   } catch {
     try {
       storage.removeItem(selectedPracticeFocusKey);
@@ -279,14 +288,47 @@ export function sequelSuggestion(cards, reports) {
       (newest, entry) => (newest && newest.at >= entry.at ? newest : entry),
       null,
     );
-  if (latest?.report?.decision !== "HIRE") return null;
+  if (!passedReport(latest?.report)) return null;
   const from = cards.find((card) => card.id === latest.problemId);
   const to = from?.sequel && cards.find((card) => card.id === from.sequel);
   if (!to) return null;
-  const passed = reports.some(
-    (entry) => entry?.problemId === to.id && entry?.report?.decision === "HIRE",
+  return passedProblem(reports, to.id) ? null : { from, to };
+}
+
+/// A new problem at the same level for a practice focus the candidate chose from
+/// a report: the sibling of the problem that report was about, so the focus is
+/// tried on an idea they have met under a surface they have not, rather than on
+/// the same problem again. Only an explicit choice carries a problem; the
+/// automatic carry-forward focus, which no one report chose, offers nothing.
+/// Like the sequel, it is read beside the selection and selects nothing until
+/// the candidate takes it.
+export function siblingSuggestion(cards, reports, focus) {
+  if (!focus?.problemId) return null;
+  const from = cards.find((card) => card.id === focus.problemId);
+  const to = from?.sibling && cards.find((card) => card.id === from.sibling);
+  if (!to) return null;
+  return passedProblem(reports, to.id) ? null : { from, to };
+}
+
+/// Whether a saved report passed its problem, as the progress panel reads it:
+/// `normalizeProgressEntry` scores an interview only when `sanitizeReport`
+/// leaves it complete, and that sanitizer marks incomplete both an unfinished
+/// interview and one recorded under a contract this build cannot score. Both
+/// offers ask this, so they and the panel agree on what passing means. Not
+/// `pickProblem`, whose fresh pool keeps a pass from an older contract on
+/// purpose (see `pickerEntry` in `web/progress.js`).
+function passedReport(report) {
+  return (
+    report?.decision === "HIRE" &&
+    !report.incomplete &&
+    reportContractStatus(report) !== "unsupported"
   );
-  return passed ? null : { from, to };
+}
+
+function passedProblem(reports, problemId) {
+  return (Array.isArray(reports) ? reports : []).some(
+    (entry) => entry?.problemId === problemId && passedReport(entry.report),
+  );
 }
 
 function reviewStatus(reports, now) {

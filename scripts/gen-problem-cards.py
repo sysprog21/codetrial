@@ -45,7 +45,11 @@ def read_json(path: Path) -> object:
 
 
 def card(
-    problem: dict[str, object], page: str, title: str, sequel: str | None = None
+    problem: dict[str, object],
+    page: str,
+    title: str,
+    sequel: str | None = None,
+    sibling: str | None = None,
 ) -> str:
     """One lobby card, named the way the interview will name the exercise.
 
@@ -53,14 +57,15 @@ def card(
     A `coin-change` key, published title or "Dynamic Programming" tag tells the
     candidate what they are about to be asked, so none ships in the initial
     page. The published title and topic map are fetched only after the candidate
-    opts into the corresponding picker control. The sequel is a page name for
-    the same reason.
+    opts into the corresponding picker control. The sequel and the sibling are
+    page names for the same reason.
     """
     sequel_attribute = f' data-sequel="{html.escape(sequel)}"' if sequel else ""
+    sibling_attribute = f' data-sibling="{html.escape(sibling)}"' if sibling else ""
     return "\n".join(
         [
             f'  <div class="problem-entry" id="problem-entry-{html.escape(page)}">',
-            f'    <button class="problem-card" type="button" data-problem="{html.escape(page)}" data-difficulty="{html.escape(problem["difficulty"])}"{sequel_attribute}>',
+            f'    <button class="problem-card" type="button" data-problem="{html.escape(page)}" data-difficulty="{html.escape(problem["difficulty"])}"{sequel_attribute}{sibling_attribute}>',
             f'      <span class="problem-title">{html.escape(title)}</span>',
             '      <span class="problem-source" hidden></span>',
             f'      <span class="problem-meta">{html.escape(problem["difficulty"])}</span>',
@@ -80,6 +85,7 @@ def generated(problems: list, pages: dict) -> str:
             pages[problem["id"]]["page"],
             pages[problem["id"]]["title"],
             pages[problem["sequel"]]["page"] if "sequel" in problem else None,
+            pages[problem["sibling"]]["page"] if "sibling" in problem else None,
         )
         for problem in problems
     )

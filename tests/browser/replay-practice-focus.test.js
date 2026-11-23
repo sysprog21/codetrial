@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { storeReportPracticeFocus } from "../../web/problem-picker.js";
 import { functionBody, read } from "./source.js";
 
-test("replay Practice this stores the selected item and stays on failure", async () => {
+test("replay Practice this stores the selected item with its problem and stays on failure", async () => {
   const body = functionBody(read("web/replay.js"), "loadReport");
 
   const first = {
@@ -23,7 +23,13 @@ test("replay Practice this stores the selected item and stays on failure", async
 
   const report = { improvementPlan: [first, second] };
 
-  for (const storageFails of [false, true]) {
+  // The last case keeps the problem id on the stored row alone, a shape the
+  // row is guaranteed to have and the payload is not.
+  for (const [storageFails, idOnRow] of [
+    [false, false],
+    [true, false],
+    [false, true],
+  ]) {
     let click;
     const stored = [];
     const status = { textContent: "" };
@@ -91,10 +97,11 @@ test("replay Practice this stores the selected item and stays on failure", async
           return {
             reports: [
               {
+                ...(idOnRow ? { problemId: "example" } : {}),
                 payload: {
                   interviewId: "interview-1",
                   problemTitle: "Example",
-                  problemId: "example",
+                  ...(idOnRow ? {} : { problemId: "example" }),
                   report,
                 },
               },
@@ -117,7 +124,14 @@ test("replay Practice this stores the selected item and stays on failure", async
 
     assert.deepEqual(
       stored,
-      storageFails ? [] : [["codetrial.selectedPracticeFocus", second]],
+      storageFails
+        ? []
+        : [
+            [
+              "codetrial.selectedPracticeFocus",
+              { ...second, problemId: "example" },
+            ],
+          ],
     );
     assert.equal(fakeWindow.location.href, storageFails ? "" : "/");
     assert.equal(

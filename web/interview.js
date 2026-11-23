@@ -5049,7 +5049,12 @@ async function leaveRoom(practiceButton = null) {
   }
   if (
     practiceButton &&
-    !storeReportPracticeFocus(tabStorage, state.report, practiceButton)
+    !storeReportPracticeFocus(
+      tabStorage,
+      state.report,
+      practiceButton,
+      problem?.page,
+    )
   ) {
     return;
   }

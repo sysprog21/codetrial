@@ -266,7 +266,7 @@ def validated_problems(source: Path = SOURCE) -> list[dict]:
     return problems
 
 
-def validated_problem_data(problems: object, sequels: bool = True) -> list[dict]:
+def validated_problem_data(problems: object, lobby_links: bool = True) -> list[dict]:
     if not isinstance(problems, list):
         raise RuntimeError("problem bank must be a JSON array")
     require_valid_origins(problems)
@@ -311,26 +311,40 @@ def validated_problem_data(problems: object, sequels: bool = True) -> list[dict]
         cleaned = [topic.strip() for topic in topics if named(topic)]
         if len(cleaned) != len(topics) or len(set(cleaned)) != len(cleaned):
             raise RuntimeError(f"{problem_id}: topics must be non-empty and unique")
-    if not sequels:
+    if not lobby_links:
         return problems
     # Exactly one level up, so the lobby can offer a sequel as the next step
     # without ever skipping Medium on the way from Easy to Hard.
     levels = {"Easy": 0, "Medium": 1, "Hard": 2}
     by_id = {problem["id"]: problem for problem in problems}
     for problem in problems:
-        if "sequel" not in problem:
-            continue
         # A list or object here would raise TypeError from the lookup instead
         # of the refusal below, which is the one that names the problem.
-        named_sequel = problem["sequel"]
+        named_sequel = problem.get("sequel")
         sequel = by_id.get(named_sequel) if isinstance(named_sequel, str) else None
-        if (
+        if "sequel" in problem and (
             sequel is None
             or levels[sequel["difficulty"]] != levels[problem["difficulty"]] + 1
         ):
             raise RuntimeError(
                 f"{problem['id']}: sequel must name a problem one level harder"
             )
+        # The same level, so the lobby can offer a sibling after a report
+        # without turning a second try at one idea into a harder problem.
+        named_sibling = problem.get("sibling")
+        sibling = by_id.get(named_sibling) if isinstance(named_sibling, str) else None
+        if "sibling" in problem and (
+            sibling is None
+            or sibling is problem
+            or sibling["difficulty"] != problem["difficulty"]
+        ):
+            raise RuntimeError(
+                f"{problem['id']}: sibling must name another problem at the same level"
+            )
+        # Both ways, so the lobby offers each of a pair from the other and an
+        # edit to one side cannot leave the other offering nothing.
+        if sibling is not None and sibling.get("sibling") != problem["id"]:
+            raise RuntimeError(f"{problem['id']}: sibling must name this problem back")
     return problems
 
 

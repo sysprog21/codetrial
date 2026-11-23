@@ -28,6 +28,7 @@ import {
   practiceFocus,
   practiceFocusFrom,
   sequelSuggestion,
+  siblingSuggestion,
   storeSharedFocus,
   suggestDifficulty,
 } from "./problem-picker.js";
@@ -189,6 +190,9 @@ const nodes = {
   sequelSuggestion: document.querySelector("#sequel-suggestion"),
   sequelSuggestionText: document.querySelector("#sequel-suggestion-text"),
   sequelSuggestionPick: document.querySelector("#sequel-suggestion-pick"),
+  siblingSuggestion: document.querySelector("#sibling-suggestion"),
+  siblingSuggestionText: document.querySelector("#sibling-suggestion-text"),
+  siblingSuggestionPick: document.querySelector("#sibling-suggestion-pick"),
   randomProblem: document.querySelector("#random-problem"),
   practiceListPick: document.querySelector("#practice-list-pick"),
   practiceListStatus: document.querySelector("#practice-list-status"),
@@ -254,6 +258,7 @@ const cards = [...document.querySelectorAll("[data-problem]")].map(
     leetcodeTitle: "",
     difficulty: button.dataset.difficulty,
     sequel: button.dataset.sequel ?? null,
+    sibling: button.dataset.sibling ?? null,
     topics: [],
     button,
     entry: document.querySelector(`#problem-entry-${button.dataset.problem}`),
@@ -493,25 +498,33 @@ nodes.practiceListPick.addEventListener("click", () => {
 });
 
 // Selects the sequel the way a list draw selects its pick, across the level
-// filters, since moving up a level is the reason it is offered.
-nodes.sequelSuggestionPick.addEventListener("click", () => {
+// filters, since moving up a level is the reason it is offered. The sibling
+// is taken the same way, since the problem its focus came from may sit at a
+// level that is no longer checked.
+nodes.sequelSuggestionPick.addEventListener("click", () =>
+  takeSuggestion(sequelSuggestion(cards, reports)?.to),
+);
+nodes.siblingSuggestionPick.addEventListener("click", () =>
+  takeSuggestion(siblingSuggestion(cards, reports, selectedPracticeFocus)?.to),
+);
+
+function takeSuggestion(card) {
   if (!historyReady || starting || accountUpdatePending() || deletingReports)
     return;
-  const card = sequelSuggestion(cards, reports)?.to;
   if (!card) return;
   manualProblem = true;
   keptDraw = null;
   applyProblemFilters();
   if (!nodes.problemSearch.value.trim()) revealChosenCard(card);
-  // Selecting the sequel hides the offer and this button with it, which would
-  // drop keyboard focus to the body. The random draw stays visible, and the
+  // Selecting the suggestion hides the offer and its button with it, which
+  // would drop keyboard focus to the body. The random draw stays visible, and the
   // guard above is the one that leaves it enabled.
   nodes.randomProblem.focus();
   setProblem(card);
   searchVisibilityException = card;
   setDuration(suggestedDuration(new Set([card.difficulty])));
   nodes.recommendation.textContent = `Selected problem: ${title(card)} (${card.difficulty}).`;
-});
+}
 
 function refreshPracticeList() {
   // After a failed save, readable storage is older than this visit's changes.
@@ -1096,6 +1109,7 @@ function syncLobbyControls() {
   // a press would do nothing.
   nodes.sequelSuggestionPick.disabled =
     !historyReady || starting || accountBusy || deletingReports;
+  nodes.siblingSuggestionPick.disabled = nodes.sequelSuggestionPick.disabled;
   const deleteBlocked = reportDeletesBlocked();
   nodes.deleteReports.disabled = deleteBlocked;
   for (const remove of nodes.attemptHistory.querySelectorAll(
@@ -1837,6 +1851,7 @@ function renderPracticeFocus() {
     nodes.practiceFocusShareInput.checked = false;
   sharedFocus = focus?.weakness ?? null;
   syncFocusSharing();
+  renderSiblingSuggestion();
 }
 
 /// Check the level the candidate's own results point at and return the sentence
@@ -1872,6 +1887,7 @@ function setProblem(card, language = null) {
   retryLanguage = language;
   syncLobbyControls();
   renderSequelSuggestion();
+  renderSiblingSuggestion();
 }
 
 /// Beside the selection rather than in it: the offer selects nothing until it
@@ -1883,6 +1899,30 @@ function renderSequelSuggestion() {
   nodes.sequelSuggestionText.textContent = shown
     ? `You passed ${title(suggestion.from)}. Next in this series: ${title(suggestion.to)} (${suggestion.to.difficulty}).`
     : "";
+  // Both offers can show at once, and both buttons read "Practice it".
+  if (shown)
+    nodes.sequelSuggestionPick.setAttribute(
+      "aria-label",
+      `Practice it: ${title(suggestion.to)}`,
+    );
+  else nodes.sequelSuggestionPick.removeAttribute("aria-label");
+}
+
+/// The same, for the practice focus chosen from a report: it follows that
+/// choice, so it goes when the focus is replaced or the history is cleared.
+function renderSiblingSuggestion() {
+  const suggestion = siblingSuggestion(cards, reports, selectedPracticeFocus);
+  const shown = suggestion !== null && problem !== suggestion.to;
+  nodes.siblingSuggestion.hidden = !shown;
+  nodes.siblingSuggestionText.textContent = shown
+    ? `Try your practice focus on a new problem: ${title(suggestion.to)} (${suggestion.to.difficulty}).`
+    : "";
+  if (shown)
+    nodes.siblingSuggestionPick.setAttribute(
+      "aria-label",
+      `Practice it: ${title(suggestion.to)}`,
+    );
+  else nodes.siblingSuggestionPick.removeAttribute("aria-label");
 }
 
 /// Says whether a button is the chosen one, in both the ways that answer has to
@@ -2371,7 +2411,7 @@ function renderAttemptHistory(attempts, preserveDownloadNote = false) {
           attempt.report.improvementPlan?.[
             Number(button.dataset.practiceFocus)
           ];
-        const focus = practiceFocusFrom(item);
+        const focus = practiceFocusFrom(item, attempt.problemId);
         if (!focus) return;
         selectedPracticeFocus = focus;
         nodes.practiceFocusShareInput.checked = false;

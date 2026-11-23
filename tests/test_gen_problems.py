@@ -91,6 +91,7 @@ class ProblemMetadataGeneratorTests(unittest.TestCase):
         problems = json.loads(GEN.SOURCE.read_text())[:2]
         for problem in problems:
             problem.pop("sequel", None)
+            problem.pop("sibling", None)
         problems[1]["number"] = problems[0]["number"]
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "problems.json"
@@ -108,6 +109,7 @@ class ProblemMetadataGeneratorTests(unittest.TestCase):
         )
         problem.pop("number")
         problem.pop("sequel", None)
+        problem.pop("sibling", None)
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "problems.json"
             path.write_text(json.dumps([problem]))
@@ -170,13 +172,53 @@ class ProblemMetadataGeneratorTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "one level harder"):
                     GEN.validated_problems(path)
 
+    def test_a_sibling_names_another_problem_at_the_same_level(self):
+        def problem(problem_id, difficulty, **extra):
+            return {
+                "id": problem_id,
+                "origin": "original",
+                "difficulty": difficulty,
+                "topics": ["Array"],
+                "summary": "Summary.",
+                "optimal": "Optimal.",
+                "pitfalls": "Pitfalls.",
+                **extra,
+            }
+
+        first = problem("first", "Easy", sibling="second")
+        second = problem("second", "Easy", sibling="first")
+        harder = problem("harder", "Medium")
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "problems.json"
+            path.write_text(json.dumps([first, second, harder]))
+            self.assertEqual(GEN.validated_problems(path), [first, second, harder])
+            for problems in (
+                [{**first, "sibling": "missing"}, second, harder],
+                [{**first, "sibling": "harder"}, second, harder],
+                [{**first, "sibling": "first"}, second, harder],
+                # Not a name at all: refused the same way, not by a TypeError.
+                [{**first, "sibling": ["second"]}, second, harder],
+                [{**first, "sibling": None}, second, harder],
+            ):
+                path.write_text(json.dumps(problems))
+                with self.assertRaisesRegex(RuntimeError, "at the same level"):
+                    GEN.validated_problems(path)
+            # A one-way link: `first` names `third`, which names nothing back.
+            third = problem("third", "Easy")
+            # Only that link is broken, so the refusal has to come from it.
+            path.write_text(json.dumps([{**first, "sibling": "third"}, third]))
+            with self.assertRaisesRegex(
+                RuntimeError, "^first: sibling must name this problem back"
+            ):
+                GEN.validated_problems(path)
+
     def test_legacy_imported_task_keeps_its_bare_source_title(self):
         fixture = json.loads(
             (ROOT / "tests/fixtures/task-mode/uncustomized.json").read_text()
         )
         problem = fixture["problem"]
         problem.pop("number")
-        problems = validated_problem_data([problem], sequels=False)
+        problems = validated_problem_data([problem], lobby_links=False)
         self.assertEqual(problems, [problem])
         public = GEN.candidate_problem(
             {
@@ -203,6 +245,27 @@ class ProblemMetadataGeneratorTests(unittest.TestCase):
         )
         self.assertIn('data-problem="bundle-pair" data-difficulty="Medium">', block)
         self.assertNotIn("two-sum", block)
+
+    def test_a_card_names_its_sibling_by_page_and_not_by_id(self):
+        problems = [
+            {"id": "two-sum", "difficulty": "Easy", "sibling": "ransom-note"},
+            {"id": "ransom-note", "difficulty": "Easy", "sibling": "two-sum"},
+        ]
+        pages = {
+            "two-sum": {"page": "pair-match", "title": "Pair Match"},
+            "ransom-note": {"page": "letter-tiles", "title": "Letter Tiles"},
+        }
+        block = CARDS.generated(problems, pages)
+        self.assertIn(
+            'data-problem="pair-match" data-difficulty="Easy" data-sibling="letter-tiles">',
+            block,
+        )
+        self.assertIn(
+            'data-problem="letter-tiles" data-difficulty="Easy" data-sibling="pair-match">',
+            block,
+        )
+        self.assertNotIn("two-sum", block)
+        self.assertNotIn("ransom-note", block)
 
     def test_rejects_invalid_numbers(self):
         truly_valid = {

@@ -9,11 +9,13 @@ import {
   practiceFocus,
   practiceFocusFrom,
   sequelSuggestion,
+  siblingSuggestion,
   storeSelectedPracticeFocus,
   storeSharedFocus,
   suggestDifficulty,
 } from "../../web/problem-picker.js";
 import { ACTIVE_CONTRACT } from "../../web/lib.js";
+import { normalizeProgressEntry } from "../../web/progress.js";
 
 const bank = [
   { id: "passed", difficulty: "Easy" },
@@ -886,4 +888,120 @@ test("the latest interview decides the offer whatever order the reports arrive i
 test("a sequel the lobby has no card for is not offered", () => {
   const cards = [{ id: "pair", difficulty: "Easy", sequel: "retired" }];
   assert.equal(sequelSuggestion(cards, [attempt("pair", 2, "HIRE")]), null);
+});
+
+test("a report focus keeps the problem it came from through the lobby handoff", () => {
+  const values = new Map();
+  const storage = {
+    getItem: (key) => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, String(value)),
+    removeItem: (key) => values.delete(key),
+  };
+  const item = {
+    phase: "Test",
+    weakness: "Test boundaries",
+    drill: "Build a test table",
+    successCriterion: "Predict each output",
+  };
+
+  assert.equal(practiceFocusFrom(item, "pair").problemId, "pair");
+  // No page, or not a page, carries no problem rather than a wrong one.
+  for (const page of [undefined, "", 7, ["pair"]])
+    assert.equal("problemId" in practiceFocusFrom(item, page), false);
+  assert.equal(storeSelectedPracticeFocus(storage, item, "pair"), true);
+  assert.deepEqual(consumeSelectedPracticeFocus(storage), {
+    ...item,
+    problemId: "pair",
+  });
+});
+
+const siblings = [
+  { id: "pair", difficulty: "Easy", sibling: "repeat" },
+  { id: "repeat", difficulty: "Easy", sibling: "pair" },
+  { id: "alone", difficulty: "Easy", sibling: null },
+  { id: "gone", difficulty: "Easy", sibling: "retired" },
+];
+const focusOn = (problemId) => ({
+  phase: "Test",
+  weakness: "Test boundaries",
+  drill: "Build a test table",
+  successCriterion: "Predict each output",
+  ...(problemId ? { problemId } : {}),
+});
+const siblingOffered = (focus, reports = []) => {
+  const suggestion = siblingSuggestion(siblings, reports, focus);
+  return suggestion && [suggestion.from.id, suggestion.to.id];
+};
+
+test("a focus chosen from a report offers that problem's sibling", () => {
+  assert.deepEqual(siblingOffered(focusOn("pair")), ["pair", "repeat"]);
+  // Whatever the report decided: the focus is the reason, not the verdict.
+  assert.deepEqual(
+    siblingOffered(focusOn("repeat"), [attempt("repeat", 2, "HIRE")]),
+    ["repeat", "pair"],
+  );
+});
+
+test("no sibling is offered without a chosen focus, a sibling or a card for it", () => {
+  assert.equal(siblingOffered(null), null);
+  // The carry-forward focus names no problem.
+  assert.equal(siblingOffered(focusOn()), null);
+  assert.equal(siblingOffered(focusOn("alone")), null);
+  assert.equal(siblingOffered(focusOn("gone")), null);
+  assert.equal(siblingOffered(focusOn("retired")), null);
+});
+
+test("a sibling already passed is not offered", () => {
+  assert.equal(
+    siblingOffered(focusOn("pair"), [attempt("repeat", 1, "HIRE")]),
+    null,
+  );
+  // A failed or unscored attempt at the sibling is not a pass.
+  assert.deepEqual(
+    siblingOffered(focusOn("pair"), [
+      attempt("repeat", 1, "NO_HIRE"),
+      attempt("repeat", 2),
+    ]),
+    ["pair", "repeat"],
+  );
+});
+
+test("both offers count a pass the way the progress panel scores one", () => {
+  const shapes = {
+    legacy: { decision: "HIRE" },
+    supported: { decision: "HIRE", interviewContract: { ...ACTIVE_CONTRACT } },
+    // Recorded under a rubric this build no longer scores.
+    unsupported: {
+      decision: "HIRE",
+      interviewContract: {
+        ...ACTIVE_CONTRACT,
+        rubricVersion: ACTIVE_CONTRACT.rubricVersion + 1,
+      },
+    },
+    incomplete: { decision: "HIRE", incomplete: true },
+  };
+  for (const [name, report] of Object.entries(shapes)) {
+    const panel = normalizeProgressEntry({ problemId: "pair", report });
+    const passed = panel.scored && panel.recordedDecision === "HIRE";
+    assert.equal(passed, name === "legacy" || name === "supported", name);
+    const row = (problemId, at) => ({ problemId, at, report });
+    // As the sequel's trigger: only a pass offers the next problem.
+    assert.deepEqual(
+      offered([row("pair", 2)]),
+      passed ? ["pair", "bundle"] : null,
+      `sequel trigger, ${name}`,
+    );
+    // As the sequel's own check: only a pass at the sequel withdraws it.
+    assert.deepEqual(
+      offered([attempt("pair", 2, "HIRE"), row("bundle", 1)]),
+      passed ? null : ["pair", "bundle"],
+      `sequel passed, ${name}`,
+    );
+    // As the sibling's check, the same rule.
+    assert.deepEqual(
+      siblingOffered(focusOn("pair"), [row("repeat", 1)]),
+      passed ? null : ["pair", "repeat"],
+      `sibling passed, ${name}`,
+    );
+  }
 });
