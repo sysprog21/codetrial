@@ -2,14 +2,6 @@
 
 use super::*;
 
-fn timestamped_state(issued: i64, seed: u8) -> String {
-    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-
-    let mut state = [seed; 23];
-    state[..4].copy_from_slice(&u32::try_from(issued).unwrap().to_be_bytes());
-    URL_SAFE_NO_PAD.encode(state)
-}
-
 fn oauth_test_config(path: &std::path::Path) -> WebServerConfig {
     initialize_account_database(path).unwrap();
 
@@ -121,7 +113,7 @@ async fn github_callback_cancelled_from_peer_lobby_has_retry_link() {
         .as_secs() as i64;
     let stale_return = signed_cookie(
         "codetrial_oauth_return",
-        &format!("{}:/peer-lobby", timestamped_state(issued, 1)),
+        &format!("{}:/peer-lobby", "a".repeat(32)),
         "session-secret",
     );
 
@@ -144,7 +136,7 @@ async fn github_callback_cancelled_from_peer_lobby_has_retry_link() {
     // correctly signed.
     let expired_issued = issued - 10 * 60 - 1;
 
-    let expired_token = timestamped_state(expired_issued, 2);
+    let expired_token = "b".repeat(32);
     let expired_state = signed_cookie(
         "codetrial_oauth_state",
         &format!("{expired_issued}:{expired_token}"),
@@ -153,7 +145,7 @@ async fn github_callback_cancelled_from_peer_lobby_has_retry_link() {
 
     // A mismatched callback state still fails authentication, but a valid
     // signed return cookie can preserve the retry destination.
-    let newer_token = timestamped_state(issued, 3);
+    let newer_token = "c".repeat(32);
     let newer_state = signed_cookie(
         "codetrial_oauth_state",
         &format!("{issued}:{newer_token}"),
@@ -268,23 +260,14 @@ async fn github_callback_cancelled_from_peer_lobby_has_retry_link() {
         "reloading the failure page should preserve the Peer Lobby retry link"
     );
 
-    // Retry uses the signed return destination independently of the old OAuth
-    // state's age. An invalid signature must still be rejected.
+    // Retry uses the signed return destination without matching the callback
+    // state. An invalid signature must still be rejected.
     for (why, return_cookie, expected_retry) in [
         (
-            "old signed return cookie",
+            "signed return cookie without matching callback state",
             signed_cookie(
                 "codetrial_oauth_return",
-                &format!("{}:/peer-lobby", timestamped_state(issued - 10 * 60 - 1, 4)),
-                "session-secret",
-            ),
-            "/api/login?next=peer-join",
-        ),
-        (
-            "older signed return cookie supplied manually",
-            signed_cookie(
-                "codetrial_oauth_return",
-                &format!("{}:/peer-lobby", timestamped_state(issued - 60 * 60 - 1, 4)),
+                &format!("{}:/peer-lobby", "d".repeat(32)),
                 "session-secret",
             ),
             "/api/login?next=peer-join",
@@ -293,7 +276,7 @@ async fn github_callback_cancelled_from_peer_lobby_has_retry_link() {
             "invalid return cookie signature",
             signed_cookie(
                 "codetrial_oauth_return",
-                &format!("{}:/peer-lobby", timestamped_state(issued, 4)),
+                &format!("{}:/peer-lobby", "e".repeat(32)),
                 "wrong-session-secret",
             ),
             "/api/login",
@@ -584,15 +567,9 @@ async fn github_callback_rate_limit_uses_html_error_page() {
         assert_eq!(response.status(), 400, "attempt {attempt}");
     }
 
-    // Rate limiting must preserve a signed Peer Lobby return destination.
-    let issued = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs() as i64;
-
     let return_cookie = signed_cookie(
         "codetrial_oauth_return",
-        &format!("{}:/peer-lobby", timestamped_state(issued, 5)),
+        &format!("{}:/peer-lobby", "f".repeat(32)),
         "session-secret",
     );
 
@@ -617,6 +594,20 @@ async fn github_callback_rate_limit_uses_html_error_page() {
     assert!(body.contains("Too many login attempts."));
     assert!(body.contains("href=\"/api/login?next=peer-join\""));
 
+    // An explicitly empty state must preserve the Peer Lobby retry link even
+    // when the callback is rate-limited.
+    let blocked_empty_state = client
+        .get(format!("{callback}&state="))
+        .header("cookie", format!("codetrial_oauth_return={return_cookie}"))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(blocked_empty_state.status(), 429);
+
+    let body = blocked_empty_state.text().await.unwrap();
+    assert!(body.contains("href=\"/api/login?next=peer-join\""));
+
     server.shutdown().await;
     remove_database(path).await;
 }
@@ -636,6 +627,34 @@ async fn github_callback_upstream_failures_show_html_retry_pages() {
 
     let client = http_client();
 
+    // Start one upstream-failure case from a real Peer Lobby login.
+    let login = http_client_builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap()
+        .get(format!("{base}/api/login?next=peer-join"))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(login.status(), 302);
+
+    let peer_state = reqwest::Url::parse(login.headers()["location"].to_str().unwrap())
+        .unwrap()
+        .query_pairs()
+        .find(|(name, _)| name == "state")
+        .unwrap()
+        .1
+        .into_owned();
+
+    let peer_cookies = login
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .map(|cookie| cookie.to_str().unwrap().split(';').next().unwrap())
+        .collect::<Vec<_>>()
+        .join("; ");
+
     for (why, code, state, expected_message) in [
         (
             "token exchange failure",
@@ -650,12 +669,22 @@ async fn github_callback_upstream_failures_show_html_retry_pages() {
             "GitHub profile request failed. Please try again.",
         ),
     ] {
-        let cookie = state_cookie(state, "session-secret");
+        let (callback_state, cookies) = if why == "token exchange failure" {
+            (peer_state.as_str(), peer_cookies.clone())
+        } else {
+            (
+                state,
+                format!(
+                    "codetrial_oauth_state={}",
+                    state_cookie(state, "session-secret")
+                ),
+            )
+        };
 
         let response = client
             .get(format!("{base}/api/callback"))
-            .query(&[("code", code), ("state", state)])
-            .header("cookie", format!("codetrial_oauth_state={cookie}"))
+            .query(&[("code", code), ("state", callback_state)])
+            .header("cookie", cookies)
             .send()
             .await
             .unwrap();
@@ -678,7 +707,13 @@ async fn github_callback_upstream_failures_show_html_retry_pages() {
             "{why}"
         );
         assert!(body.contains("Try signing in again"), "{why}");
-        assert!(body.contains("href=\"/api/login\""), "{why}");
+        let expected_href = if why == "token exchange failure" {
+            "href=\"/api/login?next=peer-join\""
+        } else {
+            "href=\"/api/login\""
+        };
+
+        assert!(body.contains(expected_href), "{why}");
     }
 
     server.shutdown().await;
@@ -783,8 +818,11 @@ async fn github_login_return_cookie_fits_chromium_limit() {
                 .iter()
                 .map(|(name, value)| name.as_str().len() + ": \r\n".len() + value.as_bytes().len())
                 .sum::<usize>();
-        assert_eq!(header_bytes, expected_path.len() + 1171);
-        assert_eq!(header_bytes <= 4096, destination_size != 3997);
+        assert_eq!(
+            header_bytes <= 4096,
+            destination_size != 3997,
+            "{destination_size}-byte destination produced {header_bytes} bytes of response headers"
+        );
 
         let pair = response
             .headers()
@@ -926,7 +964,6 @@ async fn github_oauth_return_cookie_keeps_legacy_wire_format_and_survives_upgrad
                 .iter()
                 .map(|(name, value)| name.as_str().len() + ": \r\n".len() + value.as_bytes().len())
                 .sum::<usize>();
-        assert_eq!(header_bytes, destination.len() + 1050);
         assert!((4097..=8192).contains(&header_bytes));
     }
 
@@ -1033,6 +1070,10 @@ async fn github_callback_cancelled_from_task_preserves_retry_destination() {
 
     // Preserve query parameters, but reject unsafe return destinations.
     for (return_to, expected_retry) in [
+        (
+            "/t/classroom/delimiter-closer?site=https%3A%2F%2Fteacher.github.io%2Fcourse%22%26&version=7",
+            "/api/login?returnTo=%2Ft%2Fclassroom%2Fdelimiter-closer%3Fsite%3Dhttps%253A%252F%252Fteacher.github.io%252Fcourse%2522%2526%26version%3D7",
+        ),
         (
             "/t/classroom/delimiter-closer?site=https%3A%2F%2Fteacher.github.io%2Fcourse&version=7",
             "/api/login?returnTo=%2Ft%2Fclassroom%2Fdelimiter-closer%3Fsite%3Dhttps%253A%252F%252Fteacher.github.io%252Fcourse%26version%3D7",

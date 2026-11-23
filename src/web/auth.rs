@@ -343,7 +343,11 @@ fn oauth_callback_error_page(
     message: &'static str,
     retry_href: impl AsRef<str>,
 ) -> Response {
-    let retry_href = retry_href.as_ref();
+    let retry_href = retry_href
+        .as_ref()
+        .replace('&', "&amp;")
+        .replace('"', "&quot;")
+        .replace('<', "&lt;");
     (
         status,
         [(axum::http::header::CACHE_CONTROL, "no-store")],
@@ -457,13 +461,7 @@ async fn callback_response(
 
     let session = match sign_in(&state, accounts, &access_token).await {
         Ok(session) => session,
-        Err(refusal) => {
-            let message = if refusal.status() == StatusCode::BAD_GATEWAY {
-                "GitHub profile request failed. Please try again."
-            } else {
-                "Could not create account session. Please try again."
-            };
-
+        Err((refusal, message)) => {
             return oauth_callback_error_page(refusal.status(), message, retry_href);
         }
     };
@@ -626,7 +624,7 @@ pub(crate) async fn device_poll_handler(
     };
     let session = match sign_in(&state, accounts, access_token).await {
         Ok(session) => session,
-        Err(refusal) => return refusal,
+        Err((refusal, _)) => return refusal,
     };
     (
         StatusCode::OK,
@@ -653,7 +651,7 @@ async fn sign_in(
     state: &AppState,
     accounts: Arc<Accounts>,
     access_token: &str,
-) -> Result<String, Response> {
+) -> Result<String, (Response, &'static str)> {
     let profile = match github_profile(
         accounts.config(),
         access_token,
@@ -662,13 +660,21 @@ async fn sign_in(
     .await
     {
         Ok(profile) => profile,
-        Err(error) => return Err(github_failure("GitHub profile request failed", error)),
+        Err(error) => {
+            return Err((
+                github_failure("GitHub profile request failed", error),
+                "GitHub profile request failed. Please try again.",
+            ));
+        }
     };
     let session_secret = accounts.config().session_secret.clone();
     let Ok(session_id) = blocking(move || create_session(&accounts, &profile)).await else {
-        return Err(json_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            json!({ "error": "Could not create account session." }),
+        return Err((
+            json_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                json!({ "error": "Could not create account session." }),
+            ),
+            "Could not create account session. Please try again.",
         ));
     };
     Ok(session_cookie(
