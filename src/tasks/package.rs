@@ -116,6 +116,38 @@ struct Package {
 pub struct LoadedSet {
     pub config: Arc<SetConfig>,
     pub records: BTreeMap<String, Arc<TaskRecord>>,
+    /// A defense set's course settings (docs/mycpu-defense.md); its one
+    /// record is the built-in `defense` task.
+    pub defense: Option<Arc<super::defense::Config>>,
+}
+
+/// The plaintext of a defense set: the course settings in place of a bank.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DefensePackage {
+    package_version: u32,
+    set_id: String,
+    set_version: u32,
+    rules: Rules,
+    defense: Value,
+}
+
+/// The task record every defense set poses: the examiner's prompt, no hints.
+fn defense_record() -> Arc<TaskRecord> {
+    static RECORD: std::sync::LazyLock<Arc<TaskRecord>> = std::sync::LazyLock::new(|| {
+        let row: Value = serde_json::from_str(include_str!("../../problem-bank/defense-task.json"))
+            .expect("the shipped defense task is JSON");
+        Arc::new(
+            TaskRecord::from_bank(
+                &row["problem"],
+                &row["judge"],
+                &row["variant"],
+                Some(&row["sidecar"]),
+            )
+            .expect("the shipped defense task is a valid task"),
+        )
+    });
+    RECORD.clone()
 }
 
 /// Why a downloaded package did not open.
@@ -246,6 +278,11 @@ pub fn open_package(
 /// record must validate. Apart from `open_package` so these checks are tested
 /// without paying a key derivation each time.
 pub(crate) fn decode(set_id: &str, version: u32, plaintext: &[u8]) -> Result<LoadedSet, TaskError> {
+    let shape: Value =
+        serde_json::from_slice(plaintext).map_err(|_| invalid("invalid package schema"))?;
+    if shape.get("defense").is_some() {
+        return decode_defense(set_id, version, shape);
+    }
     let package: Package =
         serde_json::from_slice(plaintext).map_err(|_| invalid("invalid package schema"))?;
     if package.package_version != 1
@@ -305,6 +342,26 @@ pub(crate) fn decode(set_id: &str, version: u32, plaintext: &[u8]) -> Result<Loa
             rules,
         }),
         records,
+        defense: None,
+    })
+}
+
+fn decode_defense(set_id: &str, version: u32, shape: Value) -> Result<LoadedSet, TaskError> {
+    let package: DefensePackage =
+        serde_json::from_value(shape).map_err(|_| invalid("invalid package schema"))?;
+    if package.package_version != 1 || package.set_id != set_id || package.set_version != version {
+        return Err(invalid("invalid authenticated package metadata"));
+    }
+    let rules = checked_rules(package.rules)?;
+    let config = super::defense::Config::parse(&package.defense)?;
+    Ok(LoadedSet {
+        config: Arc::new(SetConfig {
+            id: set_id.to_owned(),
+            version,
+            rules,
+        }),
+        records: BTreeMap::from([(super::defense::TASK_ID.to_owned(), defense_record())]),
+        defense: Some(Arc::new(config)),
     })
 }
 
@@ -377,6 +434,7 @@ pub fn built_in_set() -> Arc<LoadedSet> {
                 },
             }),
             records: BTreeMap::from([(record_id_of(&row), Arc::new(record))]),
+            defense: None,
         })
     });
     SET.clone()

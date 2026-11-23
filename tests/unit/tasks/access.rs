@@ -225,6 +225,7 @@ async fn a_closed_set_refuses_new_attempts() {
             ..SetConfig::clone(&SET.config)
         }),
         records: SET.records.clone(),
+        defense: None,
     });
     service.insert_unlocked(1, SITE, closed);
     let start = |now| {
@@ -350,6 +351,7 @@ async fn each_version_of_a_set_is_unlocked_on_its_own_and_a_replay_must_name_the
             ..SetConfig::clone(&SET.config)
         }),
         records: SET.records.clone(),
+        defense: None,
     });
     service.insert_unlocked(1, SITE, other_version);
     // Unlocking version 8 left version 7 where it was.
@@ -667,6 +669,7 @@ fn a_compiled_language_is_unavailable_without_compiler_explorer_not_unsupported(
     let set = crate::tasks::package::LoadedSet {
         config: std::sync::Arc::clone(&SET.config),
         records: [("delimiter-closer".to_owned(), Arc::new(record))].into(),
+        defense: None,
     };
     let service = TaskService::new();
     service.insert_unlocked(1, SITE, Arc::new(set));
