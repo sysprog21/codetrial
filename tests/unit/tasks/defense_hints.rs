@@ -177,6 +177,14 @@ async fn a_hint_needs_an_answer_since_the_item_opened_and_the_last_hint() {
     // learner's speech counts, once.
     let granted = session.defense_hint(&item, Some(opened_at + 1)).unwrap();
     assert_eq!(granted["supportRequestId"], "defense-hint-1");
+
+    // A grant that never reached Jim is taken back: it neither counts nor caps,
+    // and the same answer may earn it again.
+    session.withdraw_defense_hint(&granted);
+    assert!(slot.hints().given.is_empty());
+    assert!(!session.defense_hinted());
+    let granted = session.defense_hint(&item, Some(opened_at + 1)).unwrap();
+    assert_eq!(granted["supportRequestId"], "defense-hint-1");
     assert_eq!(
         session.hint_rungs_used, 0,
         "a defense hint is not a task's hint rung"

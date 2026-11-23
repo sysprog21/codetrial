@@ -269,6 +269,17 @@ impl Slot {
         Ok((*given, total + 1))
     }
 
+    /// Takes back one hint on `item` whose grant never reached Jim.
+    pub fn take_back_hint(&self, item: &str) {
+        let mut hints = self.0.hints.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(given) = hints.get_mut(item) {
+            *given = given.saturating_sub(1);
+            if *given == 0 {
+                hints.remove(item);
+            }
+        }
+    }
+
     /// The hints the package lets Jim give in the whole attempt.
     pub fn hints_allowed(&self) -> u64 {
         self.0.hints_allowed

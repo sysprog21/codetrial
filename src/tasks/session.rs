@@ -947,6 +947,25 @@ impl TaskSession {
         self.record_check_with_support(id, state, revision_id, turn_id, None)
     }
 
+    /// Takes back a hint `granted` whose answer never reached Jim, as when
+    /// sending it failed: it neither counts nor caps its item's marks, and
+    /// the answer it was for may earn one again.
+    pub fn withdraw_defense_hint(&mut self, granted: &Value) {
+        let (Some(id), Some(item)) = (
+            granted["supportRequestId"].as_str(),
+            granted["item"].as_str(),
+        ) else {
+            return;
+        };
+        if self.support_opportunities.remove(id).is_none() {
+            return;
+        }
+        if let Some(slot) = &self.task.preparation.defense {
+            slot.take_back_hint(item);
+        }
+        self.answers_at_last_hint = None;
+    }
+
     /// One hint on a defense item the learner has opened, while the package
     /// allows another: recorded as a conceptual hint and against the item,
     /// whose suggested marks it caps at 2. A hint answers an attempt: the

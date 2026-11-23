@@ -690,6 +690,12 @@ impl TaskRoom<'_> {
                     answers.push((call, answer));
                 }
                 if self.gemini.send_tool_responses(&answers).await.is_err() {
+                    // A hint granted in an answer Jim never got was not given.
+                    for (call, answer) in &answers {
+                        if call.name == crate::tasks::defense::HINT_TOOL_NAME {
+                            self.session.withdraw_defense_hint(answer);
+                        }
+                    }
                     self.alive = false;
                 } else {
                     // The model owes the turn the answers continue.

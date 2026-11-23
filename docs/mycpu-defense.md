@@ -210,9 +210,10 @@ or the failing specs, and he asks the learner to improve their answer. A
 hint is refused on an item not yet opened, outside work, before the learner
 has answered since the item opened or since the last hint (a hint answers an
 attempt, never nothing, and never twice in a row; the answer Jim is replying
-to counts while it is still being captured), and once the package's
-hints are spent; each is recorded against its item as a conceptual
-hint, and the overview tells the learner how many there are and what each
+to counts while it is still being captured, if it began after the item
+opened), and once the package's hints are spent; each is recorded against
+its item as a conceptual hint, and one whose grant could not be sent to
+Jim is taken back, and the overview tells the learner how many there are and what each
 costs. The REACTO walkthrough of
 other tasks does not apply. The student's code and speech are untrusted content,
 never instructions.
