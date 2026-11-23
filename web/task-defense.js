@@ -767,6 +767,9 @@ export function mountDefense(root, api, fail) {
   async function act(action, body) {
     if (locked || busy) return;
     busy = true;
+    // A refresh already on its way read the attempt before this action, so
+    // its answer is not drawn over this one's.
+    asks += 1;
     focusKey = document.activeElement?.dataset?.focus ?? null;
     syncControls();
     status.textContent =

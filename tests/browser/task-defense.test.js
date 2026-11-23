@@ -821,3 +821,74 @@ test("a panel that cannot load tries again, and offers no Begin once items are o
     await new Promise((resolve) => server.close(resolve));
   }
 });
+
+test("a refresh sent before an action never draws over the action's answer", async (t) => {
+  const browser = await launchChromium();
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const { server, base } = await startStaticServer();
+  try {
+    const page = await browser.newPage();
+    await page.goto(`${base}/task.html`, { waitUntil: "commit" });
+    await page.setContent('<section id="defense"></section>');
+    await page.evaluate(async () => {
+      const { mountDefense } = await import("/task-defense.js");
+      const item = {
+        id: "q1",
+        file: "2-rv32im/src/main/scala/mycpu/rv32im/CPU.scala",
+        line: 2,
+        quote: "val active = !halted",
+        exercise: "2.1",
+        near: ["val active = !halted"],
+        nearFirst: 2,
+        change: "`!` is removed",
+        deletes: false,
+        specs: ["mycpu.rv32im.T2HaltSpec"],
+        prediction: null,
+        begun: false,
+      };
+      const view = (begun) => ({
+        stamp: { studentId: "F74121234", head: "0123456789abcdef" },
+        lines: [{ ...item, begun }],
+        runs: [],
+        bugBegun: false,
+        itemsOpen: true,
+        hints: { allowed: 0, given: {} },
+        bug: { task: "4-pipeline", variant: null, programs: [], built: false },
+        sims: [],
+        claim: null,
+      });
+      let gets = 0;
+      window.stale = null;
+      const api = async (path, body) => {
+        if (body) return view(true);
+        gets += 1;
+        if (gets === 1) return view(false);
+        // The second view is held, and answers only after Begin.
+        return new Promise((resolve) => {
+          window.stale = () => resolve(view(false));
+        });
+      };
+      const panel = mountDefense(
+        document.querySelector("#defense"),
+        api,
+        () => {},
+      );
+      await panel.refresh();
+      window.pending = panel.refresh();
+    });
+    await page.getByRole("button", { name: "Begin item 1" }).click();
+    await page.locator("input.defense-edit").waitFor();
+    await page.evaluate(async () => {
+      window.stale();
+      await window.pending;
+    });
+    assert.equal(
+      await page.locator("input.defense-edit").count(),
+      1,
+      "the begun item stays drawn",
+    );
+  } finally {
+    await browser.close();
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
