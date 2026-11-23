@@ -104,6 +104,29 @@ impl Exercise {
         self.task_prompt_with_hint_limit(phase, target, code, language, self.hints().len())
     }
 
+    /// What Jim is told in a defense (docs/mycpu-defense.md): the examiner's
+    /// policy from its one file, in place of REACTO and the instructor's
+    /// prompt, with the items and the hint budget, none making it a strict
+    /// exam.
+    pub fn defense_prompt(phase: Phase, items: &str, hints: u64) -> Result<String, TaskError> {
+        let policy = if hints == 0 {
+            "Give no hint: this defense allows none, and you never say whether an answer is right."
+                .to_owned()
+        } else {
+            format!(
+                "This defense allows up to {hints} hints in all. When the learner's answer to a question is wrong or incomplete, say only that it is not complete yet, never that it is wrong or right, and at once call request_defense_hint with the item's id, without asking whether they want one. If it is granted, give the hint in the same reply: one short sentence that points where to look, a signal, a clock cycle, a spec or what the line feeds, never the answer, the fix or the failing specs, then ask the learner to improve their answer in their own words. If it is refused, just ask them to try again. A hint lowers that item's suggested mark, so give one only after a real attempt, and never two in a row."
+            )
+        };
+        interpolate(
+            include_str!("../../problem-bank/defense-prompt.txt"),
+            &BTreeMap::from([
+                ("phase", phase.as_str()),
+                ("items", items),
+                ("hints", policy.as_str()),
+            ]),
+        )
+    }
+
     pub fn task_prompt_with_hint_limit(
         &self,
         phase: Phase,

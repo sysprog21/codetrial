@@ -628,3 +628,44 @@ async fn jim_may_read_the_whiteboard_but_the_session_does_not_answer_for_it() {
         json!({"error": "tool unavailable in task mode"})
     );
 }
+
+/// Held panel notes go as one message, oldest first.
+#[test]
+fn panel_notes_go_together_oldest_first() {
+    assert_eq!(panel_message(&["one".to_owned()]), "DEFENSE PANEL: one");
+    assert_eq!(
+        panel_message(&["first".to_owned(), "second".to_owned()]),
+        "DEFENSE PANEL, in order: (1) first (2) second"
+    );
+}
+
+/// Jim gets the hint tool only from a defense that allows hints.
+#[test]
+fn the_hint_tool_is_offered_only_when_hints_are_allowed() {
+    let names = |tools: serde_json::Value| -> Vec<String> {
+        tools
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|tool| tool["name"].as_str().unwrap_or_default().to_owned())
+            .collect()
+    };
+    let base = crate::gemini::task_tool_declarations();
+    let hint = crate::tasks::defense::HINT_TOOL_NAME.to_owned();
+    assert!(!names(with_hint_tool(base.clone(), 0)).contains(&hint));
+    let offered = names(with_hint_tool(base.clone(), 1));
+    assert!(offered.contains(&hint));
+    assert_eq!(offered.len(), names(base).len() + 1);
+}
+
+/// A replacement socket is told the hints delivered, and a count past the
+/// task's own list is held to it rather than panicking the room.
+#[tokio::test]
+async fn the_hints_a_replacement_is_told_never_run_past_the_task_list() {
+    let mut session = TaskSession::new(admitted().await, 100);
+    let all = session.task.exercise.hints().len();
+    session.hint_rungs_used = 1;
+    assert_eq!(delivered_hints(&session).len(), 1.min(all));
+    session.hint_rungs_used = all + 5;
+    assert_eq!(delivered_hints(&session).len(), all);
+}

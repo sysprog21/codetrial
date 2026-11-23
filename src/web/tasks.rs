@@ -110,11 +110,11 @@ pub(crate) fn task_error(error: AccessError) -> Response {
             false,
             "No result is held for that attempt.",
         ),
-        _ => (
+        code => super::defense::refusal(code).unwrap_or((
             StatusCode::SERVICE_UNAVAILABLE,
             true,
             "The task could not connect.",
-        ),
+        )),
     };
     // `json_response` already marks every answer `no-store`.
     let mut response = json_response(
@@ -134,7 +134,7 @@ pub(crate) fn task_error(error: AccessError) -> Response {
 /// also name a loopback host:
 /// a page served under another name, by a proxy nobody declared or a DNS
 /// name rebound to this machine, is not the learner at this computer.
-fn service<'a>(state: &'a AppState, headers: &HeaderMap) -> Option<&'a TaskService> {
+pub(super) fn service<'a>(state: &'a AppState, headers: &HeaderMap) -> Option<&'a TaskService> {
     state
         .config
         .tasks
@@ -144,7 +144,7 @@ fn service<'a>(state: &'a AppState, headers: &HeaderMap) -> Option<&'a TaskServi
 
 /// Why the routes have no service: `--task-mode` was not given, or it was and
 /// this server (or this request's host) is not one task mode may run on.
-fn unavailable(state: &AppState) -> Response {
+pub(super) fn unavailable(state: &AppState) -> Response {
     refuse(
         if state.config.task_mode_requested || state.config.tasks.is_some() {
             "loopback_required"
@@ -245,6 +245,13 @@ impl Learner {
 /// routes' refusal carries no `code`, and the page would offer no sign-in.
 pub(crate) struct TaskOwner(Learner);
 
+impl TaskOwner {
+    /// The account id; a guest's is 0.
+    pub(super) fn id(&self) -> i64 {
+        self.0.id
+    }
+}
+
 impl axum::extract::FromRequestParts<AppState> for TaskOwner {
     type Rejection = Response;
 
@@ -292,7 +299,7 @@ pub(crate) fn with_built_in_task(state: &AppState, mut session: Value) -> Value 
     session
 }
 
-fn refuse(code: &'static str) -> Response {
+pub(super) fn refuse(code: &'static str) -> Response {
     task_error(AccessError::new(code))
 }
 
@@ -539,6 +546,40 @@ pub(crate) async fn task_start_handler(
     let Some((login, github_id)) = learner.recorded(&assignment) else {
         return refuse("authentication_required");
     };
+
+    match service.replay_admission(
+        learner.id,
+        &assignment,
+        &task_id,
+        &body.request_key,
+        &body.language,
+        crate::current_epoch_seconds(),
+    ) {
+        Ok(Some(response)) => return json_response(StatusCode::OK, response),
+        Ok(None) => {}
+        Err(error) => return task_error(error),
+    }
+
+    // A defense set's attempt checks the checkout and chooses its items now, so
+    // a checkout that cannot be defended is refused before any room.
+    let defense = match service.defense_config(learner.id, &assignment) {
+        None => None,
+        Some(config) => {
+            let Some(workspace) = service.workspace().map(std::path::Path::to_path_buf) else {
+                return refuse("workspace_required");
+            };
+            let config = (*config).clone();
+            match tokio::task::spawn_blocking(move || {
+                crate::tasks::defense::prepare(config, &workspace)
+            })
+            .await
+            {
+                Ok(Ok(slot)) => Some(slot),
+                Ok(Err(code)) => return refuse(code),
+                Err(_) => return refuse("setup_failed"),
+            }
+        }
+    };
     let task = match service.begin_admission(
         learner.id,
         (&login, github_id),
@@ -550,6 +591,7 @@ pub(crate) async fn task_start_handler(
             calibration,
             language: body.language,
             compiler_explorer: state.config.compiler_explorer_enabled,
+            defense,
         },
         crate::current_epoch_seconds(),
     ) {
@@ -596,7 +638,7 @@ pub(crate) async fn task_start_handler(
             provider,
             super::AgentJob::Task {
                 candidate: identity,
-                task,
+                task: Box::new(task),
             },
         )
         .is_err()

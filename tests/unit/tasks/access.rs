@@ -152,6 +152,18 @@ async fn a_retried_start_replays_one_attempt_and_a_second_start_is_refused() {
         task.claim_id,
         Some(json!({"roomName": "room-1"})),
     );
+    let recovered = service
+        .replay_admission(
+            1,
+            &assignment("classroom", 7),
+            "delimiter-closer",
+            "start-1",
+            "python",
+            102,
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(recovered["roomName"], "room-1");
     match replay("start-1", 102).unwrap() {
         Admission::Replayed(response) => assert_eq!(response["roomName"], "room-1"),
         Admission::New(_) => panic!("a retry started a second attempt"),
