@@ -1175,6 +1175,381 @@ test("stock III cases reject the two-runs shortcut and its greedy join", () => {
   assert.equal(joined(true)([0, 1, 0, 3, 1, 4]), 6);
 });
 
+const jumpGameIICorrect = (nums) => {
+  let jumps = 0;
+  let end = 0;
+  let far = 0;
+  for (let i = 0; i < nums.length - 1; i += 1) {
+    far = Math.max(far, i + nums[i]);
+    if (i === end) {
+      jumps += 1;
+      end = far;
+    }
+  }
+  return jumps;
+};
+const jumpGameIIChoosePad = (score) => (nums) => {
+  let pad = 0;
+  let jumps = 0;
+  while (pad < nums.length - 1) {
+    const end = Math.min(pad + nums[pad], nums.length - 1);
+    if (end === nums.length - 1) return jumps + 1;
+    if (end <= pad) return -1;
+    let next = pad + 1;
+    for (let k = next + 1; k <= end; k += 1) {
+      if (score(k, nums) >= score(next, nums)) next = k;
+    }
+    pad = next;
+    jumps += 1;
+  }
+  return jumps;
+};
+const jumpGameIILargestReach = jumpGameIIChoosePad((k, nums) => k + nums[k]);
+const jumpGameIIMinimumHops = (nums) => {
+  const distance = Array(nums.length).fill(Infinity);
+  distance[0] = 0;
+  const queue = [0];
+  for (let at = 0; at < queue.length; at += 1) {
+    const pad = queue[at];
+    for (
+      let next = pad + 1;
+      next < nums.length && next <= pad + nums[pad];
+      next += 1
+    ) {
+      if (distance[next] === Infinity) {
+        distance[next] = distance[pad] + 1;
+        queue.push(next);
+      }
+    }
+  }
+  return distance.at(-1);
+};
+
+test("jump-game-ii cases reject hop-count and landing shortcuts", () => {
+  const reported = (nums) => {
+    let jumps = 0;
+    let end = 0;
+    let far = 0;
+    for (let i = 0; i < nums.length; i += 1) {
+      far = Math.max(far, i + nums[i]);
+      if (i === end) {
+        jumps += 1;
+        end = far;
+      }
+    }
+    return nums.length > 1 ? jumps - 1 : 0;
+  };
+  const rejectsZeroDestination = (nums) =>
+    nums.length > 1 && nums.at(-1) === 0 ? -1 : jumpGameIICorrect(nums);
+  const firstHopOnly = (nums) =>
+    nums.length === 1 ? 0 : nums[0] >= nums.length - 1 ? 1 : reported(nums);
+  const choosePastDestination = (preferLater) => (nums) => {
+    let pad = 0;
+    let jumps = 0;
+    while (pad < nums.length - 1) {
+      const end = Math.min(pad + nums[pad], nums.length - 1);
+      if (end <= pad) return -1;
+      let next = pad + 1;
+      for (let k = next + 1; k <= end; k += 1) {
+        const reach = k + nums[k];
+        const best = next + nums[next];
+        if (reach > best || (preferLater && reach === best)) next = k;
+      }
+      pad = next;
+      jumps += 1;
+    }
+    return jumps;
+  };
+  const countReachGrowth = (nums, stopWhenReachable = false) => {
+    let far = 0;
+    let jumps = 0;
+    for (let i = 0; i < nums.length - 1; i += 1) {
+      if (stopWhenReachable && far >= nums.length - 1) break;
+      if (i + nums[i] > far) {
+        far = i + nums[i];
+        jumps += 1;
+      }
+    }
+    return jumps;
+  };
+  const countReachGrowthEarlyExit = (nums) => countReachGrowth(nums, true);
+  const stopOnReachOvershoot = (nums) => {
+    let jumps = 0;
+    let end = 0;
+    let far = 0;
+    for (let i = 0; i < nums.length - 1; i += 1) {
+      if (far > nums.length - 1) break;
+      far = Math.max(far, i + nums[i]);
+      if (i === end) {
+        jumps += 1;
+        end = far;
+      }
+    }
+    return jumps;
+  };
+  const firstFlightOnly = (preferLater) => (nums) =>
+    nums.length > 1 && nums[0] >= nums.length - 1
+      ? 1
+      : choosePastDestination(preferLater)(nums);
+  const backwardLargestValue = (preferLater) => (nums) => {
+    let pad = nums.length - 1;
+    let jumps = 0;
+    while (pad > 0) {
+      let previous = -1;
+      for (let k = 0; k < pad; k += 1) {
+        if (
+          k + nums[k] >= pad &&
+          (previous < 0 ||
+            nums[k] > nums[previous] ||
+            (preferLater && nums[k] === nums[previous]))
+        ) {
+          previous = k;
+        }
+      }
+      if (previous < 0) return -1;
+      pad = previous;
+      jumps += 1;
+    }
+    return jumps;
+  };
+  const positiveDirectFirst = (nums) =>
+    nums[0] > 0 && nums[0] >= nums.length - 1 ? 1 : jumpGameIICorrect(nums);
+  const rejectsExactFirst = (nums) =>
+    nums.length > 1 && nums[0] === nums.length - 1
+      ? 2
+      : jumpGameIICorrect(nums);
+  const rejectsConsecutiveZeros = (nums) =>
+    nums.some((value, i) => i > 0 && value === 0 && nums[i - 1] === 0)
+      ? -1
+      : jumpGameIICorrect(nums);
+  const largestValue = jumpGameIIChoosePad((k, nums) => nums[k]);
+  // The judge can reject both variants even if they use the same tie policy.
+  // These synthetic controls keep earlier and later ties distinct for the
+  // destination, first-flight repair, and backward predecessor shortcuts.
+  assert.equal(
+    choosePastDestination(false)([2, 1, 0]),
+    2,
+    "an earlier reach tie keeps the intermediate pad",
+  );
+  assert.equal(
+    choosePastDestination(true)([2, 1, 0]),
+    1,
+    "a later reach tie selects the destination",
+  );
+  const tied = pinnedCase("jump-game-ii", "three hops needed");
+  assert.equal(
+    largestValue(tied.input[0]),
+    tied.expected,
+    "equal jump values must prefer the later pad",
+  );
+  const growing = pinnedCase(
+    "jump-game-ii",
+    "two pads in range both reach farther",
+  );
+  assert.equal(
+    countReachGrowth(growing.input[0]),
+    3,
+    "three reach extensions are not three flights",
+  );
+  assert.equal(
+    countReachGrowthEarlyExit(growing.input[0]),
+    2,
+    "a reachable destination stops the reach-growth counter",
+  );
+  assert.equal(
+    stopOnReachOvershoot(pinnedCase("jump-game-ii", "two hops").input[0]),
+    2,
+    "an exact reach does not trigger the overshoot exit",
+  );
+  for (const later of [false, true]) {
+    for (const nums of [
+      [2, 2, 0],
+      [3, 3, 0],
+    ]) {
+      assert.equal(
+        firstFlightOnly(later)(nums),
+        1,
+        "the first-flight repair must take exact and overshooting arrivals",
+      );
+    }
+  }
+  assert.equal(
+    firstFlightOnly(false)([1, 2, 1, 0]),
+    3,
+    "the first-flight repair keeps earlier ties on later flights",
+  );
+  assert.equal(
+    firstFlightOnly(true)([1, 2, 1, 0]),
+    2,
+    "the first-flight repair keeps later ties on later flights",
+  );
+  assert.equal(
+    backwardLargestValue(false)([1, 2, 2, 0]),
+    2,
+    "the backward raw-value chooser must keep earlier ties",
+  );
+  assert.equal(
+    backwardLargestValue(true)([1, 2, 2, 0]),
+    3,
+    "the backward raw-value chooser must keep later ties",
+  );
+  for (const [name, wrong, label] of [
+    [
+      "the reported final-hop subtraction",
+      reported,
+      "two pads with room to spare",
+    ],
+    [
+      "the reported final-hop subtraction",
+      reported,
+      "three pads with room to spare",
+    ],
+    [
+      "the reported final-hop subtraction",
+      reported,
+      "range grows after the first pad",
+    ],
+    [
+      "choosing the largest raw predecessor with earlier ties",
+      backwardLargestValue(false),
+      "last pad shares the second flight's range",
+    ],
+    [
+      "choosing the largest raw predecessor with later ties",
+      backwardLargestValue(true),
+      "last pad shares the second flight's range",
+    ],
+    [
+      "counting reach extensions with a reachable-destination early exit",
+      countReachGrowthEarlyExit,
+      "three charged pads followed by two empty pads",
+    ],
+    [
+      "counting reach extensions without an early exit",
+      countReachGrowth,
+      "three charged pads followed by two empty pads",
+    ],
+    [
+      "stopping on an overshoot before counting the pending flight",
+      stopOnReachOvershoot,
+      "second pad has room beyond the destination",
+    ],
+    [
+      "repairing direct arrivals only on the first flight with earlier ties",
+      firstFlightOnly(false),
+      "last pad shares the second flight's range",
+    ],
+    [
+      "repairing direct arrivals only on the first flight with later ties",
+      firstFlightOnly(true),
+      "last pad shares the second flight's range",
+    ],
+    [
+      "choosing past the destination with a later tie",
+      choosePastDestination(true),
+      "last pad in range beside a farther-reaching pad",
+    ],
+    [
+      "choosing past the destination with an earlier tie",
+      choosePastDestination(false),
+      "last pad in range beside a farther-reaching pad",
+    ],
+    [
+      "counting each reach extension as a flight",
+      countReachGrowth,
+      "two pads in range both reach farther",
+    ],
+    [
+      "checking a direct flight before a singleton",
+      positiveDirectFirst,
+      "one pad with charge remaining",
+    ],
+    [
+      "requiring the first range to pass the destination",
+      rejectsExactFirst,
+      "two pads with just enough range",
+    ],
+    [
+      "rejecting consecutive empty pads",
+      rejectsConsecutiveZeros,
+      "empty pads between charging stops",
+    ],
+    [
+      "treating a zero-valued destination as unreachable",
+      rejectsZeroDestination,
+      "two pads with room to spare",
+    ],
+    [
+      "choosing the largest pad value with a later tie",
+      largestValue,
+      "weaker pad sits closer to the end",
+    ],
+    [
+      "a first-hop-only repair",
+      firstHopOnly,
+      "range grows after the first pad",
+    ],
+  ]) {
+    assertRejects(
+      "jump-game-ii",
+      label,
+      wrong,
+      `"${label}" must reject ${name}`,
+    );
+  }
+});
+
+test("jump-game-ii reference strategies match shortest paths", () => {
+  for (const { label, input, expected } of judges["jump-game-ii"].cases) {
+    assert.equal(
+      jumpGameIICorrect(input[0]),
+      expected,
+      `"${label}" must accept the correct greedy solution`,
+    );
+    assert.equal(
+      jumpGameIILargestReach(input[0]),
+      expected,
+      `"${label}" must accept choosing the largest reach`,
+    );
+    assert.equal(
+      jumpGameIIMinimumHops(input[0]),
+      expected,
+      `"${label}" must match shortest paths`,
+    );
+  }
+  let checked = 0;
+  for (let size = 1; size <= 5; size += 1) {
+    for (let encoded = 0; encoded < 4 ** size; encoded += 1) {
+      let digits = encoded;
+      const nums = Array.from({ length: size }, () => {
+        const value = digits % 4;
+        digits = Math.floor(digits / 4);
+        return value;
+      });
+      const expected = jumpGameIIMinimumHops(nums);
+      if (expected === Infinity) continue;
+      checked += 1;
+      assert.equal(jumpGameIICorrect(nums), expected, JSON.stringify(nums));
+      assert.equal(
+        jumpGameIILargestReach(nums),
+        expected,
+        JSON.stringify(nums),
+      );
+    }
+  }
+  assert.equal(checked, 828);
+  for (const [nums, expected] of [
+    [Array(10000).fill(1), 9999],
+    [Array(10000).fill(1000), 10],
+    [Array.from({ length: 10000 }, (_, i) => (i % 1000 === 0 ? 1000 : 0)), 10],
+    [[1000, 0], 1],
+  ]) {
+    assert.equal(jumpGameIIMinimumHops(nums), expected);
+    assert.equal(jumpGameIICorrect(nums), expected);
+    assert.equal(jumpGameIILargestReach(nums), expected);
+  }
+});
+
 test("harness generator covers every function problem without network access", () => {
   for (const [id, spec] of Object.entries(judges)) {
     if (spec.kind !== "function") continue;
