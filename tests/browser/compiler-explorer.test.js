@@ -374,6 +374,20 @@ test("valid-anagram cases reject equal-length character-digest shortcuts", () =>
   }
 });
 
+/// The built-in case `label` of `problem`, which a test pinning a wrong
+/// solution to it must still find, so dropping the case fails by its name.
+const pinnedCase = (problem, label) => {
+  const row = judges[problem].cases.find((item) => item.label === label);
+  assert.ok(row, `the built-in cases must keep "${label}"`);
+  return row;
+};
+
+/// Asserts that `run`, a wrong solution, misses the answer case `label` expects.
+const assertRejects = (problem, label, run, message) => {
+  const { input, expected } = pinnedCase(problem, label);
+  assert.notEqual(run(...structuredClone(input)), expected, message);
+};
+
 test("jump-game cases reject each hop-by-hop shortcut", () => {
   const travel = (choose) => (nums) => {
     let at = 0;
@@ -394,12 +408,6 @@ test("jump-game cases reject each hop-by-hop shortcut", () => {
     }
     return best;
   };
-  const byLabel = Object.fromEntries(
-    judges["jump-game"].cases.map(({ label, input: [nums], expected }) => [
-      label,
-      { nums, expected },
-    ]),
-  );
   for (const [name, choose, label] of [
     [
       "the full range",
@@ -426,11 +434,10 @@ test("jump-game cases reject each hop-by-hop shortcut", () => {
       "far small relay beats a near big one",
     ],
   ]) {
-    const pinned = byLabel[label];
-    assert.ok(pinned, `the built-in cases must keep "${label}"`);
-    assert.notEqual(
-      travel(choose)(pinned.nums),
-      pinned.expected,
+    assertRejects(
+      "jump-game",
+      label,
+      travel(choose),
       `"${label}" must reject always hopping to ${name}`,
     );
   }
@@ -643,6 +650,206 @@ test("basic-calculator cases reject parsers without a unary minus", () => {
     if (input[0].length <= MAX_EXPRESSION_LENGTH)
       assert.ok(calculate(input[0]) === expected, label);
     assert.ok(evaluate(input[0], { sign: () => true }) === expected, label);
+  }
+});
+
+test("word-break cases reject splits that go back no further than the last cut and prefix tables that ask about one term", () => {
+  const flip = (text, fromEnd) =>
+    fromEnd ? [...text].reverse().join("") : text;
+  // Cuts one term at a time and never goes back. With `lookahead` it only
+  // takes a term that the rest of the tag can start another term after.
+  const split =
+    (pick, fromEnd, lookahead = false) =>
+    (s, vocabulary) => {
+      const tag = flip(s, fromEnd);
+      const terms = vocabulary.map((term) => flip(term, fromEnd));
+      const followed = (at) =>
+        at === tag.length || terms.some((term) => tag.startsWith(term, at));
+      let at = 0;
+      while (at < tag.length) {
+        const fits = terms.filter(
+          (term) =>
+            tag.startsWith(term, at) &&
+            (!lookahead || followed(at + term.length)),
+        );
+        if (fits.length === 0) return false;
+        at += pick(fits).length;
+      }
+      return true;
+    };
+  const shortest = (fits) =>
+    fits.reduce((best, term) => (term.length < best.length ? term : best));
+  const longest = (fits) =>
+    fits.reduce((best, term) => (term.length > best.length ? term : best));
+  const first = (fits) => fits[0];
+  const last = (fits) => fits.at(-1);
+  // Goes back only as far as its last cut: at a dead end it cuts the next term
+  // there, and gives up once that cut has no term left.
+  const undoLast = (pick, fromEnd) => (s, vocabulary) => {
+    const tag = flip(s, fromEnd);
+    const terms = vocabulary.map((term) => flip(term, fromEnd));
+    const cuts = [];
+    let at = 0;
+    while (at < tag.length) {
+      let from = at;
+      let left = terms.filter((term) => tag.startsWith(term, at));
+      if (left.length === 0) {
+        const cut = cuts.pop();
+        if (!cut || cut.left.length === 0) return false;
+        ({ from, left } = cut);
+      }
+      const term = pick(left);
+      cuts.push({ from, left: left.filter((other) => other !== term) });
+      at = from + term.length;
+    }
+    return true;
+  };
+  // Records whether each prefix splits, but asks only about the one term
+  // `pick` takes among those that end the prefix, not about each of them.
+  const oneTermDecides = (pick) => (s, vocabulary) => {
+    const splits = [true];
+    for (let end = 1; end <= s.length; end += 1) {
+      const fits = vocabulary.filter((term) => s.endsWith(term, end));
+      splits[end] = fits.length > 0 && splits[end - pick(fits).length];
+    }
+    return splits[s.length];
+  };
+  const picks = [
+    ["the shortest term", shortest],
+    ["the longest term", longest],
+    ["the first listed term", first],
+    ["the last listed term", last],
+  ];
+  const choices = picks.flatMap(([term, pick]) =>
+    [false, true].flatMap((lookahead) =>
+      [false, true].map((fromEnd) => [
+        `${term}${lookahead ? " another term can follow" : ""}${fromEnd ? " from the end" : ""}`,
+        split(pick, fromEnd, lookahead),
+      ]),
+    ),
+  );
+  const retries = picks.flatMap(([term, pick]) =>
+    [false, true].map((fromEnd) => [
+      `${term}${fromEnd ? " from the end" : ""} and going back only to the last cut`,
+      undoLast(pick, fromEnd),
+    ]),
+  );
+  const run = "one different letter in a run";
+  for (const [name, cut] of [...choices, ...retries]) {
+    assertRejects(
+      "word-break",
+      run,
+      cut,
+      `"${run}" must reject always cutting ${name}`,
+    );
+  }
+  for (const [term, pick] of picks) {
+    assertRejects(
+      "word-break",
+      run,
+      oneTermDecides(pick),
+      `"${run}" must reject asking each prefix only about ${term} that ends it`,
+    );
+  }
+  const inside = "term inside a longer term";
+  for (const lookahead of [false, true]) {
+    assertRejects(
+      "word-break",
+      inside,
+      split(shortest, false, lookahead),
+      `"${inside}" must reject always cutting the shortest term${lookahead ? " another term can follow" : ""}`,
+    );
+  }
+
+  // Both strings of the run case read the same reversed, so only a case that
+  // does not shows the cuts from the end are made from the end. The lookahead
+  // rows fail the new cases whether or not they look ahead, so only a case
+  // where looking ahead changes the answer shows that they look. Every row
+  // misses the run case whichever term it cuts, so the term each one picks is
+  // pinned on overlapping words, which lists car before ca: from the front
+  // the shortest and the last listed term split it, while the longest and
+  // the first listed term stop at s. Going back to the last cut fails the run
+  // case too, so overlapping words, which splits only once car is undone,
+  // shows that it goes back, and catsdog, which it splits from the front only
+  // after cats, pins its term and its direction. A prefix table fails the run
+  // case whichever term it asks about, and no case tells those terms apart, so
+  // ab over ab and b does: only the longest and the first listed term that end
+  // it reach the start.
+  const { input, expected } = pinnedCase("word-break", inside);
+  assert.equal(
+    split(shortest, true)(...input),
+    expected,
+    `"${inside}" must split when the shortest term is cut from the end`,
+  );
+  const cars = pinnedCase("word-break", "overlapping words");
+  assert.equal(
+    split(longest, false, true)(...cars.input),
+    cars.expected,
+    `"overlapping words" must split when the longest term another term can follow is cut`,
+  );
+  assert.equal(
+    undoLast(longest, false)(...cars.input),
+    cars.expected,
+    `"overlapping words" must split when the longest term is cut and the last cut is gone back to`,
+  );
+  for (const [name, pick, splits] of [
+    ["the shortest term", shortest, false],
+    ["the first listed term", first, false],
+    ["the longest term", longest, true],
+    ["the last listed term", last, true],
+  ]) {
+    assert.equal(
+      undoLast(pick, false)(...input) === expected,
+      splits,
+      `"${inside}" must ${splits ? "split" : "reject"} when ${name} is cut and the last cut is gone back to`,
+    );
+  }
+  assert.equal(
+    undoLast(shortest, true)(...input),
+    expected,
+    `"${inside}" must split when the shortest term is cut from the end and the last cut is gone back to`,
+  );
+  for (const [name, pick, splits] of [
+    ["the shortest term", shortest, false],
+    ["the last listed term", last, false],
+    ["the longest term", longest, true],
+    ["the first listed term", first, true],
+  ]) {
+    assert.equal(
+      oneTermDecides(pick)("ab", ["ab", "b"]),
+      splits,
+      `"ab" over ab and b must ${splits ? "split" : "not split"} when each prefix asks only about ${name} that ends it`,
+    );
+  }
+  for (const [name, pick, splits] of [
+    ["the shortest term", shortest, true],
+    ["the last listed term", last, true],
+    ["the longest term", longest, false],
+    ["the first listed term", first, false],
+  ]) {
+    assert.equal(
+      split(pick, false)(...cars.input) === cars.expected,
+      splits,
+      `"overlapping words" must ${splits ? "split" : "reject"} when ${name} is cut`,
+    );
+  }
+
+  // A wrong solution missing an answer says nothing if the answer is wrong, so
+  // each new case carries a split that shows it is true.
+  for (const [label, pieces] of [
+    [inside, ["cats", "dog"]],
+    [run, ["a", "aabaa", "a"]],
+  ]) {
+    const {
+      input: [s, vocabulary],
+      expected,
+    } = pinnedCase("word-break", label);
+    assert.equal(expected, true, `"${label}" must expect a split`);
+    assert.ok(
+      pieces.every((piece) => vocabulary.includes(piece)) &&
+        pieces.join("") === s,
+      `"${label}" must split as ${pieces.join(" + ")}`,
+    );
   }
 });
 
