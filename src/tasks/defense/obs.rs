@@ -58,7 +58,9 @@ pub fn read(data: &[u8]) -> Result<Table, String> {
         .map(|record| fields.iter().map(|f| value(record, f)).collect())
         .collect();
     Ok(Table {
-        first: header["first"].as_u64().unwrap_or(0),
+        first: header["first"]
+            .as_u64()
+            .ok_or("the header has no first cycle")?,
         fields: fields.into_iter().map(|f| f.name).collect(),
         rows,
         end: trailer.0["end"].clone(),

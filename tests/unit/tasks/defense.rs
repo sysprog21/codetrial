@@ -575,6 +575,17 @@ fn a_trace_reads_into_the_table_of_its_window() {
     cut.truncate(cut.len() - 3);
     read_trace(&cut).unwrap_err();
     read_trace(b"no header").unwrap_err();
+    let mut unplaced = trace(3, 3);
+    let header_end = unplaced.iter().position(|&b| b == b'\n').unwrap();
+    let header = String::from_utf8(unplaced[..header_end].to_vec()).unwrap();
+    let without_first = header.replace("\"first\":40,", "");
+    assert_ne!(header, without_first);
+    unplaced.splice(..header_end, without_first.into_bytes());
+    assert_eq!(
+        read_trace(&unplaced).unwrap_err(),
+        "the header has no first cycle",
+        "a window with no first cycle would be drawn at the wrong cycles"
+    );
 }
 
 #[test]
