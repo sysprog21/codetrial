@@ -3,7 +3,6 @@
 //! a signed-in learner.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::Arc;
 
 use axum::body::Body;
@@ -186,55 +185,13 @@ fn every_defense_refusal_has_its_status_and_sentence() {
     assert_eq!(refusal("setup_failed"), None, "not the defense's code");
 }
 
-/// A git repository shaped like a student's checkout, removed when dropped.
-struct Repo(PathBuf);
-
-impl Repo {
-    fn git(&self, args: &[&str]) -> String {
-        let output = Command::new("git")
-            .arg("-C")
-            .arg(&self.0)
-            .args(["-c", "user.name=T", "-c", "user.email=t@example.invalid"])
-            .args([
-                "-c",
-                "commit.gpgsign=false",
-                "-c",
-                "core.hooksPath=/dev/null",
-            ])
-            .args(args)
-            .output()
-            .unwrap();
-        assert!(output.status.success(), "git {args:?}: {output:?}");
-        String::from_utf8(output.stdout).unwrap().trim().to_owned()
-    }
-
-    fn write(&self, path: &str, text: &str) {
-        let path = self.0.join(path);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(path, text).unwrap();
-    }
-
-    fn commit(&self, message: &str) -> String {
-        self.git(&["add", "-A"]);
-        self.git(&["commit", "-q", "-m", message]);
-        self.git(&["rev-parse", "HEAD"])
-    }
-}
-
-impl Drop for Repo {
-    fn drop(&mut self) {
-        let _gone = std::fs::remove_dir_all(&self.0);
-    }
-}
+use crate::tasks::test_support::Repo;
 
 const HAZARD: &str = "4-pipeline/src/main/scala/mycpu/pipeline/Hazard.scala";
 
 /// Upstream with a blank, the student's commit that fills it, and two specs.
-fn student_repo(dir: PathBuf) -> Repo {
-    let _gone = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    let repo = Repo(dir);
-    repo.git(&["init", "-q", "-b", "main"]);
+fn student_repo() -> Repo {
+    let repo = Repo::new("routes");
     repo.write(
         HAZARD,
         "class Hazard {\n  // [CA26: Exercise 4.2] stall\n  ???\n}\n",
@@ -415,11 +372,11 @@ async fn send(
 async fn the_panel_routes_act_on_the_signed_in_learners_open_attempt() {
     let base =
         std::env::temp_dir().join(format!("codetrial-defense-routes-{}", std::process::id()));
-    let repo = student_repo(base.join("checkout"));
+    let repo = student_repo();
     let tools = base.join("tools");
     std::fs::create_dir_all(&tools).unwrap();
     let config = Config::parse(&defense_config()).unwrap();
-    let checkout = Checkout::open(&repo.0).unwrap();
+    let checkout = Checkout::open(repo.path()).unwrap();
     let plan = plan(&config, &checkout).unwrap();
     let tools = Tools {
         sbt: fake_sbt(&tools),

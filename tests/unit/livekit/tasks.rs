@@ -658,67 +658,24 @@ fn the_hint_tool_is_offered_only_when_hints_are_allowed() {
     assert_eq!(offered.len(), names(base).len() + 1);
 }
 
-/// A student checkout with one graded line added over upstream, removed when
-/// dropped.
+/// A student checkout with one graded line added over upstream.
 #[cfg(unix)]
-struct Checkout(std::path::PathBuf);
-
-#[cfg(unix)]
-impl Checkout {
-    fn new(label: &str) -> Self {
-        let dir = std::env::temp_dir().join(format!(
-            "codetrial-room-defense-{label}-{}",
-            std::process::id()
-        ));
-        let _gone = std::fs::remove_dir_all(&dir);
-        let checkout = Self(dir);
-        let cpu = "4-pipeline/src/main/scala/mycpu/pipeline/CPU.scala";
-        std::fs::create_dir_all(checkout.0.join(cpu).parent().unwrap()).unwrap();
-        checkout.git(&["init", "-q", "-b", "main"]);
-        checkout.write(
-            cpu,
-            "class CPU {\n  // [CA26: Exercise 4.4] flush\n  ???\n}\n",
-        );
-        checkout.git(&["add", "-A"]);
-        checkout.git(&["commit", "-q", "-m", "upstream"]);
-        checkout.git(&["update-ref", "refs/remotes/upstream/main", "HEAD"]);
-        checkout.write(
-            cpu,
-            "class CPU {\n  // [CA26: Exercise 4.4] flush\n  io.flush := taken && valid\n}\n",
-        );
-        checkout.write("STUDENT_ID", "F74121234\n");
-        checkout.git(&["add", "-A"]);
-        checkout.git(&["commit", "-q", "-m", "cpu"]);
-        checkout
-    }
-
-    fn write(&self, path: &str, text: &str) {
-        std::fs::write(self.0.join(path), text).unwrap();
-    }
-
-    fn git(&self, args: &[&str]) {
-        let output = std::process::Command::new("git")
-            .arg("-C")
-            .arg(&self.0)
-            .args(["-c", "user.name=T", "-c", "user.email=t@example.invalid"])
-            .args([
-                "-c",
-                "commit.gpgsign=false",
-                "-c",
-                "core.hooksPath=/dev/null",
-            ])
-            .args(args)
-            .output()
-            .unwrap();
-        assert!(output.status.success(), "git {args:?}: {output:?}");
-    }
-}
-
-#[cfg(unix)]
-impl Drop for Checkout {
-    fn drop(&mut self) {
-        let _gone = std::fs::remove_dir_all(&self.0);
-    }
+fn defense_checkout() -> crate::tasks::test_support::Repo {
+    let repo = crate::tasks::test_support::Repo::new("room-panel");
+    let cpu = "4-pipeline/src/main/scala/mycpu/pipeline/CPU.scala";
+    repo.write(
+        cpu,
+        "class CPU {\n  // [CA26: Exercise 4.4] flush\n  ???\n}\n",
+    );
+    let upstream = repo.commit("upstream");
+    repo.git(&["update-ref", "refs/remotes/upstream/main", &upstream]);
+    repo.write(
+        cpu,
+        "class CPU {\n  // [CA26: Exercise 4.4] flush\n  io.flush := taken && valid\n}\n",
+    );
+    repo.write("STUDENT_ID", "F74121234\n");
+    repo.commit("cpu");
+    repo
 }
 
 /// A defense room that allows hints: its connection is set up with the hint
@@ -747,7 +704,7 @@ async fn a_defense_room_offers_its_hint_tool_and_drives_the_panel() {
         "a task room's connection is given the task tools"
     );
 
-    let checkout = Checkout::new("panel");
+    let checkout = defense_checkout();
     let plaintext = json!({"packageVersion": 1, "setId": "mycpu", "setVersion": 1,
         "rules": {"durationMin": 60, "maxHintRungs": 0, "closesAt": null,
             "lookAwaySeconds": 8, "rulesNote": null},
@@ -763,7 +720,7 @@ async fn a_defense_room_offers_its_hint_tool_and_drives_the_panel() {
     service.insert_unlocked(1, SITE, std::sync::Arc::new(set));
     let assignment = assignment("mycpu", 1);
     let defense = service.defense_config(1, &assignment).unwrap();
-    let slot = crate::tasks::defense::prepare((*defense).clone(), &checkout.0).unwrap();
+    let slot = crate::tasks::defense::prepare((*defense).clone(), checkout.path()).unwrap();
     let Admission::New(task) = service
         .begin_admission(
             1,

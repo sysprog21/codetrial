@@ -1,5 +1,4 @@
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::path::Path;
 use std::time::Duration;
 
 use serde_json::{Value, json};
@@ -186,62 +185,7 @@ fn the_defense_object_follows_the_shared_cases() {
     }
 }
 
-/// A throwaway git repository shaped like a student's checkout.
-pub(super) struct Repo(PathBuf);
-
-impl Repo {
-    fn new(label: &str) -> Self {
-        let dir = std::env::temp_dir().join(format!(
-            "codetrial-defense-test-{label}-{}",
-            std::process::id()
-        ));
-        let _gone = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let repo = Self(dir);
-        repo.git(&["init", "-q", "-b", "main"]);
-        repo
-    }
-
-    pub(super) fn git(&self, args: &[&str]) -> String {
-        let output = Command::new("git")
-            .arg("-C")
-            .arg(&self.0)
-            .args(["-c", "user.name=T", "-c", "user.email=t@example.invalid"])
-            .args([
-                "-c",
-                "commit.gpgsign=false",
-                "-c",
-                "core.hooksPath=/dev/null",
-            ])
-            .args(args)
-            .output()
-            .unwrap();
-        assert!(output.status.success(), "git {args:?}: {output:?}");
-        String::from_utf8(output.stdout).unwrap().trim().to_owned()
-    }
-
-    pub(super) fn write(&self, path: &str, text: &str) {
-        let path = self.0.join(path);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(path, text).unwrap();
-    }
-
-    pub(super) fn commit(&self, message: &str) -> String {
-        self.git(&["add", "-A"]);
-        self.git(&["commit", "-q", "-m", message]);
-        self.git(&["rev-parse", "HEAD"])
-    }
-
-    pub(super) fn path(&self) -> &Path {
-        &self.0
-    }
-}
-
-impl Drop for Repo {
-    fn drop(&mut self) {
-        let _gone = std::fs::remove_dir_all(&self.0);
-    }
-}
+pub(super) use crate::tasks::test_support::Repo;
 
 pub(super) const CPU: &str = "4-pipeline/src/main/scala/mycpu/pipeline/CPU.scala";
 pub(super) const HAZARD: &str = "4-pipeline/src/main/scala/mycpu/pipeline/Hazard.scala";
