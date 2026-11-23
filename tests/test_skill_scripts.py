@@ -975,7 +975,8 @@ class PrSweepTests(SweepCase):
         release = release[: release.index("steps:")]
         self.assertIn("contents: write", release)
         self.assertIn(
-            "if: github.event_name == 'push' && github.ref == 'refs/heads/main'",
+            "${{ !cancelled() && github.event_name == 'push'"
+            " && github.ref == 'refs/heads/main'",
             release,
         )
 
