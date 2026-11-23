@@ -447,7 +447,10 @@ decrypts and validates everything. A download that does not match its hash is
 PIN, the likeliest cause. The PIN and derived key are dropped once the set is
 decoded. CodeTrial never writes the decoded set anywhere; it lives in process
 memory until exit, which is not a promise about what the operating system
-pages to disk. A restart downloads the set and asks for the PIN again. No
+pages to disk. A restart downloads the set and asks for the PIN again,
+except for a defense set, whose PIN the learner's browser keeps for that set
+version and enters itself until the server refuses it
+([mycpu-defense.md](mycpu-defense.md#panel-and-jim)). No
 failure falls back to a catalog problem, or to the default task.
 
 ### Rules and preparation

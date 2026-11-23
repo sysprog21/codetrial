@@ -963,3 +963,163 @@ dialog button {
   clip-path: inset(50%);
   white-space: nowrap;
 }
+
+/* A defense is answered in its panel (task-defense.js): the editor, the
+   public cases and the public runs have nothing to do with it. */
+#task.is-defense
+  :is(
+    .editor-bar,
+    .editor-stack,
+    #code-keys,
+    #compiled-note,
+    #results,
+    #run,
+    #hint,
+    #discuss,
+    #public-cases
+  ),
+#task.is-defense .task-reference > h2,
+#task.is-defense .task-editor > label:first-child,
+#task.is-defense .task-editor > p:not([id]),
+#prepare.is-defense #language-choice,
+#prepare.is-defense #language-note,
+#prepare.is-defense [aria-label="Local recording"] {
+  display: none;
+}
+
+/* A defense's setup is one screen that moves on by itself: its three steps
+   are numbered so the learner can see which one is under way. */
+#prepare.is-defense .prepare-grid {
+  counter-reset: setup-step;
+}
+#prepare.is-defense .setup-panel > h2::before {
+  counter-increment: setup-step;
+  content: counter(setup-step) ". ";
+}
+
+/* The panel takes the editor's place: one wide column, the brief and the
+   panel first, then what is left of the controls (Finish, Thinking). */
+#task.is-defense .task-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+#task.is-defense .task-reference {
+  padding: 0 0 1rem;
+  border-right: 0;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.defense-controls {
+  border: 0;
+  padding: 0;
+  min-width: 0;
+}
+
+.defense-item {
+  border-top: 1px solid currentcolor;
+  padding-block: 0.75rem;
+}
+
+.defense-near,
+.defense-retire {
+  overflow-x: auto;
+  font-size: 0.85rem;
+}
+
+.defense-error {
+  color: var(--critical);
+  font-weight: 600;
+}
+
+.defense-asked {
+  font-weight: bold;
+  text-decoration: underline;
+}
+
+.defense-edit {
+  width: 100%;
+  font-family: monospace;
+}
+
+.defense-specs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+  padding: 0.25rem 0.75rem;
+}
+
+.defense-specs label {
+  margin: 0;
+}
+
+.defense-item label textarea {
+  display: block;
+  width: 100%;
+  margin-top: 0.5rem;
+}
+
+.defense-sim,
+.defense-claim {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: end;
+}
+
+.defense-wave {
+  max-height: 24rem;
+  overflow: auto;
+}
+
+.defense-wave table {
+  border-collapse: collapse;
+  font-family: monospace;
+  font-size: 0.8rem;
+}
+
+.defense-wave :is(th, td) {
+  padding: 0 0.4rem;
+  white-space: nowrap;
+  border: 1px solid color-mix(in srgb, currentcolor 30%, transparent);
+  text-align: right;
+}
+
+.defense-wave thead th {
+  position: sticky;
+  top: 0;
+  background: var(--surface);
+}
+
+.defense-waveform {
+  display: block;
+  font-family: monospace;
+  font-size: 10px;
+}
+
+.defense-waveform text {
+  fill: currentcolor;
+}
+
+.defense-waveform :is(.bit, .bus) {
+  fill: none;
+  stroke: currentcolor;
+  stroke-width: 1.5;
+}
+
+.defense-waveform .tick {
+  stroke: color-mix(in srgb, currentcolor 20%, transparent);
+}
+
+/* An item before it is opened: its overview and the Begin button. */
+.defense-overview ol {
+  margin: 0.5rem 0 1rem;
+  padding-left: 1.5rem;
+  line-height: 1.5;
+}
+.defense-overview-lead {
+  margin: 1rem 0 0;
+  font-weight: 600;
+}
+.defense-lineno {
+  color: var(--tok-comment);
+  user-select: none;
+}

@@ -186,6 +186,8 @@ export function startNeverArrived() {
 
 /// Lets go of a room that can no longer start the attempt.
 export function dropConnection() {
+  st.defense?.destroy();
+  st.defense = null;
   const oldRoom = st.room;
   st.room = null;
   // The interviewer's audio element belongs to the room just left.

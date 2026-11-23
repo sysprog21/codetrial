@@ -39,6 +39,7 @@ import { evaluate, formatResult } from "./calculator.js";
 import { mountExampleBoard } from "./example-board.js";
 import { mountEditorView } from "./editor-view.js";
 import { mountCubeView } from "./cube-view.js";
+import { defenseSections, mountDefense } from "./task-defense.js";
 import { CONSTRAINTS } from "./devices.js";
 import { videoTrackReady } from "./audio-check.js";
 import { COMPILED_LANGUAGES } from "./compiler-explorer.js";
@@ -283,7 +284,13 @@ function error(value) {
     if (dismissOnly) return;
     if (value.code === "authentication_required") showSignin().catch(error);
     else if (value.code === "credentials_missing") location.reload();
-    else if (["invalid_pin", "unlock_required"].includes(value.code)) {
+    else if (value.code === "unlock_required") {
+      // The server forgot the set, as a restart does: a remembered PIN may
+      // unlock it again, once.
+      st.triedPinKey = null;
+      showUnlock();
+      $("pin").focus();
+    } else if (value.code === "invalid_pin") {
       show("unlock");
       $("pin").focus();
     } else if (value.code === "package_unavailable") show("unlock");
@@ -363,6 +370,13 @@ $("device-start").onclick = async () => {
 
 // --- Unlock ----------------------------------------------------------------
 
+/// Where this browser keeps the PIN of a defense set it has unlocked. Task
+/// packages are deterrence, not secrecy (docs/task-mode.md), and a defense is
+/// examined on the learner's own machine, so the PIN is remembered there for
+/// that set version only, and forgotten as soon as it is refused.
+const pinKey = () =>
+  `codetrial.defense-pin:${st.site}|${st.setId}|${st.version}`;
+
 function showUnlock() {
   show("unlock");
   // A learner who entered the server can go back to it; one who followed a
@@ -370,6 +384,12 @@ function showUnlock() {
   $("unlock-back").hidden = !st.wantsInstructor;
   $("assignment").textContent =
     `Task set ${st.setId}, version ${st.version}, from ${st.site}. Enter the PIN your instructor gave you.`;
+  const remembered = readStored(pinKey());
+  if (remembered && st.triedPinKey !== pinKey()) {
+    st.triedPinKey = pinKey();
+    $("pin").value = remembered;
+    $("pin-form").requestSubmit();
+  }
 }
 
 /// The address of the assignment the page now works from, so a reload comes
@@ -456,10 +476,11 @@ $("unlock-back").onclick = () => showServer();
 
 $("pin-form").onsubmit = async (event) => {
   event.preventDefault();
+  const pin = $("pin").value;
   try {
     const unlocked = await api(
       `/api/task-sets/${encodeURIComponent(st.setId)}/unlock`,
-      { site: st.site, version: st.version, pin: $("pin").value },
+      { site: st.site, version: st.version, pin },
     );
     $("pin").value = "";
     $("task-picker").replaceChildren(
@@ -472,7 +493,15 @@ $("pin-form").onsubmit = async (event) => {
     openAssignment();
     showPrepare();
     await loadTask();
+    // Only a defense set's PIN is kept; any other set asks every time.
+    if (st.task?.defense) writeStored(pinKey(), pin);
   } catch (value) {
+    // Only the remembered PIN is forgotten and cleared from the field; a
+    // typed one stays for the learner to correct, as for every other set.
+    if (pin === readStored(pinKey())) {
+      if (value?.code === "invalid_pin") writeStored(pinKey(), "");
+      $("pin").value = "";
+    }
     error(value);
   }
 };
@@ -513,6 +542,9 @@ async function loadTask() {
   if (st.task.explainers?.includes("cube"))
     st.cubeMounted ??= mountCubeView($("cube-explorer"));
   $("cube-explorer").hidden = !st.task.explainers?.includes("cube");
+  // A defense is answered in its panel: no editor, cases or public runs.
+  $("task").classList.toggle("is-defense", Boolean(st.task.defense));
+  $("prepare").classList.toggle("is-defense", Boolean(st.task.defense));
   $("public-cases").replaceChildren(
     ...(st.task.publicCases?.cases ?? []).map((row, index) => {
       const li = document.createElement("li");
@@ -624,12 +656,19 @@ function showPrepare() {
   $("devices").disabled = true;
 }
 
+/// Whether a device request is waiting on its permission prompt or detector.
+let requestingDevices = false;
+
 $("acknowledge").onchange = () => {
   st.acknowledgedAt = $("acknowledge").checked
     ? new Date().toISOString()
     : null;
   if (!st.acknowledgedAt) $("start").disabled = true;
-  $("devices").disabled = !st.acknowledgedAt || Boolean(st.media);
+  $("devices").disabled =
+    !st.acknowledgedAt || Boolean(st.media) || requestingDevices;
+  // A defense's setup moves on by itself: accepting the rules asks for the
+  // devices, in the same gesture a permission prompt needs.
+  if (st.task?.defense && !$("devices").disabled) $("devices").click();
   $("calibrate").disabled =
     !st.acknowledgedAt ||
     !st.media ||
@@ -637,6 +676,15 @@ $("acknowledge").onchange = () => {
     !st.task ||
     Boolean(st.room) ||
     st.calibrating;
+  // ...and accepting them again, after unticking them while the devices
+  // were granted, resumes it at the calibration.
+  if (
+    st.task?.defense &&
+    !$("calibrate").disabled &&
+    !st.calibration &&
+    !requestingDevices
+  )
+    $("calibrate").click();
 };
 
 /// How long the first detection may take. It starts the model, which takes
@@ -671,7 +719,10 @@ const faceFiles = loadFaceAssets({
 // the page out of fullscreen during the attempt.
 $("devices").onclick = async () => {
   // One request at a time, or a second grant would orphan the first stream's
-  // tracks, which stopMonitoring never sees.
+  // tracks, which stopMonitoring never sees. The flag holds while the button
+  // is enabled again by a rules toggle during the prompt.
+  if (requestingDevices) return;
+  requestingDevices = true;
   $("devices").disabled = true;
   try {
     // The interviewer interrupts itself on the learner's voice here too, so
@@ -718,6 +769,8 @@ $("devices").onclick = async () => {
     detectorStatus("Face detector ready.");
     $("devices").disabled = true;
     $("calibrate").disabled = !st.task || !st.acknowledgedAt;
+    // ...and a ready detector starts the calibration.
+    if (st.task?.defense && !$("calibrate").disabled) $("calibrate").click();
   } catch (value) {
     releaseMedia();
     $("devices").disabled = false;
@@ -731,6 +784,8 @@ $("devices").onclick = async () => {
               "The microphone and camera are needed for this task. Allow them and try again.",
           },
     );
+  } finally {
+    requestingDevices = false;
   }
 };
 
@@ -825,6 +880,7 @@ $("calibrate").onclick = async () => {
     $("calibration-result").textContent =
       "Calibrated and connected. Press Start when you are ready.";
     $("start").disabled = false;
+    if (st.task?.defense) $("start").focus();
   } catch (value) {
     error(value);
   } finally {
@@ -1056,6 +1112,13 @@ function editorLocked() {
 }
 function lock() {
   const locked = editorLocked();
+  // The panel opens once work starts and freezes with the work.
+  if (st.task?.defense && st.state && !st.defense && !locked) {
+    st.defense = mountDefense($("defense"), api, error);
+    $("defense").hidden = false;
+    st.defense.refresh();
+  }
+  st.defense?.setLocked(locked);
   st.board?.refresh();
   // A Finish confirmed after the attempt ended would act on nothing.
   if (
@@ -1405,11 +1468,6 @@ function renderReview(value, awaitingResult = false) {
   // nothing to download.
   const codeLost = st.restored && typeof finalCode !== "string";
   $("export-code").disabled = codeLost;
-  if (value.feedbackUnavailable) {
-    container.textContent = feedbackUnavailableText(awaitingResult, codeLost);
-    return;
-  }
-  if (!value.taskAssessment?.dimensions) return;
   function appendFeedback(label, text) {
     const section = document.createElement("section");
     section.className = "review-item";
@@ -1420,9 +1478,15 @@ function renderReview(value, awaitingResult = false) {
     section.append(heading, p);
     container.append(section);
   }
-  for (const [label, text] of reviewSections(value.taskAssessment)) {
+  if (value.feedbackUnavailable)
+    container.textContent = feedbackUnavailableText(awaitingResult, codeLost);
+  else if (value.taskAssessment?.dimensions)
+    for (const [label, text] of reviewSections(value.taskAssessment))
+      appendFeedback(label, text);
+  // A defense's record and the marks its rules suggest stand without the
+  // review model, so they show whatever became of the feedback.
+  for (const [label, text] of defenseSections(value.defense))
     appendFeedback(label, text);
-  }
 }
 $("new-attempt").onclick = () => {
   forgetAttempt();

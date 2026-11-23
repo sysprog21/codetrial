@@ -23,6 +23,11 @@ export const st = Object.seal({
   serverClockOffset: null,
   // The whiteboard, mounted once the page is loaded; `lock` repaints it.
   board: undefined,
+  // The defense panel, mounted for an active defense attempt.
+  defense: null,
+  // The defense set whose remembered PIN this page has tried, so a refused one
+  // is asked for rather than retried, while another set's is still tried.
+  triedPinKey: null,
   // The editor's syntax colours and line numbers, behind the textarea.
   editorView: undefined,
   // The cube a task may offer to turn, once one has.

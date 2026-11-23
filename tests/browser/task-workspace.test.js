@@ -148,6 +148,7 @@ async function pageFor(
     taskOverrides = {},
     realLivekit = false,
     builtIn = null,
+    stored = {},
   } = {},
 ) {
   if (!browser) {
@@ -162,6 +163,11 @@ async function pageFor(
   const admissions = [];
   const reviewRequests = [];
   const unlocks = [];
+  // What this browser kept from an earlier visit.
+  await page.addInitScript((entries) => {
+    for (const [key, value] of Object.entries(entries))
+      localStorage.setItem(key, value);
+  }, stored);
   await page.addInitScript(
     ({ denied, faceFiles }) => {
       if (faceFiles) globalThis.faceFilesResult = faceFiles;
@@ -1021,10 +1027,85 @@ test("device sign-in, then the PIN unlocks the set at the linked site and versio
     await page.locator("#pin-form button").click();
     await page.locator("#message").waitFor({ state: "visible" });
     assert.match(await page.locator("#message-text").textContent(), /PIN/);
+    // A typed PIN stays in the field to be corrected.
+    assert.equal(await page.inputValue("#pin"), "000000");
     await page.fill("#pin", "123456");
     await page.locator("#pin-form button").click();
     await page.locator("#prepare").waitFor({ state: "visible" });
     assert.deepEqual(unlocks.at(-1), { site: SITE, version: 7, pin: "123456" });
+  } finally {
+    await page.close();
+  }
+});
+
+test("a defense set's PIN is remembered for its version and forgotten once refused", async (t) => {
+  const key = `codetrial.defense-pin:${SITE}|classroom|7`;
+  const defense = { taskOverrides: { defense: {} } };
+  const stored = (page) => page.evaluate((k) => localStorage.getItem(k), key);
+
+  // Kept after an unlock of a defense set, and never for any other set.
+  let ctx = await pageFor(t, defense);
+  if (!ctx) return;
+  try {
+    await unlock(ctx.page);
+    assert.equal(await stored(ctx.page), "123456");
+  } finally {
+    await ctx.page.close();
+  }
+  ctx = await pageFor(t);
+  try {
+    await unlock(ctx.page);
+    assert.equal(await stored(ctx.page), null);
+  } finally {
+    await ctx.page.close();
+  }
+
+  // A later visit, after a restart, unlocks with it unasked.
+  ctx = await pageFor(t, { ...defense, stored: { [key]: "123456" } });
+  try {
+    await ctx.page.locator("#prepare").waitFor({ state: "visible" });
+    assert.deepEqual(ctx.unlocks, [{ site: SITE, version: 7, pin: "123456" }]);
+  } finally {
+    await ctx.page.close();
+  }
+
+  // One the server refuses is forgotten, and the PIN is asked for.
+  ctx = await pageFor(t, { ...defense, stored: { [key]: "000000" } });
+  try {
+    await ctx.page.locator("#message").waitFor({ state: "visible" });
+    assert.match(await ctx.page.locator("#message-text").textContent(), /PIN/);
+    assert.equal(ctx.unlocks.length, 1);
+    assert.equal(await stored(ctx.page), null);
+    assert.equal(await ctx.page.inputValue("#pin"), "");
+  } finally {
+    await ctx.page.close();
+  }
+});
+
+test("a defense's setup moves on by itself from the rules to Start", async (t) => {
+  const ctx = await pageFor(t, { taskOverrides: { defense: {} } });
+  if (!ctx) return;
+  const { page } = ctx;
+  try {
+    await unlock(page);
+    assert.equal(await page.locator("#language-choice").isVisible(), false);
+    // Accepting the rules is the only press before the typed line and Start.
+    await page.check("#acknowledge");
+    await calibrationPhases(page);
+    await page.waitForFunction(
+      () => !document.getElementById("start").disabled,
+    );
+    assert.equal(
+      await page.evaluate(() => document.activeElement?.id),
+      "start",
+    );
+    assert.equal(
+      await page.$eval(
+        ".setup-panel h2",
+        (h) => getComputedStyle(h, "::before").content,
+      ),
+      'counter(setup-step) ". "',
+    );
   } finally {
     await page.close();
   }
