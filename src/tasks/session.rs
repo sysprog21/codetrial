@@ -1203,7 +1203,7 @@ impl TaskSession {
     /// Whether there is work to examine: started, and neither frozen nor
     /// ended. A defense's panel acts only then.
     pub fn work_open(&self) -> bool {
-        self.outcome.is_none() && self.phase.is_active()
+        self.outcome.is_none() && self.phase.is_active() && self.final_revision_id.is_none()
     }
 
     pub fn page_present(&self) -> bool {

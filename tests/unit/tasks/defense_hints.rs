@@ -206,6 +206,20 @@ async fn a_hint_needs_an_answer_since_the_item_opened_and_the_last_hint() {
     );
     session.phase = crate::tasks::session::Phase::Work;
 
+    // A Finish freezes the work, which closes the panel though wrap-up has only
+    // begun.
+    assert!(session.work_open());
+    let finish = crate::tasks::session::Action {
+        version: 1,
+        request_id: "finish".to_owned(),
+        action: crate::tasks::session::ActionKind::Finish,
+        revision_id: Some(session.current.id.clone()),
+        target_id: None,
+    };
+    session.action(finish, opened_at + 4).unwrap();
+    assert!(!session.work_open(), "frozen work closes the panel");
+    session.phase = crate::tasks::session::Phase::Work;
+
     // The review may rate a dimension 2 with the hint, citing an answer after
     // it; an answer before every hint is no provenance; and an independent 3
     // after a hint stands, a hint being about one item.
