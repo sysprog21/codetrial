@@ -131,42 +131,50 @@ fn an_exit_is_explained_by_what_the_server_last_wrote() {
     );
 }
 
-/// A stand-in server: a shell script, so the process handling is what is
-/// tested and not the CodeTrial server.
+/// Held from writing a stand-in server until it has started. A spawn on
+/// another test's thread forks a child that keeps every descriptor open at
+/// that moment until it execs, so a script still open for writing then cannot
+/// be executed: "Text file busy". The rule this sets: every process this test
+/// binary starts, a `kill` or any other helper included, is started under
+/// `SPAWNING`, and a stand-in server through `start_fake`.
 #[cfg(unix)]
-fn fake_server(dir: &Path, body: &str) -> PathBuf {
+static SPAWNING: Mutex<()> = Mutex::new(());
+
+/// Starts a stand-in server: a shell script, so the process handling is what
+/// is tested and not the CodeTrial server.
+#[cfg(unix)]
+fn start_fake(dir: &Path, body: &str, report: impl Fn(Status) + Send + Sync + 'static) -> Server {
     use std::os::unix::fs::PermissionsExt;
+    // A test that failed while holding the lock left nothing half done.
+    let _spawning = SPAWNING
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let program = dir.join("fake-codetrial");
     std::fs::write(&program, format!("#!/bin/sh\n{body}\n")).unwrap();
     std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
-    program
-}
-
-#[cfg(unix)]
-fn launch_of(dir: &Path, program: PathBuf, addr: String) -> Launch {
-    Launch {
+    let launch = Launch {
         program,
         data_dir: dir.to_path_buf(),
-        addr,
+        addr: "127.0.0.1:9".to_string(),
         import_config: None,
         change_keys_code: CODE.to_string(),
-    }
+    };
+    start(&launch, report).unwrap()
 }
 
 #[cfg(unix)]
 #[test]
 fn a_server_that_dies_at_start_is_reported_with_what_it_said() {
     let dir = temp_dir("dies");
-    let program = fake_server(&dir, "echo starting; echo 'it went wrong' >&2; exit 3");
     let (sender, received) = mpsc::channel();
     let sender = Mutex::new(sender);
-    let _server = start(
-        &launch_of(&dir, program, "127.0.0.1:9".to_string()),
+    let _server = start_fake(
+        &dir,
+        "echo starting; echo 'it went wrong' >&2; exit 3",
         move |status| {
             let _ = sender.lock().unwrap().send(status);
         },
-    )
-    .unwrap();
+    );
 
     let Status::Exited(message) = received.recv_timeout(Duration::from_secs(10)).unwrap() else {
         panic!("a server that never bound cannot be ready");
@@ -186,7 +194,9 @@ fn a_server_that_dies_at_start_is_reported_with_what_it_said() {
 fn a_server_is_ready_once_bound_and_stops_when_its_stdin_closes() {
     let dir = temp_dir("ready");
     let marker = dir.join("stdin-closed");
-    let program = fake_server(
+    let (sender, received) = mpsc::channel();
+    let sender = Mutex::new(sender);
+    let server = start_fake(
         &dir,
         &format!(
             "echo 'codetrial 0.1.0 (abc1234)'\n\
@@ -194,16 +204,10 @@ fn a_server_is_ready_once_bound_and_stops_when_its_stdin_closes() {
              cat >/dev/null\ntouch '{}'",
             marker.display()
         ),
-    );
-    let (sender, received) = mpsc::channel();
-    let sender = Mutex::new(sender);
-    let server = start(
-        &launch_of(&dir, program, "127.0.0.1:9".to_string()),
         move |status| {
             let _ = sender.lock().unwrap().send(status);
         },
-    )
-    .unwrap();
+    );
 
     assert_eq!(
         received.recv_timeout(Duration::from_secs(10)).unwrap(),
