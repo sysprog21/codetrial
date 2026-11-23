@@ -376,6 +376,22 @@ class PreflightWiringTests(unittest.TestCase):
         self.assertNotIn("preflight", needs_of(support.job("release")))
         self.assertNotIn("\n    needs:", support.job("build"))
 
+    def test_release_survives_the_skipped_preflight_behind_the_gates(self):
+        # A push skips preflight, and an implicit success() fails a job whose
+        # ancestor was skipped even when its direct needs passed. Release sat
+        # skipped on every push to main that way, leaving `latest` stale.
+        condition = header(support.job("release"), "if")
+        results = {"gates": "success", "audit": "success", "build": "success"}
+        self.assertTrue(evaluate(condition, "push", results, outputs={}))
+        for name in results:
+            for bad in ("failure", "skipped", "cancelled"):
+                self.assertFalse(evaluate(condition, "push", {**results, name: bad}))
+        self.assertFalse(evaluate(condition, "push", results, cancelled=True))
+        for event in ("pull_request", "merge_group", "schedule", "workflow_dispatch"):
+            self.assertFalse(evaluate(condition, event, results), event)
+        # The reason the status function is needed: preflight is an ancestor.
+        self.assertIn("preflight", ancestors(support.job("release")))
+
 
 def evaluate(condition, event, results, cancelled=False, outputs=None):
     """A job condition over an event and the results of the jobs it needs.
@@ -393,11 +409,22 @@ def evaluate(condition, event, results, cancelled=False, outputs=None):
     text = text.replace("github.event_name", "E")
     text = re.sub(r"github\.event\.pull_request\.[a-z_.]+", "'same'", text)
     text = text.replace("github.repository", "'same'")
+    text = text.replace("github.ref", "'refs/heads/main'")
     text = text.replace("!cancelled()", "(not C)").replace("always()", "True")
     text = re.sub(r"!(?!=)", "not ", text)
     text = text.replace("&&", " and ").replace("||", " or ")
     scope = {"E": event, "R": results, "O": outputs or {}, "C": cancelled}
     return bool(eval(text, {"__builtins__": {}}, scope))
+
+
+def direct_needs(body):
+    return needs_of(body) if "\n    needs:" in "\n" + body else set()
+
+
+def ancestors(body):
+    """Every job a job waits on, directly or through the jobs it waits on."""
+    needs = direct_needs(body)
+    return needs.union(*(ancestors(support.job(name)) for name in needs))
 
 
 def simulate(event, preflight_fails=False):
@@ -410,9 +437,8 @@ def simulate(event, preflight_fails=False):
         runs = evaluate(condition, event, results, outputs=outputs)
         if not re.search(r"\b(always|cancelled|failure|success)\(\)", condition):
             # No status function: GitHub adds success(), which a skipped or
-            # failed dependency fails.
-            needed = needs_of(body) if "\n    needs:" in body else set()
-            runs = runs and all(results[n] == "success" for n in needed)
+            # failed ancestor fails, not only a direct dependency.
+            runs = runs and all(results[n] == "success" for n in ancestors(body))
         failed = name == "preflight" and preflight_fails
         results[name] = "skipped" if not runs else "failure" if failed else "success"
     return results

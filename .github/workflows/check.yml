@@ -1241,7 +1241,13 @@ jobs:
   # desktop.yml's `rolling` job repeats this swap for `desktop-latest`.
   release:
     needs: [gates, audit, build]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # A push skips preflight, which the gates wait on, and an implicit
+    # success() fails a job with a skipped ancestor even when every direct need
+    # passed. `!cancelled()` plus the three results keeps the same bar.
+    if: >-
+      ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+      && needs.gates.result == 'success' && needs.audit.result == 'success'
+      && needs.build.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
