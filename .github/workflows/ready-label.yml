@@ -45,3 +45,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: python3 scripts/ready-label.py "$GH_REPO"
+      # The area labels answer a push, not a review, but the same rescan and
+      # the same token serve them, and a failed ready label must not hold
+      # them back.
+      - name: Label the pull requests by the areas they touch
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: python3 scripts/scope-label.py "$GH_REPO"
