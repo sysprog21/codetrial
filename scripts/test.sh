@@ -722,6 +722,7 @@ gate interview-behavior-script-tests unittest_gate "$ROOT/tests/test_interview_b
 gate wait-for-server-tests unittest_gate "$ROOT/tests/test_wait_for_server.py"
 gate check-run-jobs-tests unittest_gate "$ROOT/tests/test_check_run_jobs.py"
 gate ready-label-tests unittest_gate "$ROOT/tests/test_ready_label.py"
+gate scope-label-tests unittest_gate "$ROOT/tests/test_scope_label.py"
 
 # These cases enforce real one-second permit and process cleanup deadlines.
 # Thirty-two concurrent launchers starve their own guards on a loaded host.

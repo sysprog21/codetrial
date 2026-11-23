@@ -434,4 +434,6 @@ fifteen minutes; that label is what tells a maintainer to look again, so
 resolve a thread only when the change it asked for is pushed. A push takes the
 label off until its checks are green again, and a person's review left with
 no thread (a bot's does not count) takes it off until your next push answers
-it.
+it. The same run labels each pull request with the areas its files touch
+(`area: frontend`, `area: problem bank` and so on, listed in
+`scripts/scope-label.py`) and takes one off when a push stops touching it.
