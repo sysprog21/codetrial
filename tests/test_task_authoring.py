@@ -178,6 +178,7 @@ class TaskAuthoringTests(unittest.TestCase):
                     "maxHintRungs",
                     "closesAt",
                     "lookAwaySeconds",
+                    "fullscreenGraceSeconds",
                     "rulesNote",
                 },
             )

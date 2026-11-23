@@ -569,7 +569,8 @@ impl TaskService {
             "completionTargets": record.sidecar().completion_targets, "understandingChecks": record.sidecar().understanding_checks,
             "rules": config.rules_json(),
             "setupTimeoutSeconds": default_number("pendingAdmissionSeconds"),
-            "reviewDeliverySeconds": default_number("reviewDeliverySeconds")});
+            "reviewDeliverySeconds": default_number("reviewDeliverySeconds"),
+            "fullscreenReturns": default_number("fullscreenReturns")});
         if let Some(level) = &record.sidecar().optimization {
             view["optimization"] = json!(level);
         }

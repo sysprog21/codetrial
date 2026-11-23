@@ -17,8 +17,8 @@ from .bank import (
     read_json,
     write_json,
 )
-from .task_package import load_bank
-from .tasks import DEFAULTS, OPTIMIZED_LANGS, TASK_ID, default_sidecar
+from .task_package import load_bank, validated_rules
+from .tasks import OPTIMIZED_LANGS, TASK_ID, default_sidecar
 
 # Complete tasks that show what a sidecar can do. Each file holds `problem`,
 # `judge`, `variant` and `sidecar`, as a bank stores them for one task.
@@ -249,13 +249,7 @@ def new_task(bank, reference_id, task_id=None, languages=None):
 def _default_rules():
     """The set rules a new bank starts with, every one named so it can be
     changed in place."""
-    return {
-        "durationMin": DEFAULTS["durationMin"],
-        "maxHintRungs": DEFAULTS["maxHintRungs"],
-        "closesAt": None,
-        "lookAwaySeconds": DEFAULTS["lookAwaySeconds"],
-        "rulesNote": None,
-    }
+    return validated_rules({})
 
 
 def next_version(output, set_id):

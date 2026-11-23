@@ -59,11 +59,13 @@ const task = {
   rules: {
     durationMin: 15,
     lookAwaySeconds: 6,
+    fullscreenGraceSeconds: 5,
     closesAt: null,
     rulesNote: "Bring paper.",
   },
   setupTimeoutSeconds: 120,
   reviewDeliverySeconds: 300,
+  fullscreenReturns: 3,
 };
 
 const result = (outcome, cause, taskId = "delimiter-closer") => ({
@@ -1354,8 +1356,16 @@ test("a calibration without a steady face is refused and can be retried", async 
   }
 });
 
-for (const [name, leave, cause] of [
-  ["leaving fullscreen", () => document.exitFullscreen(), "fullscreen"],
+/// A set that allows no grace period, as every set did before there was one.
+const noGrace = { rules: { ...task.rules, fullscreenGraceSeconds: 0 } };
+
+for (const [name, leave, cause, taskOverrides] of [
+  [
+    "leaving fullscreen without a grace period",
+    () => document.exitFullscreen(),
+    "fullscreen",
+    noGrace,
+  ],
   [
     "hiding the page",
     () => {
@@ -1366,10 +1376,14 @@ for (const [name, leave, cause] of [
       document.dispatchEvent(new Event("visibilitychange"));
     },
     "visibility",
+    {},
   ],
 ]) {
   test(`${name} ends the attempt as invalid at once`, async (t) => {
-    const ctx = await pageFor(t, { completedReview: result("invalid", cause) });
+    const ctx = await pageFor(t, {
+      completedReview: result("invalid", cause),
+      taskOverrides,
+    });
     if (!ctx) return;
     const { page } = ctx;
     try {
@@ -1401,6 +1415,7 @@ for (const [name, leave, cause] of [
 test("the attempt holds Escape for fullscreen and lets it go when it ends", async (t) => {
   const ctx = await pageFor(t, {
     completedReview: result("invalid", "fullscreen"),
+    taskOverrides: noGrace,
   });
   if (!ctx) return;
   const { page } = ctx;
@@ -1425,6 +1440,115 @@ test("the attempt holds Escape for fullscreen and lets it go when it ends", asyn
       await page.evaluate(() => globalThis.keyboardCalls.at(-1)),
       ["unlock"],
     );
+  } finally {
+    await page.close();
+  }
+});
+
+const leaveFullscreen = (page) =>
+  page.evaluate(() => document.exitFullscreen());
+
+test("a learner who leaves fullscreen can return within the grace period", async (t) => {
+  const ctx = await pageFor(t);
+  if (!ctx) return;
+  const { page } = ctx;
+  try {
+    await start(page);
+    await leaveFullscreen(page);
+    const panel = page.locator("#fullscreen-return");
+    await panel.waitFor({ state: "visible" });
+    assert.match(await panel.textContent(), /within 5 seconds/);
+    await page.clock.runFor(2100);
+    assert.match(await panel.textContent(), /within 3 seconds/);
+    await page.click("#fullscreen-return-button");
+    await panel.waitFor({ state: "hidden" });
+    assert.equal(
+      await page.evaluate(() => document.activeElement?.id),
+      "code",
+      "focus goes back to the editor, not to the hidden button",
+    );
+    await page.clock.runFor(6000);
+    assert.deepEqual(await ended(page), [], "the attempt goes on");
+    assert.equal(await page.locator("#code").isDisabled(), false);
+  } finally {
+    await page.close();
+  }
+});
+
+test("the look-away countdown and the grace panel stack, not cover each other", async (t) => {
+  const ctx = await pageFor(t);
+  if (!ctx) return;
+  const { page } = ctx;
+  try {
+    await start(page);
+    await leaveFullscreen(page);
+    await page.locator("#fullscreen-return").waitFor({ state: "visible" });
+    // Both at once, out of fullscreen, after the learner has scrolled the page.
+    const [countdown, panel] = await page.evaluate(() => {
+      const countdown = document.getElementById("countdown");
+      countdown.textContent = "Look back at the screen: ends in 3 seconds";
+      countdown.hidden = false;
+      const spacer = document.createElement("div");
+      spacer.style.height = "4000px";
+      document.getElementById("task").append(spacer);
+      window.scrollTo(0, 2000);
+      return ["countdown", "fullscreen-return"].map((id) => {
+        const box = document.getElementById(id).getBoundingClientRect();
+        return { top: box.top, bottom: box.bottom };
+      });
+    });
+    assert.ok(
+      Math.abs(countdown.top) < 1,
+      `out of fullscreen the alerts stay in view: ${JSON.stringify(countdown)}`,
+    );
+    assert.ok(
+      panel.top >= countdown.bottom,
+      `the grace panel starts below the countdown: ${JSON.stringify({ countdown, panel })}`,
+    );
+  } finally {
+    await page.close();
+  }
+});
+
+test("a learner who does not return in time ends the attempt as invalid", async (t) => {
+  const ctx = await pageFor(t, {
+    completedReview: result("invalid", "fullscreen"),
+  });
+  if (!ctx) return;
+  const { page } = ctx;
+  try {
+    await start(page);
+    await leaveFullscreen(page);
+    await page.locator("#fullscreen-return").waitFor({ state: "visible" });
+    await page.clock.runFor(4900);
+    assert.deepEqual(await ended(page), [], "not before the grace runs out");
+    await page.clock.runFor(200);
+    await page.waitForFunction(() => document.getElementById("code").disabled);
+    assert.deepEqual(await ended(page), [["invalid", "fullscreen"]]);
+    assert.equal(await page.locator("#fullscreen-return").isHidden(), true);
+  } finally {
+    await page.close();
+  }
+});
+
+test("leaving fullscreen once more than the returns allow ends it at once", async (t) => {
+  const ctx = await pageFor(t, {
+    completedReview: result("invalid", "fullscreen"),
+  });
+  if (!ctx) return;
+  const { page } = ctx;
+  try {
+    await start(page);
+    for (let left = 0; left < 3; left += 1) {
+      await leaveFullscreen(page);
+      await page.locator("#fullscreen-return").waitFor({ state: "visible" });
+      await page.click("#fullscreen-return-button");
+      await page.locator("#fullscreen-return").waitFor({ state: "hidden" });
+    }
+    assert.deepEqual(await ended(page), []);
+    await leaveFullscreen(page);
+    await page.waitForFunction(() => document.getElementById("code").disabled);
+    assert.deepEqual(await ended(page), [["invalid", "fullscreen"]]);
   } finally {
     await page.close();
   }
@@ -2828,7 +2952,7 @@ test("the page boots on the vendored LiveKit build", async (t) => {
 test("the granted microphone is the one published, and only the end stops it", async (t) => {
   for (const ending of ["feedback", "disconnect", "rule"]) {
     await t.test(ending, async (t) => {
-      const ctx = await pageFor(t);
+      const ctx = await pageFor(t, { taskOverrides: noGrace });
       if (!ctx) return;
       const { page } = ctx;
       try {
@@ -2974,7 +3098,7 @@ test("the camera recovery button asks for the devices again", async (t) => {
 });
 
 test("an attempt that ends early is collected within the delivery window", async (t) => {
-  const ctx = await pageFor(t);
+  const ctx = await pageFor(t, { taskOverrides: noGrace });
   if (!ctx) return;
   const { page } = ctx;
   try {
@@ -3416,7 +3540,7 @@ test(
 );
 
 test("an ended attempt lets go of a wake lock granted late and of its detector", async (t) => {
-  const ctx = await pageFor(t);
+  const ctx = await pageFor(t, { taskOverrides: noGrace });
   if (!ctx) return;
   const { page } = ctx;
   try {
@@ -3642,7 +3766,10 @@ for (const ending of [
   "stop_then_look_down",
 ]) {
   test(`local task recording downloads after ${ending}`, async (t) => {
-    const fixture = await pageFor(t);
+    const fixture = await pageFor(
+      t,
+      ending === "fullscreen" ? { taskOverrides: noGrace } : {},
+    );
     if (!fixture) return;
     const { page } = fixture;
     t.after(() => page.close());

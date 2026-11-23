@@ -79,6 +79,10 @@ async fn the_public_task_carries_its_rules_and_nothing_private() {
     assert_eq!(task["rules"]["durationMin"], 15);
     assert_eq!(task["rules"]["lookAwaySeconds"], 8);
     assert_eq!(task["rules"]["closesAt"], Value::Null);
+
+    // A fixed limit rather than a set rule, sent beside the rules so the page
+    // states and enforces the one value in problem-bank/task-defaults.json.
+    assert_eq!(task["fullscreenReturns"], 3);
     // A task that names no explainers offers the page nothing to build in.
     assert!(task.get("explainers").is_none());
     assert!(

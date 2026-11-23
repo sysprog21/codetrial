@@ -135,6 +135,8 @@ class TaskSidecarTests(unittest.TestCase):
             "reviewRetentionSeconds",
             "reviewDeliverySeconds",
             "lookAwaySeconds",
+            "fullscreenGraceSeconds",
+            "fullscreenReturns",
             "kdfIterations",
             "codeBytes",
         }
@@ -154,6 +156,16 @@ class TaskSidecarTests(unittest.TestCase):
         from problem_bank.task_package import DURATION_BOUNDS
 
         self.assertEqual(list(DURATION_BOUNDS), bounds)
+        package_rs = (ROOT / "src/tasks/package.rs").read_text()
+        grace_top = re.search(
+            r"pub const MAX_FULLSCREEN_GRACE_SECONDS: u64 = ([0-9]+);", package_rs
+        )
+        from problem_bank.task_package import FULLSCREEN_GRACE_BOUNDS
+
+        self.assertEqual(FULLSCREEN_GRACE_BOUNDS, (0, int(grace_top.group(1))))
+        self.assertLessEqual(
+            DEFAULTS["fullscreenGraceSeconds"], FULLSCREEN_GRACE_BOUNDS[1]
+        )
         self.assertLessEqual(bounds[0], DEFAULTS["durationMin"])
         self.assertLessEqual(DEFAULTS["durationMin"], bounds[1])
 

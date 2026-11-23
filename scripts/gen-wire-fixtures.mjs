@@ -458,6 +458,7 @@ function taskStamps(overrides = {}) {
       durationMin: 15,
       maxHintRungs: 3,
       lookAwaySeconds: 8,
+      fullscreenGraceSeconds: 8,
       closesAt: null,
       rulesNote: null,
     },

@@ -102,13 +102,24 @@ export function taskCodeFileName(taskId, language) {
   return `${taskId}.${EXTENSIONS[language] ?? "txt"}`;
 }
 
+/// How long a learner who just left fullscreen has to come back, in
+/// milliseconds: 0 when leaving ends the attempt at once, because the set
+/// allows no grace or the returns are used up. `returns` is the task view's
+/// `fullscreenReturns`, the fixed limit in problem-bank/task-defaults.json.
+export function fullscreenGraceMs(rules, returnsUsed, returns) {
+  return returnsUsed < returns ? rules.fullscreenGraceSeconds * 1000 : 0;
+}
+
 /// The set's rules as the learner reads them, before the PIN on the
 /// instructor's page and again before Start here. The packaging tool's
 /// `rules_in_words` says the same in Python; keep the two together.
-export function rulesInWords(rules) {
+/// `returns` is the task view's `fullscreenReturns`.
+export function rulesInWords(rules, returns) {
   const lines = [
     `You have ${rules.durationMin} minutes once you press Start.`,
-    "Stay in fullscreen for the whole attempt: leaving it, Escape included, ends the attempt at once and marks it invalid.",
+    rules.fullscreenGraceSeconds > 0
+      ? `Stay in fullscreen for the whole attempt. If you leave it, Escape included, you have ${rules.fullscreenGraceSeconds} seconds to return, ${returns} times at most; otherwise the attempt ends and is marked invalid.`
+      : "Stay in fullscreen for the whole attempt: leaving it, Escape included, ends the attempt at once and marks it invalid.",
     "Keep this page visible: switching to another tab or window, minimizing it or locking the screen ends the attempt at once and marks it invalid.",
     `Keep your face in front of the camera. Looking away or down, or leaving the frame, for more than ${rules.lookAwaySeconds} seconds in a row ends the attempt and marks it invalid; a glance at the keyboard is fine. A countdown and a sound warn you first.`,
     "Use the calculator inside the workspace instead of another app.",
@@ -143,7 +154,13 @@ export function outcomeSentence(outcome) {
   if (!outcome) return "";
   const cause = CAUSES[outcome.cause] ?? "The attempt ended";
   if (outcome.outcome === "completed") return cause;
-  const at = formatTime(outcome.at);
+  // A fullscreen exit ends the attempt only when its grace period runs out,
+  // durationMs after the learner left; the sentence names when they left.
+  const left =
+    outcome.cause === "fullscreen"
+      ? Math.round((outcome.durationMs ?? 0) / 1000)
+      : 0;
+  const at = formatTime(Math.max(0, outcome.at - left));
   if (outcome.outcome === "invalid")
     return `${cause} at ${at}; the attempt ended under the announced rules and is invalid.`;
   return `${cause} at ${at}; the attempt was interrupted and can be started again.`;

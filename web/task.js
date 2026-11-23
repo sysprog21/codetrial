@@ -39,6 +39,11 @@ import {
 import { evaluate, formatResult } from "./calculator.js";
 import { mountExampleBoard } from "./example-board.js";
 import { mountEditorView } from "./editor-view.js";
+import {
+  closeFullscreenAway,
+  leaveFullscreen,
+  watchRules,
+} from "./task-rules.js";
 import { mountCubeView } from "./cube-view.js";
 import { defenseSections, mountDefense } from "./task-defense.js";
 import { CONSTRAINTS } from "./devices.js";
@@ -583,7 +588,7 @@ async function loadTask() {
       : note.dataset.base;
   }
   chooseLanguage(st.task.languages[0]);
-  const rules = rulesInWords(st.task.rules);
+  const rules = rulesInWords(st.task.rules, st.task.fullscreenReturns);
   for (const list of [$("rules"), $("rules-reminder")])
     list.replaceChildren(
       ...rules.map((line) => {
@@ -970,6 +975,7 @@ function stopMonitoring() {
   }
   clearTimeout(st.monitorTimer);
   st.monitorTimer = null;
+  closeFullscreenAway();
   $("countdown").hidden = true;
   st.wakeLock?.release?.().catch(() => {});
   st.wakeLock = null;
@@ -1024,21 +1030,7 @@ function endAttempt(outcome, cause, durationMs) {
   leaveFullscreen();
 }
 
-function leaveFullscreen() {
-  navigator.keyboard?.unlock?.();
-  if (document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
-}
-
-function ruleBroken(cause) {
-  if (st.attempt === "starting") st.startViolation ??= cause;
-  endAttempt("invalid", cause, 0);
-}
-document.addEventListener("fullscreenchange", () => {
-  if (!document.fullscreenElement) ruleBroken("fullscreen");
-});
-document.addEventListener("visibilitychange", () => {
-  if (document.hidden) ruleBroken("visibility");
-});
+watchRules();
 window.addEventListener("pagehide", (event) => {
   // A page kept for back/forward navigation comes back as it was, so its
   // recorder stays usable; only a page that is really going away lets go.

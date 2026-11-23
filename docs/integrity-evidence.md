@@ -167,8 +167,12 @@ starts, and there two things change.
 First, breaking an announced rule ends the attempt and marks it invalid. The
 rules are observable facts: the workspace left fullscreen, the page became
 hidden, or the learner's face was out of frame or tilted down past their own
-calibrated limit for longer than the set allows. The first two have no grace;
-the third warns with a countdown and a sound before it ends anything. All of
+calibrated limit for longer than the set allows. Leaving fullscreen opens the
+set's `fullscreenGraceSeconds` to return, with a countdown and a button, at
+most three times an attempt (`fullscreenReturns`, a fixed limit in
+`task-defaults.json` rather than a set rule); past that, or in a set whose
+grace is 0, it ends the attempt at once. A hidden page has no grace. The
+camera rule warns with a countdown and a sound before it ends anything. All of
 them are listed on the instructor's page and again before Start, with what is
 not detected.
 

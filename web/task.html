@@ -226,7 +226,15 @@
 
       <section id="task" hidden>
         <h1 id="title"></h1>
-        <div id="countdown" role="alert" hidden></div>
+        <div class="task-alerts">
+          <div id="countdown" role="alert" hidden></div>
+          <div id="fullscreen-return" hidden>
+            <p id="fullscreen-return-text" role="alert"></p>
+            <button type="button" id="fullscreen-return-button">
+              Return to fullscreen
+            </button>
+          </div>
+        </div>
         <div class="task-grid" id="task-grid">
           <div class="task-reference">
             <div id="brief"></div>

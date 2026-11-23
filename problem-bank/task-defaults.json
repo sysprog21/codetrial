@@ -39,6 +39,8 @@
   "reviewRetentionSeconds": 7200,
   "reviewDeliverySeconds": 300,
   "lookAwaySeconds": 8,
+  "fullscreenGraceSeconds": 8,
+  "fullscreenReturns": 3,
   "kdfIterations": 600000,
   "codeBytes": 32000
 }
