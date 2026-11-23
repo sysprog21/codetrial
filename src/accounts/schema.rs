@@ -93,6 +93,16 @@ fn is_locked(error: &rusqlite::Error) -> bool {
     )
 }
 
+/// The refusal must carry its own text: rusqlite's `InvalidQuery` displays as
+/// "Query is not read-only", which sent a user who had only opened a newer
+/// build's database looking at SQL.
+fn schema_version_error(message: String) -> rusqlite::Error {
+    rusqlite::Error::SqliteFailure(
+        rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_ERROR),
+        Some(message),
+    )
+}
+
 fn migrate(connection: &mut rusqlite::Connection) -> rusqlite::Result<()> {
     // Steady state is "already migrated", and every startup takes this path.
     // Reading first keeps it a plain read instead of a write transaction that
@@ -109,14 +119,21 @@ fn migrate(connection: &mut rusqlite::Connection) -> rusqlite::Result<()> {
     let transaction =
         connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let applied: i64 = transaction.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-    if !(0..=ACCOUNT_SCHEMA_VERSION).contains(&applied) {
-        // Above the range means running today's queries against tomorrow's
-        // tables; below it means the counter is corrupt, and casting it to an
-        // index would panic rather than say so.
-        return Err(rusqlite::Error::InvalidQuery);
-    }
-    let applied = usize::try_from(applied).map_err(|_| rusqlite::Error::InvalidQuery)?;
-    for migration in &ACCOUNT_MIGRATIONS[applied..] {
+
+    // Below zero the counter is corrupt, and casting it to an index would panic
+    // rather than say so. Past the last migration means running today's queries
+    // against tomorrow's tables.
+    let Ok(index) = usize::try_from(applied) else {
+        return Err(schema_version_error(format!(
+            "database schema version {applied} is not a valid version number; the file's user_version is corrupt"
+        )));
+    };
+    let Some(pending) = ACCOUNT_MIGRATIONS.get(index..) else {
+        return Err(schema_version_error(format!(
+            "database schema version {applied} is newer than this build supports ({ACCOUNT_SCHEMA_VERSION}); run the build that wrote it, or a later one"
+        )));
+    };
+    for migration in pending {
         transaction.execute_batch(migration)?;
     }
     transaction.execute_batch(&format!("PRAGMA user_version = {ACCOUNT_SCHEMA_VERSION}"))?;
@@ -548,3 +565,7 @@ mod peer_migration_tests;
 #[cfg(test)]
 #[path = "../../tests/unit/accounts/peer_sessions_index.rs"]
 mod peer_sessions_index_tests;
+
+#[cfg(test)]
+#[path = "../../tests/unit/accounts/schema_version_error.rs"]
+mod schema_version_error_tests;
