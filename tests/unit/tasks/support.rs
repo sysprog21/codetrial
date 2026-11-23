@@ -68,3 +68,63 @@ pub(crate) fn admit(service: &TaskService, request_key: &str, now: u64) -> Pinne
 pub(crate) async fn admitted() -> PinnedTask {
     admit(&unlocked_service(), "fixture", 100)
 }
+
+/// A throwaway git repository, as a student's checkout is, removed when
+/// dropped. Its commits are made without the user's hooks or signing.
+pub(crate) struct Repo(std::path::PathBuf);
+
+impl Repo {
+    /// An empty repository on `main` in a directory of its own, named by
+    /// `label`.
+    pub(crate) fn new(label: &str) -> Self {
+        let dir = std::env::temp_dir().join(format!(
+            "codetrial-defense-test-{label}-{}",
+            std::process::id()
+        ));
+        let _gone = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let repo = Self(dir);
+        repo.git(&["init", "-q", "-b", "main"]);
+        repo
+    }
+
+    pub(crate) fn git(&self, args: &[&str]) -> String {
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&self.0)
+            .args(["-c", "user.name=T", "-c", "user.email=t@example.invalid"])
+            .args([
+                "-c",
+                "commit.gpgsign=false",
+                "-c",
+                "core.hooksPath=/dev/null",
+            ])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "git {args:?}: {output:?}");
+        String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    }
+
+    pub(crate) fn write(&self, path: &str, text: &str) {
+        let path = self.0.join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+
+    pub(crate) fn commit(&self, message: &str) -> String {
+        self.git(&["add", "-A"]);
+        self.git(&["commit", "-q", "-m", message]);
+        self.git(&["rev-parse", "HEAD"])
+    }
+
+    pub(crate) fn path(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+impl Drop for Repo {
+    fn drop(&mut self) {
+        let _gone = std::fs::remove_dir_all(&self.0);
+    }
+}
