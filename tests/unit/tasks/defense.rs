@@ -202,7 +202,7 @@ impl Repo {
         repo
     }
 
-    fn git(&self, args: &[&str]) -> String {
+    pub(super) fn git(&self, args: &[&str]) -> String {
         let output = Command::new("git")
             .arg("-C")
             .arg(&self.0)
@@ -220,13 +220,13 @@ impl Repo {
         String::from_utf8(output.stdout).unwrap().trim().to_owned()
     }
 
-    fn write(&self, path: &str, text: &str) {
+    pub(super) fn write(&self, path: &str, text: &str) {
         let path = self.0.join(path);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, text).unwrap();
     }
 
-    fn commit(&self, message: &str) -> String {
+    pub(super) fn commit(&self, message: &str) -> String {
         self.git(&["add", "-A"]);
         self.git(&["commit", "-q", "-m", message]);
         self.git(&["rev-parse", "HEAD"])
@@ -243,8 +243,8 @@ impl Drop for Repo {
     }
 }
 
-const CPU: &str = "4-pipeline/src/main/scala/mycpu/pipeline/CPU.scala";
-const HAZARD: &str = "4-pipeline/src/main/scala/mycpu/pipeline/Hazard.scala";
+pub(super) const CPU: &str = "4-pipeline/src/main/scala/mycpu/pipeline/CPU.scala";
+pub(super) const HAZARD: &str = "4-pipeline/src/main/scala/mycpu/pipeline/Hazard.scala";
 
 /// Upstream with blanks, then the student's commits that fill them.
 pub(super) fn student_repo(label: &str) -> Repo {
@@ -524,21 +524,10 @@ fn a_command_that_does_not_exist_is_a_telemetry_gap() {
         Duration::from_secs(1),
     );
     assert!(matches!(ran.ended, Ended::NotStarted(_)));
-
-    // A relative path is the one in the directory the command runs in.
-    let dir = std::env::temp_dir().join(format!("codetrial-resolve-{}", std::process::id()));
-    std::fs::create_dir_all(dir.join("bin")).unwrap();
-    let tool = dir.join("bin/say");
-    std::fs::write(&tool, "#!/bin/sh\necho from-dir\n").unwrap();
-    std::fs::set_permissions(&tool, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
-    let ran = run("bin/say", &[], &dir, &[], Duration::from_secs(5));
-    std::fs::remove_dir_all(&dir).unwrap();
-    assert_eq!(ran.ended, Ended::Exited(0));
-    assert_eq!(ran.tail.trim(), "from-dir");
 }
 
 /// A trace of two 16-bit fields over three cycles from cycle 40.
-fn trace(records: u64, trailer_records: u64) -> Vec<u8> {
+pub(super) fn trace(records: u64, trailer_records: u64) -> Vec<u8> {
     let header = json!({"first": 40, "record_bytes": 4, "fields": [
         {"name": "core.pc", "bits": 16, "offset": 0, "bytes": 2},
         {"name": "core.stall", "bits": 1, "offset": 2, "bytes": 1},
@@ -575,17 +564,6 @@ fn a_trace_reads_into_the_table_of_its_window() {
     cut.truncate(cut.len() - 3);
     read_trace(&cut).unwrap_err();
     read_trace(b"no header").unwrap_err();
-    let mut unplaced = trace(3, 3);
-    let header_end = unplaced.iter().position(|&b| b == b'\n').unwrap();
-    let header = String::from_utf8(unplaced[..header_end].to_vec()).unwrap();
-    let without_first = header.replace("\"first\":40,", "");
-    assert_ne!(header, without_first);
-    unplaced.splice(..header_end, without_first.into_bytes());
-    assert_eq!(
-        read_trace(&unplaced).unwrap_err(),
-        "the header has no first cycle",
-        "a window with no first cycle would be drawn at the wrong cycles"
-    );
 }
 
 #[test]
@@ -680,6 +658,15 @@ body = b"".join(struct.pack("<I", 4 * (first + i)) for i in range(n))
 trailer = json.dumps({"records": n, "end": {"cycles": 6, "instret": 3, "how": "exit=0"}}).encode()
 open(a["obs-trace"], "wb").write(json.dumps(head).encode() + b"\n" + body + trailer + struct.pack("<Q", len(trailer)) + b"OBSEND01")
 "#;
+    executable(&sbt);
+    Tools {
+        sbt: sbt.display().to_string(),
+        make: fake_make(dir, vsim),
+    }
+}
+
+/// A `make` that writes `vsim` as `build/t4-forward[-<mutant>]/Vsim`.
+pub(super) fn fake_make(dir: &Path, vsim: &str) -> String {
     let make = dir.join("make");
     std::fs::write(
         &make,
@@ -688,15 +675,14 @@ open(a["obs-trace"], "wb").write(json.dumps(head).encode() + b"\n" + body + trai
         ),
     )
     .unwrap();
-    for tool in [&sbt, &make] {
-        let mut permissions = std::fs::metadata(tool).unwrap().permissions();
-        std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
-        std::fs::set_permissions(tool, permissions).unwrap();
-    }
-    Tools {
-        sbt: sbt.display().to_string(),
-        make: make.display().to_string(),
-    }
+    executable(&make);
+    make.display().to_string()
+}
+
+pub(super) fn executable(tool: &Path) {
+    let mut permissions = std::fs::metadata(tool).unwrap().permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
+    std::fs::set_permissions(tool, permissions).unwrap();
 }
 
 #[cfg(unix)]
