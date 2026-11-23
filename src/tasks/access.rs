@@ -126,6 +126,8 @@ struct Inner {
     state: Mutex<State>,
     /// One key derivation at a time: each is deliberately slow.
     unlocking: tokio::sync::Mutex<()>,
+    /// The checkout `--workspace` names, for a defense task.
+    workspace: Option<std::path::PathBuf>,
 }
 
 #[derive(Default)]
@@ -150,9 +152,37 @@ struct ActiveAttempt {
     claim_id: u64,
     /// The room its admission answered with, once it has.
     room: Option<String>,
+    defense: Option<super::defense::Slot>,
 }
 
 impl State {
+    fn replay_admission(
+        &self,
+        key: &(i64, String),
+        named: &(Assignment, String),
+        language: &str,
+        now: u64,
+    ) -> Result<Option<Value>, AccessError> {
+        let Some(admission) = self.admissions.get(key) else {
+            return Ok(None);
+        };
+        if admission.assignment != *named || admission.language != language {
+            return Err(AccessError::new("client_override"));
+        }
+        if admission.expires_at <= now
+            || self
+                .active
+                .as_ref()
+                .is_none_or(|active| active.claim_id != admission.claim_id)
+        {
+            return Err(AccessError::new("request_key_expired"));
+        }
+        admission.response.clone().map(Some).ok_or(AccessError {
+            code: "setup_pending",
+            retry_after: Some(1),
+        })
+    }
+
     /// Forgets the admission `claim_id` made if it never got an answer, and
     /// gives back the session ordinal it took when no later one was taken.
     fn forget_unanswered(&mut self, claim_id: u64) {
@@ -237,6 +267,8 @@ pub struct Preparation {
     /// Whether this server compiles C, C++ and Java on Compiler Explorer; a
     /// task's compiled language is refused as unavailable without it.
     pub compiler_explorer: bool,
+    /// A defense set's attempt, prepared over the checkout before Start.
+    pub defense: Option<super::defense::Slot>,
 }
 
 #[derive(Clone)]
@@ -269,6 +301,9 @@ impl PinnedTask {
         target: Option<&str>,
         code: &str,
     ) -> Result<String, TaskError> {
+        if let Some(defense) = &self.preparation.defense {
+            return Exercise::defense_prompt(phase, defense.brief(), defense.hints_allowed());
+        }
         self.exercise.task_prompt_with_hint_limit(
             phase,
             target,
@@ -343,13 +378,14 @@ impl Drop for AdmissionLease {
     fn drop(&mut self) {
         if let Some(inner) = self.inner.upgrade() {
             let mut state = inner.state.lock().unwrap_or_else(|e| e.into_inner());
-            if state
+            let released = state
                 .active
-                .as_ref()
-                .is_some_and(|active| active.claim_id == self.claim_id)
-            {
-                state.active = None;
-            }
+                .take_if(|active| active.claim_id == self.claim_id);
+
+            // A defense attempt removes its worktree when it goes, which can
+            // take seconds; every task route waits on this lock meanwhile.
+            drop(state);
+            drop(released);
         }
     }
 }
@@ -413,10 +449,20 @@ fn hint_limit(set: &LoadedSet, record: &TaskRecord) -> usize {
 
 impl TaskService {
     pub fn new() -> Self {
+        Self::with_workspace(None)
+    }
+
+    /// A service whose defense tasks examine the checkout at `workspace`.
+    pub fn with_workspace(workspace: Option<std::path::PathBuf>) -> Self {
         Self(Arc::new(Inner {
             state: Mutex::default(),
             unlocking: tokio::sync::Mutex::new(()),
+            workspace,
         }))
+    }
+
+    pub fn workspace(&self) -> Option<&std::path::Path> {
+        self.0.workspace.as_deref()
     }
 
     /// Downloads one set version from the instructor's site and opens it with
@@ -530,7 +576,59 @@ impl TaskService {
         if !record.sidecar().explainers.is_empty() {
             view["explainers"] = json!(record.sidecar().explainers);
         }
+        if set.defense.is_some() {
+            view["defense"] = json!(true);
+        }
         Ok(view)
+    }
+
+    /// The course settings of an unlocked set, when it is a defense set.
+    pub fn defense_config(
+        &self,
+        owner_id: i64,
+        assignment: &Assignment,
+    ) -> Option<Arc<super::defense::Config>> {
+        if assignment.is_built_in() {
+            return None;
+        }
+        let state = self.0.state.lock().unwrap_or_else(|e| e.into_inner());
+        state
+            .unlocked
+            .get(&(owner_id, assignment.clone()))
+            .and_then(|unlocked| unlocked.set.defense.clone())
+    }
+
+    /// The defense attempt `owner_id` is taking, if any.
+    pub fn active_defense(&self, owner_id: i64) -> Option<super::defense::Slot> {
+        let state = self.0.state.lock().unwrap_or_else(|e| e.into_inner());
+        state
+            .active
+            .as_ref()
+            .filter(|active| active.owner_id == owner_id)
+            .and_then(|active| active.defense.clone())
+    }
+
+    /// Looks up a retry before checkout preparation, which may no longer
+    /// succeed.
+    pub fn replay_admission(
+        &self,
+        owner_id: i64,
+        assignment: &Assignment,
+        task_id: &str,
+        request_key: &str,
+        language: &str,
+        now: u64,
+    ) -> Result<Option<Value>, AccessError> {
+        if !super::bounded_text(request_key, MAX_REQUEST_KEY_BYTES) {
+            return Err(AccessError::new("client_override"));
+        }
+        let state = self.0.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.replay_admission(
+            &(owner_id, request_key.to_owned()),
+            &(assignment.clone(), task_id.to_owned()),
+            language,
+            now,
+        )
     }
 
     /// Starts an attempt, or replays the one a retried request key already
@@ -556,26 +654,8 @@ impl TaskService {
         state.purge(now);
         let key = (owner_id, request_key.to_owned());
         let named = (assignment.clone(), task_id.to_owned());
-        if let Some(admission) = state.admissions.get(&key) {
-            if admission.assignment != named || admission.language != preparation.language {
-                return Err(AccessError::new("client_override"));
-            }
-            if admission.expires_at <= now
-                || state
-                    .active
-                    .as_ref()
-                    .is_none_or(|active| active.claim_id != admission.claim_id)
-            {
-                return Err(AccessError::new("request_key_expired"));
-            }
-            return admission
-                .response
-                .clone()
-                .map(Admission::Replayed)
-                .ok_or(AccessError {
-                    code: "setup_pending",
-                    retry_after: Some(1),
-                });
+        if let Some(response) = state.replay_admission(&key, &named, &preparation.language, now)? {
+            return Ok(Admission::Replayed(response));
         }
         if state.active.is_some() {
             return Err(AccessError::new("active_task_session"));
@@ -597,6 +677,9 @@ impl TaskService {
                 .get(task_id)
                 .ok_or_else(|| AccessError::new("task_not_found"))?,
         );
+        if set.defense.is_some() != preparation.defense.is_some() {
+            return Err(AccessError::new("workspace_required"));
+        }
         if !record.sidecar().languages.contains(&preparation.language) {
             return Err(AccessError::new("language_unsupported"));
         }
@@ -615,6 +698,7 @@ impl TaskService {
             owner_id,
             claim_id,
             room: None,
+            defense: preparation.defense.clone(),
         });
         state.admissions.insert(
             key.clone(),

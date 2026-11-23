@@ -828,6 +828,15 @@ fn task_mode_is_asked_for_by_a_flag_that_takes_no_value() {
         parse(&["web", "--task-mode=yes"]).unwrap_err(),
         "--task-mode takes no value"
     );
+    let (_, options) = parse(&["web", "--task-mode", "--workspace", "/home/s/mycpu"]).unwrap();
+    assert_eq!(
+        options.workspace,
+        Some(std::path::PathBuf::from("/home/s/mycpu"))
+    );
+    assert_eq!(
+        parse(&["web", "--workspace", "/home/s/mycpu"]).unwrap_err(),
+        "--workspace needs --task-mode: only a defense task reads a checkout"
+    );
 }
 
 /// The desktop app passes `--no-update-check`, and it has to win over a
@@ -1234,4 +1243,27 @@ fn without_a_settle_bound_the_product_stops_without_waiting() {
     );
     result.unwrap();
     assert!(elapsed < std::time::Duration::from_secs(5), "{elapsed:?}");
+}
+
+/// The checkout `--workspace` names reaches the task service a defense task
+/// reads it from, and only with task mode on.
+#[test]
+fn the_workspace_reaches_the_task_service() {
+    let (dir, mut options) = launch_fixture("workspace");
+    options.task_mode = true;
+    options.workspace = Some(dir.join("checkout"));
+    let values = livekit_values(&dir);
+    let prepared = super::prepare(&values, &options).unwrap();
+    let bound = "127.0.0.1:3101".parse().unwrap();
+    let (config, _) = super::finish(
+        prepared.config,
+        &values,
+        &options,
+        bound,
+        super::LaunchedBy::Parent(None),
+    )
+    .unwrap();
+    let tasks = config.tasks.expect("task mode on loopback");
+    assert_eq!(tasks.workspace(), Some(dir.join("checkout").as_path()));
+    let _ = std::fs::remove_dir_all(&dir);
 }

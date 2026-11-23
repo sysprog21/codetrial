@@ -59,6 +59,16 @@ const MAX_NOTES: usize = 16;
 /// The most hints a defense may allow.
 pub const MAX_HINTS: u64 = 3;
 
+/// The name of the tool Jim reserves a hint with.
+pub const HINT_TOOL_NAME: &str = "request_defense_hint";
+
+/// The tool Jim reserves a hint with, offered only in a defense that allows
+/// hints. The room answers it, through `TaskSession::defense_hint`, since
+/// only the room knows the speech Jim is replying to.
+pub static HINT_TOOL: std::sync::LazyLock<serde_json::Value> = std::sync::LazyLock::new(
+    || serde_json::json!({"name": HINT_TOOL_NAME, "description": "Reserve one hint on a defense item the learner has opened, after a wrong or incomplete answer to it; give the hint only if this grants it.", "parameters": {"type": "OBJECT", "properties": {"item": {"type": "STRING", "description": "The item id, such as q1, or bug for the bug item."}}, "required": ["item"]}}),
+);
+
 /// A task directory of the course, the sbt project that builds it and the
 /// architecture its programs are built for.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -689,3 +699,7 @@ mod change_tests;
 #[cfg(test)]
 #[path = "../../tests/unit/tasks/defense_attempt.rs"]
 mod attempt_tests;
+
+#[cfg(test)]
+#[path = "../../tests/unit/tasks/defense_hints.rs"]
+mod hint_tests;

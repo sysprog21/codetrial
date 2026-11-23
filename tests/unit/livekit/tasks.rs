@@ -628,3 +628,154 @@ async fn jim_may_read_the_whiteboard_but_the_session_does_not_answer_for_it() {
         json!({"error": "tool unavailable in task mode"})
     );
 }
+
+/// Held panel notes go as one message, oldest first.
+#[test]
+fn panel_notes_go_together_oldest_first() {
+    assert_eq!(panel_message(&["one".to_owned()]), "DEFENSE PANEL: one");
+    assert_eq!(
+        panel_message(&["first".to_owned(), "second".to_owned()]),
+        "DEFENSE PANEL, in order: (1) first (2) second"
+    );
+}
+
+/// Jim gets the hint tool only from a defense that allows hints.
+#[test]
+fn the_hint_tool_is_offered_only_when_hints_are_allowed() {
+    let names = |tools: serde_json::Value| -> Vec<String> {
+        tools
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|tool| tool["name"].as_str().unwrap_or_default().to_owned())
+            .collect()
+    };
+    let base = crate::gemini::task_tool_declarations();
+    let hint = crate::tasks::defense::HINT_TOOL_NAME.to_owned();
+    assert!(!names(with_hint_tool(base.clone(), 0)).contains(&hint));
+    let offered = names(with_hint_tool(base.clone(), 1));
+    assert!(offered.contains(&hint));
+    assert_eq!(offered.len(), names(base).len() + 1);
+}
+
+/// A student checkout with one graded line added over upstream.
+#[cfg(unix)]
+fn defense_checkout() -> crate::tasks::test_support::Repo {
+    let repo = crate::tasks::test_support::Repo::new("room-panel");
+    let cpu = "4-pipeline/src/main/scala/mycpu/pipeline/CPU.scala";
+    repo.write(
+        cpu,
+        "class CPU {\n  // [CA26: Exercise 4.4] flush\n  ???\n}\n",
+    );
+    let upstream = repo.commit("upstream");
+    repo.git(&["update-ref", "refs/remotes/upstream/main", &upstream]);
+    repo.write(
+        cpu,
+        "class CPU {\n  // [CA26: Exercise 4.4] flush\n  io.flush := taken && valid\n}\n",
+    );
+    repo.write("STUDENT_ID", "F74121234\n");
+    repo.commit("cpu");
+    repo
+}
+
+/// A defense room that allows hints: its connection is set up with the hint
+/// tool, and the panel opens with the work, takes new items only while the
+/// work is under way, and closes once the room is lost.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_defense_room_offers_its_hint_tool_and_drives_the_panel() {
+    use crate::tasks::access::{Admission, Preparation, TaskService};
+    use crate::tasks::test_support::{SITE, assignment, preparation};
+
+    let config = crate::config::load_from_pairs([
+        ("LIVEKIT_URL", "wss://example.livekit.cloud"),
+        ("LIVEKIT_API_KEY", "devkey"),
+        ("LIVEKIT_API_SECRET", "devsecret"),
+        ("GOOGLE_API_KEY", "task-test-key"),
+    ])
+    .unwrap();
+    let tools = |task: &PinnedTask| {
+        let live = TaskLive::new(&config, task);
+        crate::gemini::LiveSession::live_settings(&live).tools
+    };
+    assert_eq!(
+        tools(&admitted().await),
+        crate::gemini::task_tool_declarations(),
+        "a task room's connection is given the task tools"
+    );
+
+    let checkout = defense_checkout();
+    let plaintext = json!({"packageVersion": 1, "setId": "mycpu", "setVersion": 1,
+        "rules": {"durationMin": 60, "maxHintRungs": 0, "closesAt": null,
+            "lookAwaySeconds": 8, "rulesNote": null},
+        "defense": {"course": "ca2026-mycpu", "salt": "MDEyMzQ1Njc4OWFiY2RlZg==",
+            "lines": 1, "hints": 1,
+            "tasks": [{"dir": "4-pipeline", "project": "pipeline", "arch": "rv32im_zicsr"}],
+            "bugs": [{"task": "4-pipeline", "variant": null, "mutant": "no-flush",
+                "rule": "a taken branch flushes", "exercise": "4.4"}],
+            "specSeconds": 900, "modelSeconds": 1200, "simSeconds": 120}});
+    let set = crate::tasks::package::decode("mycpu", 1, &serde_json::to_vec(&plaintext).unwrap())
+        .unwrap();
+    let service = TaskService::new();
+    service.insert_unlocked(1, SITE, std::sync::Arc::new(set));
+    let assignment = assignment("mycpu", 1);
+    let defense = service.defense_config(1, &assignment).unwrap();
+    let slot = crate::tasks::defense::prepare((*defense).clone(), checkout.path()).unwrap();
+    let Admission::New(task) = service
+        .begin_admission(
+            1,
+            ("learner", 42),
+            &assignment,
+            crate::tasks::defense::TASK_ID,
+            "room-key",
+            Preparation {
+                defense: Some(slot.clone()),
+                ..preparation()
+            },
+            100,
+        )
+        .unwrap()
+    else {
+        panic!("a first admission is new")
+    };
+    let offered = tools(&task);
+    assert!(
+        offered
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|tool| tool["name"] == crate::tasks::defense::HINT_TOOL_NAME),
+        "a defense that allows hints offers the hint tool: {offered}"
+    );
+
+    let mut session = TaskSession::new(task, 100);
+    sync_defense_panel(&session);
+    assert!(
+        !slot.is_open() && !slot.items_open(),
+        "nothing before Start"
+    );
+    session.start(100);
+    sync_defense_panel(&session);
+    assert!(slot.is_open(), "the panel opens with the work");
+    assert!(slot.items_open(), "items open while the work is under way");
+    session.phase = Phase::WrapUp;
+    sync_defense_panel(&session);
+    assert!(slot.is_open(), "wrap-up still examines the work");
+    assert!(!slot.items_open(), "no new item in wrap-up");
+    session.phase = Phase::Work;
+    sync_defense_panel(&session);
+    assert!(lost_room_review(&mut session, "lost-room").is_some());
+    assert!(!slot.is_open(), "a lost room closes the panel");
+}
+
+/// A replacement socket is told the hints delivered, and a count past the
+/// task's own list is held to it rather than panicking the room.
+#[tokio::test]
+async fn the_hints_a_replacement_is_told_never_run_past_the_task_list() {
+    let mut session = TaskSession::new(admitted().await, 100);
+    let all = session.task.exercise.hints().len();
+    session.hint_rungs_used = 1;
+    assert_eq!(delivered_hints(&session).len(), 1.min(all));
+    session.hint_rungs_used = all + 5;
+    assert_eq!(delivered_hints(&session).len(), all);
+}

@@ -349,6 +349,11 @@ pub struct TaskSession {
     pub revisions: BTreeMap<String, Revision>,
     pub runs: BTreeMap<String, RunMessage>,
     pub turns: Turns,
+    /// When the learner began their last captured turn, 0 before any.
+    pub last_turn_began_at: u64,
+    /// The learner's answers, captured turns and one still being spoken, when
+    /// Jim was last granted a defense hint: the next needs an answer after it.
+    answers_at_last_hint: Option<usize>,
     pub current: Revision,
     pub acknowledged_capture_request_id: Option<String>,
     pub final_revision_id: Option<String>,
@@ -462,6 +467,8 @@ impl TaskSession {
             revisions: BTreeMap::from([("initial".to_owned(), initial.clone())]),
             runs: BTreeMap::new(),
             turns: Turns::default(),
+            last_turn_began_at: 0,
+            answers_at_last_hint: None,
             current: initial.clone(),
             final_revision_id: None,
             outcome: None,
@@ -907,7 +914,13 @@ impl TaskSession {
     /// Captures a completed learner turn, unless time already ran out: a turn
     /// completing between the deadline and the next tick is speech after the
     /// end and cannot become review evidence.
+    #[cfg(test)]
     pub fn observe_turn(&mut self, id: &str, text: &str, now: u64) {
+        self.observe_turn_begun(id, text, now, now);
+    }
+
+    /// `observe_turn` for a turn the learner began speaking at `began`.
+    pub fn observe_turn_begun(&mut self, id: &str, text: &str, began: u64, now: u64) {
         self.expire(now);
         if self.phase == Phase::Feedback {
             return;
@@ -917,6 +930,7 @@ impl TaskSession {
                 return;
             }
             self.turns.push(id, text);
+            self.last_turn_began_at = began;
         } else {
             self.mark_overflow();
         }
@@ -934,8 +948,100 @@ impl TaskSession {
         self.record_check_with_support(id, state, revision_id, turn_id, None)
     }
 
+    /// Takes back a hint `granted` whose answer never reached Jim, as when
+    /// sending it failed: it neither counts nor caps its item's marks, and
+    /// the answer it was for may earn one again.
+    pub fn withdraw_defense_hint(&mut self, granted: &Value) {
+        let (Some(id), Some(item)) = (
+            granted["supportRequestId"].as_str(),
+            granted["item"].as_str(),
+        ) else {
+            return;
+        };
+        if self.support_opportunities.remove(id).is_none() {
+            return;
+        }
+        if let Some(slot) = &self.task.preparation.defense {
+            slot.take_back_hint(item);
+        }
+        self.answers_at_last_hint = None;
+    }
+
+    /// One hint on a defense item the learner has opened, while the package
+    /// allows another: recorded as a conceptual hint and against the item,
+    /// whose suggested marks it caps at 2. A hint answers an attempt: the
+    /// learner must have answered since the item opened and since the last
+    /// hint. `speaking` is when the learner began speech not yet captured as
+    /// a turn: Jim reserves a hint while replying to an answer that is
+    /// captured only when his reply completes.
+    pub fn defense_hint(
+        &mut self,
+        item: &str,
+        speaking: Option<u64>,
+    ) -> Result<Value, &'static str> {
+        if self.phase != Phase::Work {
+            return Err("hints are given only while the items are under way");
+        }
+        let slot = self
+            .task
+            .preparation
+            .defense
+            .as_ref()
+            .ok_or("not a defense")?;
+        if slot.hints_allowed() == 0 {
+            return Err("hints_none");
+        }
+        let opened_at = slot.begun_at(item).ok_or("item_not_begun")?;
+
+        // Times are whole seconds: a turn in the second the item opened may be
+        // from before it, so it does not count. Speech begun before the item
+        // opened answers something else.
+        let answered_since_open =
+            speaking.is_some_and(|since| since > opened_at) || self.last_turn_began_at > opened_at;
+        let answers = self.turns.len() + usize::from(speaking.is_some());
+        if !answered_since_open || self.answers_at_last_hint.is_some_and(|at| answers <= at) {
+            return Err("no answer since the item opened or the last hint");
+        }
+        let (on_item, total) = slot.give_hint(item)?;
+        self.answers_at_last_hint = Some(answers);
+        let id = format!("defense-hint-{total}");
+        self.support_opportunities.insert(
+            id.clone(),
+            SupportOpportunity {
+                kind: Support::ConceptualHint,
+                check_id: None,
+                // The answer it follows, captured or not, comes before it.
+                after_turn: answers,
+            },
+        );
+        Ok(
+            json!({"supportRequestId": id, "item": item, "hintOnItem": on_item,
+            "instruction": "Granted: give the hint now, as your hint policy says, then ask the learner to improve their answer."}),
+        )
+    }
+
+    /// Whether Jim was granted any hint in this defense.
+    pub fn defense_hinted(&self) -> bool {
+        self.support_opportunities
+            .keys()
+            .any(|id| id.starts_with("defense-hint-"))
+    }
+
+    /// Whether `turn_id` came after a hint Jim gave in a defense: the support
+    /// a defense's review may cite, as a task's cites a check's binding.
+    pub fn after_defense_hint(&self, turn_id: &str) -> bool {
+        let Some(at) = self.turns.iter().position(|(id, _)| id == turn_id) else {
+            return false;
+        };
+        self.support_opportunities.iter().any(|(id, opportunity)| {
+            id.starts_with("defense-hint-") && at >= opportunity.after_turn
+        })
+    }
+
     pub fn targeted_followup(&mut self, check_id: &str) -> Result<Value, TaskError> {
+        // A defense offers no follow-up, and its review is told so.
         if !self.phase.is_active()
+            || self.task.preparation.defense.is_some()
             || self.targeted_followups >= default_number("extraChecks") as usize
             || !self.checks.contains_key(check_id)
         {
@@ -1112,6 +1218,12 @@ impl TaskSession {
     /// its time has not run out, which `tick` would only notice afterwards.
     pub fn wrap_up_open(&self, now: u64) -> bool {
         self.phase == Phase::WrapUp && self.deadline_at.is_none_or(|at| now < at)
+    }
+
+    /// Whether there is work to examine: started, and neither frozen nor
+    /// ended. A defense's panel acts only then.
+    pub fn work_open(&self) -> bool {
+        self.outcome.is_none() && self.phase.is_active() && self.final_revision_id.is_none()
     }
 
     pub fn page_present(&self) -> bool {

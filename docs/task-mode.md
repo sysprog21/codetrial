@@ -1,6 +1,9 @@
 # Task mode contract
 
-Status: draft, revised before any distribution; versions below stay at 1. Task
+Status: draft, revised before any distribution; versions below stay at 1.
+A defense set, which examines a student's own ca2026-mycpu checkout with this
+contract's trust model, rules and outcomes, is described in
+[mycpu-defense.md](mycpu-defense.md). Task
 mode is off unless `codetrial web --task-mode` asks for it, and then runs only
 where the server is reachable from this computer alone (see Trust model). The
 interview prompt and report contracts are unchanged.
@@ -699,7 +702,8 @@ ceiling. Run summaries stay bound to their original revision. Overflow is
 explicit, never silently truncated. No client message may cover a check.
 
 A result is a closed object with `assessmentMode: "task"`, `taskContract` and
-`taskAssessment`. The server stamps `setId`, `setVersion`, `taskId`,
+`taskAssessment`; a defense result has `assessmentMode: "defense"` and a `defense`
+section beside them ([mycpu-defense.md](mycpu-defense.md#result)). The server stamps `setId`, `setVersion`, `taskId`,
 `sessionId`, `sessionOrdinal`, `rubricProfile`, `githubLogin`, `githubId`,
 `language`, `rulesAcknowledgedAt`, `rules`, `calibration`, `outcome`,
 `captureOverflow`,

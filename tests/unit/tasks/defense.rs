@@ -707,3 +707,375 @@ fn an_attempt_records_predictions_runs_and_the_bug_claim() {
         item["explain"]["suggestedMark"].is_null() && item["predict"]["suggestedMark"].is_null()
     }));
 }
+
+/// A defense set is admitted only with its attempt prepared over the
+/// checkout; the attempt is then the learner's active defense, and Jim's
+/// prompt is the examiner's, with the items and without the bug.
+#[test]
+fn a_defense_is_admitted_with_its_attempt_and_examined_by_jim() {
+    use crate::tasks::access::{Admission, TaskService};
+    use crate::tasks::test_support::{SITE, assignment, preparation};
+
+    let repo = student_repo("admission");
+    let plaintext = json!({"packageVersion": 1, "setId": "mycpu", "setVersion": 1,
+        "rules": {"durationMin": 60, "maxHintRungs": 0, "closesAt": null,
+            "lookAwaySeconds": 8, "rulesNote": null},
+        "defense": config()});
+    let set = crate::tasks::package::decode("mycpu", 1, &serde_json::to_vec(&plaintext).unwrap())
+        .unwrap();
+    let service = TaskService::new();
+    service.insert_unlocked(1, SITE, std::sync::Arc::new(set));
+    let assignment = assignment("mycpu", 1);
+    let defense_config = service.defense_config(1, &assignment).unwrap();
+
+    let refused = service
+        .begin_admission(
+            1,
+            ("learner", 42),
+            &assignment,
+            TASK_ID,
+            "no-slot",
+            preparation(),
+            100,
+        )
+        .map(|_| ())
+        .unwrap_err();
+    assert_eq!(refused.code, "workspace_required");
+
+    let slot = prepare((*defense_config).clone(), repo.path()).unwrap();
+    let admission = service
+        .begin_admission(
+            1,
+            ("learner", 42),
+            &assignment,
+            TASK_ID,
+            "with-slot",
+            crate::tasks::access::Preparation {
+                defense: Some(slot.clone()),
+                ..preparation()
+            },
+            100,
+        )
+        .unwrap();
+    let Admission::New(task) = admission else {
+        panic!("a first admission is new")
+    };
+
+    // A retried Start is answered from its first admission, before any checkout
+    // is prepared again; until that is answered, it waits.
+    assert_eq!(
+        service
+            .replay_admission(1, &assignment, TASK_ID, "with-slot", "python", 101)
+            .unwrap_err()
+            .code,
+        "setup_pending"
+    );
+    assert!(
+        service
+            .replay_admission(1, &assignment, TASK_ID, "unknown-key", "python", 101)
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        service
+            .active_defense(1)
+            .is_some_and(|active| active == slot)
+    );
+    assert!(service.active_defense(2).is_none());
+    let prompt = task
+        .prompt(crate::tasks::session::Phase::Work, None, "")
+        .unwrap();
+    assert!(prompt.contains("examiner"));
+    assert!(!prompt.contains("REACTO"));
+    // One examiner policy, from one file: no instructor slot, no second copy.
+    assert!(!prompt.contains("INSTRUCTOR PROMPT"));
+    assert_eq!(prompt.matches("You are Jim").count(), 1);
+    assert!(prompt.contains("whether the change will compile"));
+    assert!(
+        prompt.contains("Give no hint"),
+        "a package with no hints is strict"
+    );
+    assert!(!prompt.contains("request_defense_hint"));
+    assert!(prompt.contains("io.flush := taken && valid"));
+    assert!(!prompt.contains("no-flush") && !prompt.contains("flushes the younger"));
+    assert!(
+        !slot.is_open(),
+        "nothing runs before the room says work started"
+    );
+    slot.set_open(true);
+    assert!(slot.is_open());
+    slot.note("a prediction".to_owned());
+    assert_eq!(slot.take_notes(), ["a prediction"]);
+    assert!(slot.take_notes().is_empty());
+    // Notes held through a long reply keep only the newest.
+    for n in 0..40 {
+        slot.note(format!("note {n}"));
+    }
+    let held = slot.take_notes();
+    assert_eq!(held.len(), 16);
+    assert_eq!(held.first().map(String::as_str), Some("note 24"));
+    assert_eq!(held.last().map(String::as_str), Some("note 39"));
+
+    // The review of a defense rates part a and the account of each item, in
+    // order, and a number needs a turn the recognizer returned.
+    let mut session = crate::tasks::session::TaskSession::new(task, 100);
+    assert!(!session.work_open(), "no work before Start");
+    session.start(100);
+    assert!(session.work_open());
+    assert_eq!(
+        session.defense_hint(&slot.items()[0], Some(u64::MAX)),
+        Err("hints_none"),
+        "Jim's hint tool refuses in a strict defense"
+    );
+    assert_eq!(session.hint_rungs_used, 0);
+    assert_eq!(
+        session.answer_tool("request_defense_hint", &json!({"item": slot.items()[0]})),
+        json!({"error": "tool unavailable in task mode"}),
+        "the room answers the hint tool, never the session alone"
+    );
+    assert_eq!(HINT_TOOL["name"], "request_defense_hint");
+    assert_eq!(HINT_TOOL["parameters"]["required"], json!(["item"]));
+    let items = slot.items().to_vec();
+    let dimension = json!({"rating": null, "reason": "Too little was said to rate this.",
+        "insufficientReason": "missing_turns", "support": "none", "evidence": []});
+    let review = |explanations: Value| {
+        json!({"dimensions": {"reasoningParticipation": dimension, "implementationOwnership": dimension,
+            "testingAndDiagnosis": dimension, "revisionAndImprovement": dimension},
+            "gaps": [], "nextActions": [], "explanations": explanations})
+    };
+    let row = |item: &str, rating: Value| {
+        json!({"item": item, "rating": rating, "account": null,
+            "reason": "Nothing was said about this line.", "evidence": []})
+    };
+    let rows: Vec<Value> = items.iter().map(|id| row(id, json!(null))).collect();
+
+    // The review is asked for each row in the shape validation takes: a live
+    // model given "turn references" answered bare ids, every row refused.
+    let asked = crate::tasks::report::prompt(&session);
+    assert!(asked.contains(r#"{"kind": "turn", "id": "turn-3"}"#));
+    assert!(asked.contains(&serde_json::to_string(&items).unwrap()));
+    let validate = |value: Value| crate::tasks::report::validate(&session, &value, "");
+    validate(review(json!(rows))).unwrap();
+    let mut missing = review(json!(rows));
+    missing.as_object_mut().unwrap().remove("explanations");
+    assert!(
+        validate(missing).is_err(),
+        "a defense review must rate the items"
+    );
+    let mut reversed = rows.clone();
+    reversed.reverse();
+    assert!(
+        validate(review(json!(reversed))).is_err(),
+        "rows follow the items' order"
+    );
+    assert!(
+        validate(review(json!(rows[..1]))).is_err(),
+        "every item has a row"
+    );
+    let mut numbered = rows.clone();
+    numbered[0] = row(&items[0], json!(2));
+    assert!(
+        validate(review(json!(numbered))).is_err(),
+        "a mark needs a recognized turn"
+    );
+    let mut omitted = rows.clone();
+    omitted[0]["evidence"] = json!(null);
+    validate(review(json!(omitted))).unwrap();
+
+    // A follow-up is not offered in a defense, whatever Jim asks for.
+    assert!(session.targeted_followup("any").is_err());
+
+    // With a recognized turn about the line, a number citing it is taken, one
+    // off the scale is not, and nor is one citing a turn not captured.
+    session.observe_turn(
+        "turn-1",
+        "The line holds the stage while the divider is busy.",
+        150,
+    );
+    let validate = |value: Value| crate::tasks::report::validate(&session, &value, "");
+    let cited = |rating: Value, turn: &str| {
+        let mut rows = rows.clone();
+        rows[0] = json!({"item": items[0], "rating": rating, "account": 1,
+            "reason": "The learner said what the line decides.",
+            "evidence": [{"kind": "turn", "id": turn}]});
+        review(json!(rows))
+    };
+    validate(cited(json!(3), "turn-1")).unwrap();
+    assert!(
+        validate(cited(json!(4), "turn-1")).is_err(),
+        "marks are 0..3"
+    );
+    assert!(
+        validate(cited(json!(3), "turn-9")).is_err(),
+        "a turn not captured"
+    );
+    let mut extra = rows;
+    extra[0]["verdict"] = json!("pass");
+    assert!(validate(review(json!(extra))).is_err());
+    session.feedback(200);
+    assert!(!session.work_open(), "frozen work closes the panel");
+
+    // A result made while a request holds the attempt is made from the facts
+    // kept after the request before, and says so. This session finished, so its
+    // marks are given.
+    let held = slot.try_lock().unwrap();
+    slot.set_running(true);
+    let asked = std::time::Instant::now();
+    let ended = crate::tasks::report::ended(&session, "room");
+    assert!(
+        asked.elapsed() < std::time::Duration::from_secs(5),
+        "a run in progress is not waited for"
+    );
+    slot.set_running(false);
+    drop(held);
+    assert_eq!(ended["assessmentMode"], "defense");
+    assert_eq!(ended["defense"]["runningAtEnd"], true);
+    assert_eq!(ended["defense"]["marksWithheld"], false);
+    assert_eq!(
+        ended["defense"]["items"].as_array().unwrap().len(),
+        items.len()
+    );
+    let free = crate::tasks::report::ended(&session, "room");
+    assert_eq!(free["defense"]["runningAtEnd"], false);
+
+    // A short request holding the attempt is waited for, not reported as a run
+    // in progress. The lock is released only once the other thread is about to
+    // ask, and well after: one that did not wait would have its answer by then.
+    let asking = std::sync::Barrier::new(2);
+    let briefly = std::thread::scope(|scope| {
+        let held = slot.try_lock().unwrap();
+        let waiting = scope.spawn(|| {
+            asking.wait();
+            crate::tasks::report::ended(&session, "room")
+        });
+        asking.wait();
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert!(!waiting.is_finished(), "the short request is waited for");
+        drop(held);
+        waiting.join().unwrap()
+    });
+    assert_eq!(briefly["defense"]["runningAtEnd"], false);
+}
+
+/// The panel's requests act on the attempt only while the work is open and
+/// no other request holds it, and a prediction that the change will not
+/// compile names no failing spec.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn the_panel_acts_only_on_an_open_attempt_it_holds() {
+    use crate::web::defense::{PredictRequest, predict, with_attempt};
+
+    let repo = student_repo("panel");
+    repo.write(
+        "4-pipeline/src/test/scala/mycpu/pipeline/HazardSpec.scala",
+        "package mycpu.pipeline\n\nclass HazardSpec\n",
+    );
+    repo.commit("specs");
+    let slot = prepare(Config::parse(&config()).unwrap(), repo.path()).unwrap();
+    let item = slot.items()[0].clone();
+    let status = |response: axum::response::Response| response.status().as_u16();
+    let request = |body: Value| -> PredictRequest { serde_json::from_value(body).unwrap() };
+    let send = |body: Value| {
+        let input = request(body);
+        with_attempt(slot.clone(), move |attempt, slot| {
+            predict(input, attempt, slot)
+        })
+    };
+
+    let closed = send(json!({"item": item, "fails": [], "how": "nothing fails"})).await;
+    assert_eq!(status(closed), 409, "closed before the work starts");
+    slot.set_open(true);
+    slot.set_items_open(true);
+
+    // Another request holds the attempt, on a thread of its own.
+    let (locked, is_locked) = std::sync::mpsc::channel();
+    let (release, released) = std::sync::mpsc::channel::<()>();
+    let holder = std::thread::spawn({
+        let slot = slot.clone();
+        move || {
+            let _held = slot.try_lock().unwrap();
+            locked.send(()).unwrap();
+            released.recv().unwrap();
+        }
+    });
+    is_locked.recv().unwrap();
+    let busy = send(json!({"item": item, "fails": [], "how": "nothing fails"})).await;
+    assert_eq!(status(busy), 409, "busy while another request holds it");
+    release.send(()).unwrap();
+    holder.join().unwrap();
+
+    // An item acts only once opened; opening it asks Jim for its overview, the
+    // first time only.
+    let unopened = send(json!({"item": item, "fails": [], "how": "nothing fails"})).await;
+    assert_eq!(status(unopened), 409);
+    let open = |item: String| {
+        let input: crate::web::defense::BeginRequest =
+            serde_json::from_value(json!({"item": item})).unwrap();
+        with_attempt(slot.clone(), move |attempt, slot| {
+            crate::web::defense::begin(input, attempt, slot)
+        })
+    };
+    assert_eq!(status(open("q9".to_owned()).await), 400);
+    assert_eq!(status(open(item.clone()).await), 200);
+    let opened = slot.take_notes();
+    assert_eq!(opened.len(), 1);
+    assert!(opened[0].contains("overview"), "{}", opened[0]);
+    assert_eq!(status(open(item.clone()).await), 200);
+    assert!(
+        slot.take_notes().is_empty(),
+        "the overview is asked for once"
+    );
+
+    // In wrap-up the items are over: no new one opens, an open one stays.
+    slot.set_items_open(false);
+    assert_eq!(status(open("bug".to_owned()).await), 409);
+    assert_eq!(status(open(item.clone()).await), 200);
+    assert!(slot.take_notes().is_empty());
+    slot.set_items_open(true);
+
+    let spec = slot.try_lock().unwrap().specs_for(&item).unwrap()[0].clone();
+    let both = send(json!({"item": item, "fails": [spec], "compiles": false,
+        "how": "it will not build"}))
+    .await;
+    assert_eq!(status(both), 400, "a build that fails runs no spec");
+    assert!(slot.take_notes().is_empty());
+
+    let no_build = send(json!({"item": item, "fails": [], "compiles": false,
+        "how": "the types no longer match"}))
+    .await;
+    assert_eq!(status(no_build), 200);
+    let notes = slot.take_notes();
+    assert_eq!(notes.len(), 1);
+    assert!(notes[0].contains("will not compile"), "{}", notes[0]);
+    let recorded = slot.try_lock().unwrap().prediction(&item).cloned().unwrap();
+    assert!(!recorded.compiles && recorded.fails.is_empty());
+
+    // A replacement connection is told where the panel stands, in the
+    // platform's words: the open item and its prediction, never the learner's
+    // sentence.
+    let progress = slot.progress();
+    assert!(
+        progress.contains(&format!(
+            "{item} opened, a prediction recorded and not yet run"
+        )),
+        "{progress}"
+    );
+    assert!(progress.contains("the bug item not opened"), "{progress}");
+    assert!(
+        !progress.contains("the types no longer match"),
+        "{progress}"
+    );
+}
+
+/// With hints allowed, Jim reserves and gives one after a short answer, and
+/// never asks whether one is wanted or calls an answer wrong.
+#[test]
+fn a_hint_policy_gives_the_hint_without_asking_or_judging() {
+    use crate::tasks::{exercise::Exercise, session::Phase};
+    let prompt = Exercise::defense_prompt(Phase::Work, "ITEMS", 2).unwrap();
+    assert!(prompt.contains("up to 2 hints"));
+    assert!(prompt.contains("without asking whether they want one"));
+    assert!(prompt.contains("never that it is wrong or right"));
+    assert!(prompt.contains("request_defense_hint"));
+    assert!(!prompt.contains("Give no hint"));
+}

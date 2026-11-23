@@ -203,8 +203,18 @@ fn recovery_conversation(session: &TaskSession, last_reply: &str, unanswered: &s
             json!(unanswered.trim())
         )
     };
+
+    // A defense's panel is the platform's to report, outside the learner's
+    // material.
+    let panel = session
+        .task
+        .preparation
+        .defense
+        .as_ref()
+        .map(|slot| format!("\n{}", slot.progress()))
+        .unwrap_or_default();
     format!(
-        "Continue the same conversation; do not greet the learner again or repeat a question they answered. Possibly misrecognized lines support no check.\nBEGIN UNTRUSTED RECENT CONVERSATION\nlearnerTurns={}\nyourLastReply={}\nEND UNTRUSTED RECENT CONVERSATION\n{owed}",
+        "Continue the same conversation; do not greet the learner again or repeat a question they answered. Possibly misrecognized lines support no check.\nBEGIN UNTRUSTED RECENT CONVERSATION\nlearnerTurns={}\nyourLastReply={}\nEND UNTRUSTED RECENT CONVERSATION\n{owed}{panel}",
         json!(turns),
         json!(last_reply)
     )
@@ -241,7 +251,7 @@ async fn brief_replacement(
         session.snapshot_now(),
         json!(session.checks),
         session.support_context(),
-        json!(&session.task.exercise.hints()[..session.hint_rungs_used]),
+        json!(delivered_hints(session)),
         session.learner_state(),
         recovery_conversation(session, last_reply, unanswered)
     );
@@ -299,6 +309,10 @@ fn lost_room_review(session: &mut TaskSession, room: &str) -> Option<Value> {
         return None;
     }
     session.conclude(Cause::RoomLoss, 0, crate::current_epoch_seconds());
+
+    // The panel closes before the result is taken, as at every other end, so a
+    // request accepted after it is never missing from the result.
+    sync_defense_panel(session);
     Some(crate::tasks::report::ended(session, room))
 }
 
@@ -338,6 +352,9 @@ struct TaskRoom<'a> {
     turn: u64,
     /// Learner speech since the last completed turn.
     transcript: String,
+    /// When the learner began the speech in `transcript`, which is captured
+    /// as a turn only when Jim's reply completes.
+    transcript_since: u64,
     /// The interviewer's reply in progress, and the last completed one.
     reply: String,
     last_reply: String,
@@ -366,10 +383,21 @@ struct TaskRoom<'a> {
     published_seq: Option<u64>,
 }
 
+/// Opens a defense's panel while there is work to examine and closes it once
+/// the work is frozen. Before every state the page is sent, so the page never
+/// sees work start before the panel can act on it.
+fn sync_defense_panel(session: &TaskSession) {
+    if let Some(slot) = &session.task.preparation.defense {
+        slot.set_open(session.work_open());
+        slot.set_items_open(session.phase == Phase::Work);
+    }
+}
+
 impl TaskRoom<'_> {
     /// Publishes the state when it changed since the last publication, or
     /// always when `force`, as for a learner who has just rejoined.
     async fn publish_state(&mut self, force: bool) {
+        sync_defense_panel(&self.session);
         let seq = self.session.seq();
         if force || self.published_seq != Some(seq) {
             publish(&self.room, TOPIC_TASK_STATE, &self.session.snapshot_now()).await;
@@ -607,6 +635,9 @@ impl TaskRoom<'_> {
             }
             Some(GeminiEvent::InputTranscript(text)) if listening => {
                 self.last_speech = crate::current_epoch_seconds();
+                if self.transcript.trim().is_empty() {
+                    self.transcript_since = self.last_speech;
+                }
                 if self.transcript.len() + text.len() <= MAX_TURN_BYTES {
                     self.transcript.push_str(&text);
                 } else {
@@ -644,12 +675,27 @@ impl TaskRoom<'_> {
                             Some(answer) => answer.clone(),
                             None => board_answer.insert(self.read_board().await).clone(),
                         }
+                    } else if call.name == crate::tasks::defense::HINT_TOOL_NAME {
+                        // The answer Jim is replying to is captured only when
+                        // his reply completes; until then it is still speech.
+                        let item = call.args["item"].as_str().unwrap_or("");
+                        let speaking =
+                            (!self.transcript.trim().is_empty()).then_some(self.transcript_since);
+                        self.session
+                            .defense_hint(item, speaking)
+                            .unwrap_or_else(|code| json!({"error": code}))
                     } else {
                         self.session.answer_tool(&call.name, &call.args)
                     };
                     answers.push((call, answer));
                 }
                 if self.gemini.send_tool_responses(&answers).await.is_err() {
+                    // A hint granted in an answer Jim never got was not given.
+                    for (call, answer) in &answers {
+                        if call.name == crate::tasks::defense::HINT_TOOL_NAME {
+                            self.session.withdraw_defense_hint(answer);
+                        }
+                    }
                     self.alive = false;
                 } else {
                     // The model owes the turn the answers continue.
@@ -708,7 +754,8 @@ impl TaskRoom<'_> {
             self.turn += 1;
             let id = format!("turn-{}", self.turn);
             let now = crate::current_epoch_seconds();
-            self.session.observe_turn(&id, &self.transcript, now);
+            self.session
+                .observe_turn_begun(&id, &self.transcript, self.transcript_since, now);
             self.last_completed_turn = now;
 
             // An answer to a wrap-up question asks for a silent reply, so the
@@ -777,6 +824,27 @@ impl TaskRoom<'_> {
             } else if changed {
                 self.pending_context.push_back(context);
             }
+        }
+
+        // What the defense panel did since the last tick: a prediction, a run's
+        // result, a claim. Jim asks about each; he never judges it. The panel
+        // acts only while there is work to examine.
+        sync_defense_panel(&self.session);
+
+        // They stay in the slot while Jim is answering, the learner is speaking
+        // or the page is away, and then go as one message, oldest first, so no
+        // reply is cut short.
+        let quiet = !(self.output.is_playing()
+            || !self.reply.is_empty()
+            || self.reply_owed_since.is_some()
+            || speaking(self.last_speech, now))
+            && self.session.page_present();
+        let notes = match (&self.session.task.preparation.defense, quiet) {
+            (Some(slot), true) => slot.take_notes(),
+            _ => Vec::new(),
+        };
+        if !notes.is_empty() {
+            self.send_or_queue(panel_message(&notes)).await;
         }
 
         // A learner thinking quietly sends Gemini nothing, and the reader gives
@@ -1051,6 +1119,7 @@ pub(crate) async fn run(
         last_completed_turn: now,
         turn: 0,
         transcript: String::new(),
+        transcript_since: 0,
         reply: String::new(),
         last_reply: String::new(),
         suppress_output: false,
@@ -1137,6 +1206,9 @@ impl TaskRoom<'_> {
 pub(crate) struct TaskLive<'a> {
     config: &'a AgentConfig,
     pub(crate) instructions: String,
+    /// The task's tools: a defense that allows hints adds the one that
+    /// reserves them.
+    tools: serde_json::Value,
 }
 
 impl<'a> TaskLive<'a> {
@@ -1150,8 +1222,30 @@ impl<'a> TaskLive<'a> {
                     task.exercise.starter(task.language()).unwrap_or(""),
                 )
                 .expect("validated task prompt"),
+            tools: task_tools(task),
         }
     }
+}
+
+/// A task room's tools: a defense that allows hints adds the one that
+/// reserves them.
+fn task_tools(task: &PinnedTask) -> serde_json::Value {
+    let hints = task
+        .preparation
+        .defense
+        .as_ref()
+        .map_or(0, crate::tasks::defense::Slot::hints_allowed);
+    with_hint_tool(crate::gemini::task_tool_declarations(), hints)
+}
+
+/// The task tools, with the defense hint tool when the package allows hints.
+fn with_hint_tool(mut tools: serde_json::Value, hints: u64) -> serde_json::Value {
+    if hints > 0
+        && let Some(list) = tools.as_array_mut()
+    {
+        list.push(crate::tasks::defense::HINT_TOOL.clone());
+    }
+    tools
 }
 
 impl crate::gemini::LiveSession for TaskLive<'_> {
@@ -1160,7 +1254,7 @@ impl crate::gemini::LiveSession for TaskLive<'_> {
             model: &self.config.gemini_live_model,
             voice: &self.config.gemini_voice,
             instructions: &self.instructions,
-            tools: crate::gemini::task_tool_declarations(),
+            tools: self.tools.clone(),
             vocabulary: Vec::new(),
             silence_ms: self.config.gemini_silence_ms,
             start_sensitivity: &self.config.gemini_start_sensitivity,
@@ -1229,6 +1323,28 @@ fn refusal_is_moot(session: &TaskSession) -> bool {
 /// open: only once recovery has nothing left to try.
 fn finish_without_interviewer(session: &TaskSession, recovery_exhausted: bool) -> bool {
     recovery_exhausted && session.final_revision_id.is_some()
+}
+
+/// The task's hints the learner has had, never past the task's own list: a
+/// count that outran it must not take a live room down.
+fn delivered_hints(session: &TaskSession) -> &[String] {
+    let hints = session.task.exercise.hints();
+    &hints[..session.hint_rungs_used.min(hints.len())]
+}
+
+/// The defense panel's notes as one message, oldest first.
+fn panel_message(notes: &[String]) -> String {
+    match notes {
+        [one] => format!("DEFENSE PANEL: {one}"),
+        many => format!(
+            "DEFENSE PANEL, in order: {}",
+            many.iter()
+                .enumerate()
+                .map(|(i, note)| format!("({}) {note}", i + 1))
+                .collect::<Vec<_>>()
+                .join(" ")
+        ),
+    }
 }
 
 /// Whether the learner spoke in the last few seconds; nudges and wrap-up

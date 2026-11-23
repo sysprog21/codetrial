@@ -36,6 +36,7 @@ pub(crate) fn preparation() -> Preparation {
         calibration: json!({"ok": true, "metric": "keypoints", "baseline": 0.5, "keyboard": 0.7, "limit": 0.75}),
         language: "python".to_owned(),
         compiler_explorer: true,
+        defense: None,
     }
 }
 

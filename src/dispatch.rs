@@ -277,7 +277,7 @@ impl LocalDispatcher {
                         &config,
                         &slot.room_name,
                         &candidate,
-                        task,
+                        *task,
                         &slot,
                     )
                     .await
