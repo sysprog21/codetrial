@@ -352,7 +352,14 @@ stdin), never from arguments, and in one step validates the bank, encrypts it,
 decrypts the result again to prove the round trip, writes the landing page and
 scans the output. It refuses a version directory the output already holds, so a
 version built there is never overwritten, and adds a new version beside the old
-ones. The output holds only:
+ones. `scripts/task-package.py pin new [--count N]` prints PINs drawn from the operating
+system's secure random source, every one of the 10^6 equally likely and leading
+zeros kept; give each set version its own. `scripts/task-package.py pin check --set-id
+ID --version N [--output DIR]` reads a PIN the same way, without asking twice,
+and says whether it opens that version as the build wrote it, checking the
+manifest and the ciphertext's hash first, so a damaged package is told apart
+from a wrong PIN; it prints neither the PIN nor the package. The output holds
+only:
 
 ```text
 publish/.nojekyll
