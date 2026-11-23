@@ -51,6 +51,55 @@
         "1"
       ],
       "expected": 1
+    },
+    {
+      "label": "minus before a group",
+      "input": [
+        "-(2+3)"
+      ],
+      "expected": -5
+    },
+    {
+      "label": "minus inside a group",
+      "input": [
+        "1-(-2)"
+      ],
+      "expected": 3
+    },
+    {
+      "label": "minus on the first number only",
+      "input": [
+        "-2+3"
+      ],
+      "expected": 1
+    },
+    {
+      "label": "space after a leading minus",
+      "input": [
+        "- 7"
+      ],
+      "expected": -7
+    },
+    {
+      "label": "minus before a two-digit number",
+      "input": [
+        "-12"
+      ],
+      "expected": -12
+    },
+    {
+      "label": "number added after a negated group",
+      "input": [
+        "-(2+3)+4"
+      ],
+      "expected": -1
+    },
+    {
+      "label": "space before a minus inside a group",
+      "input": [
+        "1-( -2)"
+      ],
+      "expected": 3
     }
   ],
   "paramNames": [
