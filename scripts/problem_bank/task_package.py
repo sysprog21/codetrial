@@ -114,6 +114,7 @@ def check_pin(directory, set_id, version, pin):
     checked_pin(pin)
     base = Path(directory) / "sets" / set_id / str(version)
     manifest = read_json(base / "manifest.json")
+    checked_manifest(manifest)
     ciphertext = (base / "tasks.enc").read_bytes()
     if manifest.get("setId") != set_id or manifest.get("setVersion") != version:
         raise ValueError(f"{base} holds another set version")

@@ -248,6 +248,15 @@ class TaskPackageTests(unittest.TestCase):
             self.assertEqual(damaged.returncode, 1)
             self.assertIn("hash mismatch", damaged.stderr)
             self.assertNotIn("does not open", damaged.stderr)
+            # A manifest of the wrong shape is refused, never a traceback.
+            manifest = publish / "sets/classroom/7/manifest.json"
+            manifest.write_text("[]\n", encoding="utf-8")
+            shapeless = subprocess.run(
+                check, input=pin + "\n", capture_output=True, text=True
+            )
+            self.assertEqual(shapeless.returncode, 1)
+            self.assertIn("invalid manifest schema", shapeless.stderr)
+            self.assertNotIn("Traceback", shapeless.stderr)
             missing = subprocess.run(
                 command
                 + ["pin", "check", "--set-id", "classroom", "--version", "8"]
