@@ -118,19 +118,51 @@
       ]
     },
     {
-      "label": "empty tree",
+      "label": "balanced bst",
       "input": [
         [
-          "OrderedCursor"
+          "OrderedCursor",
+          "next",
+          "next",
+          "next",
+          "next",
+          "next",
+          "next",
+          "next",
+          "hasNext"
         ],
         [
           [
-            []
-          ]
+            [
+              8,
+              4,
+              12,
+              2,
+              6,
+              10,
+              14
+            ]
+          ],
+          [],
+          [],
+          [],
+          [],
+          [],
+          [],
+          [],
+          []
         ]
       ],
       "expected": [
-        null
+        null,
+        2,
+        4,
+        6,
+        8,
+        10,
+        12,
+        14,
+        false
       ]
     },
     {
