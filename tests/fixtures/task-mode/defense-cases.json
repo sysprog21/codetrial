@@ -112,6 +112,230 @@
   }
  },
  {
+  "name": "the other ends of the limits",
+  "valid": true,
+  "defense": {
+   "course": "ca2026-mycpu",
+   "salt": "MDEyMzQ1Njc4OWFiY2RlZg==",
+   "lines": 3,
+   "tasks": [
+    {
+     "dir": "4-pipeline",
+     "project": "pipeline",
+     "arch": "rv32im_zicsr"
+    }
+   ],
+   "bugs": [
+    {
+     "task": "4-pipeline",
+     "variant": "Forward",
+     "mutant": "no-flush",
+     "rule": "a taken branch flushes the younger instructions",
+     "exercise": "4.4"
+    }
+   ],
+   "specSeconds": 3600,
+   "modelSeconds": 60,
+   "simSeconds": 5
+  }
+ },
+ {
+  "name": "a 16-byte salt",
+  "valid": true,
+  "defense": {
+   "course": "ca2026-mycpu",
+   "salt": "c3Nzc3Nzc3Nzc3Nzc3Nzcw==",
+   "lines": 3,
+   "tasks": [
+    {
+     "dir": "4-pipeline",
+     "project": "pipeline",
+     "arch": "rv32im_zicsr"
+    }
+   ],
+   "bugs": [
+    {
+     "task": "4-pipeline",
+     "variant": "Forward",
+     "mutant": "no-flush",
+     "rule": "a taken branch flushes the younger instructions",
+     "exercise": "4.4"
+    }
+   ],
+   "specSeconds": 900,
+   "modelSeconds": 1200,
+   "simSeconds": 120
+  }
+ },
+ {
+  "name": "a spec limit too short",
+  "valid": false,
+  "defense": {
+   "course": "ca2026-mycpu",
+   "salt": "MDEyMzQ1Njc4OWFiY2RlZg==",
+   "lines": 3,
+   "tasks": [
+    {
+     "dir": "4-pipeline",
+     "project": "pipeline",
+     "arch": "rv32im_zicsr"
+    }
+   ],
+   "bugs": [
+    {
+     "task": "4-pipeline",
+     "variant": "Forward",
+     "mutant": "no-flush",
+     "rule": "a taken branch flushes the younger instructions",
+     "exercise": "4.4"
+    }
+   ],
+   "specSeconds": 59,
+   "modelSeconds": 1200,
+   "simSeconds": 120
+  }
+ },
+ {
+  "name": "a model limit too short",
+  "valid": false,
+  "defense": {
+   "course": "ca2026-mycpu",
+   "salt": "MDEyMzQ1Njc4OWFiY2RlZg==",
+   "lines": 3,
+   "tasks": [
+    {
+     "dir": "4-pipeline",
+     "project": "pipeline",
+     "arch": "rv32im_zicsr"
+    }
+   ],
+   "bugs": [
+    {
+     "task": "4-pipeline",
+     "variant": "Forward",
+     "mutant": "no-flush",
+     "rule": "a taken branch flushes the younger instructions",
+     "exercise": "4.4"
+    }
+   ],
+   "specSeconds": 900,
+   "modelSeconds": 59,
+   "simSeconds": 120
+  }
+ },
+ {
+  "name": "a model limit too long",
+  "valid": false,
+  "defense": {
+   "course": "ca2026-mycpu",
+   "salt": "MDEyMzQ1Njc4OWFiY2RlZg==",
+   "lines": 3,
+   "tasks": [
+    {
+     "dir": "4-pipeline",
+     "project": "pipeline",
+     "arch": "rv32im_zicsr"
+    }
+   ],
+   "bugs": [
+    {
+     "task": "4-pipeline",
+     "variant": "Forward",
+     "mutant": "no-flush",
+     "rule": "a taken branch flushes the younger instructions",
+     "exercise": "4.4"
+    }
+   ],
+   "specSeconds": 900,
+   "modelSeconds": 3601,
+   "simSeconds": 120
+  }
+ },
+ {
+  "name": "a simulation limit too long",
+  "valid": false,
+  "defense": {
+   "course": "ca2026-mycpu",
+   "salt": "MDEyMzQ1Njc4OWFiY2RlZg==",
+   "lines": 3,
+   "tasks": [
+    {
+     "dir": "4-pipeline",
+     "project": "pipeline",
+     "arch": "rv32im_zicsr"
+    }
+   ],
+   "bugs": [
+    {
+     "task": "4-pipeline",
+     "variant": "Forward",
+     "mutant": "no-flush",
+     "rule": "a taken branch flushes the younger instructions",
+     "exercise": "4.4"
+    }
+   ],
+   "specSeconds": 900,
+   "modelSeconds": 1200,
+   "simSeconds": 601
+  }
+ },
+ {
+  "name": "a 15-byte salt",
+  "valid": false,
+  "defense": {
+   "course": "ca2026-mycpu",
+   "salt": "c3Nzc3Nzc3Nzc3Nzc3Nz",
+   "lines": 3,
+   "tasks": [
+    {
+     "dir": "4-pipeline",
+     "project": "pipeline",
+     "arch": "rv32im_zicsr"
+    }
+   ],
+   "bugs": [
+    {
+     "task": "4-pipeline",
+     "variant": "Forward",
+     "mutant": "no-flush",
+     "rule": "a taken branch flushes the younger instructions",
+     "exercise": "4.4"
+    }
+   ],
+   "specSeconds": 900,
+   "modelSeconds": 1200,
+   "simSeconds": 120
+  }
+ },
+ {
+  "name": "a 65-byte salt",
+  "valid": false,
+  "defense": {
+   "course": "ca2026-mycpu",
+   "salt": "c3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3M=",
+   "lines": 3,
+   "tasks": [
+    {
+     "dir": "4-pipeline",
+     "project": "pipeline",
+     "arch": "rv32im_zicsr"
+    }
+   ],
+   "bugs": [
+    {
+     "task": "4-pipeline",
+     "variant": "Forward",
+     "mutant": "no-flush",
+     "rule": "a taken branch flushes the younger instructions",
+     "exercise": "4.4"
+    }
+   ],
+   "specSeconds": 900,
+   "modelSeconds": 1200,
+   "simSeconds": 120
+  }
+ },
+ {
   "name": "another course",
   "valid": false,
   "defense": {

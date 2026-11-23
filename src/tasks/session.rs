@@ -914,6 +914,7 @@ impl TaskSession {
     /// Captures a completed learner turn, unless time already ran out: a turn
     /// completing between the deadline and the next tick is speech after the
     /// end and cannot become review evidence.
+    #[cfg(test)]
     pub fn observe_turn(&mut self, id: &str, text: &str, now: u64) {
         self.observe_turn_begun(id, text, now, now);
     }

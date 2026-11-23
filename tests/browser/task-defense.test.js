@@ -304,8 +304,8 @@ test("the defense panel predicts, runs, locks and lets go in a browser", async (
       ],
     ]);
   } finally {
-    server?.close();
     await browser.close();
+    if (server) await new Promise((resolve) => server.close(resolve));
   }
 });
 
@@ -442,8 +442,8 @@ test("the panel draws a run's waveform and its test output in a browser", async 
     assert.equal(drawn.buses, 2, "core.pc holds 0x10, then 0x14");
     assert.match(drawn.output, /Tests: succeeded 0, failed 1/);
   } finally {
-    server?.close();
     await browser.close();
+    if (server) await new Promise((resolve) => server.close(resolve));
   }
 });
 
@@ -597,8 +597,8 @@ test("a prediction that the change will not compile, a refusal and an answer ove
     assert.equal(result.afterClaim, "bug:stated");
     assert.equal(result.row, "Predicted no build; the change did not compile");
   } finally {
-    server?.close();
     await browser.close();
+    if (server) await new Promise((resolve) => server.close(resolve));
   }
 });
 

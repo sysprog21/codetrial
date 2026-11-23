@@ -1265,4 +1265,5 @@ fn the_workspace_reaches_the_task_service() {
     .unwrap();
     let tasks = config.tasks.expect("task mode on loopback");
     assert_eq!(tasks.workspace(), Some(dir.join("checkout").as_path()));
+    let _ = std::fs::remove_dir_all(&dir);
 }

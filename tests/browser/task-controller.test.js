@@ -285,9 +285,18 @@ test("a defense result is displayed, and keeps its record when its feedback fail
   });
   assert.equal(failed.feedbackUnavailable, true);
   assert.equal(failed.defense, defense);
+  // The record of how the attempt ended stays; only the feedback goes.
+  assert.deepEqual(failed.taskAssessment, {
+    outcome: { outcome: "completed" },
+  });
+  // A defense mode without its section, or a section on a task result, is
+  // not a result at all: the withheld fallback, whole.
   for (const value of [
     { ...unavailable, defense: undefined },
     { ...unavailable, assessmentMode: "task" },
   ])
-    assert.equal(taskReviewForDisplay(value).defense, undefined);
+    assert.deepEqual(taskReviewForDisplay(value), {
+      assessmentMode: "task",
+      feedbackUnavailable: true,
+    });
 });
