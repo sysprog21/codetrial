@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use serde_json::json;
 
 pub(super) const SALT: &[u8] = b"0123456789abcdef";
@@ -43,4 +45,10 @@ pub(super) fn student_repo(label: &str) -> Repo {
     );
     repo.commit("hazard");
     repo
+}
+
+pub(super) fn executable(tool: &Path) {
+    let mut permissions = std::fs::metadata(tool).unwrap().permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
+    std::fs::set_permissions(tool, permissions).unwrap();
 }
