@@ -530,6 +530,31 @@ const files = {
       },
     ],
   },
+  "task-transcript.json": {
+    topic: lib.TASK_TOPICS.transcript,
+    cases: [
+      {
+        name: "a learner turn",
+        payload: {
+          version: 1,
+          role: "learner",
+          turnId: "turn-3",
+          at: 1795465000,
+          text: "The flush clears the younger instruction in decode.",
+        },
+      },
+      {
+        name: "the interviewer's reply",
+        payload: {
+          version: 1,
+          role: "jim",
+          turnId: null,
+          at: 1795465012,
+          text: "Which signal carries that flush, and in which cycle?",
+        },
+      },
+    ],
+  },
   "task-review.json": {
     topic: lib.TASK_TOPICS.review,
     cases: [

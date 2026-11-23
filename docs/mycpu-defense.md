@@ -252,8 +252,14 @@ failed prediction.
 
 A defense's setup is one screen that moves on by itself: accepting the rules
 asks for the microphone and camera, a ready face detector starts the
-calibration, and Start takes focus once it is done; the language choice and
-the optional local recording are not offered. The browser remembers the PIN
+calibration, and Start takes focus once it is done; the language choice is
+not offered. The optional local recording is, as in every task
+([task-mode.md](task-mode.md#local-recordings)): the learner may record this
+tab before Start, and once the defense ends its **Download** link appears
+beside the result with a line saying what it saves: a WebM of the page as it
+was shown, with Jim's voice and the microphone when tab audio was shared. It
+is never uploaded by CodeTrial, so it is saved before the tab is closed and
+then put on YouTube by the learner (see [Handing in](#handing-in)). The browser remembers the PIN
 of a defense set it has unlocked, for that set version only, and forgets it
 as soon as the server refuses it: the package is deterrence, and the defense
 runs on the learner's own machine, so anyone using that browser profile is
@@ -421,7 +427,36 @@ divergence and the bug's exercise; 0 for no claim; null when the models failed
 to build and nothing was claimed. A result made while a run, a build or a
 simulation still held the attempt, or a shorter request held it for ten
 seconds, uses the record as it stood after the request before, and says so
-with `runningAtEnd`. There is
-no total: the instructors set the marks. The export says that it was
-generated on the student's machine, that its marks are suggestions and not a
-grade, and that it proves neither identity nor independent work.
+with `runningAtEnd`. The result adds up the suggested marks as `total`:
+`{marks, outOf, complete}`, with 3 marks for each explanation, each
+prediction and the bug. It is null when the attempt did not complete, and
+`complete` is false when a part had no mark for a reason other than a missing
+turn or run (a telemetry gap, an unavailable review), so the sum may be
+short; the page says so. The instructors still set the marks. The export says
+that it was generated on the student's machine, that its marks are
+suggestions and not a grade, and that it proves neither identity nor
+independent work.
+
+## Handing in
+
+A learner may defend as often as they like and hands in the attempt they
+choose. Starting a new attempt clears the page, so each attempt that may be
+handed in is saved first. Two things are handed in for it:
+
+- **The recording**, which stays decoupled from the code. The learner
+  downloads the WebM, uploads it to YouTube (public or unlisted, not private)
+  and pastes the link into the result page.
+- **The submission ZIP** from **Download submission (.zip)**: `result.json`,
+  `code.txt` (retained run details per item and the bug claim),
+  `transcript.txt` (the conversation, one line per turn with its UTC time) and
+  `manifest.json`. The manifest names each file by its SHA-256, the attempt
+  (set, version, session, student, checkout head) and the YouTube link, so the
+  files of one attempt are not mixed with another's. File names are plain
+  ASCII. The link is checked to be a YouTube video or playlist address; with
+  none, the ZIP is made without one and the page says so.
+
+The transcript is an incomplete record of the `task_transcript` lines the
+page received: turns may be missing or shortened, including all lines captured
+before a reload or crash. The hashes catch
+a mix-up of files; they prove neither who made the attempt nor that nothing
+was edited, nor what the video shows.

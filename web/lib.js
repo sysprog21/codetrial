@@ -2336,6 +2336,7 @@ export const TASK_TOPICS = Object.freeze({
   end: "task_end",
   thinking: "task_thinking",
   error: "task_error",
+  transcript: "task_transcript",
   action: "task_action",
   revision: "task_revision",
   run: "task_run",

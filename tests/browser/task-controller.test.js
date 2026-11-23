@@ -263,3 +263,40 @@ test("a sleep that stops the monotonic clock only shortens the time left", () =>
   // Ten minutes of sleep: the wall clock moved, the monotonic one did not.
   assert.equal(serverTimeAt(offset, 2_000, start + 600_000), start + 600_000);
 });
+
+// A defense result is a task result with its defense section beside it, and
+// is shown, or withheld, by the same check; a mode that does not match its
+// section is not shown.
+test("a defense result is displayed, and keeps its record when its feedback fails", () => {
+  const defense = { items: [], bug: { suggestedMark: 0 }, notice: "n" };
+  const unavailable = {
+    assessmentMode: "defense",
+    taskContract: contract,
+    feedbackUnavailable: true,
+    taskAssessment: { sessionId: "task-room" },
+    defense,
+  };
+  assert.equal(taskReviewForDisplay(unavailable), unavailable);
+  const failed = taskReviewForDisplay({
+    assessmentMode: "defense",
+    taskContract: contract,
+    taskAssessment: { outcome: { outcome: "completed" }, dimensions: {} },
+    defense,
+  });
+  assert.equal(failed.feedbackUnavailable, true);
+  assert.equal(failed.defense, defense);
+  // The record of how the attempt ended stays; only the feedback goes.
+  assert.deepEqual(failed.taskAssessment, {
+    outcome: { outcome: "completed" },
+  });
+  // A defense mode without its section, or a section on a task result, is
+  // not a result at all: the withheld fallback, whole.
+  for (const value of [
+    { ...unavailable, defense: undefined },
+    { ...unavailable, assessmentMode: "task" },
+  ])
+    assert.deepEqual(taskReviewForDisplay(value), {
+      assessmentMode: "task",
+      feedbackUnavailable: true,
+    });
+});

@@ -7,6 +7,7 @@ import {
   read,
   startStaticServer,
 } from "./source.js";
+import { readZip, sha256 } from "./zip-reader.js";
 import {
   apply,
   parseAlgorithm,
@@ -148,6 +149,7 @@ async function pageFor(
     taskOverrides = {},
     realLivekit = false,
     builtIn = null,
+    stored = {},
   } = {},
 ) {
   if (!browser) {
@@ -162,6 +164,11 @@ async function pageFor(
   const admissions = [];
   const reviewRequests = [];
   const unlocks = [];
+  // What this browser kept from an earlier visit.
+  await page.addInitScript((entries) => {
+    for (const [key, value] of Object.entries(entries))
+      localStorage.setItem(key, value);
+  }, stored);
   await page.addInitScript(
     ({ denied, faceFiles }) => {
       if (faceFiles) globalThis.faceFilesResult = faceFiles;
@@ -1021,10 +1028,85 @@ test("device sign-in, then the PIN unlocks the set at the linked site and versio
     await page.locator("#pin-form button").click();
     await page.locator("#message").waitFor({ state: "visible" });
     assert.match(await page.locator("#message-text").textContent(), /PIN/);
+    // A typed PIN stays in the field to be corrected.
+    assert.equal(await page.inputValue("#pin"), "000000");
     await page.fill("#pin", "123456");
     await page.locator("#pin-form button").click();
     await page.locator("#prepare").waitFor({ state: "visible" });
     assert.deepEqual(unlocks.at(-1), { site: SITE, version: 7, pin: "123456" });
+  } finally {
+    await page.close();
+  }
+});
+
+test("a defense set's PIN is remembered for its version and forgotten once refused", async (t) => {
+  const key = `codetrial.defense-pin:${SITE}|classroom|7`;
+  const defense = { taskOverrides: { defense: {} } };
+  const stored = (page) => page.evaluate((k) => localStorage.getItem(k), key);
+
+  // Kept after an unlock of a defense set, and never for any other set.
+  let ctx = await pageFor(t, defense);
+  if (!ctx) return;
+  try {
+    await unlock(ctx.page);
+    assert.equal(await stored(ctx.page), "123456");
+  } finally {
+    await ctx.page.close();
+  }
+  ctx = await pageFor(t);
+  try {
+    await unlock(ctx.page);
+    assert.equal(await stored(ctx.page), null);
+  } finally {
+    await ctx.page.close();
+  }
+
+  // A later visit, after a restart, unlocks with it unasked.
+  ctx = await pageFor(t, { ...defense, stored: { [key]: "123456" } });
+  try {
+    await ctx.page.locator("#prepare").waitFor({ state: "visible" });
+    assert.deepEqual(ctx.unlocks, [{ site: SITE, version: 7, pin: "123456" }]);
+  } finally {
+    await ctx.page.close();
+  }
+
+  // One the server refuses is forgotten, and the PIN is asked for.
+  ctx = await pageFor(t, { ...defense, stored: { [key]: "000000" } });
+  try {
+    await ctx.page.locator("#message").waitFor({ state: "visible" });
+    assert.match(await ctx.page.locator("#message-text").textContent(), /PIN/);
+    assert.equal(ctx.unlocks.length, 1);
+    assert.equal(await stored(ctx.page), null);
+    assert.equal(await ctx.page.inputValue("#pin"), "");
+  } finally {
+    await ctx.page.close();
+  }
+});
+
+test("a defense's setup moves on by itself from the rules to Start", async (t) => {
+  const ctx = await pageFor(t, { taskOverrides: { defense: {} } });
+  if (!ctx) return;
+  const { page } = ctx;
+  try {
+    await unlock(page);
+    assert.equal(await page.locator("#language-choice").isVisible(), false);
+    // Accepting the rules is the only press before the typed line and Start.
+    await page.check("#acknowledge");
+    await calibrationPhases(page);
+    await page.waitForFunction(
+      () => !document.getElementById("start").disabled,
+    );
+    assert.equal(
+      await page.evaluate(() => document.activeElement?.id),
+      "start",
+    );
+    assert.equal(
+      await page.$eval(
+        ".setup-panel h2",
+        (h) => getComputedStyle(h, "::before").content,
+      ),
+      'counter(setup-step) ". "',
+    );
   } finally {
     await page.close();
   }
@@ -3456,14 +3538,9 @@ async function recordAgainAndStart(page) {
   await page.waitForFunction(() => !document.getElementById("code").disabled);
 }
 
-async function prepareLocalRecording(page) {
-  await page.addInitScript(() => {
-    navigator.mediaDevices.setCaptureHandleConfig = ({ handle }) => {
-      window.taskCaptureHandle = handle;
-    };
-  });
-  await page.reload();
-  await prepare(page);
+// A recorder that hands over its data when stopped, and a tab-capture
+// picker that answers at once.
+async function installFakeRecorder(page) {
   await page.evaluate(() => {
     // Codec coverage lives in local-recorder.test.js. This fixture controls
     // final data delivery while exercising the task's real lifecycle wiring.
@@ -3504,6 +3581,17 @@ async function prepareLocalRecording(page) {
       return stream;
     };
   });
+}
+
+async function prepareLocalRecording(page) {
+  await page.addInitScript(() => {
+    navigator.mediaDevices.setCaptureHandleConfig = ({ handle }) => {
+      window.taskCaptureHandle = handle;
+    };
+  });
+  await page.reload();
+  await prepare(page);
+  await installFakeRecorder(page);
   await page.click("[data-local-start]");
   await page.waitForFunction(() =>
     document.querySelector("[data-local-stop]").textContent.includes("00:"),
@@ -3626,6 +3714,181 @@ for (const ending of [
       .waitFor({ state: "visible" });
   });
 }
+
+// A defense result as the runtime sends it, with the facts the submission reads.
+function defended() {
+  return {
+    ...result("completed", "finish"),
+    assessmentMode: "defense",
+    defense: {
+      items: [],
+      bug: { claim: null },
+      stamp: { studentId: "B12345678", head: "abc123" },
+    },
+  };
+}
+
+test("a defense can be recorded locally, and its result says what Download saves", async (t) => {
+  const fixture = await pageFor(t, { taskOverrides: { defense: {} } });
+  if (!fixture) return;
+  const { page } = fixture;
+  t.after(() => page.close());
+  await page.addInitScript(() => {
+    navigator.mediaDevices.setCaptureHandleConfig = ({ handle }) => {
+      window.taskCaptureHandle = handle;
+    };
+  });
+  await page.reload();
+  await unlock(page);
+  await installFakeRecorder(page);
+  await page.check("#acknowledge");
+  await calibrationPhases(page);
+  await page.waitForFunction(() => !document.getElementById("start").disabled);
+  // Offered as in every task, with the language choice still left out.
+  assert.equal(await page.locator("#language-choice").isVisible(), false);
+  await page
+    .locator("#prepare [data-local-start]")
+    .waitFor({ state: "visible" });
+  assert.equal(
+    await page.locator("#prepare [data-local-note]").isVisible(),
+    false,
+  );
+  await page.click("[data-local-start]");
+  await page.waitForFunction(() =>
+    document.querySelector("[data-local-stop]").textContent.includes("00:"),
+  );
+  await page.click("#start");
+  await page.waitForFunction(() => !document.getElementById("task").hidden);
+  const download = page.waitForEvent("download");
+  await page.evaluate(() => {
+    globalThis.taskHarness.state.phase = "feedback";
+    globalThis.taskHarness.publish();
+  });
+  assert.match((await download).suggestedFilename(), /\.webm$/);
+  await page.evaluate(() => {
+    const send = globalThis.taskHarness.publish.bind(globalThis.taskHarness);
+    send("task_transcript", {
+      version: 1,
+      role: "jim",
+      turnId: null,
+      at: 1795465012,
+      text: "Which signal carries the flush?",
+    });
+    send("task_transcript", {
+      version: 1,
+      role: "learner",
+      turnId: "turn-1",
+      at: 1795465020,
+      text: "id flush, in cycle 14.",
+    });
+  });
+  await page.evaluate(
+    (review) => globalThis.taskHarness.publish("task_review", review),
+    defended(),
+  );
+  await page
+    .locator("#review [data-local-download]")
+    .waitFor({ state: "visible" });
+  const note = page.locator("#review [data-local-note]");
+  await note.waitFor({ state: "visible" });
+  const said = await note.textContent();
+  assert.match(said, /never uploads/);
+  assert.match(said, /Jim's voice/);
+  assert.match(said, /ffmpeg/);
+
+  // The submission is one ZIP of code, transcript and result; the recording
+  // goes on YouTube and is named by its link.
+  await page.locator("#submission-help").waitFor({ state: "visible" });
+  await page.fill("#recording-url", "https://youtu.be/0MiU9z_UDc8");
+  const handed = page.waitForEvent("download");
+  await page.click("#export-submission");
+  const zip = await handed;
+  assert.match(zip.suggestedFilename(), /^defense-submission-.*\.zip$/);
+  const files = readZip(await readFile(await zip.path()));
+  assert.deepEqual(
+    files.map((file) => file.name),
+    ["result.json", "code.txt", "transcript.txt", "manifest.json"],
+  );
+  const text = (file) => Buffer.from(file.bytes).toString();
+  assert.match(text(files[2]), /Jim: Which signal carries the flush\?/);
+  assert.match(text(files[2]), /Learner \(turn-1\): id flush, in cycle 14\./);
+  const manifest = JSON.parse(text(files[3]));
+  assert.equal(manifest.format, "codetrial-defense-submission-2");
+  assert.equal(manifest.recordingUrl, "https://youtu.be/0MiU9z_UDc8");
+  assert.equal(manifest.files.length, 3);
+  for (const file of files.slice(0, 3)) {
+    const named = manifest.files.find((entry) => entry.name === file.name);
+    assert.equal(named.sha256, sha256(file.bytes), file.name);
+    assert.equal(named.bytes, file.bytes.length, file.name);
+  }
+  assert.equal(
+    JSON.parse(text(files[0])).taskAssessment.outcome.outcome,
+    "completed",
+  );
+  assert.match(
+    await page.locator("#submission-status").textContent(),
+    /names your YouTube recording/,
+  );
+});
+
+test("a link that is not a YouTube video is refused, and none is allowed", async (t) => {
+  const fixture = await pageFor(t, { taskOverrides: { defense: {} } });
+  if (!fixture) return;
+  const { page } = fixture;
+  t.after(() => page.close());
+  await unlock(page);
+  await page.check("#acknowledge");
+  await calibrationPhases(page);
+  await page.waitForFunction(() => !document.getElementById("start").disabled);
+  await page.click("#start");
+  await page.waitForFunction(() => !document.getElementById("task").hidden);
+  await page.evaluate(() => {
+    globalThis.taskHarness.state.phase = "feedback";
+    globalThis.taskHarness.publish();
+  });
+  await page.evaluate(
+    (review) => globalThis.taskHarness.publish("task_review", review),
+    defended(),
+  );
+  await page.fill("#recording-url", "https://example.com/watch?v=0MiU9z_UDc8");
+  await page.locator("#export-submission").click();
+  await page.waitForFunction(() =>
+    /could not be made/.test(
+      document.getElementById("submission-status").textContent,
+    ),
+  );
+  await page.fill("#recording-url", "");
+  const handed = page.waitForEvent("download");
+  await page.locator("#export-submission").click();
+  const files = readZip(await readFile(await (await handed).path()));
+  const manifest = JSON.parse(Buffer.from(files[3].bytes).toString());
+  assert.equal(manifest.recordingUrl, null);
+  assert.match(
+    await page.locator("#submission-status").textContent(),
+    /names no recording/,
+  );
+});
+
+test("a task that is not a defense offers no submission", async (t) => {
+  const fixture = await pageFor(t);
+  if (!fixture) return;
+  const { page } = fixture;
+  t.after(() => page.close());
+  await prepare(page);
+  await page.click("#start");
+  await page.waitForFunction(() => !document.getElementById("code").disabled);
+  await page.evaluate(() => {
+    globalThis.taskHarness.state.phase = "feedback";
+    globalThis.taskHarness.publish();
+  });
+  await page.evaluate(
+    (review) => globalThis.taskHarness.publish("task_review", review),
+    result("completed", "finish"),
+  );
+  await page.locator("#review").waitFor({ state: "visible" });
+  assert.equal(await page.locator("#export-submission").isHidden(), true);
+  assert.equal(await page.locator("#submission-help").isHidden(), true);
+});
 
 test("task recording finalizes before stopped camera devices are replaced", async (t) => {
   const fixture = await pageFor(t);

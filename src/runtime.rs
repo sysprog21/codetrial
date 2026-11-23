@@ -190,3 +190,6 @@ pub const TOPIC_TASK_START: &str = "task_start";
 pub const TOPIC_TASK_END: &str = "task_end";
 pub const TOPIC_TASK_THINKING: &str = "task_thinking";
 pub const TOPIC_TASK_ERROR: &str = "task_error";
+/// One line of the conversation, runtime to page: the page keeps them for the
+/// transcript of a defense's submission.
+pub const TOPIC_TASK_TRANSCRIPT: &str = "task_transcript";

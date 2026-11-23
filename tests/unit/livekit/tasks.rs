@@ -779,3 +779,27 @@ async fn the_hints_a_replacement_is_told_never_run_past_the_task_list() {
     session.hint_rungs_used = all + 5;
     assert_eq!(delivered_hints(&session).len(), all);
 }
+
+/// A line of the transcript is what the wire fixture says it is, and one very
+/// long turn is cut where it stops being a line.
+#[test]
+fn a_transcript_line_has_the_fixtures_shape_and_is_bounded() {
+    let fixture: serde_json::Value =
+        serde_json::from_str(include_str!("../../../tests/fixtures/task-transcript.json")).unwrap();
+    assert_eq!(fixture["topic"], crate::runtime::TOPIC_TASK_TRANSCRIPT);
+    for case in fixture["cases"].as_array().unwrap() {
+        let payload = &case["payload"];
+        let built = transcript_line(
+            payload["role"].as_str().unwrap(),
+            payload["turnId"].as_str(),
+            &format!("  {}  ", payload["text"].as_str().unwrap()),
+            payload["at"].as_u64().unwrap(),
+        );
+        assert_eq!(&built, payload, "{}", case["name"]);
+    }
+    let long = transcript_line("jim", None, &"x".repeat(MAX_TRANSCRIPT_CHARS + 50), 1);
+    assert_eq!(
+        long["text"].as_str().unwrap().chars().count(),
+        MAX_TRANSCRIPT_CHARS
+    );
+}

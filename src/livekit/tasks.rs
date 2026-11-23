@@ -15,6 +15,7 @@ use crate::config::AgentConfig;
 use crate::gemini::{GeminiEvent, GeminiKeys, GeminiLiveSession, TokenUsage};
 use crate::runtime::{
     TOOL_READ_BOARD, TOPIC_TASK_CONNECTED, TOPIC_TASK_ERROR, TOPIC_TASK_REVIEW, TOPIC_TASK_STATE,
+    TOPIC_TASK_TRANSCRIPT,
 };
 use crate::tasks::access::PinnedTask;
 use crate::tasks::default_number;
@@ -267,6 +268,21 @@ async fn brief_replacement(
 }
 
 /// A `task_error`, typed, so its shape is checked where it is written.
+/// The most of one spoken turn the page is sent for the transcript it keeps.
+const MAX_TRANSCRIPT_CHARS: usize = 4000;
+
+/// One line of the conversation for the page to keep, `role` being `learner`
+/// or `jim`. The learner's carries the id of the turn the review cites.
+fn transcript_line(role: &str, turn_id: Option<&str>, text: &str, at: u64) -> Value {
+    json!({
+        "version": 1,
+        "role": role,
+        "turnId": turn_id,
+        "at": at,
+        "text": text.trim().chars().take(MAX_TRANSCRIPT_CHARS).collect::<String>(),
+    })
+}
+
 async fn publish_error(room: &Room, error: ErrorMessage) {
     publish(room, TOPIC_TASK_ERROR, &json!(error)).await;
 }
@@ -747,6 +763,10 @@ impl TaskRoom<'_> {
         // was muted, so a replacement socket is not told it was heard.
         let muted_recording = self.wrap_up_recording_since.take().is_some();
         let reply = std::mem::take(&mut self.reply);
+
+        // What the learner hears in the room, for the page's transcript; a
+        // reply that was muted, as to a recording request, was never heard.
+        let heard = (!muted_recording && !reply.trim().is_empty()).then(|| reply.clone());
         if !muted_recording && !reply.trim().is_empty() {
             self.last_reply = reply;
         }
@@ -757,6 +777,13 @@ impl TaskRoom<'_> {
             self.session
                 .observe_turn_begun(&id, &self.transcript, self.transcript_since, now);
             self.last_completed_turn = now;
+            let line = transcript_line(
+                "learner",
+                Some(&id),
+                &self.transcript,
+                self.transcript_since,
+            );
+            publish(&self.room, TOPIC_TASK_TRANSCRIPT, &line).await;
 
             // An answer to a wrap-up question asks for a silent reply, so the
             // check it supports can be recorded before the next question or
@@ -777,6 +804,10 @@ impl TaskRoom<'_> {
                     self.reply_owed_since = Some(Instant::now());
                 }
             }
+        }
+        if let Some(text) = heard {
+            let line = transcript_line("jim", None, &text, crate::current_epoch_seconds());
+            publish(&self.room, TOPIC_TASK_TRANSCRIPT, &line).await;
         }
         self.suppress_output = self.wrap_up_recording_since.is_some();
     }

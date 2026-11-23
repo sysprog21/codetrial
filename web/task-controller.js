@@ -153,7 +153,9 @@ export function taskReviewForDisplay(value) {
   const unavailable = { assessmentMode: "task", feedbackUnavailable: true };
   const versions = ["package", "prompt", "wire", "reportSchema", "rubric"];
   if (
-    value?.assessmentMode !== "task" ||
+    // A defense result is a task result with its defense section beside it.
+    !["task", "defense"].includes(value?.assessmentMode) ||
+    (value.assessmentMode === "defense") !== Boolean(value.defense) ||
     !value.taskContract ||
     Object.keys(value.taskContract).length !== versions.length ||
     !versions.every((key) => value.taskContract[key] === 1)
