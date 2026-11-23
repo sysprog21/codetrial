@@ -653,15 +653,16 @@ test("basic-calculator cases reject parsers without a unary minus", () => {
   }
 });
 
-test("word-break cases reject each split that never revisits a cut", () => {
+test("word-break cases reject splits that go back no further than the last cut and prefix tables that ask about one term", () => {
+  const flip = (text, fromEnd) =>
+    fromEnd ? [...text].reverse().join("") : text;
   // Cuts one term at a time and never goes back. With `lookahead` it only
   // takes a term that the rest of the tag can start another term after.
   const split =
     (pick, fromEnd, lookahead = false) =>
     (s, vocabulary) => {
-      const flip = (text) => (fromEnd ? [...text].reverse().join("") : text);
-      const tag = flip(s);
-      const terms = vocabulary.map(flip);
+      const tag = flip(s, fromEnd);
+      const terms = vocabulary.map((term) => flip(term, fromEnd));
       const followed = (at) =>
         at === tag.length || terms.some((term) => tag.startsWith(term, at));
       let at = 0;
@@ -682,12 +683,44 @@ test("word-break cases reject each split that never revisits a cut", () => {
     fits.reduce((best, term) => (term.length > best.length ? term : best));
   const first = (fits) => fits[0];
   const last = (fits) => fits.at(-1);
-  const choices = [
+  // Goes back only as far as its last cut: at a dead end it cuts the next term
+  // there, and gives up once that cut has no term left.
+  const undoLast = (pick, fromEnd) => (s, vocabulary) => {
+    const tag = flip(s, fromEnd);
+    const terms = vocabulary.map((term) => flip(term, fromEnd));
+    const cuts = [];
+    let at = 0;
+    while (at < tag.length) {
+      let from = at;
+      let left = terms.filter((term) => tag.startsWith(term, at));
+      if (left.length === 0) {
+        const cut = cuts.pop();
+        if (!cut || cut.left.length === 0) return false;
+        ({ from, left } = cut);
+      }
+      const term = pick(left);
+      cuts.push({ from, left: left.filter((other) => other !== term) });
+      at = from + term.length;
+    }
+    return true;
+  };
+  // Records whether each prefix splits, but asks only about the one term
+  // `pick` takes among those that end the prefix, not about each of them.
+  const oneTermDecides = (pick) => (s, vocabulary) => {
+    const splits = [true];
+    for (let end = 1; end <= s.length; end += 1) {
+      const fits = vocabulary.filter((term) => s.endsWith(term, end));
+      splits[end] = fits.length > 0 && splits[end - pick(fits).length];
+    }
+    return splits[s.length];
+  };
+  const picks = [
     ["the shortest term", shortest],
     ["the longest term", longest],
     ["the first listed term", first],
     ["the last listed term", last],
-  ].flatMap(([term, pick]) =>
+  ];
+  const choices = picks.flatMap(([term, pick]) =>
     [false, true].flatMap((lookahead) =>
       [false, true].map((fromEnd) => [
         `${term}${lookahead ? " another term can follow" : ""}${fromEnd ? " from the end" : ""}`,
@@ -695,13 +728,27 @@ test("word-break cases reject each split that never revisits a cut", () => {
       ]),
     ),
   );
+  const retries = picks.flatMap(([term, pick]) =>
+    [false, true].map((fromEnd) => [
+      `${term}${fromEnd ? " from the end" : ""} and going back only to the last cut`,
+      undoLast(pick, fromEnd),
+    ]),
+  );
   const run = "one different letter in a run";
-  for (const [name, cut] of choices) {
+  for (const [name, cut] of [...choices, ...retries]) {
     assertRejects(
       "word-break",
       run,
       cut,
       `"${run}" must reject always cutting ${name}`,
+    );
+  }
+  for (const [term, pick] of picks) {
+    assertRejects(
+      "word-break",
+      run,
+      oneTermDecides(pick),
+      `"${run}" must reject asking each prefix only about ${term} that ends it`,
     );
   }
   const inside = "term inside a longer term";
@@ -721,7 +768,13 @@ test("word-break cases reject each split that never revisits a cut", () => {
   // misses the run case whichever term it cuts, so the term each one picks is
   // pinned on overlapping words, which lists car before ca: from the front
   // the shortest and the last listed term split it, while the longest and
-  // the first listed term stop at s.
+  // the first listed term stop at s. Going back to the last cut fails the run
+  // case too, so overlapping words, which splits only once car is undone,
+  // shows that it goes back, and catsdog, which it splits from the front only
+  // after cats, pins its term and its direction. A prefix table fails the run
+  // case whichever term it asks about, and no case tells those terms apart, so
+  // ab over ab and b does: only the longest and the first listed term that end
+  // it reach the start.
   const { input, expected } = pinnedCase("word-break", inside);
   assert.equal(
     split(shortest, true)(...input),
@@ -734,6 +787,40 @@ test("word-break cases reject each split that never revisits a cut", () => {
     cars.expected,
     `"overlapping words" must split when the longest term another term can follow is cut`,
   );
+  assert.equal(
+    undoLast(longest, false)(...cars.input),
+    cars.expected,
+    `"overlapping words" must split when the longest term is cut and the last cut is gone back to`,
+  );
+  for (const [name, pick, splits] of [
+    ["the shortest term", shortest, false],
+    ["the first listed term", first, false],
+    ["the longest term", longest, true],
+    ["the last listed term", last, true],
+  ]) {
+    assert.equal(
+      undoLast(pick, false)(...input) === expected,
+      splits,
+      `"${inside}" must ${splits ? "split" : "reject"} when ${name} is cut and the last cut is gone back to`,
+    );
+  }
+  assert.equal(
+    undoLast(shortest, true)(...input),
+    expected,
+    `"${inside}" must split when the shortest term is cut from the end and the last cut is gone back to`,
+  );
+  for (const [name, pick, splits] of [
+    ["the shortest term", shortest, false],
+    ["the last listed term", last, false],
+    ["the longest term", longest, true],
+    ["the first listed term", first, true],
+  ]) {
+    assert.equal(
+      oneTermDecides(pick)("ab", ["ab", "b"]),
+      splits,
+      `"ab" over ab and b must ${splits ? "split" : "not split"} when each prefix asks only about ${name} that ends it`,
+    );
+  }
   for (const [name, pick, splits] of [
     ["the shortest term", shortest, true],
     ["the last listed term", last, true],
