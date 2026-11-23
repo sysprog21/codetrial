@@ -250,3 +250,28 @@ fn the_bug_is_marked_by_what_the_claim_checks() {
         json!(3)
     );
 }
+
+/// A replacement connection is told what the last run of each item showed:
+/// the specs that failed, that every spec passed, that the change did not
+/// compile, or that the run said nothing.
+#[test]
+fn a_replacement_is_told_what_each_last_run_showed() {
+    let item = |id: &str, outcome: Value| {
+        json!({"id": id, "begunAt": 10, "pendingPrediction": null,
+            "runs": [{"outcome": outcome}]})
+    };
+    let facts = json!({"items": [
+        item("q1", json!({"kind": "tests", "failed": ["p.ASpec"]})),
+        item("q2", json!({"kind": "tests", "failed": []})),
+        item("q3", json!({"kind": "compileError"})),
+        item("q4", json!({"kind": "telemetryGap", "reason": "timeout"}))]});
+    let told = super::progress(&facts, &Hints::default());
+    for said in [
+        r#"q1 opened, 1 run(s), the last showing failed: ["p.ASpec"]"#,
+        "q2 opened, 1 run(s), the last showing every spec it ran passing",
+        "q3 opened, 1 run(s), the last showing the change did not compile",
+        "q4 opened, 1 run(s), the last showing a telemetry gap",
+    ] {
+        assert!(told.contains(said), "{said:?} not in {told}");
+    }
+}

@@ -1088,5 +1088,53 @@
    "simSeconds": 120,
    "hints": -1
   }
+ },
+ {
+  "name": "no bugs",
+  "valid": false,
+  "defense": {
+   "course": "ca2026-mycpu",
+   "salt": "MDEyMzQ1Njc4OWFiY2RlZg==",
+   "lines": 3,
+   "tasks": [
+    {
+     "dir": "4-pipeline",
+     "project": "pipeline",
+     "arch": "rv32im_zicsr"
+    }
+   ],
+   "bugs": [],
+   "specSeconds": 900,
+   "modelSeconds": 1200,
+   "simSeconds": 120
+  }
+ },
+ {
+  "name": "a project name with a space",
+  "valid": false,
+  "defense": {
+   "course": "ca2026-mycpu",
+   "salt": "MDEyMzQ1Njc4OWFiY2RlZg==",
+   "lines": 3,
+   "tasks": [
+    {
+     "dir": "4-pipeline",
+     "project": "pipe line",
+     "arch": "rv32im_zicsr"
+    }
+   ],
+   "bugs": [
+    {
+     "task": "4-pipeline",
+     "variant": "Forward",
+     "mutant": "no-flush",
+     "rule": "a taken branch flushes the younger instructions",
+     "exercise": "4.4"
+    }
+   ],
+   "specSeconds": 900,
+   "modelSeconds": 1200,
+   "simSeconds": 120
+  }
  }
 ]

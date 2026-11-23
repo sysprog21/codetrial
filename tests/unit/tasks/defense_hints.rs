@@ -40,6 +40,13 @@ async fn hints_are_reserved_within_the_budget_and_cap_their_item() {
         "a replacement connection is told the hints given: {}",
         slot.progress()
     );
+    // The page sees the hints and the phase the slot holds.
+    let view = slot.view(&slot.try_lock().unwrap());
+    assert_eq!(view["hints"]["allowed"], 2);
+    assert_eq!(view["hints"]["given"][&item], 2);
+    assert_eq!(view["itemsOpen"], true);
+    assert_eq!(view["lines"][0]["id"], item.as_str());
+    assert_eq!(view["lines"][0]["begun"], true);
 
     // The result says how many each item had, and caps its marks.
     let mut facts = slot.kept();
@@ -228,6 +235,10 @@ async fn a_hint_needs_an_answer_since_the_item_opened_and_the_last_hint() {
     assert!(!session.work_open(), "frozen work closes the panel");
     session.phase = crate::tasks::session::Phase::Work;
 
+    // A defense offers no follow-up, even on a check its task names.
+    assert!(session.task.exercise.check_question("explain").is_some());
+    assert!(session.targeted_followup("explain").is_err());
+
     // The review may rate a dimension 2 with the hint, citing an answer after
     // it; an answer before every hint is no provenance; and an independent 3
     // after a hint stands, a hint being about one item.
@@ -257,4 +268,40 @@ async fn a_hint_needs_an_answer_since_the_item_opened_and_the_last_hint() {
     assert!(validate(review(json!(2), "conceptual_hint", "turn-1")).is_err());
     validate(review(json!(3), "none", "turn-3")).unwrap();
     assert!(crate::tasks::report::prompt(&session).contains("Jim gave hints"));
+
+    // A row that marks the line must give its evidence, and cites a turn only
+    // through a turn reference.
+    let unrated = json!({"rating": null, "reason": "Too little was said.",
+        "insufficientReason": "missing_turns", "support": "none", "evidence": []});
+    let with_row = |row: Value| {
+        let mut rows = rows.clone();
+        rows[0] = row;
+        json!({"dimensions": {"reasoningParticipation": unrated,
+                "implementationOwnership": unrated, "testingAndDiagnosis": unrated,
+                "revisionAndImprovement": unrated},
+            "gaps": [], "nextActions": [], "explanations": rows})
+    };
+    let row = |account: Value, evidence: Value| {
+        json!({"item": item, "rating": 2, "account": account,
+            "reason": "The learner said what the line checks.", "evidence": evidence})
+    };
+    let turn = json!([{"kind": "turn", "id": "turn-3"}]);
+    validate(with_row(row(json!(null), turn))).unwrap();
+    for account in [json!(null), json!(2)] {
+        assert_eq!(
+            validate(with_row(row(account, json!(null)))).unwrap_err().0,
+            "invalid explanation evidence",
+            "a mark with its evidence left out"
+        );
+    }
+    assert_eq!(
+        validate(with_row(row(
+            json!(null),
+            json!([{"kind": "revision", "id": "turn-3"}])
+        )))
+        .unwrap_err()
+        .0,
+        "dangling review evidence reference",
+        "a reference of another kind does not cite a turn"
+    );
 }

@@ -658,6 +658,159 @@ fn the_hint_tool_is_offered_only_when_hints_are_allowed() {
     assert_eq!(offered.len(), names(base).len() + 1);
 }
 
+/// A student checkout with one graded line added over upstream, removed when
+/// dropped.
+#[cfg(unix)]
+struct Checkout(std::path::PathBuf);
+
+#[cfg(unix)]
+impl Checkout {
+    fn new(label: &str) -> Self {
+        let dir = std::env::temp_dir().join(format!(
+            "codetrial-room-defense-{label}-{}",
+            std::process::id()
+        ));
+        let _gone = std::fs::remove_dir_all(&dir);
+        let checkout = Self(dir);
+        let cpu = "4-pipeline/src/main/scala/mycpu/pipeline/CPU.scala";
+        std::fs::create_dir_all(checkout.0.join(cpu).parent().unwrap()).unwrap();
+        checkout.git(&["init", "-q", "-b", "main"]);
+        checkout.write(
+            cpu,
+            "class CPU {\n  // [CA26: Exercise 4.4] flush\n  ???\n}\n",
+        );
+        checkout.git(&["add", "-A"]);
+        checkout.git(&["commit", "-q", "-m", "upstream"]);
+        checkout.git(&["update-ref", "refs/remotes/upstream/main", "HEAD"]);
+        checkout.write(
+            cpu,
+            "class CPU {\n  // [CA26: Exercise 4.4] flush\n  io.flush := taken && valid\n}\n",
+        );
+        checkout.write("STUDENT_ID", "F74121234\n");
+        checkout.git(&["add", "-A"]);
+        checkout.git(&["commit", "-q", "-m", "cpu"]);
+        checkout
+    }
+
+    fn write(&self, path: &str, text: &str) {
+        std::fs::write(self.0.join(path), text).unwrap();
+    }
+
+    fn git(&self, args: &[&str]) {
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&self.0)
+            .args(["-c", "user.name=T", "-c", "user.email=t@example.invalid"])
+            .args([
+                "-c",
+                "commit.gpgsign=false",
+                "-c",
+                "core.hooksPath=/dev/null",
+            ])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "git {args:?}: {output:?}");
+    }
+}
+
+#[cfg(unix)]
+impl Drop for Checkout {
+    fn drop(&mut self) {
+        let _gone = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// A defense room that allows hints: its connection is set up with the hint
+/// tool, and the panel opens with the work, takes new items only while the
+/// work is under way, and closes once the room is lost.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_defense_room_offers_its_hint_tool_and_drives_the_panel() {
+    use crate::tasks::access::{Admission, Preparation, TaskService};
+    use crate::tasks::test_support::{SITE, assignment, preparation};
+
+    let config = crate::config::load_from_pairs([
+        ("LIVEKIT_URL", "wss://example.livekit.cloud"),
+        ("LIVEKIT_API_KEY", "devkey"),
+        ("LIVEKIT_API_SECRET", "devsecret"),
+        ("GOOGLE_API_KEY", "task-test-key"),
+    ])
+    .unwrap();
+    let tools = |task: &PinnedTask| {
+        let live = TaskLive::new(&config, task);
+        crate::gemini::LiveSession::live_settings(&live).tools
+    };
+    assert_eq!(
+        tools(&admitted().await),
+        crate::gemini::task_tool_declarations(),
+        "a task room's connection is given the task tools"
+    );
+
+    let checkout = Checkout::new("panel");
+    let plaintext = json!({"packageVersion": 1, "setId": "mycpu", "setVersion": 1,
+        "rules": {"durationMin": 60, "maxHintRungs": 0, "closesAt": null,
+            "lookAwaySeconds": 8, "rulesNote": null},
+        "defense": {"course": "ca2026-mycpu", "salt": "MDEyMzQ1Njc4OWFiY2RlZg==",
+            "lines": 1, "hints": 1,
+            "tasks": [{"dir": "4-pipeline", "project": "pipeline", "arch": "rv32im_zicsr"}],
+            "bugs": [{"task": "4-pipeline", "variant": null, "mutant": "no-flush",
+                "rule": "a taken branch flushes", "exercise": "4.4"}],
+            "specSeconds": 900, "modelSeconds": 1200, "simSeconds": 120}});
+    let set = crate::tasks::package::decode("mycpu", 1, &serde_json::to_vec(&plaintext).unwrap())
+        .unwrap();
+    let service = TaskService::new();
+    service.insert_unlocked(1, SITE, std::sync::Arc::new(set));
+    let assignment = assignment("mycpu", 1);
+    let defense = service.defense_config(1, &assignment).unwrap();
+    let slot = crate::tasks::defense::prepare((*defense).clone(), &checkout.0).unwrap();
+    let Admission::New(task) = service
+        .begin_admission(
+            1,
+            ("learner", 42),
+            &assignment,
+            crate::tasks::defense::TASK_ID,
+            "room-key",
+            Preparation {
+                defense: Some(slot.clone()),
+                ..preparation()
+            },
+            100,
+        )
+        .unwrap()
+    else {
+        panic!("a first admission is new")
+    };
+    let offered = tools(&task);
+    assert!(
+        offered
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|tool| tool["name"] == crate::tasks::defense::HINT_TOOL_NAME),
+        "a defense that allows hints offers the hint tool: {offered}"
+    );
+
+    let mut session = TaskSession::new(task, 100);
+    sync_defense_panel(&session);
+    assert!(
+        !slot.is_open() && !slot.items_open(),
+        "nothing before Start"
+    );
+    session.start(100);
+    sync_defense_panel(&session);
+    assert!(slot.is_open(), "the panel opens with the work");
+    assert!(slot.items_open(), "items open while the work is under way");
+    session.phase = Phase::WrapUp;
+    sync_defense_panel(&session);
+    assert!(slot.is_open(), "wrap-up still examines the work");
+    assert!(!slot.items_open(), "no new item in wrap-up");
+    session.phase = Phase::Work;
+    sync_defense_panel(&session);
+    assert!(lost_room_review(&mut session, "lost-room").is_some());
+    assert!(!slot.is_open(), "a lost room closes the panel");
+}
+
 /// A replacement socket is told the hints delivered, and a count past the
 /// task's own list is held to it rather than panicking the room.
 #[tokio::test]

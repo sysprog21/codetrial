@@ -579,4 +579,17 @@ fn a_defense_set_is_refused_whole_when_any_part_is_wrong() {
     bad = defense_plaintext();
     bad["rules"]["lookAwaySeconds"] = Value::from(1);
     assert!(decoded(&bad).is_err());
+    for (field, value) in [
+        ("packageVersion", json!(2)),
+        ("setId", json!("other")),
+        ("setVersion", json!(8)),
+    ] {
+        bad = defense_plaintext();
+        bad[field] = value;
+        assert_eq!(
+            decoded(&bad).err().unwrap().0,
+            "invalid authenticated package metadata",
+            "{field}"
+        );
+    }
 }
