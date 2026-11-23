@@ -814,29 +814,51 @@ printf 'python:%s\\n' "$*" >> "$CALLS"
             with self.assertRaises(subprocess.CalledProcessError):
                 key(CXX=str(Path(tmp) / "missing-c++"))
 
+    def apt_install(self, tmp):
+        """The apt-install script against stubs, with apt's archive and the
+        cache directory under TMP. A package file is named NAME_VERSION.deb.
+        With $FETCH set, an install that works leaves those files in the
+        archive, as a download does, and $VERSION is the version dpkg then
+        reports for every package."""
+        archives, debs = Path(tmp) / "archives", Path(tmp) / "debs"
+        archives.mkdir()
+        run = stubbed(
+            tmp,
+            action_script("apt-install"),
+            {
+                # Installed means named in $INSTALLED.
+                "dpkg-query": 'case "$2" in *Version*) printf %s "${VERSION:-1}"; exit ;; esac\n'
+                'case " $INSTALLED " in *" $3 "*) '
+                "printf installed ;; *) exit 1 ;; esac",
+                "dpkg-deb": 'f=$(basename "$3" .deb); printf "%s %s" "${f%%_*}" "${f#*_}"',
+                "sudo": 'exec "$@"',
+                "dpkg": 'printf "dpkg %s\\n" "$*" >> "$CALLS"',
+                "sed": 'printf "sed %s\\n" "$*" >> "$CALLS"',
+                # With $DOWN the installs before the DOWNth fail, as a stalled
+                # mirror does. With $STALE set the first install fails, as a
+                # stale list does, leaving the files $STALE names; the log it
+                # just wrote says whether this is the first. With $BROKEN the
+                # cached files do not install.
+                "apt-get": 'shift 4; printf "apt %s\\n" "$*" >> "$CALLS"\n'
+                '[ "$2" = --no-download ] && { [ -z "${BROKEN:-}" ]; exit; }\n'
+                '[ -n "${STALE:-}" ] && [ "$1" = install ] '
+                '&& [ "$(grep -c "^apt install" "$CALLS")" = 1 ] '
+                '&& { for f in $STALE; do : > "$APT_ARCHIVES/$f"; done; exit 100; }\n'
+                '[ -n "${DOWN:-}" ] && [ "$1" = install ] '
+                '&& [ "$(grep -c "^apt install" "$CALLS")" -lt "$DOWN" ] && exit 100\n'
+                '[ "$1" = install ] && for f in ${FETCH:-}; do : > "$APT_ARCHIVES/$f"; done\n'
+                "exit 0",
+            },
+        )
+
+        def install(**env):
+            return run(**{"APT_ARCHIVES": str(archives), "DEBS": str(debs), **env})
+
+        return install, archives, debs
+
     def test_apt_install_asks_only_for_what_is_missing(self):
         with tempfile.TemporaryDirectory() as tmp:
-            install = stubbed(
-                tmp,
-                action_script("apt-install"),
-                {
-                    # Installed means named in $INSTALLED.
-                    "dpkg-query": 'case " $INSTALLED " in *" $3 "*) '
-                    "printf installed ;; *) exit 1 ;; esac",
-                    "sudo": 'exec "$@"',
-                    "dpkg": 'printf "dpkg %s\\n" "$*" >> "$CALLS"',
-                    "sed": 'printf "sed %s\\n" "$*" >> "$CALLS"',
-                    # With $DOWN every install fails, as a stalled mirror
-                    # does. With $STALE set the first install fails, as a stale list
-                    # does; the log it just wrote says whether this is the first.
-                    "apt-get": 'shift 4; printf "apt %s\\n" "$*" >> "$CALLS"\n'
-                    '[ -n "${STALE:-}" ] && [ "$1" = install ] '
-                    '&& [ "$(grep -c "^apt install" "$CALLS")" = 1 ] && exit 100\n'
-                    '[ -n "${DOWN:-}" ] && [ "$1" = install ] '
-                    '&& [ "$(grep -c "^apt install" "$CALLS")" -lt 3 ] && exit 100\n'
-                    "exit 0",
-                },
-            )
+            install, _, _ = self.apt_install(tmp)
             self.assertEqual(
                 install(PACKAGES="sqlite3 shellcheck", INSTALLED="sqlite3 shellcheck"),
                 [],
@@ -846,7 +868,7 @@ printf 'python:%s\\n' "$*" >> "$CALLS"
                 ["apt install -y libglib2.0-dev mold"],
             )
             self.assertEqual(
-                install(PACKAGES="mold", INSTALLED="", STALE="1"),
+                install(PACKAGES="mold", INSTALLED="", STALE="mold_0.deb"),
                 [
                     "apt install -y mold",
                     "dpkg --configure -a",
@@ -855,7 +877,7 @@ printf 'python:%s\\n' "$*" >> "$CALLS"
                 ],
             )
             # A stalled mirror gets two refreshed attempts, then the archive.
-            fallback = install(PACKAGES="mold", INSTALLED="", DOWN="1")
+            fallback = install(PACKAGES="mold", INSTALLED="", DOWN="3")
             self.assertEqual(
                 [line.split()[0:2] for line in fallback],
                 [
@@ -871,6 +893,80 @@ printf 'python:%s\\n' "$*" >> "$CALLS"
             )
             self.assertIn("mirror+file:/etc/apt/apt-mirrors.txt", fallback[5])
             self.assertIn("archive.ubuntu.com", fallback[5])
+
+    def test_apt_install_reuses_and_keeps_the_downloaded_packages(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            install, archives, debs = self.apt_install(tmp)
+            output = Path(tmp) / "output"
+
+            def kept(**env):
+                output.write_text("")
+                calls = install(GITHUB_OUTPUT=str(output), **env)
+                return output.read_text(), calls
+
+            # A stale first try leaves the old version it fetched beside the
+            # one the refresh installed; only the installed one is kept.
+            self.assertEqual(
+                kept(PACKAGES="mold", INSTALLED="", STALE="a_0.deb", FETCH="a_1.deb")[
+                    0
+                ],
+                "kept=1\n",
+            )
+            self.assertEqual(
+                sorted(p.name for p in archives.iterdir()), ["a_0.deb", "a_1.deb"]
+            )
+            self.assertEqual(sorted(p.name for p in debs.iterdir()), ["a_1.deb"])
+            # The next run installs the cached files and asks no mirror, with
+            # the files in apt's archive as well as named.
+            for stale in archives.iterdir():
+                stale.unlink()
+            self.assertEqual(
+                kept(PACKAGES="mold", INSTALLED=""),
+                ("", [f"apt install --no-download -y mold {debs}/a_1.deb"]),
+            )
+            self.assertEqual(sorted(p.name for p in archives.iterdir()), ["a_1.deb"])
+            # Cached files that no longer install fall back to the mirror, and
+            # the refill replaces them rather than joining them, so the next
+            # run does not name the broken file again.
+            self.assertEqual(
+                kept(
+                    PACKAGES="mold",
+                    INSTALLED="",
+                    BROKEN="1",
+                    FETCH="a_2.deb",
+                    VERSION="2",
+                ),
+                (
+                    "kept=1\n",
+                    [
+                        f"apt install --no-download -y mold {debs}/a_1.deb",
+                        "dpkg --configure -a",
+                        "apt install -y mold",
+                    ],
+                ),
+            )
+            self.assertEqual(sorted(p.name for p in debs.iterdir()), ["a_2.deb"])
+            # A lane with nothing to install keeps nothing, so nothing is saved.
+            self.assertEqual(kept(PACKAGES="mold", INSTALLED="mold"), ("", []))
+            # An install that never works keeps nothing and still fails.
+            (debs / "a_2.deb").unlink()
+            with self.assertRaises(subprocess.CalledProcessError):
+                kept(PACKAGES="mold", INSTALLED="", DOWN="9")
+            self.assertEqual(output.read_text(), "")
+            # A cache that cannot be written costs the next run, not this one.
+            (Path(tmp) / "file").write_text("")
+            install(PACKAGES="mold", INSTALLED="", DEBS=str(Path(tmp) / "file/debs"))
+        # A refill is saved under its own run's key and restored by prefix, so
+        # a set the mirror replaced is not restored again; an exact hit guard
+        # would keep the broken set for the rest of the week.
+        action = (ROOT / ".github/actions/apt-install/action.yml").read_text()
+        self.assertIn("restore-keys: ${{ steps.key.outputs.prefix }}\n", action)
+        self.assertIn(
+            "key: ${{ steps.key.outputs.prefix }}${{ github.run_id }}"
+            "-${{ github.run_attempt }}\n",
+            action,
+        )
+        self.assertNotIn("cache-hit", action)
 
     def test_chromium_installs_system_libraries_only_when_one_is_missing(self):
         with tempfile.TemporaryDirectory() as tmp:
