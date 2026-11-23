@@ -1388,7 +1388,7 @@ The instructor tool and its acceptance tests use the pinned Python dependency in
 `scripts/requirements-task.txt`. `scripts/task-package.py` finds its own
 interpreter: it needs Python 3.9 or newer (the test gate needs 3.11, for its Rust style
 checker), and reruns itself under a newer
-`python3.x` on PATH when started on an older one; `build` also needs the
+`python3.x` on PATH when started on an older one; `build` and `pin check` also need the
 dependency, and reruns under `target/task-tools` (`CODETRIAL_TASK_TOOLS` names
 another place), or else under a `python3.x` on PATH that already has it, and
 only then sets up `target/task-tools` from that file. It creates that
@@ -1404,7 +1404,7 @@ target/task-tools/bin/pip install -r scripts/requirements-task.txt
 ```
 
 `scripts/task-package.py --help` lists references, new, validate,
-render-prompt, preview, build and publish-scan;
+render-prompt, preview, build, pin and publish-scan;
 [task-mode.md](task-mode.md#instructor-workflow) says what each does. The
 tooling never uploads or pushes files.
 
