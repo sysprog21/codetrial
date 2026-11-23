@@ -56,8 +56,9 @@ under defense: commit before Start. The attempt records a stamp of it, `head`,
 and whether the student is an auditor (`NONE`): an auditor's attempt is marked
 not scored. The stamp names the work; it does not prove who wrote it.
 
-CodeTrial never writes to the student's tree or index. Every edit and build is
-made in a private worktree, `git worktree add --detach` of HEAD in a temporary
+CodeTrial never writes to the student's tree or index; the one write outside
+its worktree is the course's own bootcamp gate, described below. Every edit
+and build is made in a private worktree, `git worktree add --detach` of HEAD in a temporary
 directory, kept for the attempt so that only the first build is cold, and
 removed with `git worktree remove --force` once the attempt's room has ended.
 A process that dies can leave its worktree behind, directory and all. Remove
@@ -165,8 +166,9 @@ program rebuilt or removed meanwhile changes neither run. A run is `Vsim
 +elf=<file> +retire-log=<log> +obs-trace=<trace> +obs-task=T<n>
 +obs-variant=<variant> +obs-start=<first> +obs-cycles=<count>
 +max-cycles=2000000`, with a window of at most 256 cycles. The harness has no
-cycle limit of its own, so a program that never ends would fill the disk with
-its retire log; one that reaches the limit is shown as such. A divergence is
+cycle limit of its own, so CodeTrial passes this one: a program that never
+ends stops there, with a bounded retire log, and is shown as having reached
+the limit. A divergence is
 looked for only in logs whose last line is the harness's `end` record for a
 run that stopped by itself (`exit=`, `halt=`, `stop=assert` or
 `stop=finish`): a log cut off by the limit, a signal or the display would show
