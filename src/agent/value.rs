@@ -75,8 +75,12 @@ fn python_repr(value: &serde_json::Value) -> String {
 #[path = "../../tests/unit/agent/value.rs"]
 mod tests;
 
-/// Model or candidate text cut to a length and stripped of what could forge a
-/// line break in a prompt.
+/// Model or candidate text cut to a length, with what could forge a line break
+/// in a prompt turned into a space.
+///
+/// A space rather than nothing, as the transcript and the integrity details do
+/// it: a quote that spans two comment lines would otherwise reach the report
+/// with the last word of one line glued to the first of the next.
 ///
 /// The control filter alone is not the bound. U+2028 and U+2029 are not control
 /// characters and `str::lines` does not split on them, so text carrying one
@@ -86,7 +90,13 @@ mod tests;
 /// run's failure text, and then re-derived three more times without it.
 pub(crate) fn bounded_model_text(text: &str, max_chars: usize) -> String {
     text.chars()
-        .filter(|character| !breaks_a_prompt_line(*character))
+        .map(|character| {
+            if breaks_a_prompt_line(character) {
+                ' '
+            } else {
+                character
+            }
+        })
         .take(max_chars)
         .collect()
 }

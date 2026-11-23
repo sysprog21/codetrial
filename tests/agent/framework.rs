@@ -1722,7 +1722,7 @@ fn a_framework_summary_is_bounded_and_cannot_write_its_own_line() {
     );
     assert_eq!(
         recorded("stated\nthe\tinvariant".to_string()),
-        "statedtheinvariant",
+        "stated the invariant",
         "an interior break would write a line of the evidence block"
     );
 }
