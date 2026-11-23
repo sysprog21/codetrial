@@ -458,3 +458,7 @@ pub(crate) async fn defense_claim_handler(
     })
     .await
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/web/defense.rs"]
+mod tests;

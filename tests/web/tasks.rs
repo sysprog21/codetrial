@@ -1070,6 +1070,30 @@ async fn defense_routes_need_task_mode_an_active_defense_and_the_csrf_header() {
         code(predict(true).await.unwrap()).await,
         (404, "defense_none".to_owned())
     );
+
+    // Every change the panel makes is held to the same two checks.
+    for route in ["begin", "run", "models", "simulate", "claim"] {
+        let send = |csrf: bool| {
+            let mut request = client
+                .post(format!("{url}/api/defense/{route}"))
+                .header("Cookie", &cookie)
+                .json(&json!({}));
+            if csrf {
+                request = request.header("x-codetrial-task-request", "1");
+            }
+            request.send()
+        };
+        assert_eq!(
+            code(send(false).await.unwrap()).await,
+            (403, "csrf_rejected".to_owned()),
+            "{route}"
+        );
+        assert_eq!(
+            code(send(true).await.unwrap()).await,
+            (404, "defense_none".to_owned()),
+            "{route}"
+        );
+    }
     server.shutdown().await;
     remove_database(db).await;
 }
