@@ -158,8 +158,6 @@ const localRecording = initLocalRecording({
   // The capture picker must close before Start requests fullscreen, and Start
   // waits while the picker is open.
   canStart: () => !st.enteringFullscreen && !hasStarted(),
-  // The take lives in this tab alone, so replacing one must not lose it.
-  saveReplacedTake: true,
   onSetupChange: (active) => {
     $("start").disabled = active || !startReady();
   },

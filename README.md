@@ -192,8 +192,10 @@ The screen-recorder checkbox is not needed for this path.
 In offline practice, stopping a recording also releases the microphone.
 Starting another recording requests the same input after tab sharing is
 allowed, falling back to the default if that device is no longer available.
-If recording fails, download any available partial recording. An undownloaded
-partial stays available during a retry until another take is ready.
+If recording stops on an error, any available partial recording still
+downloads automatically and the error stays on screen. Starting another
+recording releases that partial recording, so if the browser blocked the
+download, use Download first.
 
 Local recording targets 1 Mbps video and 128 kbps audio, about 760 MB for
 90 minutes before container overhead. These are encoder targets, not hard

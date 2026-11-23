@@ -3732,14 +3732,13 @@ test("leaving while a task recording is unsaved asks first, and a kept page keep
   assert.equal(await page.locator("[data-local-stop]").isVisible(), true);
 });
 
-test("a take that was not downloaded still asks before leaving after the result", async (t) => {
+test("a take stopped by a lost microphone downloads, so leaving does not ask", async (t) => {
   const fixture = await pageFor(t);
   if (!fixture) return;
   const { page } = fixture;
   t.after(() => page.close());
-  const unloadPrevented = () => beforeUnloadPrevented(page);
   await prepareLocalRecording(page);
-  // A lost microphone saves the partial take without downloading it.
+  const download = page.waitForEvent("download");
   await page.evaluate(() =>
     globalThis.cameraStream
       .getAudioTracks()[0]
@@ -3748,19 +3747,8 @@ test("a take that was not downloaded still asks before leaving after the result"
   await page
     .locator("#prepare [data-local-download]")
     .waitFor({ state: "visible" });
-  assert.equal(await unloadPrevented(), true);
-  await page.click("#start");
-  await page.waitForFunction(() => !document.getElementById("code").disabled);
-  await page.evaluate(
-    (review) => globalThis.taskHarness.publish("task_review", review),
-    result("completed", "finish"),
-  );
-  await page.locator("#review").waitFor({ state: "visible" });
-  assert.equal(await unloadPrevented(), true);
-  const download = page.waitForEvent("download");
-  await page.locator("#review [data-local-download]").click();
-  await download;
-  assert.equal(await unloadPrevented(), false);
+  assert.equal(await beforeUnloadPrevented(page), false);
+  assert.match((await download).suggestedFilename(), /\.webm$/);
 });
 
 test("an empty task recording returns focus to a visible workspace control", async (t) => {
