@@ -321,6 +321,92 @@ fn programs_are_the_built_elfs_with_plain_names() {
     assert!(checkout.programs("rv32i").is_empty());
 }
 
+#[cfg(unix)]
+#[test]
+fn a_run_past_its_limit_loses_its_whole_process_group() {
+    let dir = std::env::temp_dir();
+    let marker = dir.join(format!("codetrial-defense-orphan-{}", std::process::id()));
+    let script = format!("(sleep 2; touch {}) & sleep 30", marker.display());
+    let ran = run(
+        "sh",
+        &["-c".to_owned(), script],
+        &dir,
+        &[],
+        Duration::from_millis(300),
+    );
+    assert_eq!(ran.ended, Ended::Timeout);
+    std::thread::sleep(Duration::from_millis(2500));
+    assert!(!marker.exists(), "the background child was killed too");
+}
+
+#[test]
+fn a_run_keeps_only_the_tail_of_its_output() {
+    let ran = run(
+        "sh",
+        &[
+            "-c".to_owned(),
+            "i=0; while [ $i -lt 20000 ]; do echo line-$i; i=$((i+1)); done; echo done >&2; exit 3"
+                .to_owned(),
+        ],
+        &std::env::temp_dir(),
+        &[("UNUSED".to_owned(), "1".to_owned())],
+        Duration::from_secs(30),
+    );
+    assert_eq!(ran.ended, Ended::Exited(3));
+    assert!(ran.tail.len() <= TAIL_BYTES);
+    assert!(ran.tail.ends_with("done\n"));
+    assert!(!ran.tail.contains("line-0\n"));
+}
+
+#[cfg(unix)]
+#[test]
+fn continuous_output_is_drained_until_timeout() {
+    let ran = run(
+        "sh",
+        &[
+            "-c".to_owned(),
+            "while :; do printf '0123456789'; done".to_owned(),
+        ],
+        &std::env::temp_dir(),
+        &[],
+        Duration::from_millis(500),
+    );
+    assert_eq!(ran.ended, Ended::Timeout);
+    assert_eq!(ran.tail.len(), TAIL_BYTES);
+    assert!(ran.tail.bytes().all(|byte| byte.is_ascii_digit()));
+}
+
+/// A process that left the group, still holding the output pipe, keeps the
+/// end from coming: what the command printed is kept all the same.
+#[cfg(unix)]
+#[test]
+fn output_is_kept_when_an_escaped_process_holds_the_pipe() {
+    let ran = run(
+        "sh",
+        &[
+            "-c".to_owned(),
+            "setsid sleep 5 & echo printed-before-exit; exit 0".to_owned(),
+        ],
+        &std::env::temp_dir(),
+        &[],
+        Duration::from_secs(10),
+    );
+    assert_eq!(ran.ended, Ended::Exited(0));
+    assert_eq!(ran.tail, "printed-before-exit\n");
+}
+
+#[test]
+fn a_command_that_does_not_exist_is_a_telemetry_gap() {
+    let ran = run(
+        "codetrial-no-such-tool",
+        &[],
+        &std::env::temp_dir(),
+        &[],
+        Duration::from_secs(1),
+    );
+    assert!(matches!(ran.ended, Ended::NotStarted(_)));
+}
+
 #[test]
 fn a_short_selection_is_filled_from_the_lines_it_passed_over() {
     let cpu = "4-pipeline/src/main/scala/mycpu/pipeline/CPU.scala";
