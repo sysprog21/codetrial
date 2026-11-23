@@ -1,0 +1,3 @@
+# Downloaded by scripts/fetch-vendor.sh; bump this URL and SHA256SUMS together.
+https://cdn.jsdelivr.net/npm/tree-sitter-scala@0.24.0/
+tree-sitter-scala.wasm

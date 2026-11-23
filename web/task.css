@@ -453,6 +453,23 @@ label:has(input[type="checkbox"]) {
 .tok-literal {
   color: var(--tok-literal);
 }
+/* Chisel in the defense panel (chisel-highlight.js), in VS Code Dark+ hues:
+   Scala types, Chisel's hardware constructors, its hardware types and its
+   connection and comparison operators. */
+.tok-type {
+  color: var(--tok-type);
+}
+.tok-chisel {
+  color: var(--tok-chisel);
+}
+.tok-chisel-type {
+  color: var(--tok-chisel-type);
+  font-weight: 600;
+}
+.tok-hardware-op {
+  color: var(--tok-hardware-op);
+  font-weight: 600;
+}
 .matching-bracket {
   background: var(--code-selection);
   outline: 1px solid var(--code-match-outline);

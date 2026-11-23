@@ -170,6 +170,10 @@
   --tok-comment: #6a9955;
   --tok-number: #b5cea8;
   --tok-literal: #569cd6;
+  --tok-type: #4ec9b0;
+  --tok-chisel: #dcdcaa;
+  --tok-chisel-type: #4ec9b0;
+  --tok-hardware-op: #c586c0;
 }
 
 /* The browser's own parts take the theme: a checkbox, radio or range fills
@@ -205,6 +209,10 @@ body {
   --tok-comment: #008000;
   --tok-number: #098658;
   --tok-literal: #0000ff;
+  --tok-type: #267f99;
+  --tok-chisel: #795e26;
+  --tok-chisel-type: #267f99;
+  --tok-hardware-op: #af00db;
 }
 
 /* The same values, for no stored and no clicked choice: applied by the
@@ -232,6 +240,10 @@ body {
     --tok-comment: #008000;
     --tok-number: #098658;
     --tok-literal: #0000ff;
+    --tok-type: #267f99;
+    --tok-chisel: #795e26;
+    --tok-chisel-type: #267f99;
+    --tok-hardware-op: #af00db;
   }
 }
 

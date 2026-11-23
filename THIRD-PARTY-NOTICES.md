@@ -16,6 +16,7 @@ pinned files with `make verify-vendor`.
 | [Tree-sitter Java](https://github.com/tree-sitter/tree-sitter-java) | 0.23.5 | MIT | Java grammar |
 | [Tree-sitter JavaScript](https://github.com/tree-sitter/tree-sitter-javascript) | 0.25.0 | MIT | JavaScript grammar |
 | [Tree-sitter Python](https://github.com/tree-sitter/tree-sitter-python) | 0.25.0 | MIT | Python grammar |
+| [Tree-sitter Scala](https://github.com/tree-sitter/tree-sitter-scala) | 0.24.0 | MIT | Scala grammar (Chisel in the defense panel) |
 | [Three.js](https://threejs.org/) | 0.185.1 | MIT | Avatar renderer |
 | [@pixiv/three-vrm](https://github.com/pixiv/three-vrm) | 3.5.5 | MIT | VRM support |
 | [Prettier](https://github.com/prettier/prettier) | 3.10.1 | MIT | Editor's Format JS, `standalone.mjs` with the estree and acorn plugins |
@@ -28,7 +29,7 @@ bundle are committed and pinned in place.
 License texts and source details are shipped with the relevant assets:
 
 - `web/vendor/LICENSE-apache-2.0.txt` (LiveKit client, MediaPipe, pdf.js)
-- `web/vendor/tree-sitter/LICENSE` (browser runtime and five grammars)
+- `web/vendor/tree-sitter/LICENSE` (browser runtime and six grammars)
 - `web/vendor/avatar/LICENSE-three.txt`
 - `web/vendor/avatar/LICENSE-three-vrm.txt`
 - `web/vendor/avatar/NOTICE`
