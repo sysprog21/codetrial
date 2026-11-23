@@ -6,6 +6,7 @@ use std::sync::LazyLock;
 use serde_json::Value;
 
 pub mod access;
+pub mod defense;
 pub mod exercise;
 pub mod package;
 pub mod report;
