@@ -524,6 +524,17 @@ fn a_command_that_does_not_exist_is_a_telemetry_gap() {
         Duration::from_secs(1),
     );
     assert!(matches!(ran.ended, Ended::NotStarted(_)));
+
+    // A relative path is the one in the directory the command runs in.
+    let dir = std::env::temp_dir().join(format!("codetrial-resolve-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("bin")).unwrap();
+    let tool = dir.join("bin/say");
+    std::fs::write(&tool, "#!/bin/sh\necho from-dir\n").unwrap();
+    std::fs::set_permissions(&tool, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let ran = run("bin/say", &[], &dir, &[], Duration::from_secs(5));
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(ran.ended, Ended::Exited(0));
+    assert_eq!(ran.tail.trim(), "from-dir");
 }
 
 /// A trace of two 16-bit fields over three cycles from cycle 40.

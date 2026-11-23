@@ -44,7 +44,7 @@ pub fn run(
         ended: Ended::NotStarted(why),
         tail: String::new(),
     };
-    let Some(resolved) = resolve(program) else {
+    let Some(resolved) = resolve(program, dir) else {
         return not_started(format!("{program}: not found"));
     };
     let (mut output, writer) = match std::io::pipe() {
@@ -59,7 +59,7 @@ pub fn run(
     // The process group outlives CodeTrial if CodeTrial is killed, so each
     // command also carries its own limit, which coreutils' `timeout` keeps
     // whether or not anyone is left to kill it.
-    let mut command = match resolve("timeout") {
+    let mut command = match resolve("timeout", dir) {
         Some(timeout) => {
             let mut command = Command::new(timeout);
             command
@@ -109,11 +109,13 @@ pub fn run(
     }
 }
 
-/// The executable `program` names: a path as it is, a bare name on `PATH`.
-fn resolve(program: &str) -> Option<std::path::PathBuf> {
+/// The executable `program` names: a path, relative to `dir` where the
+/// command runs, or a bare name on `PATH`. The path found is the one run.
+fn resolve(program: &str, dir: &Path) -> Option<std::path::PathBuf> {
     let named = Path::new(program);
     if named.components().count() > 1 {
-        return named.is_file().then(|| named.to_path_buf());
+        let path = dir.join(named);
+        return path.is_file().then_some(path);
     }
     std::env::split_paths(&std::env::var_os("PATH")?)
         .map(|dir| dir.join(program))
