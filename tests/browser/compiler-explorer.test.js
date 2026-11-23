@@ -26,6 +26,7 @@ import {
   parseCompilerResults,
   stripAnsi,
 } from "../../web/compiler-explorer.js";
+import { checkAnswer } from "../../web/lib.js";
 import { createSyntaxParser } from "../../web/syntax-parser.js";
 
 const cppSyntax = createSyntaxParser({
@@ -477,6 +478,50 @@ test("insert-interval cases reject reading the last block before checking for on
     TypeError,
     `"${label}" must reject reading the last block before checking for one`,
   );
+});
+
+test("remove-element cases reject skipping a last unchecked target", () => {
+  const kept = (nums, val) => nums.filter((code) => code !== val);
+  // Swaps kept codes in from the right, but tests left === right only
+  // after right moves, so a lone unchecked target is copied and counted.
+  const skipsLastTarget = (nums, val) => {
+    let left = 0;
+    let right = nums.length - 1;
+    while (left <= right) {
+      if (nums[left] !== val) {
+        left += 1;
+      } else {
+        while (left <= right && nums[right] === val) {
+          right -= 1;
+          if (left === right) return left;
+        }
+        nums[left] = nums[right];
+        left += 1;
+        right -= 1;
+      }
+    }
+    return left;
+  };
+  const judge = judges["remove-element"];
+  for (const testCase of judge.cases) {
+    assert.ok(
+      checkAnswer(judge, testCase, kept(...testCase.input)),
+      `"${testCase.label}" must expect the codes that are not muted`,
+    );
+  }
+  for (const label of [
+    "last unchecked element is the target",
+    "only element is the target",
+  ]) {
+    const pinned = pinnedCase("remove-element", label);
+    const [nums, val] = structuredClone(pinned.input);
+    const size = skipsLastTarget(nums, val);
+    assert.equal(
+      checkAnswer(judge, pinned, nums.slice(0, size)),
+      false,
+      `"${label}" must reject skipping a last unchecked target`,
+    );
+  }
 });
 
 test("basic-calculator cases reject parsers without a unary minus", () => {

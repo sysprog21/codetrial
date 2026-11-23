@@ -573,6 +573,8 @@ fn static_problem_bank_and_judges_cover_each_problem() {
         ("two-sum", "duplicates"),
         ("merge-sorted-array", "duplicates"),
         ("remove-element", "remove every"),
+        ("remove-element", "last unchecked element is the target"),
+        ("remove-element", "only element is the target"),
         ("remove-duplicates-from-sorted-array", "several duplicate"),
         ("remove-duplicates-from-sorted-array-ii", "single repeated"),
         ("majority-element", "not the first"),
