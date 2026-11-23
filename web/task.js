@@ -1025,6 +1025,7 @@ function endAttempt(outcome, cause, durationMs) {
 }
 
 function leaveFullscreen() {
+  navigator.keyboard?.unlock?.();
   if (document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
 }
 

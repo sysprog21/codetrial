@@ -1398,6 +1398,38 @@ for (const [name, leave, cause] of [
   });
 }
 
+test("the attempt holds Escape for fullscreen and lets it go when it ends", async (t) => {
+  const ctx = await pageFor(t, {
+    completedReview: result("invalid", "fullscreen"),
+  });
+  if (!ctx) return;
+  const { page } = ctx;
+  try {
+    await page.evaluate(() => {
+      globalThis.keyboardCalls = [];
+      Object.defineProperty(navigator, "keyboard", {
+        value: {
+          lock: async (codes) => globalThis.keyboardCalls.push(["lock", codes]),
+          unlock: () => globalThis.keyboardCalls.push(["unlock"]),
+        },
+        configurable: true,
+      });
+    });
+    await start(page);
+    assert.deepEqual(await page.evaluate(() => globalThis.keyboardCalls), [
+      ["lock", ["Escape"]],
+    ]);
+    await page.evaluate(() => document.exitFullscreen());
+    await page.waitForFunction(() => document.getElementById("code").disabled);
+    assert.deepEqual(
+      await page.evaluate(() => globalThis.keyboardCalls.at(-1)),
+      ["unlock"],
+    );
+  } finally {
+    await page.close();
+  }
+});
+
 test("looking down past the calibration warns, counts down and then ends", async (t) => {
   const ctx = await pageFor(t);
   if (!ctx) return;

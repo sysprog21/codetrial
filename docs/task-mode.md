@@ -511,6 +511,13 @@ staying visible does not end an attempt. The workspace requests a screen wake
 lock for the attempt so an idle screen does not lock it; a refused wake lock is
 stated, not hidden.
 
+Start also asks for a keyboard lock on Escape (`navigator.keyboard.lock`).
+Once Chromium grants it, the workspace leaves fullscreen only on a held Escape,
+as the browser's own banner says: a tap, or the Ctrl+[ a Vim user presses for
+Escape and Chromium treats as one, no longer ends the attempt. Start goes on
+when the lock is refused, and Firefox and Safari have none, so there a tap
+still ends it. The lock is released whenever the page leaves fullscreen.
+
 The look-away rule allows what normal work looks like: a glance at the
 keyboard, a moment out of frame, both shorter than `lookAwaySeconds`. What it
 is for is sustained attention elsewhere, such as reading a phone or tablet in
