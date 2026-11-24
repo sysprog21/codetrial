@@ -298,6 +298,25 @@ fn state_cookie(token: &str, secret: &str) -> String {
     state_cookie_aged(token, secret, 0)
 }
 
+fn oauth_login_pair(headers: &reqwest::header::HeaderMap) -> (String, String) {
+    let authorize = reqwest::Url::parse(headers["location"].to_str().unwrap()).unwrap();
+    let state = authorize
+        .query_pairs()
+        .find(|(key, _)| key == "state")
+        .expect("OAuth login must include a state")
+        .1
+        .into_owned();
+
+    let cookies = headers
+        .get_all("set-cookie")
+        .iter()
+        .map(|cookie| cookie.to_str().unwrap().split(';').next().unwrap())
+        .collect::<Vec<_>>()
+        .join("; ");
+
+    (state, cookies)
+}
+
 /// Whether a response spends the OAuth state, as the callback must on every
 /// answer it gives.
 fn clears_state_cookie(headers: &reqwest::header::HeaderMap) -> bool {

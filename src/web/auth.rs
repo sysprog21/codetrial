@@ -317,25 +317,30 @@ pub(crate) async fn callback_handler(
     response
 }
 
+fn oauth_return_destination(payload: &str) -> Option<(&str, String)> {
+    let (state, path) = payload.split_once(':')?;
+
+    let path = if path == "/peer-lobby" {
+        path.to_owned()
+    } else {
+        super::tasks::task_return_path(path)?
+    };
+
+    Some((state, path))
+}
+
 fn oauth_retry_href(headers: &header::HeaderMap, secret: &str) -> String {
-    let fallback = || "/api/login".to_owned();
-
-    let Some(return_payload) = verified_cookie(headers, OAUTH_RETURN_COOKIE, secret) else {
-        return fallback();
+    let Some(payload) = verified_cookie(headers, OAUTH_RETURN_COOKIE, secret) else {
+        return "/api/login".to_owned();
     };
 
-    let Some((_, return_path)) = return_payload.split_once(':') else {
-        return fallback();
-    };
-
-    if return_path == "/peer-lobby" {
-        return "/api/login?next=peer-join".to_owned();
+    match oauth_return_destination(&payload) {
+        Some((_, path)) if path == "/peer-lobby" => "/api/login?next=peer-join".to_owned(),
+        Some((_, path)) => {
+            format!("/api/login?returnTo={}", percent_encode_component(&path))
+        }
+        None => "/api/login".to_owned(),
     }
-
-    // Only preserve valid task destinations.
-    super::tasks::task_return_path(return_path)
-        .map(|path| format!("/api/login?returnTo={}", percent_encode_component(&path)))
-        .unwrap_or_else(fallback)
 }
 
 fn oauth_callback_error_page(
@@ -446,16 +451,8 @@ async fn callback_response(
         &accounts.config().session_secret,
     )
     .and_then(|payload| {
-        payload
-            .strip_prefix(&format!("{state_token}:"))
-            .map(str::to_owned)
-    })
-    .and_then(|path| {
-        if path == "/peer-lobby" {
-            Some(path)
-        } else {
-            super::tasks::task_return_path(&path)
-        }
+        let (return_state, path) = oauth_return_destination(&payload)?;
+        (return_state == state_token.as_str()).then_some(path)
     })
     .unwrap_or_else(|| "/".to_owned());
 

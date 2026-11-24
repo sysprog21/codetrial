@@ -107,10 +107,6 @@ async fn github_callback_cancelled_from_peer_lobby_has_retry_link() {
         .find(|cookie| cookie.starts_with("codetrial_oauth_return="))
         .expect("Peer Lobby login must set a return cookie")
         .to_owned();
-    let issued = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs() as i64;
     let stale_return = signed_cookie(
         "codetrial_oauth_return",
         &format!("{}:/peer-lobby", "a".repeat(32)),
@@ -134,23 +130,13 @@ async fn github_callback_cancelled_from_peer_lobby_has_retry_link() {
 
     // An expired OAuth state does not prevent a retry when the return cookie is
     // correctly signed.
-    let expired_issued = issued - 10 * 60 - 1;
-
     let expired_token = "b".repeat(32);
-    let expired_state = signed_cookie(
-        "codetrial_oauth_state",
-        &format!("{expired_issued}:{expired_token}"),
-        "session-secret",
-    );
+    let expired_state = state_cookie_aged(&expired_token, "session-secret", 10 * 60 + 1);
 
     // A mismatched callback state still fails authentication, but a valid
     // signed return cookie can preserve the retry destination.
     let newer_token = "c".repeat(32);
-    let newer_state = signed_cookie(
-        "codetrial_oauth_state",
-        &format!("{issued}:{newer_token}"),
-        "session-secret",
-    );
+    let newer_state = state_cookie(&newer_token, "session-secret");
     let newer_return = signed_cookie(
         "codetrial_oauth_return",
         &format!("{newer_token}:/peer-lobby"),
@@ -314,22 +300,7 @@ async fn github_callback_cancelled_from_peer_lobby_has_retry_link() {
     );
 
     // Complete the retry using the fresh OAuth state and cookies.
-    let authorize = reqwest::Url::parse(retry.headers()["location"].to_str().unwrap()).unwrap();
-
-    let state = authorize
-        .query_pairs()
-        .find(|(key, _)| key == "state")
-        .unwrap()
-        .1
-        .into_owned();
-
-    let retry_cookies = retry
-        .headers()
-        .get_all("set-cookie")
-        .iter()
-        .map(|cookie| cookie.to_str().unwrap().split(';').next().unwrap())
-        .collect::<Vec<_>>()
-        .join("; ");
+    let (state, retry_cookies) = oauth_login_pair(retry.headers());
 
     let success = client
         .get(format!("{base}/api/callback"))
@@ -392,20 +363,7 @@ async fn github_callback_sets_session_and_clears_oauth_state() {
             .await
             .unwrap();
         assert_eq!(login.status(), 302);
-        let authorize = reqwest::Url::parse(login.headers()["location"].to_str().unwrap()).unwrap();
-        let state = authorize
-            .query_pairs()
-            .find(|(key, _)| key == "state")
-            .unwrap()
-            .1
-            .into_owned();
-        let cookies = login
-            .headers()
-            .get_all("set-cookie")
-            .iter()
-            .map(|cookie| cookie.to_str().unwrap().split(';').next().unwrap())
-            .collect::<Vec<_>>()
-            .join("; ");
+        let (state, cookies) = oauth_login_pair(login.headers());
         let callback = client
             .get(format!("{base}/api/callback"))
             .query(&[("code", "ok"), ("state", state.as_str())])
@@ -639,48 +597,32 @@ async fn github_callback_upstream_failures_show_html_retry_pages() {
 
     assert_eq!(login.status(), 302);
 
-    let peer_state = reqwest::Url::parse(login.headers()["location"].to_str().unwrap())
-        .unwrap()
-        .query_pairs()
-        .find(|(name, _)| name == "state")
-        .unwrap()
-        .1
-        .into_owned();
+    let (peer_state, peer_cookies) = oauth_login_pair(login.headers());
 
-    let peer_cookies = login
-        .headers()
-        .get_all("set-cookie")
-        .iter()
-        .map(|cookie| cookie.to_str().unwrap().split(';').next().unwrap())
-        .collect::<Vec<_>>()
-        .join("; ");
+    let profile_state = "profile-error-state";
+    let profile_cookies = format!(
+        "codetrial_oauth_state={}",
+        state_cookie(profile_state, "session-secret")
+    );
 
-    for (why, code, state, expected_message) in [
+    for (why, code, callback_state, cookies, expected_message, expected_href) in [
         (
             "token exchange failure",
             "invalid",
-            "token-error-state",
+            peer_state.as_str(),
+            peer_cookies.as_str(),
             "GitHub token exchange failed. Please try again.",
+            "href=\"/api/login?next=peer-join\"",
         ),
         (
             "profile API failure",
             "ok",
-            "profile-error-state",
+            profile_state,
+            profile_cookies.as_str(),
             "GitHub profile request failed. Please try again.",
+            "href=\"/api/login\"",
         ),
     ] {
-        let (callback_state, cookies) = if why == "token exchange failure" {
-            (peer_state.as_str(), peer_cookies.clone())
-        } else {
-            (
-                state,
-                format!(
-                    "codetrial_oauth_state={}",
-                    state_cookie(state, "session-secret")
-                ),
-            )
-        };
-
         let response = client
             .get(format!("{base}/api/callback"))
             .query(&[("code", code), ("state", callback_state)])
@@ -707,12 +649,6 @@ async fn github_callback_upstream_failures_show_html_retry_pages() {
             "{why}"
         );
         assert!(body.contains("Try signing in again"), "{why}");
-        let expected_href = if why == "token exchange failure" {
-            "href=\"/api/login?next=peer-join\""
-        } else {
-            "href=\"/api/login\""
-        };
-
         assert!(body.contains(expected_href), "{why}");
     }
 
@@ -1039,22 +975,7 @@ async fn github_callback_cancelled_from_task_preserves_retry_destination() {
 
     assert_eq!(retry.status(), 302);
 
-    let authorize = reqwest::Url::parse(retry.headers()["location"].to_str().unwrap()).unwrap();
-
-    let fresh_state = authorize
-        .query_pairs()
-        .find(|(key, _)| key == "state")
-        .unwrap()
-        .1
-        .into_owned();
-
-    let retry_cookies = retry
-        .headers()
-        .get_all("set-cookie")
-        .iter()
-        .map(|cookie| cookie.to_str().unwrap().split(';').next().unwrap())
-        .collect::<Vec<_>>()
-        .join("; ");
+    let (fresh_state, retry_cookies) = oauth_login_pair(retry.headers());
 
     // Complete the new login and return to the original task.
     let success = client
