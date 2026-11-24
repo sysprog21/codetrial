@@ -13,15 +13,17 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "scope-label.py"
 
 # Answers the read of every pull request from $PAGES_FILE (failing when $PAGES
-# says so), the later files of a pull request from $FILES_FILE, the label list
-# from $LABELS_FILE, and records every write in $CALLS. A write to pull request
-# $WRITE_FAIL fails.
+# says so), the later files of a pull request from $FILES_FILE (failing when
+# $FILES says so), the label list from $LABELS_FILE, and records every write in
+# $CALLS. A write to pull request $WRITE_FAIL fails.
 STUB = """#!/bin/sh
 case "$*" in
 *graphql*)
   [ "$PAGES" = fail ] && { echo "gh: HTTP 502" >&2; exit 1; }
   cat "$PAGES_FILE" ;;
-*/files*) cat "$FILES_FILE" ;;
+*/files*)
+  [ "$FILES" = fail ] && { echo "gh: HTTP 502 files" >&2; exit 1; }
+  cat "$FILES_FILE" ;;
 "api -X DELETE "*|*"labels[]="*)
   case "$*" in *"/issues/$WRITE_FAIL/"*) echo "gh: HTTP 403 write" >&2; exit 1 ;; esac
   echo "$*" >> "$CALLS" ;;
@@ -53,7 +55,16 @@ def pr(number=1, paths=(), labels=(), total=None):
     }
 
 
-def sweep(prs, *args, pages="ok", later=(), labels=None, write_fail="", per_page=50):
+def sweep(
+    prs,
+    *args,
+    pages="ok",
+    files="ok",
+    later=(),
+    labels=None,
+    write_fail="",
+    per_page=50,
+):
     """Run the script on PRS, PER_PAGE to a page as --paginate prints them
     back to back; (exit code, stdout, stderr, writes)."""
     with tempfile.TemporaryDirectory() as tmp:
@@ -86,6 +97,7 @@ def sweep(prs, *args, pages="ok", later=(), labels=None, write_fail="", per_page
             os.environ,
             PATH=f"{tmp}{os.pathsep}{os.environ['PATH']}",
             PAGES=pages,
+            FILES=files,
             PAGES_FILE=str(tmp / "pages.json"),
             FILES_FILE=str(tmp / "files.txt"),
             LABELS_FILE=str(tmp / "labels.txt"),
@@ -207,6 +219,14 @@ class ScopeLabel(unittest.TestCase):
         code, _, err, writes = sweep([pr(paths=["docs/x.md"])], pages="fail")
         self.assertEqual((code, writes), (2, []))
         self.assertIn("502", err)
+
+    def test_a_failed_read_of_the_later_files_writes_nothing(self):
+        first = ["tests/t.rs"] * 100
+        code, _, err, writes = sweep(
+            [pr(6, first, ["area: desktop"], total=101)], files="fail"
+        )
+        self.assertEqual((code, writes), (2, []))
+        self.assertIn("502 files", err)
 
     def test_a_failed_write_still_lets_the_others_through(self):
         prs = [pr(1, ["docs/x.md"]), pr(2, ["web/app.js"])]
