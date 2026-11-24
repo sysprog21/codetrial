@@ -20,6 +20,7 @@ import {
   deleteReport,
   readDeviceHistory,
   renameLocalHistory,
+  resolveHistoryProblemIds,
   withLocalCode,
 } from "./history.js";
 import {
@@ -267,7 +268,7 @@ const cards = [...document.querySelectorAll("[data-problem]")].map(
     ),
   }),
 );
-const cardIds = new Set(cards.map((card) => card.id));
+const cardById = new Map(cards.map((card) => [card.id, card]));
 let practiceList = new Set();
 let practiceListSaved = true;
 practiceListSaved = refreshPracticeList();
@@ -533,7 +534,7 @@ function refreshPracticeList() {
     // A removed key means an empty list; a failed read keeps this visit's list.
     practiceList = parsePracticeList(
       storageArea("localStorage").getItem(PRACTICE_LIST_KEY),
-      cardIds,
+      cardById,
     );
     return true;
   } catch {
@@ -670,6 +671,7 @@ nodes.groundingResume.addEventListener("change", () =>
 nodes.groundingClear.addEventListener("click", clearGrounding);
 
 let progressNormalized = [];
+let uncheckedHistoryProblemIds = null;
 let progressSuffix = "saved";
 let progressLogin = null;
 /// From learning that the history belongs to another login until its rows land.
@@ -1423,22 +1425,23 @@ async function renderLocalHistory(generation = historyLoad) {
     // attempts long after the 20-row history has dropped them, so it can hold
     // a published id the history no longer shows.
     let entries = readDeviceHistory();
-    if (
-      entries.some(
-        (entry) =>
-          !cardIds.has(pickerEntry(entry).problemId) &&
-          entry?.pageMapChecked !== true,
-      )
-    ) {
+    let uncheckedProblemIds = new Set();
+    for (const entry of entries) {
+      const { problemId } = pickerEntry(entry);
+      if (!cardById.has(problemId) && entry?.pageMapChecked !== true)
+        uncheckedProblemIds.add(problemId);
+    }
+    if (uncheckedProblemIds.size > 0) {
       const pages = await loadPageMapWithin(requestTimeoutMs);
       if (generation !== historyLoad) return;
       if (pages) {
         renameLocalHistory(pages, undefined, true);
-        entries = readDeviceHistory();
+        entries = resolveHistoryProblemIds(readDeviceHistory(), pages);
+        uncheckedProblemIds = null;
       }
     }
     reports = entries.map(pickerEntry);
-    showProgress(entries, "saved on this device");
+    showProgress(entries, "saved on this device", uncheckedProblemIds);
   } catch {
     if (generation !== historyLoad) return;
     showProgressError("Could not load progress saved on this device.");
@@ -2124,6 +2127,7 @@ function showProgressError(message) {
   reports = [];
   selectedPracticeFocus = null;
   progressNormalized = [];
+  uncheckedHistoryProblemIds = null;
   nodes.progressProblem.length = 1;
   nodes.progressProblem.value = "all";
   nodes.progressMode.length = 1;
@@ -2153,13 +2157,14 @@ function renderProblemAttempts(attempts) {
   }
 }
 
-function showProgress(entries, suffix) {
+function showProgress(entries, suffix, uncheckedProblemIds = null) {
   renderPracticeFocus();
   renderSequelSuggestion();
   renderRecentPerformance();
   // Normalized once here, not per render: the filters below only select from
   // these rows, so a dropdown change has nothing to re-sanitize.
   progressNormalized = normalizeProgressEntries(entries);
+  uncheckedHistoryProblemIds = uncheckedProblemIds;
   renderProblemAttempts(progressNormalized);
   // A different store or login replaces the list. Even when the new rows use
   // the same ids, selection and page position belong to the previous source.
@@ -2375,6 +2380,17 @@ function renderAttemptHistory(attempts, preserveDownloadNote = false) {
     }
     const line = document.createElement("p");
     line.append(label);
+    const card = cardById.get(attempt.problemId);
+    if (!card) {
+      const availability = document.createElement("span");
+      availability.className = "attempt-unavailable";
+      availability.textContent = uncheckedHistoryProblemIds?.has(
+        attempt.problemId,
+      )
+        ? "Could not check problem availability. Reload the lobby to try again."
+        : "Problem no longer available";
+      line.append(" · ", availability);
+    }
     const open = document.createElement("button");
     open.type = "button";
     open.textContent = "Open report";
@@ -2391,9 +2407,11 @@ function renderAttemptHistory(attempts, preserveDownloadNote = false) {
       "click",
       () => void exportSavedReport(attempt, download),
     );
-    const retry = document.createElement("button");
-    retry.type = "button";
-    retry.textContent = "Try again";
+    const retry = card ? document.createElement("button") : null;
+    if (retry) {
+      retry.type = "button";
+      retry.textContent = "Try again";
+    }
     const report = document.createElement("div");
     report.innerHTML = reportMarkup({
       report: saved,
@@ -2440,12 +2458,8 @@ function renderAttemptHistory(attempts, preserveDownloadNote = false) {
       void openAttemptCategoryComparison(report, attempt);
       void loadOriginalProblem(report, attempt.problemId);
     });
-    retry.addEventListener("click", () => {
+    retry?.addEventListener("click", () => {
       if (starting) return;
-      const card = cards.find(
-        (candidate) => candidate.id === attempt.problemId,
-      );
-      if (!card) return;
       selection.value = "practice";
       syncSelectionMode();
       manualProblem = true;
@@ -2475,7 +2489,8 @@ function renderAttemptHistory(attempts, preserveDownloadNote = false) {
           : "";
       nodes.recommendation.textContent = `Selected problem: ${title(card)}.${adjustment}`;
     });
-    item.append(line, open, download, retry);
+    item.append(line, open, download);
+    if (retry) item.append(retry);
     // A row with no id has nothing both stores and the account agree on, and
     // deleting by anything weaker could take a different report than this one.
     if (attempt.id) {
