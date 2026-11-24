@@ -13,10 +13,11 @@ mod progress;
 mod recovery;
 
 pub use assessment::{
-    BehavioralRound, InterimReviewInput, PhaseJudgeInput, ReportPromptInput, interim_review_prompt,
-    interim_system_instruction, phase_judge_prompt, phase_judge_system_instruction,
-    phase_judgment_note, received_test_note, report_prompt, report_system_instruction,
-    report_system_instruction_for_examples, rolling_assessment, unvoiced_record_note,
+    BehavioralRound, InterimReviewInput, PhaseJudgeInput, RepeatCue, ReportPromptInput,
+    interim_review_prompt, interim_system_instruction, phase_judge_prompt,
+    phase_judge_system_instruction, phase_judgment_note, received_test_note, report_prompt,
+    report_system_instruction, report_system_instruction_for_examples, rolling_assessment,
+    unvoiced_record_note,
 };
 pub use instructions::build_instructions_for_plan;
 pub(crate) use material::hint_rung_held_text;

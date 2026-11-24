@@ -842,9 +842,22 @@ export function boardOpBatches(ops, budget = 24 * 1024) {
 /// the same data channel. The agent reads `strokes` and the optional validated
 /// phase checkpoint off these attributes, so this shape is a wire contract
 /// with `src/livekit/board.rs`; `tests/fixtures/board-stream.json` pins it.
-export function boardStreamOptions(sequence, strokes, size, checkpoint = "") {
+/// A checkpoint also carries `taken`, the order the page took it in, which
+/// the agent sorts checkpoints by: a checkpoint held after a failed upload
+/// arrives after one taken later, and `sequence` counts uploads.
+export function boardStreamOptions(
+  sequence,
+  strokes,
+  size,
+  checkpoint = "",
+  taken = 0,
+) {
   const attributes = { strokes: String(strokes) };
-  if (whiteboardPhaseLabel(checkpoint)) attributes.checkpoint = checkpoint;
+  if (whiteboardPhaseLabel(checkpoint)) {
+    attributes.checkpoint = checkpoint;
+    if (Number.isSafeInteger(taken) && taken > 0)
+      attributes.taken = String(taken);
+  }
   return {
     topic: topics.board,
     name: `board-${sequence}.jpg`,
@@ -900,9 +913,9 @@ const textEncoder = new TextEncoder();
 /// function-local, moving it left the whole suite green with the supported-card
 /// branch no longer rendering, which is the defect a local constant invites.
 export const ACTIVE_CONTRACT = {
-  bundleVersion: 48,
-  livePromptVersion: 36,
-  reportPromptVersion: 26,
+  bundleVersion: 49,
+  livePromptVersion: 37,
+  reportPromptVersion: 27,
   reportSchemaVersion: 4,
   rubricVersion: 1,
 };

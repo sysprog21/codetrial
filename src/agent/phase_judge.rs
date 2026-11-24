@@ -59,9 +59,16 @@ const MIN_SPOKEN_QUOTE_WORDS: usize = 6;
 const MIN_QUOTE_WORDS: usize = 4;
 /// What the row keeps of the judge's summary and of the quote it was checked
 /// against. The quote goes into the row, so the report reads the words that
-/// were verified rather than only the judge's account of them.
+/// were verified rather than only the judge's account of them. A comment's
+/// words reach the report only through an `editor_snapshot` Repeat row's
+/// quote, so one longer than the row keeps is refused for Repeat rather than
+/// cut; the judge's prompt names the bound.
 const MAX_PHASE_JUDGE_SUMMARY_CHARS: usize = 120;
-const MAX_PHASE_JUDGE_QUOTE_CHARS: usize = 110;
+pub(crate) const MAX_PHASE_JUDGE_QUOTE_CHARS: usize = 110;
+/// The most repeat entries one answer is read for: the judge quotes a comment
+/// longer than a row keeps in parts, and the code it is shown holds at most
+/// this many parts of that length.
+const MAX_REPEAT_PARTS: usize = PHASE_JUDGE_CODE_BYTES.div_ceil(MAX_PHASE_JUDGE_QUOTE_CHARS);
 
 /// The steps the judge may still record, in checklist spelling: the STAR
 /// steps once the behavioral round has opened, the coding ones before it, and
@@ -94,7 +101,10 @@ pub fn phase_judge_open(state: &RuntimeState) -> Vec<&'static str> {
     let unrecorded = JUDGED_PHASES
         .into_iter()
         .chain(traced.then_some(FrameworkPhase::Test))
-        .filter(|phase| !phases_evidenced(state, &[*phase]))
+        .filter(|phase| {
+            !phases_evidenced(state, &[*phase])
+                || (*phase == FrameworkPhase::Repeat && restatement_open(state))
+        })
         .filter(|phase| phase.needs_code() || !coded || !tool)
         .collect::<Vec<_>>();
 
@@ -117,6 +127,37 @@ pub fn phase_judge_open(state: &RuntimeState) -> Vec<&'static str> {
         return Vec::new();
     }
     open.into_iter().map(phase_id).collect()
+}
+
+/// Whether a comment typed now was typed before the candidate moved on: at an
+/// editor, while no step but Repeat is recorded. The report credits a rule
+/// written as a comment only when a `repeat` row from `editor_snapshot` quotes
+/// it, so a comment is recorded for Repeat, as the first restatement or added
+/// to a recorded one, only while this holds; a skipped row is no step taken.
+/// A late spoken restatement is still recorded, from `candidate_speech`, so its
+/// words can match a comment typed after this closed.
+fn restatement_open(state: &RuntimeState) -> bool {
+    !state.interview_mode.is_whiteboard()
+        && !state
+            .framework_evidence
+            .iter()
+            .any(|item| item.phase != FrameworkPhase::Repeat && item.kind != EvidenceKind::Skipped)
+}
+
+/// What the judge is told about an open Repeat, so it is not invited to quote
+/// a comment `quote_is_grounded` would refuse: once Repeat is recorded only a
+/// comment adds to it, and once another step is recorded first only speech
+/// records it. A whiteboard has no comment to speak of.
+fn repeat_cue(state: &RuntimeState, open: &[&str]) -> RepeatCue {
+    if !open.contains(&"repeat") {
+        RepeatCue::None
+    } else if phases_evidenced(state, &[FrameworkPhase::Repeat]) {
+        RepeatCue::Reopened
+    } else if !state.interview_mode.is_whiteboard() && !restatement_open(state) {
+        RepeatCue::SpeechOnly
+    } else {
+        RepeatCue::None
+    }
 }
 
 /// The candidate's latest turn, which the recognizer keeps rewriting in place
@@ -213,6 +254,7 @@ pub fn take_phase_judge_window(state: &mut RuntimeState, problem: &Problem) -> S
     let prompt = phase_judge_prompt(&PhaseJudgeInput {
         problem,
         open: &open,
+        repeat: repeat_cue(state, &open),
         transcript_window: &window,
         code: &code,
         language: &state.language,
@@ -240,6 +282,141 @@ fn quote_words(text: &str) -> String {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// The fewest of a starter comment line's words a candidate's comment line
+/// must keep, in order, to be read as that line edited rather than as their
+/// own sentence: three, and four in five of the starter line's words, and
+/// more than half of the words from the first kept to the last. A shorter
+/// starter line, such as "@return {number}", is a phrase a restatement of the
+/// output says in passing, and a sentence that keeps less of a longer one,
+/// such as "I return an array of host groups, each of size k" beside "Return
+/// an array of arrays of size *returnSize", or spreads what it keeps across
+/// itself, such as "For a binary tree, return the label of each node seen
+/// from the left" beside "Definition for a binary tree node.", says it in the
+/// candidate's own words.
+const MIN_STARTER_WORDS_KEPT: usize = 3;
+
+/// A comment line's words, `quote_words` spelling, with each word it keeps from
+/// a starter comment line it edits replaced by a `|`, which no quote's words
+/// contain, so no quote can match across or into the starter's words: a line
+/// left as the starter wrote it, however short, holds nothing of the
+/// candidate's, and one they added a word or two to, or took words out of,
+/// holds only the words they added. The longer starter lines are matched
+/// first, so a shorter one that begins a longer one does not take its words
+/// and leave the rest too few to match. A starter line typed twice is cut
+/// twice.
+fn without_starter(words: &str, given: &[String]) -> String {
+    let unchanged = given.iter().any(|line| line == words);
+    let words = words.split(' ').collect::<Vec<_>>();
+    let mut starter = vec![unchanged; words.len()];
+    let mut given = given
+        .iter()
+        .map(|line| line.split(' ').collect::<Vec<_>>())
+        .collect::<Vec<_>>();
+    given.sort_by_key(|line| std::cmp::Reverse(line.len()));
+    for line in given {
+        let least = MIN_STARTER_WORDS_KEPT.max((line.len() * 4).div_ceil(5));
+        loop {
+            let free = (0..words.len())
+                .filter(|at| !starter[*at])
+                .collect::<Vec<_>>();
+            let text = free.iter().map(|at| words[*at]).collect::<Vec<_>>();
+            let Some(kept) = edited_starter_line(&line, &text, least) else {
+                break;
+            };
+
+            // Each find is at least `least` free words, so every pass marks
+            // some and the loop ends; this stops it anyway should a pass mark
+            // none, rather than finding the same words for good.
+            let mut marked = false;
+            for at in kept {
+                marked |= !std::mem::replace(&mut starter[free[at]], true);
+            }
+            if !marked {
+                break;
+            }
+        }
+    }
+    let marked = words.iter().zip(&starter);
+    let marked = marked.map(|(word, given)| if *given { "|" } else { word });
+    marked.collect::<Vec<_>>().join(" ")
+}
+
+/// Where in `text` `line` falls edited: at least `least` of its words, kept in
+/// their order, that are more than half of the words from the first of them to
+/// the last, so a word or two added inside the line is still the line while a
+/// sentence that spreads its words across itself is not. Of the stretches of
+/// `text` that hold such a run, the one keeping the most words wins, the
+/// earliest and then the shortest of those, so an edited line is cut whole
+/// rather than a part of it that already passes.
+fn edited_starter_line(line: &[&str], text: &[&str], least: usize) -> Option<Vec<usize>> {
+    // A stretch longer than this has its first and last kept word too far apart
+    // for even the whole line to be most of it.
+    let widest = (2 * line.len()).saturating_sub(1);
+    let mut best: Option<(usize, usize, usize)> = None;
+    for start in 0..text.len() {
+        let stretch = &text[start..text.len().min(start + widest)];
+        for (width, kept) in kept_by_width(line, stretch).into_iter().enumerate() {
+            if kept >= least && kept * 2 > width && best.is_none_or(|(most, _, _)| kept > most) {
+                best = Some((kept, start, width));
+            }
+        }
+    }
+    let (_, start, width) = best?;
+    let kept = kept_in_order(line, &text[start..start + width]);
+    Some(kept.into_iter().map(|at| start + at).collect())
+}
+
+/// How many of `line`'s words, kept in their order, the first `width` words of
+/// `text` hold, for each `width` from none to all of them.
+fn kept_by_width(line: &[&str], text: &[&str]) -> Vec<usize> {
+    let mut row = vec![0usize; text.len() + 1];
+    for word in line {
+        let mut next = vec![0usize; text.len() + 1];
+        for (j, other) in text.iter().enumerate() {
+            next[j + 1] = if word == other {
+                row[j] + 1
+            } else {
+                row[j + 1].max(next[j])
+            };
+        }
+        row = next;
+    }
+    row
+}
+
+/// Where in `text` a longest run of `line`'s words, kept in their order, falls:
+/// the word-level longest common subsequence, as a diff reads an edited line.
+fn kept_in_order(line: &[&str], text: &[&str]) -> Vec<usize> {
+    let mut longest = vec![vec![0usize; text.len() + 1]; line.len() + 1];
+    for (i, word) in line.iter().enumerate().rev() {
+        for (j, other) in text.iter().enumerate().rev() {
+            longest[i][j] = if word == other {
+                longest[i + 1][j + 1] + 1
+            } else {
+                longest[i + 1][j].max(longest[i][j + 1])
+            };
+        }
+    }
+
+    // Walked one text word at a time, skipping the line's words a longest run
+    // does not need there, so it ends after the text however the steps are
+    // counted: a counter that failed to advance left an open loop spinning.
+    let (mut i, mut kept) = (0, Vec::new());
+    for (j, other) in text.iter().enumerate() {
+        let needed =
+            (i..line.len()).find(|&at| line[at] == *other || longest[at + 1][j] != longest[at][j]);
+        let Some(at) = needed else {
+            break;
+        };
+        i = at;
+        if line[at] == *other {
+            kept.push(j);
+            i = at + 1;
+        }
+    }
+    kept
 }
 
 /// The comments in `code`, read by the lexer that leaves them out of a
@@ -316,9 +493,12 @@ pub(super) fn speaker_turns(state: &RuntimeState) -> Vec<Turn> {
 /// explaining. The interviewer saying it back afterwards, which is how an
 /// interviewer confirms they followed, leaves the candidate's words theirs.
 /// Speech also gives the line the first candidate turn that said it opens on.
+/// `own` holds the candidate's comment words once a step has needed them, so
+/// an answer cuts the starter out of the code at most once.
 fn quote_is_grounded(
     state: &RuntimeState,
     turns: &[Turn],
+    own: &std::cell::OnceCell<String>,
     phase: FrameworkPhase,
     quote: &str,
 ) -> Option<(EvidenceSource, Option<usize>)> {
@@ -348,13 +528,26 @@ fn quote_is_grounded(
     // explanation as a comment, and at an editor without the evidence tool
     // nobody else can record it from there. A hand trace stays spoken: Test
     // without a run is recorded as the candidate's speech, which is how the
-    // report tells tracing from testing.
-    let commented = |code: &str| typed(&typed_comments(&state.language, code));
+    // report tells tracing from testing. The starter's comment lines are cut
+    // out of the candidate's before the lines are joined, an edited one
+    // included, so its words never ground a quote or help one reach the floor.
+    // A comment counts for Repeat only while no other step is recorded, so
+    // after that a restatement both said and typed is speech, and the report
+    // reads its `candidate_speech` row as speech, not as dating the comment.
+    // The report reads a comment only through an `editor_snapshot` Repeat row's
+    // quote, so one the row would cut is not a Repeat comment: a rule past the
+    // cut would be recorded as left out. Speech reaches the report whole in the
+    // transcript while the report's tail of it still holds the turn; a long
+    // interview can drop the opening restatement from it, a known limit.
+    let whole = bounded_model_text(quote.trim(), MAX_PHASE_JUDGE_QUOTE_CHARS + 1)
+        .chars()
+        .count()
+        <= MAX_PHASE_JUDGE_QUOTE_CHARS;
     if !phase.is_star()
         && phase != FrameworkPhase::Test
         && !state.interview_mode.is_whiteboard()
-        && commented(&state.code)
-        && !commented(starter(state, &state.language))
+        && (phase != FrameworkPhase::Repeat || (whole && restatement_open(state)))
+        && format!(" {} ", own.get_or_init(|| own_comment_words(state))).contains(&needle)
     {
         return editor;
     }
@@ -371,6 +564,29 @@ fn quote_is_grounded(
         ))
         && first.speaker == INTERVIEWER_SPEAKER;
     (!echo).then_some((EvidenceSource::CandidateSpeech, Some(spoken.start)))
+}
+
+/// The candidate's comment lines, `quote_words` spelling, joined with the
+/// starter's words cut out of them. The cut reads every comment line against
+/// every starter comment line, so it is made once for a judge answer rather
+/// than once for each of its entries. Only the head of the editor the judge
+/// is shown is read: a comment past it is one the judge never saw, and the
+/// cut grows with the square of a line's words, so a long pasted line would
+/// otherwise hold the session for a second or more.
+fn own_comment_words(state: &RuntimeState) -> String {
+    let given = typed_comments(&state.language, starter(state, &state.language));
+    let given = given
+        .lines()
+        .map(quote_words)
+        .filter(|words| !words.is_empty())
+        .collect::<Vec<_>>();
+    let shown = &state.code[..state.code.floor_char_boundary(PHASE_JUDGE_CODE_BYTES)];
+    typed_comments(&state.language, shown)
+        .lines()
+        .map(|line| without_starter(&quote_words(line), &given))
+        .filter(|words| !words.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Records what the judge found, through the same gate the interviewer's calls
@@ -420,12 +636,39 @@ pub fn apply_phase_judgment(state: &mut RuntimeState, text: &str) -> Vec<Framewo
     // Read once, as the call was asked: Coding recorded from this answer closes
     // the spoken steps to later calls, not to a restatement listed after it.
     // The transcript and the editor comparison are worked out only when a step
-    // needs them, since most answers find nothing.
+    // needs them, since most answers find nothing. The code does not change
+    // while the answer is applied, so the starter is cut out of its comments
+    // once, by the first step that reads them.
     let open = phase_judge_open(state);
     let mut turns = None;
+    let own = std::cell::OnceCell::new();
     let mut code_current = None;
     let mut recorded = Vec::new();
-    for step in steps.iter().take(JUDGEABLE.len()) {
+
+    // A first restatement is the first Repeat entry actually recorded, so one
+    // the server refuses does not take its place: while Repeat is unrecorded
+    // the answer's Repeat entries are tried first, in order, and once anything
+    // but a Repeat comment is recorded the Repeat entries still waiting go
+    // behind the other steps, where they start when Repeat was recorded before.
+    // Another step recorded from the same answer then moves the candidate on
+    // whatever order the judge listed the steps in, after the answer's comment
+    // entries when its restatement is a comment.
+    let repeat = |step: &&serde_json::Value| {
+        step.get("step").and_then(serde_json::Value::as_str) == Some("repeat")
+    };
+
+    // Read up to one entry for each other step, and for Repeat every part of
+    // the longest comment the judge is shown, quoted in parts.
+    let (mut repeats, mut others): (Vec<_>, Vec<_>) = steps.iter().partition(repeat);
+    repeats.truncate(MAX_REPEAT_PARTS);
+    others.truncate(JUDGEABLE.len());
+    let mut queue =
+        std::collections::VecDeque::from(if phases_evidenced(state, &[FrameworkPhase::Repeat]) {
+            [others, repeats].concat()
+        } else {
+            [repeats, others].concat()
+        });
+    while let Some(step) = queue.pop_front() {
         let (Some(id), Some(quote)) = (
             step.get("step").and_then(serde_json::Value::as_str),
             step.get("quote").and_then(serde_json::Value::as_str),
@@ -435,7 +678,11 @@ pub fn apply_phase_judgment(state: &mut RuntimeState, text: &str) -> Vec<Framewo
         let Some(phase) = JUDGEABLE.into_iter().find(|phase| phase_id(*phase) == id) else {
             continue;
         };
-        if !open.contains(&id) || phases_evidenced(state, &[phase]) {
+
+        // Only Repeat is judged again once recorded, and then only from a
+        // comment, below.
+        let again = phases_evidenced(state, &[phase]);
+        if !open.contains(&id) || (again && phase != FrameworkPhase::Repeat) {
             continue;
         }
         if phase.needs_code()
@@ -450,17 +697,37 @@ pub fn apply_phase_judgment(state: &mut RuntimeState, text: &str) -> Vec<Framewo
             continue;
         }
         let turns = turns.get_or_insert_with(|| speaker_turns(state));
-        let Some((source, spoken_at)) = quote_is_grounded(state, turns, phase, quote) else {
+        let Some((source, spoken_at)) = quote_is_grounded(state, turns, &own, phase, quote) else {
             continue;
         };
+
+        // A comment counts for Repeat only while no other step is recorded, one
+        // recorded earlier in this answer included, and `quote_is_grounded`
+        // reads it as one only then. The queue settles which comes first: while
+        // Repeat is unrecorded its entries go ahead, so a first restatement
+        // typed as a comment counts beside the answer's other steps; when it
+        // was recorded before this answer they go behind, so those steps close
+        // it. Once Repeat is recorded only a comment adds to it: speech is the
+        // restatement already recorded, and a quote a Repeat row already holds
+        // adds nothing. A late spoken restatement is still recorded.
+        let comment = source == EvidenceSource::EditorSnapshot;
+        if again
+            && (!comment
+                || restatement_quoted(state, own.get_or_init(|| own_comment_words(state)), quote))
+        {
+            continue;
+        }
         let summary = step
             .get("summary")
             .and_then(serde_json::Value::as_str)
             .map(str::trim)
             .filter(|summary| !summary.is_empty());
+
+        // A double quote inside becomes a single one, so the quote is always
+        // what the row's last two double quotes hold, whatever it says.
         let quoted = format!(
             "\"{}\"",
-            bounded_model_text(quote.trim(), MAX_PHASE_JUDGE_QUOTE_CHARS)
+            bounded_model_text(quote.trim(), MAX_PHASE_JUDGE_QUOTE_CHARS).replace('"', "'")
         );
         let summary = match summary {
             Some(summary) => format!(
@@ -483,9 +750,68 @@ pub fn apply_phase_judgment(state: &mut RuntimeState, text: &str) -> Vec<Framewo
             let latest = &mut state.hint_attempt.quoted_turn_start;
             *latest = (*latest).max(spoken_at);
             recorded.push(evidence);
+
+            // A comment recorded for Repeat keeps the answer's other Repeat
+            // entries ahead of its other steps: they may be the rest of a
+            // comment the judge quoted in parts, typed before the candidate
+            // moved on as surely as this part was, and only a comment can add
+            // to it now. A spoken one sends them behind. Another step never
+            // finds one still ahead of it, since they are tried first while
+            // Repeat is unrecorded and last once it is.
+            if !comment {
+                let (left, rest): (Vec<_>, Vec<_>) = queue.drain(..).partition(repeat);
+                queue.extend(rest.into_iter().chain(left));
+            }
         }
     }
     recorded
+}
+
+/// Whether the Repeat rows already quote every word of the comment `quote`
+/// holds: each row's quote is placed wherever it falls in `comment`, the
+/// candidate's comment words as `quote_is_grounded` read them, and the quote is
+/// refused when one place it falls is covered throughout. Placed rather than
+/// joined, since the judge may quote a comment in parts that overlap, and
+/// recorded in any order, by one answer or several, with a spoken row between
+/// them, so rows read end to end repeat the overlap at a seam or put the parts
+/// out of order, and a quote across them would be recorded again. A spoken row
+/// covers the comment words it says too. A comment is recorded for Repeat only
+/// when the row keeps it whole, so it needs no cut to be found. Only the row's
+/// quote is read: the judge's summary beside it is not the candidate's words,
+/// and either may contain "Quote: ", so the quote is found by the double quotes
+/// around it, which it never contains.
+fn restatement_quoted(state: &RuntimeState, comment: &str, quote: &str) -> bool {
+    let comment = comment.split(' ').collect::<Vec<_>>();
+    let places = |words: &str| places_in(&comment, &words.split(' ').collect::<Vec<_>>());
+    let mut covered = vec![false; comment.len()];
+    let rows = state
+        .framework_evidence
+        .iter()
+        .filter(|item| item.phase == FrameworkPhase::Repeat)
+        .filter_map(|item| {
+            item.summary
+                .strip_suffix('"')
+                .and_then(|summary| summary.rsplit_once('"'))
+                .map(|(_, quoted)| quote_words(quoted))
+        })
+        .filter(|words| !words.is_empty());
+    for row in rows {
+        for place in places(&row) {
+            covered[place].fill(true);
+        }
+    }
+    places(&quote_words(quote))
+        .into_iter()
+        .any(|place| covered[place].iter().all(|word| *word))
+}
+
+/// Every stretch of `text` that reads `words`, word for word.
+fn places_in(text: &[&str], words: &[&str]) -> Vec<std::ops::Range<usize>> {
+    text.windows(words.len())
+        .enumerate()
+        .filter(|(_, window)| *window == words)
+        .map(|(start, _)| start..start + words.len())
+        .collect()
 }
 
 /// One line of what a pause-time reviewer saw, bounded the way a summary is.
@@ -525,3 +851,7 @@ pub fn record_interim_notes(state: &mut RuntimeState, text: &str) {
         state.interim_notes.push(line);
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/agent/phase_judge.rs"]
+mod tests;

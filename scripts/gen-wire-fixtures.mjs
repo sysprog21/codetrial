@@ -405,6 +405,19 @@ function boardCases() {
     // A board that was cleared: no strokes, and still a board, because the
     // interviewer has to see that what they were asked about is gone.
     { name: "cleared board", options: lib.boardStreamOptions(18, 0, 4_096) },
+    // Repeat taken first and Example second, in the order they arrive when
+    // Repeat's upload failed twice: Example goes out first, and the held
+    // Repeat after it, each with the order it was taken in. The page's own
+    // uploads are checked against these two in
+    // tests/browser/board-checkpoint-order.test.js.
+    {
+      name: "an example checkpoint ahead of a held repeat",
+      options: lib.boardStreamOptions(21, 12, 30_720, "example", 2),
+    },
+    {
+      name: "the held repeat checkpoint, sent last",
+      options: lib.boardStreamOptions(22, 9, 28_672, "repeat", 1),
+    },
   ];
 }
 

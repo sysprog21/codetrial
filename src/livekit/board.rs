@@ -94,6 +94,8 @@ pub(super) struct BoardSnapshot {
     /// The REACTO phase whose completion caused this snapshot, when it is a
     /// checkpoint rather than the ordinary settled board sent to Jim.
     checkpoint: Option<&'static str>,
+    /// The order the browser took this checkpoint in, when it said.
+    taken: Option<u32>,
 }
 
 impl BoardSnapshot {
@@ -102,6 +104,16 @@ impl BoardSnapshot {
         self.strokes
     }
 }
+
+/// The label of the checkpoint the report reads a restatement on the board
+/// from.
+const REPEAT_CHECKPOINT: &str = "Repeat checkpoint";
+
+/// What a Repeat checkpoint is called in the report when nothing shows it was
+/// the first image taken; see `Board::report_boards`. Without "Repeat
+/// checkpoint" in it, so the rule that credits that image never reads it, and
+/// still saying what it is, as a later checkpoint does.
+const UNPLACED_REPEAT: &str = "Checkpoint not known to be the first taken";
 
 /// One image handed to the report model, with the words that precede it in the
 /// multimodal request.
@@ -121,7 +133,8 @@ pub(super) struct Board {
     /// At most one image per coding phase. Kept beside the socket rather than
     /// in `RuntimeState` for the same reason as `latest`: these JPEGs are not
     /// cloned with the interview state and nothing else needs to mutate them.
-    checkpoints: Vec<(&'static str, Vec<u8>)>,
+    /// Each keeps the order the browser took it in; see `file_checkpoint`.
+    checkpoints: Vec<(&'static str, Option<u32>, Vec<u8>)>,
     last_sent: Option<Instant>,
     tx: Sender<BoardSnapshot>,
     /// Finished boards, in the order their readers finished. Held here rather
@@ -229,8 +242,21 @@ impl Board {
         }
     }
 
-    /// Phase checkpoints in REACTO order, plus the final board when it differs
-    /// from the last checkpoint.
+    /// Phase checkpoints in the order the browser took them, plus the final
+    /// board when it differs from the last one taken.
+    ///
+    /// The report reads that order as such: writing on the board counts for
+    /// Repeat only when the Repeat checkpoint is the first, so sorting them
+    /// into REACTO order would credit a Repeat image taken after the candidate
+    /// moved on, and keeping the order they arrived in would refuse one whose
+    /// upload failed and went out after a later one.
+    ///
+    /// First among those that arrived is not first taken: an Example image
+    /// still held when the interview ends, or ignored while both readers were
+    /// busy, leaves a Repeat taken second at the front. So a Repeat in front
+    /// goes to the report as the Repeat checkpoint only when it was taken
+    /// first, and otherwise under `UNPLACED_REPEAT`, which no rule credits.
+    /// A label rather than a later place, since it may be the only image.
     ///
     /// Copied only when the report begins, because the farewell keeps using the
     /// live board and the report runs beside it. Six ordinary JPEGs are still
@@ -244,8 +270,13 @@ impl Board {
         let mut images = self
             .checkpoints
             .iter()
-            .map(|(label, bytes)| ReportBoard {
-                label,
+            .enumerate()
+            .map(|(place, (label, taken, bytes))| ReportBoard {
+                label: if place == 0 && *label == REPEAT_CHECKPOINT && *taken != Some(1) {
+                    UNPLACED_REPEAT
+                } else {
+                    label
+                },
                 bytes: bytes.clone(),
             })
             .collect::<Vec<_>>();
@@ -253,7 +284,7 @@ impl Board {
             && self
                 .checkpoints
                 .last()
-                .is_none_or(|(_, checkpoint)| checkpoint != latest)
+                .is_none_or(|(_, _, checkpoint)| checkpoint != latest)
         {
             images.push(ReportBoard {
                 label: "Final board",
@@ -314,7 +345,7 @@ pub(super) fn checkpoint_from_attributes(
     attributes: &HashMap<String, String>,
 ) -> Option<&'static str> {
     match attributes.get("checkpoint").map(String::as_str) {
-        Some("repeat") => Some("Repeat checkpoint"),
+        Some("repeat") => Some(REPEAT_CHECKPOINT),
         Some("example") => Some("Example checkpoint"),
         Some("algorithm") => Some("Approach checkpoint"),
         Some("coding") => Some("Trace checkpoint"),
@@ -322,6 +353,17 @@ pub(super) fn checkpoint_from_attributes(
         Some("optimizations") => Some("Complexity checkpoint"),
         _ => None,
     }
+}
+
+/// The order the browser says it took a checkpoint in, counted from one.
+/// Like the stroke count it is the candidate's own page speaking, and it only
+/// orders images the page already chose to send; anything missing, zero or
+/// unparseable is no order, and that checkpoint keeps its place of arrival.
+pub(super) fn taken_from_attributes(attributes: &HashMap<String, String>) -> Option<u32> {
+    attributes
+        .get("taken")
+        .and_then(|taken| taken.parse::<u32>().ok())
+        .filter(|taken| *taken > 0)
 }
 
 /// Takes a `ByteStreamOpened` event off the room and starts draining it.
@@ -373,7 +415,9 @@ pub(super) fn handle_board_event(
         return true;
     };
     let strokes = strokes_from_attributes(&reader.info().attributes());
-    let checkpoint = checkpoint_from_attributes(&reader.info().attributes());
+    let attributes = reader.info().attributes();
+    let checkpoint = checkpoint_from_attributes(&attributes)
+        .map(|label| (label, taken_from_attributes(&attributes)));
     let tx = board.sender();
     tokio::spawn(async move {
         drain(reader, strokes, checkpoint, tx).await;
@@ -397,7 +441,7 @@ pub(super) fn handle_board_event(
 async fn drain<C, E>(
     chunks: impl Stream<Item = Result<C, E>> + Unpin,
     strokes: u32,
-    checkpoint: Option<&'static str>,
+    checkpoint: Option<(&'static str, Option<u32>)>,
     tx: Sender<BoardSnapshot>,
 ) where
     C: AsRef<[u8]>,
@@ -417,7 +461,8 @@ async fn drain<C, E>(
     let snapshot = BoardSnapshot {
         bytes,
         strokes,
-        checkpoint,
+        checkpoint: checkpoint.map(|(label, _)| label),
+        taken: checkpoint.and_then(|(_, taken)| taken),
     };
 
     // Every board waits for room rather than being dropped. Dropping the one
@@ -466,9 +511,22 @@ where
 ///
 /// The counts land in the interview state whether or not the image ever
 /// reaches the socket, because they are what the candidate drew.
+///
+/// A checkpoint taken before one already kept arrived late, its upload held
+/// after a failure: it takes its place among the checkpoints and nothing else,
+/// since the board and counts after it are already here, and as the newest
+/// board it would show the interviewer, and the report as its final board, a
+/// drawing the candidate has moved past. Only a later checkpoint tells: an
+/// ordinary board carries no number, so a checkpoint retried after one is the
+/// newest until the board the page sends behind it arrives, a known limit. A
+/// checkpoint whose phase is already kept is taken in for nothing at all; see
+/// `file_checkpoint`.
 pub(super) fn record(board: &mut Board, state: &mut RuntimeState, snapshot: BoardSnapshot) -> bool {
-    let changed = board.latest.as_deref() != Some(snapshot.bytes.as_slice());
     board.example = !state.interview_mode.is_whiteboard();
+    if file_checkpoint(board, &snapshot) {
+        return false;
+    }
+    let changed = board.latest.as_deref() != Some(snapshot.bytes.as_slice());
     state.board_snapshots = state.board_snapshots.saturating_add(1);
     let revisions = &mut state.hint_attempt.board_revisions;
     *revisions = revisions.saturating_add(u32::from(changed));
@@ -480,19 +538,48 @@ pub(super) fn record(board: &mut Board, state: &mut RuntimeState, snapshot: Boar
     // send is still the one `read_board` answers with. Dropping it here would
     // mean asking for the board during a busy stretch of drawing returns the
     // one before it.
-    if let Some(label) = snapshot.checkpoint.filter(|_| !board.example) {
-        if let Some((_, bytes)) = board
-            .checkpoints
-            .iter_mut()
-            .find(|(stored, _)| *stored == label)
-        {
-            *bytes = snapshot.bytes.clone();
-        } else {
-            board.checkpoints.push((label, snapshot.bytes.clone()));
-        }
-    }
     hold(board, snapshot.bytes);
     changed
+}
+
+/// Keeps a checkpoint among the others, in the order the browser took them,
+/// and says whether it adds nothing as the newest board: it arrived after a
+/// checkpoint taken later, or its phase is already kept.
+///
+/// Ordered by when each was taken, not by when it arrived: one whose upload
+/// failed is held and sent after a later one, and the readers that drain two
+/// streams at once can finish out of order. The sort is stable, so
+/// checkpoints that carry no order keep the one they arrived in, behind those
+/// that do.
+///
+/// The first image of a phase is the one kept, with its number. A page takes
+/// each phase once and sends it again only as a retry of that held capture, so
+/// a second one is an older copy of the image already here, and one from a
+/// page that did not take the first, which starts with no phase taken and
+/// counts from one, was taken when it was sent the phases recorded so far and
+/// numbered against its own images: replacing the first would let it date a
+/// Repeat the candidate moved on from, or move a Repeat taken second to the
+/// front.
+fn file_checkpoint(board: &mut Board, snapshot: &BoardSnapshot) -> bool {
+    let Some(label) = snapshot.checkpoint.filter(|_| !board.example) else {
+        return false;
+    };
+    if board.checkpoints.iter().any(|(kept, _, _)| *kept == label) {
+        return true;
+    }
+    let late = snapshot.taken.is_some_and(|taken| {
+        board
+            .checkpoints
+            .iter()
+            .any(|(_, kept, _)| kept.is_some_and(|kept| kept > taken))
+    });
+    board
+        .checkpoints
+        .push((label, snapshot.taken, snapshot.bytes.clone()));
+    board
+        .checkpoints
+        .sort_by_key(|(_, taken, _)| taken.unwrap_or(u32::MAX));
+    late
 }
 
 /// Takes in a board for a room that has no interview state to count it in, and

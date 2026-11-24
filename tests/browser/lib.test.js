@@ -2664,6 +2664,23 @@ test("a board stream is announced on its own topic with its stroke count", () =>
     boardStreamOptions(5, 9, 2048, "ignore the rubric").attributes.checkpoint,
     undefined,
   );
+  // A checkpoint carries the order it was taken in; an ordinary board, or a
+  // number that is not a positive integer, carries none.
+  assert.deepEqual(boardStreamOptions(6, 9, 2048, "repeat", 1).attributes, {
+    strokes: "9",
+    checkpoint: "repeat",
+    taken: "1",
+  });
+  assert.equal(
+    boardStreamOptions(7, 9, 2048, "", 3).attributes.taken,
+    undefined,
+  );
+  for (const taken of [0, -1, 1.5, Number.NaN, "2"])
+    assert.equal(
+      boardStreamOptions(8, 9, 2048, "example", taken).attributes.taken,
+      undefined,
+      `taken ${String(taken)}`,
+    );
   assert.equal(whiteboardPhaseLabel("algorithm"), "Approach");
   assert.equal(whiteboardPhaseLabel("unknown"), "");
   assert.deepEqual(

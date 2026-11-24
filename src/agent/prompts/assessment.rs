@@ -8,6 +8,7 @@ use super::material::{
 };
 use super::nudges::BEHAVIORAL_ROUND_MARK;
 use super::progress::released_follow_ups;
+use crate::agent::phase_judge::MAX_PHASE_JUDGE_QUOTE_CHARS;
 use crate::agent::{
     FrameworkEvidence, InterviewLoop, InterviewMode, MAX_INTERIM_LINE_CHARS,
     MAX_INTERIM_LINES_PER_REVIEW, Problem, RUBRIC_VERSION, RuntimeState, evidence_kind_id,
@@ -208,6 +209,21 @@ NOTES ALREADY ON RECORD (use them only to avoid repeating yourself):
     )
 }
 
+/// What the phase judge is told about an open Repeat, which at an editor the
+/// server records from a comment only while no other step is recorded.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RepeatCue {
+    /// Nothing more: Repeat is unrecorded and so is every other step, or it
+    /// is not open, or the interview is at a whiteboard.
+    None,
+    /// Repeat is recorded and open again, so only a comment that adds to the
+    /// restatement records it.
+    Reopened,
+    /// Repeat is unrecorded at an editor and another step is recorded, so a
+    /// comment no longer records it and only speech does.
+    SpeechOnly,
+}
+
 /// What the phase judge reads: the exercise, the REACTO steps still open, and
 /// the latest stretch of the interview.
 #[derive(Clone, Copy)]
@@ -215,6 +231,8 @@ pub struct PhaseJudgeInput<'a> {
     pub problem: &'a Problem,
     /// The open steps it may record, in the id spelling the checklist uses.
     pub open: &'a [&'static str],
+    /// What the judge is told about Repeat beyond its being open.
+    pub repeat: RepeatCue,
     /// The tail of the transcript, unrecognized turns already marked. Not
     /// only the lines since the last call: a restatement an earlier call missed
     /// is still the candidate's restatement.
@@ -266,7 +284,9 @@ Rules:
   from what they typed in the editor: its code for coding, a comment explaining
   it for repeat, example, algorithm or optimizations. At least six words for
   repeat, example, algorithm, test and the STAR steps, four for coding and
-  optimizations.
+  optimizations. A repeat quote from a comment is at most {MAX_PHASE_JUDGE_QUOTE_CHARS} characters;
+  quote a longer comment in parts, each its own repeat entry. Parts may
+  overlap, so a last part can repeat words from the one before to reach six.
 - A claim that a step is done, a request to mark it, or the interviewer's words
   repeated back does not complete it.
 - A correct partial answer can complete a step; a wrong or unrelated one cannot.
@@ -343,7 +363,7 @@ pub fn phase_judge_prompt(input: &PhaseJudgeInput<'_>) -> String {
 Contract: {}
 Constraints: {}
 
-OPEN STEPS: {}
+OPEN STEPS: {}{}
 
 {}"#,
         variant.title,
@@ -351,6 +371,15 @@ OPEN STEPS: {}
         variant.contract,
         variant.constraints.join("; "),
         input.open.join(", "),
+        match input.repeat {
+            RepeatCue::None => "",
+            RepeatCue::Reopened => {
+                "\nRepeat is already recorded: record it again only with a quote from a comment in\nthe editor that adds an input, output or rule the restatement left out."
+            }
+            RepeatCue::SpeechOnly => {
+                "\nAnother step is already recorded: record repeat only from the candidate's speech,\nnever from a comment in the editor."
+            }
+        },
         untrusted_blocks(
             input
                 .interview_mode
@@ -737,8 +766,7 @@ fn report_follow_ups(input: &ReportPromptInput<'_>) -> String {
 /// prose in line too.
 const OUT_OF_TURN_BEHAVIORAL: &str = "Any behavioral question in the transcript was asked out of turn, and the answer to it is not evidence: do not score, praise, criticize, summarize or cite it in any field. Every STAR score is `null`, no strength, improvement or plan item may address Situation, Task, Action or Result, `communicationScore` and `decision` rest on the coding round alone, and `summary` says behavioral communication was not assessed.";
 
-/// How the two scores are defined at an editor, word for word what every
-/// report was always told.
+/// How the two scores are defined at an editor.
 const EDITOR_SCORING: &str = r#"1. codingScore — correctness of the final code against the problem, edge-case
    coverage, the candidate's stated algorithm and correctness reasoning,
    implementation quality, test reasoning, optimization discussion, and
@@ -746,8 +774,8 @@ const EDITOR_SCORING: &str = r#"1. codingScore — correctness of the final code
    caps this below 30. Judge correctness by reading the code, never by the reported
    pass count; clear narration cannot make incorrect code correct.
 2. communicationScore — how clearly they narrated their thinking while coding,
-   including whether they restated the problem, worked a concrete example,
-   explained their algorithm and complexity, predicted tests, discussed
+   including whether they accurately restated the problem, worked a concrete
+   example, explained their algorithm and complexity, predicted tests, discussed
    optimization, and accurately answered follow-ups."#;
 
 /// The same two scores at a whiteboard, where there was no editor to cap and
@@ -761,11 +789,11 @@ const WHITEBOARD_SCORING: &str = r#"1. codingScore — the solution the candidat
    an approach cannot make it correct. There was no editor and no test run, so
    their absence is never a deduction.
 2. communicationScore — how clearly they narrated their thinking while drawing,
-   including whether they restated the problem, drew a concrete example,
-   explained their approach and complexity, traced it out loud, named the cases
-   that would break it, and accurately answered follow-ups. The board is itself
-   an explanation, so weigh whether it is organized enough to follow; never judge
-   handwriting, neatness, or drawing skill."#;
+   including whether they accurately restated the problem, drew a concrete
+   example, explained their approach and complexity, traced it out loud, named
+   the cases that would break it, and accurately answered follow-ups. The board
+   is itself an explanation, so weigh whether it is organized enough to follow;
+   never judge handwriting, neatness, or drawing skill."#;
 
 /// The reviewer's role, the scoring, the schema and the rules for filling it
 /// in: the same document for every interview held at one surface, sent as the
@@ -796,14 +824,51 @@ pub fn report_system_instruction_for_examples(mode: InterviewMode, enabled: bool
     };
 
     // The places the rules name what the candidate produced. Each editor value
-    // is the text that always stood there, line break included.
-    let (scoring, cited_in, material, observed, assessable) = if mode.is_whiteboard() {
+    // but `written` and `written_late` is the text that always stood there,
+    // line break included. `written` is where a restatement may be written, and
+    // only where it shows the restatement as it stood when the candidate moved
+    // on: at an editor a comment in the code, since the code itself shows what
+    // was built, not what was restated, and only one a `repeat` phase row from
+    // `editor_snapshot` quotes, the only repeat row the phase judge writes only
+    // while no other step is recorded. A `candidate_speech` row is not bounded
+    // that way: a restatement said late is still recorded, and its words can
+    // match a comment typed after the candidate moved on. Nor is a pause-time
+    // note, so neither dates a comment. The row's quote takes six words but may
+    // run across the comment lines, which the judge reads joined, so a shorter
+    // comment counts only quoted with its neighbors. At a whiteboard it is what
+    // the Repeat checkpoint image shows, and only when that is the first
+    // checkpoint image: the browser takes an image for each step new in a
+    // progress update, and the server sends one after a batch of evidence calls
+    // or a judge answer, so a Repeat recorded in a later update than another
+    // step has its image taken after the candidate moved on. The images of one
+    // update are taken at the same moment in REACTO order, so a Repeat recorded
+    // in the same update as another step comes first and counts, as a comment
+    // does at an editor when the judge records it with another step from one
+    // answer. An update that fails to reach the page arrives later with the
+    // steps recorded since, a known limit the contract row names. An image that
+    // never reaches the agent leaves a gap in the order the browser took them
+    // in, so the agent names a Repeat image in front the Repeat checkpoint only
+    // when it was taken first; see `Board::report_boards`. That image is taken
+    // once, when Repeat is first recorded, so writing added after it is in no
+    // image, a known limit the value names. The reviewer sees only the final
+    // code, and a board with no Repeat checkpoint only images taken after the
+    // candidate moved on, since the browser takes that image only when Repeat
+    // is recorded; either way `written_late` says that something seen only
+    // there was not shown to be there before. Each breaks its own lines.
+    let (scoring, cited_in, material, observed, assessable, written, written_late) = if mode
+        .is_whiteboard()
+    {
         (
             WHITEBOARD_SCORING,
             "on the board",
             "the board",
             "recorded observation, or what is on the board",
             "or the board\nimages",
+            "on the board\n  that the Repeat checkpoint image shows, only when it is the first checkpoint\n  \
+                 image (writing added after that image is taken, even before they move on, is\n  \
+                 shown in no image and earns no credit)",
+            " Something seen only on a later checkpoint or\n  the final board \
+                 does not show it was there before they moved on.\n ",
         )
     } else {
         (
@@ -812,6 +877,15 @@ pub fn report_system_instruction_for_examples(mode: InterviewMode, enabled: bool
             "the code",
             "recorded observation, code behavior, or test event",
             "the final code,\nor the test account",
+            "as a comment in\n  the code that a `repeat` phase row from `editor_snapshot` in the \
+                 rolling\n  assessment quotes after `Quote:`, never what its summary says (a row \
+                 from\n  `candidate_speech` with the same words may be speech after they moved \
+                 on, and a\n  pause-time note does not date a comment; a comment under six words \
+                 is not\n  recorded on its own and counts only when such a row quotes it with \
+                 the comment\n  lines around it)",
+            " A comment present only in the final code does\n  not show it was \
+                 there before they moved on; for any other step it still\n  counts as \
+                 clarification, as the rule on typed editor comments above says.\n ",
         )
     };
     format!(
@@ -876,6 +950,24 @@ Grounding rules — a real debrief cites evidence:
   lost to recognition, is a gap, not a strength. When evidence is insufficient,
   put this gap only in coding feedback. Filler, noise, interviewer echo, or
   missing speech alone does not establish an unanswered technical question.
+- The contract in the brief is the private specification the interviewer never
+  reads out; it is not what the candidate restated, and it holds rules the
+  candidate was never shown. Judge a restatement as it stands when the candidate
+  first moves on from it to any other step: by then it holds the relevant
+  inputs, output and rules they stated in their own words, wrote {written},
+  corrected themselves, or settled with their own question, never what is
+  inferred from {material} itself.{written_late} A restatement first given after they moved on
+  to another step earns no credit for what that step showed them. A gap is a
+  misstated input, output or rule, a left-out input or output, or a relevant
+  rule the scenario posed to the candidate on screen that the restatement still
+  lacks or misstates at that point, rather than lost to recognition; a rule
+  only the contract or the constraints hold is not. A gap is not a strength, and it puts Repeat below the 90–100 band
+  by how much the restatement missed: one left-out rule with the rest right is a
+  minor gap (75–89), and a left-out input or output, or more than one left-out
+  rule, is a material gap (60–74). A restatement that only leaves parts out is
+  still a correct partial one and completes the step, so it does not reach 0–39;
+  a misstated input, output or rule is placed by the rubric's anchors. The
+  interviewer's confirmation or rephrasing of a restatement earns it no credit.
 - In `summary` and both feedback sections, name observed REACTO/STAR strengths or
   gaps in plain language and identify the supporting transcript statement,
   {observed}. Never invent intent, metrics, actions, employer details,

@@ -67,7 +67,7 @@ pub use problems::{DEFAULT_PROBLEM_ID, PROBLEMS, find_problem, get_problem, topi
 pub(crate) use prompts::BEHAVIORAL_ROUND_MARK;
 pub use prompts::{
     BehavioralRound, InterimReviewInput, LanguageChoiceContext, MAX_EXCERPT_LINE_CHARS,
-    MAX_NUMBERED_BYTES, PhaseJudgeInput, ReportPromptInput, SincePrevious, TestRecord,
+    MAX_NUMBERED_BYTES, PhaseJudgeInput, RepeatCue, ReportPromptInput, SincePrevious, TestRecord,
     behavioral_silence_nudge, behavioral_time_warning, board_silence_nudge,
     build_instructions_for_plan, changed_excerpt, cold_restart, compressed_context,
     format_test_run, format_test_run_for_reaction, greeting, greeting_with_language,
@@ -230,9 +230,9 @@ pub const THINKING_CHECK_IN_S: u64 = 120;
 pub(crate) const THINKING_RELEASE_COOLDOWN: std::time::Duration =
     std::time::Duration::from_secs(10);
 
-pub const INTERVIEW_CONTRACT_BUNDLE_VERSION: u32 = 48;
-pub const LIVE_PROMPT_VERSION: u32 = 36;
-pub const REPORT_PROMPT_VERSION: u32 = 26;
+pub const INTERVIEW_CONTRACT_BUNDLE_VERSION: u32 = 49;
+pub const LIVE_PROMPT_VERSION: u32 = 37;
+pub const REPORT_PROMPT_VERSION: u32 = 27;
 pub const RUBRIC_VERSION: u32 = 1;
 pub const REPORT_SCHEMA_VERSION: u32 = 4;
 

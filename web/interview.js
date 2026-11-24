@@ -455,6 +455,11 @@ const board = {
   /// the name for nothing, and that is deliberate: it holds the newest board
   /// it finished reading, not the highest number it has seen.
   sequence: 0,
+  /// Numbers the checkpoints as they are taken, which `sequence` cannot do: it
+  /// counts uploads, and a checkpoint held after a failed upload goes out
+  /// after one taken later. The agent orders checkpoints by this number, and
+  /// the report reads that order as the order they were taken.
+  checkpointsTaken: 0,
   /// Phase ids already captured. A reconnect can restate the whole framework
   /// checklist, and restating it must not create a second checkpoint for every
   /// phase the interviewer had already banked.
@@ -6415,7 +6420,8 @@ function checkpointBoard(phase) {
   board.settle = null;
   board.unsentSince = 0;
   recordBoardOps(phase);
-  queueBoardPublish(phase);
+  board.checkpointsTaken += 1;
+  queueBoardPublish(phase, board.checkpointsTaken);
   board.snapshots.set(phase, boardDataUrl());
 }
 
@@ -6469,21 +6475,21 @@ function recordBoardOps(checkpoint = "") {
 }
 
 /// Captures the board and appends its upload to the one stream-at-a-time chain.
-function queueBoardPublish(checkpoint = "") {
+function queueBoardPublish(checkpoint = "", taken = 0) {
   const strokes = board.model.inkCount();
   const image = new Promise((resolve) => {
     nodes.board.toBlob(resolve, "image/jpeg", BOARD_JPEG_QUALITY);
   });
-  chainBoardPublish(image, strokes, checkpoint);
+  chainBoardPublish(image, strokes, checkpoint, taken);
 }
 
 /// Appends one captured board to the upload chain, behind any checkpoint
 /// still held.
-function chainBoardPublish(image, strokes, checkpoint) {
+function chainBoardPublish(image, strokes, checkpoint, taken) {
   board.publishing = board.publishing
     .then(async () => {
       await retryHeldCheckpoints();
-      await sendBoard(await image, strokes, checkpoint);
+      await sendBoard(await image, strokes, checkpoint, taken);
     })
     .catch((error) => {
       console.warn("codetrial board_publish_failed", error);
@@ -6491,15 +6497,16 @@ function chainBoardPublish(image, strokes, checkpoint) {
 }
 
 /// Sends one captured board, and holds it if it is a checkpoint that did not
-/// make it out; see `board.heldCheckpoints`.
-async function sendBoard(blob, strokes, checkpoint) {
+/// make it out; see `board.heldCheckpoints`. A held checkpoint keeps the
+/// number it was taken with, so it takes its place when it does arrive.
+async function sendBoard(blob, strokes, checkpoint, taken = 0) {
   try {
-    if (await publishBoard(blob, strokes, checkpoint)) return;
+    if (await publishBoard(blob, strokes, checkpoint, taken)) return;
   } catch (error) {
     console.warn("codetrial board_publish_failed", error);
   }
   if (checkpoint && blob)
-    board.heldCheckpoints.set(checkpoint, { blob, strokes });
+    board.heldCheckpoints.set(checkpoint, { blob, strokes, taken });
 }
 
 /// Every held checkpoint, each as it was captured, ahead of the board about to
@@ -6514,8 +6521,8 @@ async function retryHeldCheckpoints() {
   if (!state.connected) return;
   const held = [...board.heldCheckpoints];
   board.heldCheckpoints.clear();
-  for (const [checkpoint, { blob, strokes }] of held)
-    await sendBoard(blob, strokes, checkpoint);
+  for (const [checkpoint, { blob, strokes, taken }] of held)
+    await sendBoard(blob, strokes, checkpoint, taken);
 }
 
 /// After a reconnect: the board as it is now, behind whatever checkpoints the
@@ -6559,12 +6566,18 @@ async function boardUploadsSettled() {
 /// An ordinary board is dropped rather than queued while the room is down: it
 /// is the whole state of the drawing, so the one `republishBoard` sends after
 /// the reconnect carries everything this one would have.
-async function publishBoard(blob, strokes, checkpoint) {
+async function publishBoard(blob, strokes, checkpoint, taken = 0) {
   if (!state.room || !state.connected || !blob) return false;
   const bytes = new Uint8Array(await blob.arrayBuffer());
   board.sequence += 1;
   const writer = await state.room.localParticipant.streamBytes(
-    boardStreamOptions(board.sequence, strokes, bytes.byteLength, checkpoint),
+    boardStreamOptions(
+      board.sequence,
+      strokes,
+      bytes.byteLength,
+      checkpoint,
+      taken,
+    ),
   );
   try {
     await writer.write(bytes);

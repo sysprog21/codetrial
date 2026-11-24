@@ -662,14 +662,34 @@ fn prompt_samples() -> Value {
         "phaseJudge": phase_judge_prompt(&PhaseJudgeInput {
             problem,
             open: &["repeat", "optimizations"],
+            repeat: RepeatCue::None,
             transcript_window: "Candidate: I return the indices of the two numbers.",
             code: "seen = {}",
+            language: "python",
+            interview_mode: InterviewMode::Coding,
+        }),
+        "phaseJudgeRestated": phase_judge_prompt(&PhaseJudgeInput {
+            problem,
+            open: &["repeat", "example", "algorithm"],
+            repeat: RepeatCue::Reopened,
+            transcript_window: "Candidate: I return the indices of the two numbers.",
+            code: "# each index is used once\nseen = {}",
+            language: "python",
+            interview_mode: InterviewMode::Coding,
+        }),
+        "phaseJudgeSpeechOnly": phase_judge_prompt(&PhaseJudgeInput {
+            problem,
+            open: &["repeat", "algorithm"],
+            repeat: RepeatCue::SpeechOnly,
+            transcript_window: "Candidate: I return the indices of the two numbers.",
+            code: "# each index is used once\nseen = {}",
             language: "python",
             interview_mode: InterviewMode::Coding,
         }),
         "phaseJudgeBoard": phase_judge_prompt(&PhaseJudgeInput {
             problem,
             open: &["repeat", "algorithm"],
+            repeat: RepeatCue::None,
             transcript_window: "Candidate: I draw the array and sweep it once.",
             code: "",
             language: "python",
@@ -1429,8 +1449,14 @@ fn stored_types(state: &RuntimeState) -> Vec<&str> {
 #[path = "agent/prompts.rs"]
 mod prompts;
 
+#[path = "agent/report_grounding.rs"]
+mod report_grounding;
+
 #[path = "agent/framework.rs"]
 mod framework;
+
+#[path = "agent/restatement_comments.rs"]
+mod restatement_comments;
 
 #[path = "agent/wire.rs"]
 mod wire;
