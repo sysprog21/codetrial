@@ -17,6 +17,18 @@ const DIMENSIONS: [&str; 4] = [
     "revisionAndImprovement",
 ];
 
+/// The keys every dimension of a learning review has.
+const DIMENSION_FIELDS: [&str; 5] = [
+    "rating",
+    "reason",
+    "insufficientReason",
+    "support",
+    "evidence",
+];
+
+/// The keys every explanation row of a defense review has.
+const EXPLANATION_FIELDS: [&str; 5] = ["item", "rating", "account", "reason", "evidence"];
+
 /// The task contract versions every review carries, written once. The page
 /// refuses a review whose versions it does not know, in
 /// `taskReviewForDisplay`.
@@ -24,8 +36,70 @@ fn task_contract() -> Value {
     json!({"package": 1, "prompt": 1, "wire": 1, "reportSchema": 1, "rubric": 1})
 }
 
-fn closed(value: &Value, fields: &[&str]) -> bool {
-    super::validation::fields(value, fields, &[]).is_ok()
+/// The longest unknown key a refusal repeats.
+const MAX_NAMED_KEY: usize = 64;
+
+/// The most unknown keys one refusal repeats, so a long answer cannot fill the
+/// next prompt with keys.
+const MAX_NAMED_KEYS: usize = 8;
+
+/// The most places one refusal names, for the same reason: each place can
+/// carry up to `MAX_NAMED_KEYS` of the model's keys, and there is one per
+/// dimension, row and evidence reference.
+const MAX_REFUSALS: usize = 8;
+
+/// That `value` is an object with exactly `fields`, and if not, which keys
+/// broke it. A bare refusal was all the repair prompt and the log had, so
+/// repairs at temperature 0 resent one prompt and got one answer back (#744).
+/// Missing keys are the schema's own. An unknown key is the model's, so only a
+/// short plain identifier is repeated, and any other text it wrote stays out of
+/// the log and the next prompt.
+fn exactly(value: &Value, fields: &[&str], object: &str) -> Result<(), TaskError> {
+    let map = value
+        .as_object()
+        .ok_or_else(|| invalid(format!("{object} is not an object")))?;
+    let missing: Vec<String> = fields
+        .iter()
+        .filter(|field| !map.contains_key(**field))
+        .map(|field| format!("\"{field}\""))
+        .collect();
+    // Every unknown key at once: one named per refusal spent a repair on each.
+    let unknown: Vec<&String> = map
+        .keys()
+        .filter(|key| !fields.contains(&key.as_str()))
+        .collect();
+    let named: Vec<String> = unknown
+        .iter()
+        .filter(|key| {
+            key.len() <= MAX_NAMED_KEY
+                && key.starts_with(|c: char| c.is_ascii_alphabetic())
+                && key.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+        })
+        .take(MAX_NAMED_KEYS)
+        .map(|key| format!("\"{key}\""))
+        .collect();
+    let unknown = match (named.len(), unknown.len()) {
+        (_, 0) => None,
+        (0, 1) => Some("an unknown field whose name is not an identifier".to_owned()),
+        (0, total) => Some(format!(
+            "{total} unknown fields whose names are not identifiers"
+        )),
+        (1, 1) => Some(format!("unknown field {}", named[0])),
+        (shown, total) if shown == total => Some(format!("unknown fields {}", named.join(", "))),
+        (_, total) => Some(format!(
+            "{total} unknown fields, among them {}",
+            named.join(", ")
+        )),
+    };
+    let missing = (!missing.is_empty()).then(|| format!("is missing {}", missing.join(", ")));
+    match (missing, unknown) {
+        (None, None) => Ok(()),
+        (Some(missing), None) => Err(invalid(format!("{object} {missing}"))),
+        (None, Some(unknown)) => Err(invalid(format!("{object} has {unknown}"))),
+        (Some(missing), Some(unknown)) => {
+            Err(invalid(format!("{object} {missing} and has {unknown}")))
+        }
+    }
 }
 
 fn narrative(value: &Value, improvement: bool) -> Result<&str, TaskError> {
@@ -79,6 +153,17 @@ pub fn reference_overlap(text: &str, reference: &str) -> bool {
 }
 
 pub fn validate(session: &TaskSession, value: &Value, reference: &str) -> Result<(), TaskError> {
+    refusals(session, value, reference).map_err(|places| invalid(joined(&places)))
+}
+
+/// Every place `validate` refuses a review at, in the order it checks them.
+/// `validate` joins them into one refusal for the next prompt, and a log line,
+/// which has less room, keeps the whole places that fit.
+pub(crate) fn refusals(
+    session: &TaskSession,
+    value: &Value,
+    reference: &str,
+) -> Result<(), Vec<String>> {
     // The reference is tokenized once per review, not once per narrative.
     let reference = tokens(reference);
     let windows: HashSet<&[String]> = reference.windows(12).collect();
@@ -89,220 +174,335 @@ pub fn validate(session: &TaskSession, value: &Value, reference: &str) -> Result
     } else {
         &["dimensions", "gaps", "nextActions"]
     };
-    if !closed(value, fields) || !closed(&value["dimensions"], &DIMENSIONS) {
-        return Err(invalid("unknown learning review field"));
+    let Some(review) = value.as_object() else {
+        return Err(vec!["learning review is not an object".to_owned()]);
+    };
+
+    // Every shape at once: the keys of the review, of its dimensions, of each
+    // explanation row and of every evidence reference. A model that misspells a
+    // key tends to do it everywhere, and naming one place per refusal spent a
+    // repair on each of them. Only what a refusal here leaves unreadable is
+    // skipped: a missing `dimensions` or rows, one that is not an object or a
+    // list, an absent dimension. A dimension or row whose own keys, item or
+    // references are refused is kept out of the value checks below, which would
+    // read what was refused and name the same fault again in other words.
+    let mut misshapen: Vec<String> = Vec::new();
+
+    // Each with the name its shape refusals used, so that its value refusals
+    // carry the same one.
+    let mut whole_dimensions: Vec<(&str, &Value, String)> = Vec::new();
+    let mut whole_rows: Vec<(&Value, String)> = Vec::new();
+    if let Err(TaskError(why)) = exactly(value, fields, "learning review") {
+        note(&mut misshapen, why);
     }
-    if let Some(defense) = defense {
-        explanations(
-            session,
-            &value["explanations"],
-            defense.items(),
-            &reference_overlap,
-        )?;
+    let dimensions = review.get("dimensions");
+    if let Some(dimensions) = dimensions
+        && let Err(TaskError(why)) = exactly(dimensions, &DIMENSIONS, "learning review dimensions")
+    {
+        note(&mut misshapen, why);
+    }
+    for name in DIMENSIONS {
+        let Some(dimension) = dimensions.and_then(|dimensions| dimensions.get(name)) else {
+            continue;
+        };
+        let object = format!("learning review dimension {name}");
+        let shaped = exactly(dimension, &DIMENSION_FIELDS, &object)
+            .map_err(|TaskError(why)| note(&mut misshapen, why))
+            .is_ok();
+        if references(&mut misshapen, &dimension["evidence"], &object) && shaped {
+            whole_dimensions.push((name, dimension, object));
+        }
+    }
+    if let Some(defense) = defense
+        && let Some(rows) = review.get("explanations")
+    {
+        let items = defense.items();
+        match rows.as_array().filter(|rows| rows.len() == items.len()) {
+            None => note(
+                &mut misshapen,
+                "explanations must rate every defense item".to_owned(),
+            ),
+            Some(rows) => {
+                for (row, item) in rows.iter().zip(items) {
+                    // The item is the package's, so the refusal can name it.
+                    let object = format!("defense explanation row {item}");
+                    let mut shaped = exactly(row, &EXPLANATION_FIELDS, &object)
+                        .map_err(|TaskError(why)| note(&mut misshapen, why))
+                        .is_ok();
+                    if row.get("item").is_some_and(|named| named != item.as_str()) {
+                        note(&mut misshapen, format!("{object} names another item"));
+                        shaped = false;
+                    }
+                    if references(&mut misshapen, &row["evidence"], &object) && shaped {
+                        whole_rows.push((row, object));
+                    }
+                }
+            }
+        }
+    }
+
+    // Then the values of every dimension, row and list whose shape passed, in
+    // the same refusal and after the shape faults, each named by where it
+    // broke: a value fault beside a shape fault elsewhere used to wait for the
+    // next refusal. Within one dimension or row the checks still stop at the
+    // first, since a later one can read what an earlier one refused.
+    let mut refused = misshapen;
+    for (row, object) in whole_rows {
+        if let Err(TaskError(why)) = explained(session, row, &reference_overlap) {
+            note(&mut refused, format!("{object}: {why}"));
+        }
     }
 
     // A defense's runs are in its panel's record, not the session's: one that
     // said something about a change is the run testing is rated on.
     let defense_ran = defense.is_some_and(|slot| super::defense::ran(&slot.kept()));
-    for name in DIMENSIONS {
-        let dimension = &value["dimensions"][name];
-        if !closed(
-            dimension,
-            &[
-                "rating",
-                "reason",
-                "insufficientReason",
-                "support",
-                "evidence",
-            ],
-        ) {
-            return Err(invalid("invalid dimension fields"));
-        }
-        let reason = narrative(&dimension["reason"], false)?;
-        if reference_overlap(reason) {
-            return Err(invalid("review overlaps reference implementation"));
-        }
-        let support = dimension["support"]
-            .as_str()
-            .and_then(Support::parse)
-            .ok_or_else(|| invalid("invalid support provenance"))?;
-        let evidence = dimension["evidence"]
-            .as_array()
-            .filter(|rows| rows.len() <= MAX_REVIEW_ROWS)
-            .ok_or_else(|| invalid("invalid dimension evidence"))?;
-        for reference in evidence {
-            if !closed(reference, &["kind", "id"]) {
-                return Err(invalid("invalid evidence reference"));
-            }
-            let id = reference["id"]
-                .as_str()
-                .ok_or_else(|| invalid("invalid evidence id"))?;
-            let exists = match reference["kind"].as_str() {
-                Some("revision") => session.revisions.contains_key(id),
-                Some("run") => session
-                    .runs
-                    .get(id)
-                    .is_some_and(|run| session.revisions.contains_key(&run.revision_id)),
-                Some("turn") => session.turns.contains_key(id),
-                _ => false,
-            };
-            if !exists {
-                return Err(invalid("dangling review evidence reference"));
-            }
-        }
-        if dimension["rating"].is_null() {
-            if !matches!(
-                dimension["insufficientReason"].as_str(),
-                Some(
-                    "missing_turns"
-                        | "garbled_turns"
-                        | "timeout"
-                        | "telemetry_gap"
-                        | "capture_overflow"
-                )
-            ) {
-                return Err(invalid(
-                    "null rating requires an insufficient-evidence reason",
-                ));
-            }
-        } else {
-            let rating = dimension["rating"]
-                .as_u64()
-                .filter(|rating| *rating <= 3)
-                .ok_or_else(|| invalid("rating must be integer 0..3 or null"))?;
-
-            // A turn the recognizer did not return as English carries no
-            // content the review can rate; it may only explain a null.
-            let has_turn = evidence.iter().any(|reference| {
-                reference["kind"] == "turn"
-                    && reference["id"]
-                        .as_str()
-                        .and_then(|id| session.turns.get(id))
-                        .is_some_and(|text| !crate::agent::is_unrecognized_speech(text))
-            });
-            let has_run = evidence.iter().any(|reference| {
-                reference["kind"] == "run"
-                    && reference["id"]
-                        .as_str()
-                        .and_then(|id| session.runs.get(id))
-                        .is_some_and(|run| run.total > 0)
-            });
-            if !dimension["insufficientReason"].is_null()
-                || evidence.is_empty()
-                || !has_turn
-                || (name == "testingAndDiagnosis" && !has_run && !defense_ran)
-            {
-                return Err(invalid("numeric rating needs reliable evidence"));
-            }
-            if rating == 0
-                && !session.checks.values().any(|check| {
-                    check.state == CheckState::Unresolved
-                        && evidence.iter().any(|reference| {
-                            reference["kind"] == "turn"
-                                && reference["id"]
-                                    .as_str()
-                                    .is_some_and(|id| check.turn_ids.iter().any(|turn| turn == id))
-                        })
-                })
-            {
-                return Err(invalid("zero needs an observed unresolved opportunity"));
-            }
-
-            // The support each cited turn was recorded with, on every check
-            // that kept it.
-            let bindings: Vec<Support> = evidence
-                .iter()
-                .filter(|reference| reference["kind"] == "turn")
-                .filter_map(|reference| reference["id"].as_str())
-                .flat_map(|id| {
-                    session
-                        .checks
-                        .values()
-                        .filter_map(move |check| check.turn_support.get(id).copied())
-                })
-                .collect();
-            let supported = bindings.iter().any(|kind| *kind != Support::None);
-            if rating == 3 && (support != Support::None || supported) {
-                return Err(invalid("independent rating contradicts supported evidence"));
-            }
-
-            // A defense hint is not bound to a check: a cited turn after one is
-            // the provenance of a hinted rating. It does not make a later
-            // independent answer supported, as a hint is about one item.
-            let hinted = support == Support::ConceptualHint
-                && evidence
-                    .iter()
-                    .filter(|reference| reference["kind"] == "turn")
-                    .filter_map(|reference| reference["id"].as_str())
-                    .any(|id| session.after_defense_hint(id));
-            if rating == 2 && (support == Support::None || !(supported || hinted)) {
-                return Err(invalid("supported rating needs support provenance"));
-            }
-            if rating == 2 && !(bindings.contains(&support) || hinted) {
-                return Err(invalid("review support kind contradicts check evidence"));
-            }
+    for (name, dimension, object) in whole_dimensions {
+        if let Err(TaskError(why)) =
+            rated(session, name, dimension, &reference_overlap, defense_ran)
+        {
+            note(&mut refused, format!("{object}: {why}"));
         }
     }
+    // A list the review lacks is already refused as a missing key.
     for field in ["gaps", "nextActions"] {
-        let rows = value[field]
-            .as_array()
-            .filter(|rows| rows.len() <= MAX_REVIEW_ROWS)
-            .ok_or_else(|| invalid("invalid learning review list"))?;
-        for row in rows {
-            if reference_overlap(narrative(row, true)?) {
-                return Err(invalid("review overlaps reference implementation"));
-            }
+        let Some(rows) = review.get(field) else {
+            continue;
+        };
+        if let Err(TaskError(why)) = listed(rows, &reference_overlap) {
+            note(&mut refused, format!("learning review {field}: {why}"));
+        }
+    }
+    if !refused.is_empty() {
+        return Err(refused);
+    }
+    Ok(())
+}
+
+/// One refusal from many: the first `MAX_REFUSALS` of them, and how many more.
+pub(crate) fn joined(refusals: &[String]) -> String {
+    let shown = refusals
+        .iter()
+        .take(MAX_REFUSALS)
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join("; ");
+    match refusals.len().saturating_sub(MAX_REFUSALS) {
+        0 => shown,
+        more => format!("{shown}; and {more} more"),
+    }
+}
+
+/// Adds a refusal to a list of them unless the same text is already there.
+fn note(refusals: &mut Vec<String>, why: String) {
+    if !refusals.contains(&why) {
+        refusals.push(why);
+    }
+}
+
+/// The keys of every evidence reference under `object`, and whether they all
+/// passed. Evidence past the row limit, or that is not a list, is refused as a
+/// value later.
+fn references(refusals: &mut Vec<String>, evidence: &Value, object: &str) -> bool {
+    let object = format!("{object} evidence reference");
+    let mut shaped = true;
+    for reference in evidence
+        .as_array()
+        .into_iter()
+        .flatten()
+        .take(MAX_REVIEW_ROWS)
+    {
+        if let Err(TaskError(why)) = exactly(reference, &["kind", "id"], &object) {
+            note(refusals, why);
+            shaped = false;
+        }
+    }
+    shaped
+}
+
+/// A list of gaps or next actions: at most `MAX_REVIEW_ROWS` narratives, none
+/// copying the reference.
+fn listed(rows: &Value, reference_overlap: &dyn Fn(&str) -> bool) -> Result<(), TaskError> {
+    let rows = rows
+        .as_array()
+        .filter(|rows| rows.len() <= MAX_REVIEW_ROWS)
+        .ok_or_else(|| invalid("invalid learning review list"))?;
+    for row in rows {
+        if reference_overlap(narrative(row, true)?) {
+            return Err(invalid("review overlaps reference implementation"));
         }
     }
     Ok(())
 }
 
-/// A defense review's mark of part a of each line item: exactly one row per
-/// item, a rating 0..3 cited to a turn the recognizer returned, or null.
-fn explanations(
+/// One dimension's values, its keys and its evidence references' keys already
+/// checked: a reason that does not copy the reference, a known support kind,
+/// evidence that resolves, and a rating the evidence carries.
+fn rated(
     session: &TaskSession,
-    rows: &Value,
-    items: &[String],
+    name: &str,
+    dimension: &Value,
+    reference_overlap: &dyn Fn(&str) -> bool,
+    defense_ran: bool,
+) -> Result<(), TaskError> {
+    let reason = narrative(&dimension["reason"], false)?;
+    if reference_overlap(reason) {
+        return Err(invalid("review overlaps reference implementation"));
+    }
+    let support = dimension["support"]
+        .as_str()
+        .and_then(Support::parse)
+        .ok_or_else(|| invalid("invalid support provenance"))?;
+    let evidence = dimension["evidence"]
+        .as_array()
+        .filter(|rows| rows.len() <= MAX_REVIEW_ROWS)
+        .ok_or_else(|| invalid("invalid dimension evidence"))?;
+    for reference in evidence {
+        let id = reference["id"]
+            .as_str()
+            .ok_or_else(|| invalid("invalid evidence id"))?;
+        let exists = match reference["kind"].as_str() {
+            Some("revision") => session.revisions.contains_key(id),
+            Some("run") => session
+                .runs
+                .get(id)
+                .is_some_and(|run| session.revisions.contains_key(&run.revision_id)),
+            Some("turn") => session.turns.contains_key(id),
+            _ => false,
+        };
+        if !exists {
+            return Err(invalid("dangling review evidence reference"));
+        }
+    }
+    if dimension["rating"].is_null() {
+        if !matches!(
+            dimension["insufficientReason"].as_str(),
+            Some(
+                "missing_turns"
+                    | "garbled_turns"
+                    | "timeout"
+                    | "telemetry_gap"
+                    | "capture_overflow"
+            )
+        ) {
+            return Err(invalid(
+                "null rating requires an insufficient-evidence reason",
+            ));
+        }
+    } else {
+        let rating = dimension["rating"]
+            .as_u64()
+            .filter(|rating| *rating <= 3)
+            .ok_or_else(|| invalid("rating must be integer 0..3 or null"))?;
+
+        // A turn the recognizer did not return as English carries no content
+        // the review can rate; it may only explain a null.
+        let has_turn = evidence.iter().any(|reference| {
+            reference["kind"] == "turn"
+                && reference["id"]
+                    .as_str()
+                    .and_then(|id| session.turns.get(id))
+                    .is_some_and(|text| !crate::agent::is_unrecognized_speech(text))
+        });
+        let has_run = evidence.iter().any(|reference| {
+            reference["kind"] == "run"
+                && reference["id"]
+                    .as_str()
+                    .and_then(|id| session.runs.get(id))
+                    .is_some_and(|run| run.total > 0)
+        });
+        if !dimension["insufficientReason"].is_null()
+            || evidence.is_empty()
+            || !has_turn
+            || (name == "testingAndDiagnosis" && !has_run && !defense_ran)
+        {
+            return Err(invalid("numeric rating needs reliable evidence"));
+        }
+        if rating == 0
+            && !session.checks.values().any(|check| {
+                check.state == CheckState::Unresolved
+                    && evidence.iter().any(|reference| {
+                        reference["kind"] == "turn"
+                            && reference["id"]
+                                .as_str()
+                                .is_some_and(|id| check.turn_ids.iter().any(|turn| turn == id))
+                    })
+            })
+        {
+            return Err(invalid("zero needs an observed unresolved opportunity"));
+        }
+
+        // The support each cited turn was recorded with, on every check that
+        // kept it.
+        let bindings: Vec<Support> = evidence
+            .iter()
+            .filter(|reference| reference["kind"] == "turn")
+            .filter_map(|reference| reference["id"].as_str())
+            .flat_map(|id| {
+                session
+                    .checks
+                    .values()
+                    .filter_map(move |check| check.turn_support.get(id).copied())
+            })
+            .collect();
+        let supported = bindings.iter().any(|kind| *kind != Support::None);
+        if rating == 3 && (support != Support::None || supported) {
+            return Err(invalid("independent rating contradicts supported evidence"));
+        }
+
+        // A defense hint is not bound to a check: a cited turn after one is the
+        // provenance of a hinted rating. It does not make a later independent
+        // answer supported, as a hint is about one item.
+        let hinted = support == Support::ConceptualHint
+            && evidence
+                .iter()
+                .filter(|reference| reference["kind"] == "turn")
+                .filter_map(|reference| reference["id"].as_str())
+                .any(|id| session.after_defense_hint(id));
+        if rating == 2 && (support == Support::None || !(supported || hinted)) {
+            return Err(invalid("supported rating needs support provenance"));
+        }
+        if rating == 2 && !(bindings.contains(&support) || hinted) {
+            return Err(invalid("review support kind contradicts check evidence"));
+        }
+    }
+    Ok(())
+}
+
+/// A defense review's mark of part a of one line item, its keys, item and
+/// evidence references' keys already checked: a rating 0..3 cited to a turn the
+/// recognizer returned, or null.
+fn explained(
+    session: &TaskSession,
+    row: &Value,
     reference_overlap: &dyn Fn(&str) -> bool,
 ) -> Result<(), TaskError> {
-    let rows = rows
-        .as_array()
-        .filter(|rows| rows.len() == items.len())
-        .ok_or_else(|| invalid("explanations must rate every defense item"))?;
-    for (row, item) in rows.iter().zip(items) {
-        if !closed(row, &["item", "rating", "account", "reason", "evidence"])
-            || row["item"] != item.as_str()
-        {
-            return Err(invalid("invalid explanation row"));
-        }
-        if reference_overlap(narrative(&row["reason"], false)?) {
-            return Err(invalid("review overlaps reference implementation"));
-        }
-        // A row with nothing to mark may leave its evidence out.
-        let unmarked = row["rating"].is_null() && row["account"].is_null();
-        let none = Vec::new();
-        let turns = match &row["evidence"] {
-            Value::Null if unmarked => &none,
-            evidence => evidence
-                .as_array()
-                .filter(|rows| rows.len() <= MAX_REVIEW_ROWS)
-                .ok_or_else(|| invalid("invalid explanation evidence"))?,
-        };
-        let mut recognized = false;
-        for reference in turns {
-            let text = (closed(reference, &["kind", "id"]) && reference["kind"] == "turn")
-                .then(|| reference["id"].as_str())
-                .flatten()
-                .and_then(|id| session.turns.get(id))
-                .ok_or_else(|| invalid("dangling review evidence reference"))?;
-            recognized |= !crate::agent::is_unrecognized_speech(text);
-        }
-        for mark in [&row["rating"], &row["account"]] {
-            match mark {
-                Value::Null => {}
-                rating if rating.as_u64().is_some_and(|r| r <= 3) && recognized => {}
-                _ => return Err(invalid("an explanation mark needs a recognized turn")),
-            }
+    if reference_overlap(narrative(&row["reason"], false)?) {
+        return Err(invalid("review overlaps reference implementation"));
+    }
+    // A row with nothing to mark may leave its evidence out.
+    let unmarked = row["rating"].is_null() && row["account"].is_null();
+    let none = Vec::new();
+    let turns = match &row["evidence"] {
+        Value::Null if unmarked => &none,
+        evidence => evidence
+            .as_array()
+            .filter(|rows| rows.len() <= MAX_REVIEW_ROWS)
+            .ok_or_else(|| invalid("invalid explanation evidence"))?,
+    };
+    let mut recognized = false;
+    for reference in turns {
+        let text = (reference["kind"] == "turn")
+            .then(|| reference["id"].as_str())
+            .flatten()
+            .and_then(|id| session.turns.get(id))
+            .ok_or_else(|| invalid("dangling review evidence reference"))?;
+        recognized |= !crate::agent::is_unrecognized_speech(text);
+    }
+    for mark in [&row["rating"], &row["account"]] {
+        match mark {
+            Value::Null => {}
+            rating if rating.as_u64().is_some_and(|r| r <= 3) && recognized => {}
+            _ => return Err(invalid("an explanation mark needs a recognized turn")),
         }
     }
     Ok(())

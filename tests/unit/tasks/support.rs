@@ -129,3 +129,11 @@ impl Drop for Repo {
         let _gone = std::fs::remove_dir_all(&self.0);
     }
 }
+
+/// Renames the key `from` of `object` to `to` and keeps its value, the way a
+/// model that misspells a key writes it.
+pub(crate) fn rename(object: &mut serde_json::Value, from: &str, to: &str) {
+    let map = object.as_object_mut().unwrap();
+    let value = map.remove(from).unwrap();
+    map.insert(to.to_owned(), value);
+}

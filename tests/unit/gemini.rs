@@ -237,113 +237,6 @@ pub(crate) const EDITOR: ReportMaterial<'static> = ReportMaterial {
     boards: &[],
 };
 
-#[tokio::test]
-async fn task_feedback_exhausts_repairs_without_reusing_rejected_provider_content() {
-    let session =
-        crate::tasks::session::TaskSession::new(crate::tasks::test_support::admitted().await, 100);
-    let observed = Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
-    let captured = Arc::clone(&observed);
-    let app = axum::Router::new().route("/", axum::routing::post(move |axum::Json(request): axum::Json<Value>| {
-        let captured = Arc::clone(&captured);
-        async move {
-            captured.lock().unwrap().push(request);
-            axum::Json(json!({"candidates":[{"content":{"parts":[{"text":"{\"hire\":true,\"private\":\"REJECTED_PROVIDER_IMPLEMENTATION\"}"}]}}]}))
-        }
-    }));
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let url = format!("http://{}/", listener.local_addr().unwrap());
-    let server = tokio::spawn(async move {
-        axum::serve(listener, app).await.unwrap();
-    });
-    let keys =
-        GeminiKeys::from_config(&live_config(&[("GOOGLE_API_KEYS", "task-repair-test-key")]));
-    assert!(
-        generate_task_feedback_at(
-            &keys,
-            &url,
-            &session,
-            "private reference",
-            "task-repair-room"
-        )
-        .await
-        .is_none()
-    );
-    let observed = observed.lock().unwrap();
-    assert_eq!(observed.len(), 1 + MAX_REPORT_REPAIRS);
-    // Thinking would spend the output budget and truncate the JSON.
-    assert!(
-        observed.iter().all(|request| {
-            request["generationConfig"]["thinkingConfig"]["thinkingBudget"] == 0
-        })
-    );
-    assert!(observed.iter().all(|request| {
-        !request
-            .to_string()
-            .contains("REJECTED_PROVIDER_IMPLEMENTATION")
-    }));
-    server.abort();
-}
-
-#[tokio::test]
-async fn a_rejected_task_review_is_asked_for_again_with_the_repair_note() {
-    let mut session =
-        crate::tasks::session::TaskSession::new(crate::tasks::test_support::admitted().await, 100);
-    session.start(100);
-    let dimension = json!({"rating": null, "reason": "No reliable opportunity was captured.",
-        "insufficientReason": "missing_turns", "support": "none", "evidence": []});
-
-    // Named here rather than read from the validator, which is what is being
-    // exercised.
-    let dimensions: serde_json::Map<_, _> = [
-        "reasoningParticipation",
-        "implementationOwnership",
-        "testingAndDiagnosis",
-        "revisionAndImprovement",
-    ]
-    .into_iter()
-    .map(|name| (name.to_owned(), dimension.clone()))
-    .collect();
-    let review = json!({"dimensions": dimensions,
-        "gaps": [], "nextActions": ["Trace a boundary input and explain the state."]});
-    let answers = Arc::new(std::sync::Mutex::new(vec![
-        review.to_string(),
-        json!({"hire": true}).to_string(),
-    ]));
-    let observed = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
-    let captured = Arc::clone(&observed);
-    let app = axum::Router::new().route(
-        "/",
-        axum::routing::post(move |axum::Json(request): axum::Json<Value>| {
-            let captured = Arc::clone(&captured);
-            let answers = Arc::clone(&answers);
-            async move {
-                captured.lock().unwrap().push(request.to_string());
-                let text = answers.lock().unwrap().pop().unwrap();
-                axum::Json(json!({"candidates":[{"content":{"parts":[{"text": text}]}}]}))
-            }
-        }),
-    );
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let url = format!("http://{}/", listener.local_addr().unwrap());
-    let server = tokio::spawn(async move {
-        axum::serve(listener, app).await.unwrap();
-    });
-    let keys = GeminiKeys::from_config(&live_config(&[("GOOGLE_API_KEYS", "task-review-key")]));
-    let result = generate_task_feedback_at(&keys, &url, &session, "", "task-review-room")
-        .await
-        .expect("the repaired review is accepted");
-    assert_eq!(
-        result,
-        crate::tasks::report::stamp(&session, &review, "task-review-room")
-    );
-    let observed = observed.lock().unwrap();
-    assert_eq!(observed.len(), 2);
-    let note = "A prior response failed the schema";
-    assert!(!observed[0].contains(note));
-    assert!(observed[1].contains(note));
-    server.abort();
-}
-
 /// Every tool the task interviewer is offered is one its session answers, and
 /// the interview's own tools are not offered.
 #[tokio::test]
@@ -2185,7 +2078,7 @@ use tokio_tungstenite::accept_async;
 /// Every Live test needs the same credentials and differs only in what it
 /// overrides, so the shared half is written once. Later pairs win, which is
 /// how an override works.
-fn live_config(overrides: &[(&str, &str)]) -> crate::config::AgentConfig {
+pub(crate) fn live_config(overrides: &[(&str, &str)]) -> crate::config::AgentConfig {
     let mut pairs = vec![
         ("LIVEKIT_URL", "wss://example.livekit.cloud"),
         ("LIVEKIT_API_KEY", "devkey"),
