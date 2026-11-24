@@ -20,6 +20,29 @@ description: Install the named Debian packages the runner image does not already
 # name instead of running out the job's clock. A bound that fires mid-unpack leaves
 # dpkg interrupted, and every later apt call refuses to run until it is
 # finished, so the retry finishes it first; with nothing pending it is a no-op.
+#
+# None of that makes a slow mirror fast, and the tail kept coming back: across
+# 17 runs of the gates, five had a lane spend 150 to 490 seconds here, most of
+# it the browser lanes fetching ffmpeg and the hundred-odd packages it pulls
+# in. So the packages an install downloads are cached, and a run that restores
+# them installs those files with --no-download, never asking a mirror or the
+# image's lists. Going through the lists would not do: an image's lists can
+# name versions the mirror has already dropped, so the packages that worked are
+# the ones a refresh named, and the stale lists would ask the mirror for the
+# old ones again, as a first try of this cache did on every run. Only the files
+# whose version is the one now installed are kept, since a failed first try
+# leaves the old versions it did fetch beside the new ones.
+#
+# The key is the image's OS, the architecture, the package list and the ISO
+# week, not the image's exact version: one run's lanes land on different image
+# builds, and keying on the build split the cache between them. The week keeps
+# security updates coming in: a new week starts a new entry from the mirror.
+# Cached files that no longer install (an image that moved a library past what
+# they need) fall back to the mirror, as a run without a cache does. Each
+# refill is saved under its own run's key and restored by prefix, newest first,
+# so the set the mirror just supplied replaces the broken one for the rest of
+# the week; an entry's key never changes once saved, so a refill under the same
+# key would be refused and every later run would retry the broken set.
 inputs:
   packages:
     description: Package names, separated by spaces.
@@ -27,9 +50,25 @@ inputs:
 runs:
   using: composite
   steps:
-    - shell: bash
+    # Sorted, so a lane that names the same packages in another order shares
+    # the entry. ImageOS is the runner's own variable.
+    - id: key
+      shell: bash
       env:
         PACKAGES: ${{ inputs.packages }}
+        ARCH: ${{ runner.arch }}
+      run: echo "prefix=apt-$ImageOS-$ARCH-$(printf '%s\n' $PACKAGES | sort -u | sha256sum | cut -c1-16)-$(date -u +%G-%V)-" >> "$GITHUB_OUTPUT"
+    - id: restore
+      uses: actions/cache/restore@v6
+      with:
+        path: ${{ runner.temp }}/apt-debs
+        key: ${{ steps.key.outputs.prefix }}
+        restore-keys: ${{ steps.key.outputs.prefix }}
+    - id: install
+      shell: bash
+      env:
+        PACKAGES: ${{ inputs.packages }}
+        DEBS: ${{ runner.temp }}/apt-debs
       run: |
         missing=()
         for package in $PACKAGES; do
@@ -41,11 +80,42 @@ runs:
           exit 0
         fi
         echo "installing: ${missing[*]}"
+        archives=${APT_ARCHIVES:-/var/cache/apt/archives}
+        shopt -s nullglob
         apt() {
           sudo timeout -k 30s 3m apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 "$@"
         }
         finish_dpkg() {
           sudo timeout -k 30s 1m dpkg --configure -a || true
+        }
+        cached=("$DEBS"/*.deb)
+        if [ "${#cached[@]}" -gt 0 ]; then
+          echo "installing from ${#cached[@]} cached package(s)"
+          # Named as files, so a cached version newer than the image's lists
+          # is the one installed, and copied into the archive too: a file
+          # whose version the lists also name is fetched from the lists'
+          # entry, which apt finds there instead of on a mirror.
+          sudo cp "${cached[@]}" "$archives/"
+          apt install --no-download -y "${missing[@]}" "${cached[@]}" && exit 0
+          finish_dpkg
+          echo "the cached packages did not install; asking the mirror"
+        fi
+        # Only after an install that worked, and never its failure: a package
+        # that could not be kept costs the next run a download, not this one.
+        # Emptied first: after a restored set failed to install, adding to it
+        # would save the broken files again beside the ones that worked.
+        keep() {
+          if ! { rm -rf "$DEBS" && mkdir -p "$DEBS"; }; then
+            echo "could not keep the downloaded packages for the next run" >&2
+            return 0
+          fi
+          kept=0
+          for deb in "$archives"/*.deb; do
+            fields=$(dpkg-deb -W --showformat='${Package} ${Version}' "$deb" 2>/dev/null) || continue
+            [ "$(dpkg-query -W -f='${Version}' "${fields% *}" 2>/dev/null)" = "${fields#* }" ] || continue
+            cp "$deb" "$DEBS/" && kept=$((kept + 1))
+          done
+          echo "kept=$kept" >> "${GITHUB_OUTPUT:-/dev/null}"
         }
         # A wedged Azure mirror once ran two 10 minute bounds back to back and
         # failed the Rust lane after 20 minutes. Now: the image's lists, then
@@ -55,12 +125,24 @@ runs:
         # downloaded packages stay cached between attempts. The image names its
         # mirror through a list file, apt-mirrors.txt, so the archive has to
         # replace that reference as well as a literal host.
-        apt install -y "${missing[@]}" && exit 0
+        apt install -y "${missing[@]}" && { keep; exit 0; }
         finish_dpkg
-        apt update && apt install -y "${missing[@]}" && exit 0
+        apt update && apt install -y "${missing[@]}" && { keep; exit 0; }
         finish_dpkg
         sudo sed -i \
           -e 's|mirror+file:/etc/apt/apt-mirrors.txt|http://archive.ubuntu.com/ubuntu/|' \
           -e 's|azure\.archive\.ubuntu\.com|archive.ubuntu.com|g' \
           /etc/apt/sources.list /etc/apt/sources.list.d/* 2>/dev/null || true
-        apt update && apt install -y "${missing[@]}"
+        apt update && apt install -y "${missing[@]}" || exit
+        keep
+    # A merge group's queue ref is deleted once it lands, so nothing saved
+    # there is ever restored. Only a download is kept: an install from the
+    # cached files exits before keeping anything, and so does a lane that
+    # installed nothing, so neither stores a copy of what it restored.
+    - if: >-
+        github.event_name != 'merge_group'
+        && steps.install.outputs.kept > 0
+      uses: actions/cache/save@v6
+      with:
+        path: ${{ runner.temp }}/apt-debs
+        key: ${{ steps.key.outputs.prefix }}${{ github.run_id }}-${{ github.run_attempt }}
