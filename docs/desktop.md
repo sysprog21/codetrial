@@ -265,6 +265,18 @@ platform's web view can be linked, which on Linux means `libwebkit2gtk-4.1-dev`
 is installed. Without it the gate skips and says so. The formatter chain and
 `cargo audit` cover `desktop/` as well.
 
+`cargo audit` reports an unsound-code warning for `glib` 0.18 in
+`desktop/Cargo.lock`, a crate only the Linux build links (through `gtk`, `gdk`
+and `webkit2gtk`). Its `VariantStrIter` iterators read a null pointer. The fix
+is in `glib` 0.20, but `gtk`, `gdk` and `webkit2gtk` pin 0.18, and so do `tao`
+and `wry`, whose newest releases (0.37.3 and 0.57.3) still depend on gtk 0.18.
+Only `Variant::array_iter_str` builds one. Across the sources of every locked
+crate, nothing but `glib` itself mentions it, so the unsound path is not
+reached. The warning clears when a Tauri release moves to a newer gtk-rs, and
+`desktop/Cargo.lock` follows it then. It is a warning, not a vulnerability, so
+the audit does not fail on it, and the repository takes no advisory ignore for
+it.
+
 `scripts/desktop-smoke.sh APP` is outside the gate because it needs a built app
 and a display. It starts the app, checks that its server answers with the Setup
 page and refuses a foreign `Host`, then kills the app with SIGKILL and checks
