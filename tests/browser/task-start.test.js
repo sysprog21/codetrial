@@ -14,6 +14,9 @@ globalThis.document = {
   fullscreenElement: {},
   hidden: false,
 };
+// Node 21 and later have a navigator; an older one gets an empty stand-in, as
+// a browser without Keyboard Lock would offer.
+globalThis.navigator ??= {};
 
 const liveCamera = { getVideoTracks: () => [{ readyState: "live" }] };
 const FULLSCREEN_REQUIRED = {
@@ -161,6 +164,44 @@ test("Start sends once, waits for the acknowledgement, then arms the rules", asy
   );
   assert.deepEqual(log[3], ["show", "task"]);
   assert.ok(st.reviewPollUntil > Date.now() + (15 * 60 + 59) * 1000);
+});
+
+// Node has its own navigator, so a test swaps it and puts it back.
+function withNavigator(value, body) {
+  const own = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  Object.defineProperty(globalThis, "navigator", { value, configurable: true });
+  return Promise.resolve()
+    .then(body)
+    .finally(() => {
+      if (own) Object.defineProperty(globalThis, "navigator", own);
+      else delete globalThis.navigator;
+    });
+}
+
+test("Start asks Chromium to hold Escape for fullscreen inside the click", async () => {
+  setUp();
+  const locked = [];
+  const keyboard = {
+    lock: (codes) => {
+      locked.push(codes);
+      return Promise.reject(new Error("refused"));
+    },
+  };
+  await withNavigator({ keyboard }, async () => {
+    startAttempt();
+    assert.deepEqual(locked, [["Escape"]], "asked before the click returns");
+    await settle();
+    assert.equal(st.attempt, "running", "a refused lock does not stop Start");
+  });
+});
+
+test("Start runs where the browser has no Keyboard Lock", async () => {
+  setUp();
+  await withNavigator({}, async () => {
+    startAttempt();
+    await settle();
+    assert.equal(st.attempt, "running");
+  });
 });
 
 test("Start keeps waiting while the server reports ready, then arms the rules", async () => {

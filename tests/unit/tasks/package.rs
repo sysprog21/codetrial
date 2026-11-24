@@ -12,6 +12,7 @@ fn a_python_built_package_opens_with_its_pin_and_nothing_else() {
     assert_eq!(set.records.len(), 2);
     assert_eq!(set.config.rules.duration_min, 15);
     assert_eq!(set.config.rules.look_away_seconds, 8);
+    assert_eq!(set.config.rules.fullscreen_grace_seconds, 8);
 
     assert_eq!(
         open(
@@ -329,6 +330,10 @@ fn decoded(value: &Value) -> Result<LoadedSet, TaskError> {
 fn a_decoded_package_must_name_the_set_it_was_opened_for() {
     let set = decoded(&plaintext()).unwrap();
     assert_eq!(set.records.len(), 2);
+
+    // `plaintext` has the rules of a package built before sets had a fullscreen
+    // grace period, so it keeps the rule its page announced: none.
+    assert_eq!(set.config.rules.fullscreen_grace_seconds, 0);
     assert_eq!(
         (set.config.id.as_str(), set.config.version),
         ("classroom", 7)
@@ -361,6 +366,7 @@ fn set_rules_are_held_to_their_bounds_at_both_ends() {
         ("durationMin", vec![low, high], vec![low - 1, high + 1]),
         ("maxHintRungs", vec![0, hints], vec![hints + 1]),
         ("lookAwaySeconds", vec![5, 60], vec![4, 61]),
+        ("fullscreenGraceSeconds", vec![0, 30], vec![31]),
     ] {
         for value in accepted {
             let set = with(field, json!(value)).unwrap_or_else(|e| panic!("{field}={value}: {e}"));

@@ -95,8 +95,17 @@ pub struct Rules {
     pub max_hint_rungs: u64,
     pub closes_at: Option<String>,
     pub look_away_seconds: u64,
+    /// Absent from a package built before sets had one, which then takes 0:
+    /// the page published beside it says leaving fullscreen ends the attempt
+    /// at once, and the package keeps the rule it was announced under.
+    #[serde(default)]
+    pub fullscreen_grace_seconds: u64,
     pub rules_note: Option<String>,
 }
+
+/// The longest grace a set may give. tests/test_task_mode.py holds
+/// `FULLSCREEN_GRACE_BOUNDS` in scripts/problem_bank/task_package.py to it.
+pub const MAX_FULLSCREEN_GRACE_SECONDS: u64 = 30;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -207,6 +216,7 @@ fn checked_rules(rules: Rules) -> Result<Rules, TaskError> {
     if !duration.contains(&rules.duration_min)
         || rules.max_hint_rungs > default_number("maxHintRungs")
         || !(5..=60).contains(&rules.look_away_seconds)
+        || rules.fullscreen_grace_seconds > MAX_FULLSCREEN_GRACE_SECONDS
     {
         return Err(invalid("set rules outside bounds"));
     }
@@ -430,6 +440,7 @@ pub fn built_in_set() -> Arc<LoadedSet> {
                     max_hint_rungs: default_number("maxHintRungs"),
                     closes_at: None,
                     look_away_seconds: default_number("lookAwaySeconds"),
+                    fullscreen_grace_seconds: default_number("fullscreenGraceSeconds"),
                     rules_note: None,
                 },
             }),

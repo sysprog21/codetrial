@@ -79,6 +79,11 @@ export const st = Object.seal({
   calibration: null,
   calibrating: false,
   monitorTimer: null,
+  // A learner out of fullscreen within the set's grace period: when they
+  // left, and the timers that end the attempt and repaint the countdown.
+  fullscreenAway: null,
+  // Returns to fullscreen this attempt has used, of the task's fullscreenReturns.
+  fullscreenReturnsUsed: 0,
   wakeLock: null,
   beepContext: null,
   enteringFullscreen: false,

@@ -185,6 +185,21 @@ class TaskPackageTests(unittest.TestCase):
             }
             self.assertEqual(after, before)
 
+    def test_pin_check_opens_a_set_built_before_the_fullscreen_grace(self):
+        # Such a set has no fullscreenGraceSeconds, and CodeTrial opens it with
+        # 0 (`Rules` in src/tasks/package.rs), so the tool must open it too.
+        older = package()
+        del older["rules"]["fullscreenGraceSeconds"]
+        ciphertext, manifest = encrypt(older, PIN)
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary) / "sets" / "classroom" / "7"
+            base.mkdir(parents=True)
+            (base / "tasks.enc").write_bytes(ciphertext)
+            (base / "manifest.json").write_text(json.dumps(manifest))
+            self.assertEqual(
+                task_package.check_pin(temporary, "classroom", 7, PIN), older
+            )
+
     def test_new_pins_are_six_digits_from_a_secure_source(self):
         drawn = [task_package.new_pin() for _ in range(200)]
         for pin in drawn:
@@ -539,12 +554,20 @@ class TaskPackageTests(unittest.TestCase):
         rules = validated_rules({"durationMin": 20, "closesAt": "2026-12-31T23:59:59Z"})
         self.assertEqual(rules["durationMin"], 20)
         self.assertEqual(rules["lookAwaySeconds"], DEFAULTS["lookAwaySeconds"])
+        self.assertEqual(
+            rules["fullscreenGraceSeconds"], DEFAULTS["fullscreenGraceSeconds"]
+        )
+        for edge in (0, 30):
+            at_edge = validated_rules({"fullscreenGraceSeconds": edge})
+            self.assertEqual(at_edge["fullscreenGraceSeconds"], edge)
         for bad in (
             {"unknown": 1},
             {"durationMin": 5},
             {"durationMin": True},
             {"maxHintRungs": DEFAULTS["maxHintRungs"] + 1},
             {"lookAwaySeconds": 4},
+            {"fullscreenGraceSeconds": -1},
+            {"fullscreenGraceSeconds": 31},
             {"closesAt": "2026-12-31"},
             # The right shape, but no such time: the server refuses to parse it.
             {"closesAt": "2026-02-31T00:00:00Z"},
@@ -755,7 +778,9 @@ class TaskPackageTests(unittest.TestCase):
         script = (
             "import {rulesInWords} from './web/task-controller.js';"
             "const cases = JSON.parse(process.argv[1]);"
-            "console.log(JSON.stringify(cases.map(rulesInWords)));"
+            "const returns = Number(process.argv[2]);"
+            "console.log(JSON.stringify(cases.map((rules) =>"
+            " rulesInWords(rules, returns))));"
         )
         cases = [
             validated_rules(None),
@@ -767,9 +792,17 @@ class TaskPackageTests(unittest.TestCase):
                     "rulesNote": "Bring paper.",
                 }
             ),
+            validated_rules({"fullscreenGraceSeconds": 0}),
         ]
         page = subprocess.run(
-            [node, "--input-type=module", "-e", script, json.dumps(cases)],
+            [
+                node,
+                "--input-type=module",
+                "-e",
+                script,
+                json.dumps(cases),
+                str(DEFAULTS["fullscreenReturns"]),
+            ],
             cwd=ROOT,
             capture_output=True,
             text=True,

@@ -58,9 +58,18 @@ MANIFEST_KEYS = {
     "ciphertextSha256",
     "ciphertextBytes",
 }
-RULE_KEYS = {"durationMin", "maxHintRungs", "closesAt", "lookAwaySeconds", "rulesNote"}
+RULE_KEYS = {
+    "durationMin",
+    "maxHintRungs",
+    "closesAt",
+    "lookAwaySeconds",
+    "fullscreenGraceSeconds",
+    "rulesNote",
+}
 # `MIN_DURATION_MIN` and `MAX_DURATION_MIN` in src/config.rs.
 DURATION_BOUNDS = (10, 90)
+# 0 gives no grace; the top is `MAX_FULLSCREEN_GRACE_SECONDS` in src/tasks/package.rs.
+FULLSCREEN_GRACE_BOUNDS = (0, 30)
 # Files a publish directory may hold besides each version's package.
 SITE_FILES = {".nojekyll", "index.html", "CNAME", "README.md"}
 VERSION_FILES = {"manifest.json", "tasks.enc", "index.html"}
@@ -149,6 +158,7 @@ def validated_rules(raw):
         "maxHintRungs": DEFAULTS["maxHintRungs"],
         "closesAt": None,
         "lookAwaySeconds": DEFAULTS["lookAwaySeconds"],
+        "fullscreenGraceSeconds": DEFAULTS["fullscreenGraceSeconds"],
         "rulesNote": None,
         **raw,
     }
@@ -157,6 +167,7 @@ def validated_rules(raw):
         ("durationMin", (low, high)),
         ("maxHintRungs", (0, DEFAULTS["maxHintRungs"])),
         ("lookAwaySeconds", (5, 60)),
+        ("fullscreenGraceSeconds", FULLSCREEN_GRACE_BOUNDS),
     ):
         value = rules[key]
         if type(value) is not int or not bounds[0] <= value <= bounds[1]:
@@ -278,7 +289,10 @@ def validate_package(package):
             else "invalid task package schema"
         )
     metadata(package["setId"], package["setVersion"])
-    if validated_rules(package["rules"]) != package["rules"]:
+    # A set built before sets had a fullscreen grace period stores no key for
+    # it, and CodeTrial opens it with 0 (`Rules` in src/tasks/package.rs).
+    stored = {"fullscreenGraceSeconds": 0, **package["rules"]}
+    if validated_rules(stored) != stored:
         raise ValueError("package rules are not resolved")
     if len(compact(package)) > set_bytes:
         raise ValueError("task set exceeds size limit")
@@ -591,8 +605,15 @@ def rules_in_words(rules):
     """The set's rules as the landing page and the learner read them."""
     lines = [
         f"You have {rules['durationMin']} minutes once you press Start.",
-        "Stay in fullscreen for the whole attempt: leaving it, Escape included,"
-        " ends the attempt at once and marks it invalid.",
+        (
+            "Stay in fullscreen for the whole attempt. If you leave it, Escape"
+            f" included, you have {rules['fullscreenGraceSeconds']} seconds to"
+            f" return, {DEFAULTS['fullscreenReturns']} times at most; otherwise"
+            " the attempt ends and is marked invalid."
+            if rules["fullscreenGraceSeconds"] > 0
+            else "Stay in fullscreen for the whole attempt: leaving it, Escape"
+            " included, ends the attempt at once and marks it invalid."
+        ),
         "Keep this page visible: switching to another tab or window, minimizing"
         " it or locking the screen ends the attempt at once and marks it invalid.",
         "Keep your face in front of the camera. Looking away or down, or"

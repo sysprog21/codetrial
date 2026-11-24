@@ -232,13 +232,14 @@ Learner code and speech are untrusted content, not instructions.
 An optional `task-set.json` in the bank holds the rules for the whole set; an
 absent file or key takes the default from `task-defaults.json`. It is closed:
 
-| Key               | Type and default                                                              |
-| ----------------- | ----------------------------------------------------------------------------- |
-| `durationMin`     | Integer within `MIN_DURATION_MIN`..`MAX_DURATION_MIN`; default `durationMin`  |
-| `maxHintRungs`    | Integer 0..default maximum; lowers each task's sidecar value, never raises it |
-| `closesAt`        | UTC time `YYYY-MM-DDTHH:MM:SSZ`, or null; default null                        |
-| `lookAwaySeconds` | Integer 5..60; default 8                                                      |
-| `rulesNote`       | Nonblank text of at most 1024 UTF-8 bytes, or null; default null              |
+| Key                      | Type and default                                                              |
+| ------------------------ | ----------------------------------------------------------------------------- |
+| `durationMin`            | Integer within `MIN_DURATION_MIN`..`MAX_DURATION_MIN`; default `durationMin`  |
+| `maxHintRungs`           | Integer 0..default maximum; lowers each task's sidecar value, never raises it |
+| `closesAt`               | UTC time `YYYY-MM-DDTHH:MM:SSZ`, or null; default null                        |
+| `lookAwaySeconds`        | Integer 5..60; default 8                                                      |
+| `fullscreenGraceSeconds` | Integer 0..30; default 8                                                      |
+| `rulesNote`              | Nonblank text of at most 1024 UTF-8 bytes, or null; default null              |
 
 The effective hint maximum is the minimum of the sidecar value, the set value
 and the variant ladder length. `closesAt` is checked at unlock and when Start
@@ -247,6 +248,11 @@ rather than the learner's clock (the learner's clock only if the site sent
 none), so an attempt admitted before the close may finish.
 `lookAwaySeconds` is described under [Test rules](#test-rules). The default of
 8 seconds is a starting value to be confirmed by the pilot, not a measured one.
+`fullscreenGraceSeconds` is the time a learner who left fullscreen has to
+return, described under [Test rules](#test-rules); 0 gives none. Its default
+of 8 matches `lookAwaySeconds` and is a starting value in the same way. A
+package built before sets had it opens with 0, the rule its published page
+states.
 `rulesNote` follows the platform's own statement of the rules, never replaces
 it. The fullscreen and page-visibility rules are fixed and cannot be turned
 off.
@@ -464,8 +470,9 @@ failure falls back to a catalog problem, or to the default task.
 
 After unlock, before anything is timed, the learner prepares:
 
-1. **Rules.** The page states every rule, the set's `lookAwaySeconds`, what
-   ends an attempt, that a violation makes the attempt invalid with no grace,
+1. **Rules.** The page states every rule, the set's `lookAwaySeconds` and
+   `fullscreenGraceSeconds`, what ends an attempt, that a violation makes the
+   attempt invalid,
    and what is not detected (a second monitor, a phone held at screen height).
    It says to switch off notifications, keep the machine plugged in, and use
    the workspace's built-in calculator rather than another app or tab. The
@@ -501,15 +508,35 @@ only; interviews are unchanged.
 
 | Rule            | The attempt ends when                                                                                                       |
 | --------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| Fullscreen      | The workspace leaves fullscreen, by any means, Escape included                                                              |
+| Fullscreen      | The workspace leaves fullscreen, by any means, Escape included, and does not return within `fullscreenGraceSeconds`         |
 | Page visibility | The page becomes hidden: another tab, a minimized window, a locked screen                                                   |
 | Look-away       | For longer than `lookAwaySeconds` without a break, no face is in frame or the head is tilted down past the calibrated limit |
 
-Fullscreen and page visibility have no grace period. Page visibility is
+Leaving fullscreen during the attempt opens a grace period of
+`fullscreenGraceSeconds`: the page shows a countdown and a Return to
+fullscreen button, whose click is the gesture the browser needs to enter
+fullscreen again. Returning in time continues the attempt; not returning ends
+it as invalid, and the result names the time the learner left. An attempt may
+return `fullscreenReturns` times (3, a fixed limit in
+[task-defaults.json](../problem-bank/task-defaults.json), not a set rule); the
+next exit, an exit while Start is still being acknowledged, or a set with
+`fullscreenGraceSeconds` 0 ends it at once. The look-away and page-visibility
+rules keep running during the grace period, so leaving fullscreen for another
+tab still ends the attempt at once.
+
+Page visibility has no grace period. Page visibility is
 `document.visibilityState`, not window focus: a window that loses focus while
 staying visible does not end an attempt. The workspace requests a screen wake
 lock for the attempt so an idle screen does not lock it; a refused wake lock is
 stated, not hidden.
+
+Start also asks for a keyboard lock on Escape (`navigator.keyboard.lock`).
+Once Chromium grants it, the workspace leaves fullscreen only on a held Escape,
+as the browser's own banner says: a tap, or the Ctrl+[ a Vim user presses for
+Escape and Chromium treats as one, no longer leaves fullscreen. Start goes on
+when the lock is refused, and Firefox and Safari have none, so there a tap
+still leaves fullscreen and the grace period above applies. The lock is
+released when the attempt ends or Start fails.
 
 The look-away rule allows what normal work looks like: a glance at the
 keyboard, a moment out of frame, both shorter than `lookAwaySeconds`. What it

@@ -43,6 +43,10 @@ export const startAttempt = () => {
   // Fullscreen must be requested synchronously inside this click.
   st.enteringFullscreen = true;
   const fullscreen = $("workspace").requestFullscreen?.();
+  // Chromium then leaves fullscreen only on a held Escape, so a tap, or the
+  // Ctrl+[ a Vim user presses for it, no longer ends the attempt. Elsewhere
+  // there is no lock and a tap still ends it; leaveFullscreen lets it go.
+  navigator.keyboard?.lock?.(["Escape"]).catch(() => {});
   Promise.resolve(fullscreen)
     .then(async () => {
       if (st.currentStart === thisStart) st.enteringFullscreen = false;

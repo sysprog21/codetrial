@@ -5,6 +5,7 @@ import {
   acceptTaskState,
   advanceServerClock,
   outcomeSentence,
+  fullscreenGraceMs,
   rulesInWords,
   serverTimeAt,
   taskLocked,
@@ -148,6 +149,27 @@ test("an ended attempt is described by its rule and time, never by intent", () =
     }),
     "You finished the task.",
   );
+  // A grace period ends the attempt durationMs after the learner left, and
+  // the sentence names when they left, not when the grace ran out.
+  assert.equal(
+    outcomeSentence({
+      outcome: "invalid",
+      cause: "fullscreen",
+      at: 12,
+      durationMs: 8000,
+    }),
+    "The workspace left fullscreen at 00:04; the attempt ended under the announced rules and is invalid.",
+  );
+  assert.match(
+    outcomeSentence({
+      outcome: "invalid",
+      cause: "fullscreen",
+      at: 4,
+      durationMs: 0,
+    }),
+    /left fullscreen at 00:04;/,
+    "an exit with no grace ends when it happens",
+  );
   for (const cause of ["fullscreen", "visibility", "look_away"])
     assert.doesNotMatch(
       outcomeSentence({ outcome: "invalid", cause, at: 1, durationMs: 0 }),
@@ -172,6 +194,26 @@ test("the rules read the same as the instructor's page states them", () => {
   assert.equal(lines.at(-1), "Bring paper.");
   // tests/test_task_package.py holds the packaging tool's wording to these
   // sentences in full.
+});
+
+test("the fullscreen rule states the grace period, or its absence", () => {
+  const rule = (fullscreenGraceSeconds) =>
+    rulesInWords(
+      { durationMin: 15, lookAwaySeconds: 8, fullscreenGraceSeconds },
+      3,
+    ).find((line) => line.startsWith("Stay in fullscreen"));
+  assert.match(rule(5), /5 seconds to return/);
+  assert.match(rule(5), /3 times at most/, "the task view's limit");
+  assert.match(rule(0), /ends the attempt at once/);
+});
+
+test("leaving fullscreen is forgiven a few times, never past the set's grace", () => {
+  const rules = { fullscreenGraceSeconds: 8 };
+  for (let used = 0; used < 3; used += 1)
+    assert.equal(fullscreenGraceMs(rules, used, 3), 8000, `after ${used}`);
+  assert.equal(fullscreenGraceMs(rules, 3, 3), 0);
+  assert.equal(fullscreenGraceMs(rules, 1, 1), 0, "the limit is the view's");
+  assert.equal(fullscreenGraceMs({ fullscreenGraceSeconds: 0 }, 0, 3), 0);
 });
 
 test("task wire messages are closed and preserve original revision", () => {
