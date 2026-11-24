@@ -535,3 +535,61 @@ fn the_site_clock_is_read_only_from_a_date_it_can_trust() {
         "before 1970"
     );
 }
+
+fn defense_plaintext() -> Value {
+    let mut value = plaintext();
+    for key in ["problems", "judges", "variants", "sidecars"] {
+        value.as_object_mut().unwrap().remove(key);
+    }
+    value["defense"] = serde_json::json!({
+        "course": "ca2026-mycpu",
+        "salt": "MDEyMzQ1Njc4OWFiY2RlZg==",
+        "lines": 3,
+        "tasks": [{"dir": "4-pipeline", "project": "pipeline", "arch": "rv32im_zicsr"}],
+        "bugs": [{"task": "4-pipeline", "variant": "Forward", "mutant": "no-flush",
+                  "rule": "a taken branch flushes", "exercise": "4.4"}],
+        "specSeconds": 900, "modelSeconds": 1200, "simSeconds": 120
+    });
+    value
+}
+
+#[test]
+fn a_defense_set_poses_the_one_defense_task_with_its_course_settings() {
+    let set = decoded(&defense_plaintext()).unwrap();
+    assert_eq!(set.records.keys().collect::<Vec<_>>(), ["defense"]);
+    let defense = set.defense.as_ref().unwrap();
+    assert_eq!(defense.bugs[0].mutant, "no-flush");
+    let record = &set.records["defense"];
+    assert_eq!(record.sidecar().max_hint_rungs, 0);
+    assert_eq!(record.sidecar().understanding_checks.len(), 3);
+    assert!(decoded(&plaintext()).unwrap().defense.is_none());
+}
+
+#[test]
+fn a_defense_set_is_refused_whole_when_any_part_is_wrong() {
+    let mut bad = defense_plaintext();
+    bad["defense"]["salt"] = Value::from("c2hvcnQ=");
+    assert!(decoded(&bad).is_err());
+    bad = defense_plaintext();
+    bad["problems"] = Value::from(Vec::<Value>::new());
+    assert!(decoded(&bad).is_err());
+    bad = defense_plaintext();
+    bad["setVersion"] = Value::from(8);
+    assert!(decoded(&bad).is_err());
+    bad = defense_plaintext();
+    bad["rules"]["lookAwaySeconds"] = Value::from(1);
+    assert!(decoded(&bad).is_err());
+    for (field, value) in [
+        ("packageVersion", json!(2)),
+        ("setId", json!("other")),
+        ("setVersion", json!(8)),
+    ] {
+        bad = defense_plaintext();
+        bad[field] = value;
+        assert_eq!(
+            decoded(&bad).err().unwrap().0,
+            "invalid authenticated package metadata",
+            "{field}"
+        );
+    }
+}

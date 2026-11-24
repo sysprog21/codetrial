@@ -20,6 +20,7 @@ pub use crate::current_epoch_seconds;
 mod assets;
 mod auth;
 mod consent;
+pub(crate) mod defense;
 mod interviews;
 mod peer;
 mod policy;
@@ -556,6 +557,19 @@ pub(crate) fn web_router(
         )
         .route("/api/observer-token", post(observer_token_handler))
         .route("/api/task-reviews/{room}", get(tasks::task_result_handler))
+        .route("/api/defense", get(defense::defense_view_handler))
+        .route(
+            "/api/defense/predict",
+            post(defense::defense_predict_handler),
+        )
+        .route("/api/defense/begin", post(defense::defense_begin_handler))
+        .route("/api/defense/run", post(defense::defense_run_handler))
+        .route("/api/defense/models", post(defense::defense_models_handler))
+        .route(
+            "/api/defense/simulate",
+            post(defense::defense_simulate_handler),
+        )
+        .route("/api/defense/claim", post(defense::defense_claim_handler))
         .route("/api/login", get(login_handler).post(record_login_handler))
         .route("/api/callback", get(callback_handler))
         .route("/api/session", get(session_handler))
@@ -863,7 +877,7 @@ pub enum AgentJob {
     /// admission pinned.
     Task {
         candidate: String,
-        task: crate::tasks::access::PinnedTask,
+        task: Box<crate::tasks::access::PinnedTask>,
     },
 }
 

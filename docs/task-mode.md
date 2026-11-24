@@ -1,6 +1,9 @@
 # Task mode contract
 
-Status: draft, revised before any distribution; versions below stay at 1. Task
+Status: draft, revised before any distribution; versions below stay at 1.
+A defense set, which examines a student's own ca2026-mycpu checkout with this
+contract's trust model, rules and outcomes, is described in
+[mycpu-defense.md](mycpu-defense.md). Task
 mode is off unless `codetrial web --task-mode` asks for it, and then runs only
 where the server is reachable from this computer alone (see Trust model). The
 interview prompt and report contracts are unchanged.
@@ -349,7 +352,14 @@ stdin), never from arguments, and in one step validates the bank, encrypts it,
 decrypts the result again to prove the round trip, writes the landing page and
 scans the output. It refuses a version directory the output already holds, so a
 version built there is never overwritten, and adds a new version beside the old
-ones. The output holds only:
+ones. `scripts/task-package.py pin new [--count N]` prints PINs drawn from the operating
+system's secure random source, every one of the 10^6 equally likely and leading
+zeros kept; give each set version its own. `scripts/task-package.py pin check --set-id
+ID --version N [--output DIR]` reads a PIN the same way, without asking twice,
+and says whether it opens that version as the build wrote it, checking the
+manifest and the ciphertext's hash first, so a damaged package is told apart
+from a wrong PIN; it prints neither the PIN nor the package. The output holds
+only:
 
 ```text
 publish/.nojekyll
@@ -444,7 +454,10 @@ decrypts and validates everything. A download that does not match its hash is
 PIN, the likeliest cause. The PIN and derived key are dropped once the set is
 decoded. CodeTrial never writes the decoded set anywhere; it lives in process
 memory until exit, which is not a promise about what the operating system
-pages to disk. A restart downloads the set and asks for the PIN again. No
+pages to disk. A restart downloads the set and asks for the PIN again,
+except for a defense set, whose PIN the learner's browser keeps for that set
+version and enters itself until the server refuses it
+([mycpu-defense.md](mycpu-defense.md#panel-and-jim)). No
 failure falls back to a catalog problem, or to the default task.
 
 ### Rules and preparation
@@ -640,6 +653,10 @@ it receives in the ready phase and ignores the rest.
 `task_thinking`: `version`, `thinking` boolean; accepted during work or
 wrap-up, and it suppresses nudges. `task_error`: `version`, `code`, `requestId`
 (or null), `retryable`, `message`.
+`task_transcript` (runtime to page): `version`, `role` enum `learner | jim`,
+`turnId` (the learner's turn id, else null), `at` (epoch seconds), `text` (at
+most 4,000 characters); one line per finished turn, sent best effort. The page
+keeps them for a defense's submission and is not told of a line it missed.
 
 `task_revision`: `version`, `requestId`, `revisionId`, `code` (at most 32,000
 UTF-8 bytes, a limit the page enforces before sending), `trigger` enum
@@ -699,7 +716,8 @@ ceiling. Run summaries stay bound to their original revision. Overflow is
 explicit, never silently truncated. No client message may cover a check.
 
 A result is a closed object with `assessmentMode: "task"`, `taskContract` and
-`taskAssessment`. The server stamps `setId`, `setVersion`, `taskId`,
+`taskAssessment`; a defense result has `assessmentMode: "defense"` and a `defense`
+section beside them ([mycpu-defense.md](mycpu-defense.md#result)). The server stamps `setId`, `setVersion`, `taskId`,
 `sessionId`, `sessionOrdinal`, `rubricProfile`, `githubLogin`, `githubId`,
 `language`, `rulesAcknowledgedAt`, `rules`, `calibration`, `outcome`,
 `captureOverflow`,

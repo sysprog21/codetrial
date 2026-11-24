@@ -1,0 +1,110 @@
+{
+  "problem": {
+    "id": "defense",
+    "difficulty": "Hard",
+    "topics": [
+      "Computer Architecture"
+    ],
+    "statement": [
+      "Explain lines of your own processor, change them as asked, predict what the change breaks and confirm it with a run, then find the bug in a model of your core."
+    ],
+    "constraints": [
+      "The work under defense is the HEAD commit of your ca2026-mycpu checkout."
+    ],
+    "starterCode": {
+      "python": "# The defense is answered in the defense panel, not in this editor.\n"
+    },
+    "summary": "Defend your ca2026-mycpu processor: explain, change, predict, run, and find a bug.",
+    "optimal": "Each answer names the signal and the cycle it matters in, predicts the failing specs before running them, and accounts for what the run showed.",
+    "pitfalls": "Restating the code instead of explaining what it decides; predicting after the run; naming a symptom instead of the rule the bug breaks.",
+    "origin": "original"
+  },
+  "judge": {
+    "kind": "function",
+    "entry": "defend",
+    "checker": "exact",
+    "cases": [
+      {
+        "label": "no public case",
+        "input": [
+          0
+        ],
+        "expected": 0
+      }
+    ],
+    "paramNames": [
+      "unused"
+    ],
+    "paramTypes": [
+      "integer"
+    ],
+    "returnType": "integer"
+  },
+  "variant": {
+    "title": "Defense of your processor",
+    "entry": "defendProcessor",
+    "brief": [
+      "Jim examines your ca2026-mycpu work over your own checkout. He asks about lines you added: explain what each decides and in which cycle it matters; then make the change he states, predict which specs fail and how, and confirm it with a run.",
+      "Last, a model of your own core has one bug in it. Run your programs on it and on your core, find the first instruction whose effect differs, and say in which cycle and which signal it goes wrong, which rule of the task it breaks and which exercise of yours implements that rule.",
+      "Jim does not teach or confirm answers here; the instructors read the record before your live defense."
+    ],
+    "contract": "Every prediction is recorded before its run. Marks are suggestions for the instructors: 0 no answer, 1 recalls the code, 2 explains it, 3 predicts and confirms with a run.",
+    "examples": [
+      {
+        "case": 0
+      }
+    ],
+    "clarifications": [
+      {
+        "question": "Which version of my work is defended?",
+        "answer": "The HEAD commit of the checkout CodeTrial was started with. Commit before Start; a graded file that differs from HEAD stops the defense from starting."
+      },
+      {
+        "question": "Can I change other lines, or the specs?",
+        "answer": "No. A run applies exactly the change the item states, in a private copy of your checkout, and puts the line back afterwards. Your own tree is never written to."
+      },
+      {
+        "question": "Which programs can I run on the bug model?",
+        "answer": "Any program already built under build/sw/mycpu/<arch>/ of your checkout when the defense starts. Build your own test programs before Start."
+      },
+      {
+        "question": "Does a wrong prediction cost marks?",
+        "answer": "A prediction that the run does not confirm cannot reach the top mark for that item, but explaining why the run differed still counts. Every mark is a suggestion the instructors review."
+      }
+    ],
+    "followUps": [
+      "Which other line of yours would the same change break, and how would the specs show it?",
+      "How would you show this behaviour in a waveform instead of a failing spec?"
+    ],
+    "hints": [
+      "Hints are not given in a defense.",
+      "Hints are not given in a defense.",
+      "Hints are not given in a defense."
+    ]
+  },
+  "sidecar": {
+    "promptVersion": 1,
+    "interactionPrompt": "A defense is examined by CodeTrial's own policy, problem-bank/defense-prompt.txt; this record carries no prompt of its own.",
+    "completionTargets": [],
+    "understandingChecks": [
+      {
+        "id": "explain",
+        "question": "What does each line decide, and in which cycle does its value matter?"
+      },
+      {
+        "id": "predict",
+        "question": "Which specs does each change make fail, and why did the run show what it showed?"
+      },
+      {
+        "id": "bug",
+        "question": "In which cycle and signal does the bug model go wrong, which rule does it break, and which exercise implements that rule?"
+      }
+    ],
+    "requiredCases": [],
+    "maxHintRungs": 0,
+    "rubricProfile": "task-engagement-v1",
+    "languages": [
+      "python"
+    ]
+  }
+}

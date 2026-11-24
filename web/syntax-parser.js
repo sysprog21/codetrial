@@ -12,6 +12,7 @@ const GRAMMARS = {
   java: "tree-sitter-java",
   javascript: "tree-sitter-javascript",
   python: "tree-sitter-python",
+  scala: "tree-sitter-scala",
 };
 const PARSE_BUDGET_MS = 25;
 
@@ -79,11 +80,13 @@ export function createSyntaxParser({
   }
 
   // The caller owns a returned tree and must delete it after reading it.
-  function parseSyntax(code, language) {
+  // `budgetMs` bounds the parse: the editor's keystroke budget by default, a
+  // longer one for a caller that parses a short snippet once.
+  function parseSyntax(code, language, budgetMs = PARSE_BUDGET_MS) {
     requireLanguage(language);
     const parser = parsers.get(language);
     if (!parser) return null;
-    const deadline = now() + PARSE_BUDGET_MS;
+    const deadline = now() + budgetMs;
     const tree = parser.parse(code, null, {
       progressCallback: () => now() >= deadline,
     });

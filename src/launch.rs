@@ -47,6 +47,9 @@ pub struct CliOptions {
     pub room_prefix: Option<String>,
     pub duration_min: Option<u32>,
     pub task_mode: bool,
+    /// The ca2026-mycpu checkout a defense task examines
+    /// (docs/mycpu-defense.md); task mode only.
+    pub workspace: Option<PathBuf>,
     pub no_update_check: bool,
 }
 
@@ -923,7 +926,7 @@ pub fn finish(
     let reachable = reachable_from_elsewhere(values, bound);
     let (fixed_room, recording) = (config.fixed_room_name.is_some(), config.recording.is_some());
     config.tasks = task_mode_enabled(config.task_mode_requested, reachable, fixed_room, recording)
-        .then(crate::tasks::access::TaskService::new);
+        .then(|| crate::tasks::access::TaskService::with_workspace(options.workspace.clone()));
 
     // Said at startup, because the address printed above is the interview lobby
     // on any other server, and a learner who asked for task mode would not

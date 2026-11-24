@@ -33,6 +33,23 @@ PACKAGE_KEYS = {
     "variants",
     "sidecars",
 }
+# A defense set (docs/mycpu-defense.md) holds the course settings in place of a
+# bank; CodeTrial poses its one task, `defense`, from a record it ships.
+DEFENSE_KEYS = {"packageVersion", "setId", "setVersion", "rules", "defense"}
+DEFENSE_FIELDS = {
+    "course",
+    "salt",
+    "lines",
+    "tasks",
+    "bugs",
+    "specSeconds",
+    "modelSeconds",
+    "simSeconds",
+}
+DEFENSE_TASK = "defense"
+DEFENSE_NAME = re.compile(r"[A-Za-z0-9_.-]{1,64}")
+DEFENSE_TASK_DIR = re.compile(r"[1-5]-[A-Za-z0-9_.-]{1,62}")
+DEFENSE_EXERCISE = re.compile(r"[0-9]+\.[0-9]+")
 MANIFEST_KEYS = {
     "packageVersion",
     "setId",
@@ -75,6 +92,36 @@ def checked_pin(pin):
     ):
         raise ValueError(f"PIN must contain {DEFAULTS['pinDigits']} ASCII digits")
     return pin
+
+
+def new_pin():
+    """A PIN drawn from the operating system's secure random source, every
+    one of its digits' values equally likely, leading zeros kept."""
+    import secrets
+
+    digits = DEFAULTS["pinDigits"]
+    return f"{secrets.randbelow(10**digits):0{digits}d}"
+
+
+def check_pin(directory, set_id, version, pin):
+    """The package `pin` opens in the set version a build wrote under
+    `directory`, or None when it opens nothing. The manifest and ciphertext
+    are checked first, as CodeTrial checks them, so a damaged download is
+    told apart from a wrong PIN."""
+    from cryptography.exceptions import InvalidTag
+
+    metadata(set_id, version)
+    checked_pin(pin)
+    base = Path(directory) / "sets" / set_id / str(version)
+    manifest = read_json(base / "manifest.json")
+    checked_manifest(manifest)
+    ciphertext = (base / "tasks.enc").read_bytes()
+    if manifest.get("setId") != set_id or manifest.get("setVersion") != version:
+        raise ValueError(f"{base} holds another set version")
+    try:
+        return decrypt(ciphertext, manifest, pin)
+    except InvalidTag:
+        return None
 
 
 def derive_key(pin, set_id, version, salt):
@@ -127,22 +174,117 @@ def validated_rules(raw):
     return rules
 
 
+def is_defense(package):
+    return isinstance(package, dict) and "defense" in package
+
+
+def task_titles(package):
+    """Each task of a package by id, with the title a learner sees."""
+    if is_defense(package):
+        record = read_json(ROOT / "problem-bank/defense-task.json")
+        return {DEFENSE_TASK: record["variant"]["title"]}
+    return {task_id: row["title"] for task_id, row in package["variants"].items()}
+
+
+def validated_defense(defense):
+    """A defense set's course settings, held to the limits CodeTrial applies
+    when it opens the package (src/tasks/defense.rs, `Config`)."""
+
+    def integer(key, low, high):
+        value = defense[key]
+        if type(value) is not int or not low <= value <= high:
+            raise ValueError(f"defense: {key} must be an integer {low}..{high}")
+
+    def name(value):
+        return isinstance(value, str) and DEFENSE_NAME.fullmatch(value)
+
+    # `hints` alone may be left out: a defense without it allows none.
+    if not isinstance(defense, dict) or set(defense) - {"hints"} != DEFENSE_FIELDS:
+        raise ValueError(
+            f"defense must have exactly: {', '.join(sorted(DEFENSE_FIELDS))},"
+            " and optionally hints"
+        )
+    if defense["course"] != "ca2026-mycpu":
+        raise ValueError("defense: course must be ca2026-mycpu")
+    # The salt chooses every student's lines: one never shared with the live
+    # defense's, which a learner holding the PIN could otherwise read.
+    try:
+        salt = base64.b64decode(defense["salt"], validate=True)
+    except (TypeError, ValueError):
+        raise ValueError("defense: salt is not standard base64") from None
+    # CodeTrial's decoder refuses stray bits after the last byte; so does this.
+    if base64.b64encode(salt).decode("ascii") != defense["salt"]:
+        raise ValueError("defense: salt is not canonical base64")
+    if not 16 <= len(salt) <= 64:
+        raise ValueError("defense: salt must be 16 to 64 bytes")
+    integer("lines", 1, 5)
+    integer("specSeconds", 60, 3600)
+    integer("modelSeconds", 60, 3600)
+    integer("simSeconds", 5, 600)
+    if "hints" in defense:
+        integer("hints", 0, 3)
+    tasks, bugs = defense["tasks"], defense["bugs"]
+    if not isinstance(tasks, list) or not 1 <= len(tasks) <= 5:
+        raise ValueError("defense: 1..5 tasks")
+    if not isinstance(bugs, list) or not 1 <= len(bugs) <= 64:
+        raise ValueError("defense: 1..64 bugs")
+    for task in tasks:
+        if (
+            not isinstance(task, dict)
+            or set(task) != {"dir", "project", "arch"}
+            or not isinstance(task["dir"], str)
+            or not DEFENSE_TASK_DIR.fullmatch(task["dir"])
+            or not name(task["project"])
+            or not name(task["arch"])
+        ):
+            raise ValueError(f"defense: task {task!r} is not valid")
+    dirs = {task["dir"] for task in tasks}
+    for bug in bugs:
+        if (
+            not isinstance(bug, dict)
+            or set(bug) != {"task", "variant", "mutant", "rule", "exercise"}
+            or not isinstance(bug["task"], str)
+            or bug["task"] not in dirs
+            or not name(bug["mutant"])
+            or not (bug["variant"] is None or name(bug["variant"]))
+            or not isinstance(bug["rule"], str)
+            or not bug["rule"].strip()
+            or len(bug["rule"].encode()) > 256
+            or not (
+                bug["exercise"] is None
+                or isinstance(bug["exercise"], str)
+                and DEFENSE_EXERCISE.fullmatch(bug["exercise"])
+            )
+        ):
+            raise ValueError(f"defense: bug {bug!r} is not valid")
+    return defense
+
+
 def validate_package(package):
     # The limits CodeTrial applies when it opens the package; a lower one here
-    # would only refuse what the learner's CodeTrial accepts.
+    # would only refuse what the learner's CodeTrial accepts. The header is
+    # checked alike for a defense set and a bank of tasks.
     task_bytes, set_bytes = DEFAULTS["taskBytes"], DEFAULTS["setBytes"]
+    defense = is_defense(package)
     if (
         not isinstance(package, dict)
-        or set(package) != PACKAGE_KEYS
+        or set(package) != (DEFENSE_KEYS if defense else PACKAGE_KEYS)
         or type(package["packageVersion"]) is not int
         or package["packageVersion"] != 1
     ):
-        raise ValueError("invalid task package schema")
+        raise ValueError(
+            "invalid defense package schema"
+            if defense
+            else "invalid task package schema"
+        )
     metadata(package["setId"], package["setVersion"])
     if validated_rules(package["rules"]) != package["rules"]:
         raise ValueError("package rules are not resolved")
     if len(compact(package)) > set_bytes:
         raise ValueError("task set exceeds size limit")
+    if defense:
+        validated_defense(package["defense"])
+        return {}, {}
     problems = package["problems"]
     if not isinstance(problems, list) or not problems:
         raise ValueError("empty task set")
@@ -189,6 +331,25 @@ def validate_package(package):
 
 def load_bank(directory, set_id, version):
     directory = Path(directory)
+    if (directory / "defense.json").exists():
+        if (directory / "problems.json").exists():
+            raise ValueError(
+                f"{directory} holds both defense.json and problems.json: a set"
+                " is a defense or a bank of tasks, not both"
+            )
+        package = {
+            "packageVersion": 1,
+            "setId": set_id,
+            "setVersion": version,
+            "rules": validated_rules(
+                read_json(directory / "task-set.json")
+                if (directory / "task-set.json").exists()
+                else None
+            ),
+            "defense": read_json(directory / "defense.json"),
+        }
+        validate_package(package)
+        return package
     package = {
         "packageVersion": 1,
         "setId": set_id,
@@ -229,6 +390,11 @@ def valid_close(text):
 def validated_task(package, task_id):
     """The validated entry and sidecar of one task in `package`, with the
     hint maximum the set's rules lower it to, as the server applies it."""
+    if is_defense(package):
+        raise ValueError(
+            "a defense set poses CodeTrial's own defense task: there is no bank"
+            " task to preview or render"
+        )
     entries, sidecars = validate_package(package)
     if task_id not in entries:
         raise ValueError("unknown task")
@@ -448,10 +614,10 @@ def version_page(package, site):
 
     set_id, version = package["setId"], package["setVersion"]
     tasks = "\n".join(
-        f"<li><strong>{escape(variant['title'])}</strong>: "
+        f"<li><strong>{escape(title)}</strong>: "
         f'<a href="{escape(link)}">Open in CodeTrial</a>'
         f"<br><code>{escape(link)}</code></li>"
-        for task_id, variant in sorted(package["variants"].items())
+        for task_id, title in sorted(task_titles(package).items())
         for link in [assignment_link(site, set_id, task_id, version)]
     )
     rules = "\n".join(

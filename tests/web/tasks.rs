@@ -47,7 +47,7 @@ impl RoomDispatcher for TaskDispatcher {
         let AgentJob::Task { task, .. } = job else {
             panic!("task admission fell back to an interview")
         };
-        self.tasks.lock().unwrap().push(task);
+        self.tasks.lock().unwrap().push(*task);
         Ok(())
     }
 }
@@ -1021,6 +1021,79 @@ async fn a_signed_in_learner_with_no_attempt_in_a_room_has_no_result_there() {
         .await
         .unwrap();
     assert_eq!(code(response).await, (404, "result_unavailable".to_owned()));
+    server.shutdown().await;
+    remove_database(db).await;
+}
+
+/// The defense panel's routes are task mode's, bound to the learner's active
+/// defense attempt, and a change needs the task CSRF header.
+#[tokio::test]
+async fn defense_routes_need_task_mode_an_active_defense_and_the_csrf_header() {
+    let (config, cookie, db) = signed_in_web_config("defense-off");
+    let (url, server) = spawn_web_server(config).await;
+    let client = http_client();
+    let view = client
+        .get(format!("{url}/api/defense"))
+        .header("Cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(code(view).await, (403, "task_mode_off".to_owned()));
+    server.shutdown().await;
+    remove_database(db).await;
+
+    let (mut config, cookie, db) = signed_in_web_config("defense-none");
+    config.tasks = Some(TaskService::new());
+    let (url, server) = spawn_task_server(config).await;
+    let view = client
+        .get(format!("{url}/api/defense"))
+        .header("Cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(code(view).await, (404, "defense_none".to_owned()));
+    let predict = |csrf: bool| {
+        let mut request = client
+            .post(format!("{url}/api/defense/predict"))
+            .header("Cookie", &cookie)
+            .json(&json!({"item": "q1", "fails": [], "how": "nothing fails"}));
+        if csrf {
+            request = request.header("x-codetrial-task-request", "1");
+        }
+        request.send()
+    };
+    assert_eq!(
+        code(predict(false).await.unwrap()).await,
+        (403, "csrf_rejected".to_owned())
+    );
+    assert_eq!(
+        code(predict(true).await.unwrap()).await,
+        (404, "defense_none".to_owned())
+    );
+
+    // Every change the panel makes is held to the same two checks.
+    for route in ["begin", "run", "models", "simulate", "claim"] {
+        let send = |csrf: bool| {
+            let mut request = client
+                .post(format!("{url}/api/defense/{route}"))
+                .header("Cookie", &cookie)
+                .json(&json!({}));
+            if csrf {
+                request = request.header("x-codetrial-task-request", "1");
+            }
+            request.send()
+        };
+        assert_eq!(
+            code(send(false).await.unwrap()).await,
+            (403, "csrf_rejected".to_owned()),
+            "{route}"
+        );
+        assert_eq!(
+            code(send(true).await.unwrap()).await,
+            (404, "defense_none".to_owned()),
+            "{route}"
+        );
+    }
     server.shutdown().await;
     remove_database(db).await;
 }

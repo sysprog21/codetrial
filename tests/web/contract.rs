@@ -176,6 +176,7 @@ fn task_topic_table_matches_the_task_room() {
         ("end", TOPIC_TASK_END),
         ("thinking", TOPIC_TASK_THINKING),
         ("error", TOPIC_TASK_ERROR),
+        ("transcript", TOPIC_TASK_TRANSCRIPT),
         ("action", TOPIC_TASK_ACTION),
         ("revision", TOPIC_TASK_REVISION),
         ("run", TOPIC_TASK_RUN),

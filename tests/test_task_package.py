@@ -185,6 +185,88 @@ class TaskPackageTests(unittest.TestCase):
             }
             self.assertEqual(after, before)
 
+    def test_new_pins_are_six_digits_from_a_secure_source(self):
+        drawn = [task_package.new_pin() for _ in range(200)]
+        for pin in drawn:
+            self.assertRegex(pin, r"^[0-9]{6}$")
+        # 200 draws from 10^6 almost never repeat much; a constant would.
+        self.assertGreater(len(set(drawn)), 190)
+        with mock.patch("secrets.randbelow", return_value=42):
+            self.assertEqual(task_package.new_pin(), "000042", "leading zeros kept")
+
+    def test_cli_pin_new_and_check_against_a_build(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            bank = directory / "bank"
+            bank.mkdir()
+            bank_files(bank, package())
+            command = [sys.executable, str(ROOT / "scripts/task-package.py")]
+            drawn = subprocess.run(
+                command + ["pin", "new", "--count", "3"], capture_output=True, text=True
+            )
+            self.assertEqual(drawn.returncode, 0, drawn.stderr)
+            pins = drawn.stdout.split()
+            self.assertEqual(len(pins), 3)
+            pin = pins[0]
+            publish = directory / "publish"
+            built = subprocess.run(
+                command
+                + ["build", "--bank", str(bank), "--set-id", "classroom"]
+                + ["--version", "7", "--site", SITE, "--output", str(publish)],
+                input=pin + "\n",
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(built.returncode, 0, built.stderr)
+            check = command + ["pin", "check", "--set-id", "classroom"]
+            check += ["--version", "7", "--output", str(publish)]
+            opened = subprocess.run(
+                check, input=pin + "\n", capture_output=True, text=True
+            )
+            self.assertEqual(opened.returncode, 0, opened.stderr)
+            self.assertIn("The PIN opens version 7 of set classroom", opened.stdout)
+            self.assertNotIn(pin, opened.stdout + opened.stderr)
+            wrong = f"{(int(pin) + 1) % 10**6:06d}"
+            refused = subprocess.run(
+                check, input=wrong + "\n", capture_output=True, text=True
+            )
+            self.assertEqual(refused.returncode, 1)
+            self.assertIn("the PIN does not open", refused.stderr)
+            malformed = subprocess.run(
+                check, input="12a456\n", capture_output=True, text=True
+            )
+            self.assertEqual(malformed.returncode, 1)
+            self.assertIn("6 ASCII digits", malformed.stderr)
+            # A changed ciphertext is a damaged package, not a wrong PIN.
+            enc = publish / "sets/classroom/7/tasks.enc"
+            data = bytearray(enc.read_bytes())
+            data[-1] ^= 1
+            enc.write_bytes(bytes(data))
+            damaged = subprocess.run(
+                check, input=pin + "\n", capture_output=True, text=True
+            )
+            self.assertEqual(damaged.returncode, 1)
+            self.assertIn("hash mismatch", damaged.stderr)
+            self.assertNotIn("does not open", damaged.stderr)
+            # A manifest of the wrong shape is refused, never a traceback.
+            manifest = publish / "sets/classroom/7/manifest.json"
+            manifest.write_text("[]\n", encoding="utf-8")
+            shapeless = subprocess.run(
+                check, input=pin + "\n", capture_output=True, text=True
+            )
+            self.assertEqual(shapeless.returncode, 1)
+            self.assertIn("invalid manifest schema", shapeless.stderr)
+            self.assertNotIn("Traceback", shapeless.stderr)
+            missing = subprocess.run(
+                command
+                + ["pin", "check", "--set-id", "classroom", "--version", "8"]
+                + ["--output", str(publish)],
+                input=pin + "\n",
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(missing.returncode, 1)
+
     def test_a_build_into_an_output_the_scan_refuses_writes_nothing(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
@@ -701,6 +783,151 @@ class TaskPackageTests(unittest.TestCase):
         for pin in ("12345", "1234567", "abcdef", "\u0661" * 6):
             with self.subTest(pin=pin), self.assertRaises(ValueError):
                 checked_pin(pin)
+
+
+DEFENSE = {
+    "course": "ca2026-mycpu",
+    "salt": "MDEyMzQ1Njc4OWFiY2RlZg==",
+    "lines": 3,
+    "tasks": [{"dir": "4-pipeline", "project": "pipeline", "arch": "rv32im_zicsr"}],
+    "bugs": [
+        {
+            "task": "4-pipeline",
+            "variant": "Forward",
+            "mutant": "no-flush",
+            "rule": "a taken branch flushes the younger instructions",
+            "exercise": "4.4",
+        }
+    ],
+    "specSeconds": 900,
+    "modelSeconds": 1200,
+    "simSeconds": 120,
+}
+
+
+class DefensePackageTests(unittest.TestCase):
+    def bank(self, directory, defense=DEFENSE):
+        (directory / "defense.json").write_text(json.dumps(defense))
+        return directory
+
+    def test_defense_title_comes_from_the_shipped_task(self):
+        # The cases run on threads at once and read files through the same
+        # function, so the stand-in answers this thread alone and every
+        # other reads the real file.
+        this_thread, real_reader = threading.get_ident(), task_package.read_json
+        record = {
+            "problem": {"id": "defense"},
+            "variant": {"title": "A different title"},
+        }
+
+        def reader(path):
+            if threading.get_ident() == this_thread:
+                return record
+            return real_reader(path)
+
+        with mock.patch.object(task_package, "read_json", reader):
+            self.assertEqual(
+                task_package.task_titles({"defense": {}}),
+                {"defense": "A different title"},
+            )
+
+    def test_a_defense_bank_builds_one_defense_task_that_decrypts_whole(self):
+        with tempfile.TemporaryDirectory() as temp:
+            (Path(temp) / "mycpu").mkdir()
+            bank = self.bank(Path(temp) / "mycpu")
+            loaded = load_bank(bank, "mycpu", 1)
+            self.assertEqual(set(loaded), task_package.DEFENSE_KEYS)
+            ciphertext, manifest = encrypt(loaded, PIN)
+            self.assertEqual(decrypt(ciphertext, manifest, PIN), loaded)
+            directory = build_package(loaded, PIN, SITE, Path(temp) / "publish")
+            page = (directory / "index.html").read_text()
+            self.assertIn("Defense of your processor", page)
+            self.assertIn("/t/mycpu/defense?", page)
+            with self.assertRaisesRegex(ValueError, "no bank task"):
+                preview(loaded, "defense")
+
+    def test_a_defense_package_header_is_held_as_a_bank_of_tasks_is(self):
+        with tempfile.TemporaryDirectory() as temp:
+            (Path(temp) / "mycpu").mkdir()
+            loaded = load_bank(self.bank(Path(temp) / "mycpu"), "mycpu", 1)
+            # True is 1 in Python; CodeTrial refuses a version that is not an
+            # integer, so the packaging tool does too.
+            for version in (True, 1.0, 2):
+                with self.subTest(version=version):
+                    with self.assertRaisesRegex(ValueError, "defense package schema"):
+                        validate_package({**loaded, "packageVersion": version})
+            unhashable = json.loads(json.dumps(loaded))
+            unhashable["defense"]["bugs"][0]["task"] = ["4-pipeline"]
+            with self.assertRaisesRegex(ValueError, "is not valid"):
+                validate_package(unhashable)
+            # A built defense set says what it is when a PIN opens it.
+            build_package(loaded, PIN, SITE, Path(temp) / "publish")
+            checked = subprocess.run(
+                [sys.executable, str(ROOT / "scripts/task-package.py"), "pin", "check"]
+                + ["--set-id", "mycpu", "--version", "1"]
+                + ["--output", str(Path(temp) / "publish")],
+                input=PIN + "\n",
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(checked.returncode, 0, checked.stderr)
+            self.assertIn("a defense set", checked.stdout)
+
+    def test_a_bank_is_a_defense_or_a_bank_of_tasks_not_both(self):
+        with tempfile.TemporaryDirectory() as temp:
+            bank = Path(temp)
+            self.bank(bank)
+            bank_files(bank, package())
+            with self.assertRaisesRegex(ValueError, "not both"):
+                load_bank(bank, "mycpu", 1)
+
+    def test_the_defense_object_follows_the_shared_cases(self):
+        cases = json.loads(
+            (ROOT / "tests/fixtures/task-mode/defense-cases.json").read_text()
+        )
+        self.assertGreater(len(cases), 20)
+        for case in cases:
+            with self.subTest(case=case["name"]):
+                try:
+                    task_package.validated_defense(case["defense"])
+                    valid = True
+                except ValueError:
+                    valid = False
+                self.assertEqual(valid, case["valid"])
+
+    def test_each_defense_rule_refuses_on_its_own(self):
+        def changed(**fields):
+            return {**DEFENSE, **fields}
+
+        def bug(**fields):
+            return changed(bugs=[{**DEFENSE["bugs"][0], **fields}])
+
+        for defense in (
+            changed(course="other"),
+            changed(salt="c2hvcnQ="),
+            changed(salt="not base64!"),
+            changed(lines=0),
+            changed(lines=True),
+            changed(simSeconds=1),
+            changed(tasks=[]),
+            changed(tasks=[{"dir": "../x", "project": "p", "arch": "a"}]),
+            bug(task="2-rv32im"),
+            bug(mutant="a b"),
+            bug(exercise="four"),
+            bug(rule=" "),
+            {**DEFENSE, "extra": 1},
+        ):
+            with self.subTest(defense=defense):
+                with self.assertRaises(ValueError):
+                    validate_package(
+                        {
+                            "packageVersion": 1,
+                            "setId": "mycpu",
+                            "setVersion": 1,
+                            "rules": validated_rules(None),
+                            "defense": defense,
+                        }
+                    )
 
 
 if __name__ == "__main__":

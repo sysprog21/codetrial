@@ -5,6 +5,9 @@ it.
     task-package.py references                 tasks to start from
     task-package.py new [--from REF]           add one to the bank
     task-package.py build --site URL           encrypt the bank for a site
+    task-package.py pin new                    draw a PIN for a new version
+    task-package.py pin check --set-id ID --version N
+                                               check a PIN opens a built set
 
 The bank is the directory `tasks` and the output `publish`, both in the
 current directory, unless --bank and --output name others.
@@ -14,10 +17,10 @@ import sys
 
 from problem_bank import runtime
 
-# Before anything that needs a newer Python: only `build` encrypts, and not
-# when it is only asked for its help.
+# Before anything that needs a newer Python: `build` encrypts and
+# `pin check` decrypts, and neither when it is only asked for its help.
 runtime.ensure(
-    needs_cryptography=sys.argv[1:2] == ["build"]
+    needs_cryptography=(sys.argv[1:2] == ["build"] or sys.argv[1:3] == ["pin", "check"])
     and not any(arg == "-h" or arg.startswith("--h") for arg in sys.argv[2:])
 )
 
@@ -38,21 +41,26 @@ from problem_bank.task_package import (  # noqa: E402
     assignment_link,
     build_package,
     check_output,
+    check_pin,
+    is_defense,
     load_bank,
+    new_pin,
     preview,
     publish_scan,
     render_prompt,
     site_base,
+    task_titles,
 )
 from problem_bank.tasks import IDENTIFIER  # noqa: E402
 
 
-def read_pin():
-    """The PIN from a non-echoing prompt, asked twice, or once from stdin."""
+def read_pin(confirm=True):
+    """The PIN from a non-echoing prompt, asked twice unless only checked, or
+    once from stdin."""
     if not sys.stdin.isatty():
         return sys.stdin.readline().rstrip("\r\n")
     pin = getpass.getpass("PIN: ")
-    if getpass.getpass("PIN again: ") != pin:
+    if confirm and getpass.getpass("PIN again: ") != pin:
         raise ValueError("the two PINs differ")
     return pin
 
@@ -66,7 +74,7 @@ def chosen_task(package, task_id):
     """`task_id`, or the bank's only task when none is named."""
     if task_id is not None:
         return task_id
-    ids = sorted(package["variants"])
+    ids = sorted(task_titles(package))
     if len(ids) != 1:
         raise ValueError(
             f"the bank holds {len(ids)} tasks; pass --task-id: {', '.join(ids)}"
@@ -124,10 +132,49 @@ def main():
             )
     arg = sub.add_parser("publish-scan")
     arg.add_argument("directory", type=Path)
+    arg = sub.add_parser(
+        "pin", help="draw new PINs, or check that a PIN opens a built set"
+    )
+    pins = arg.add_subparsers(dest="pin_command", required=True)
+    drawn = pins.add_parser(
+        "new", help="print PINs from a secure random source, one a line"
+    )
+    drawn.add_argument(
+        "--count", type=int, default=1, help="how many, 1..100; 1 by default"
+    )
+    checked = pins.add_parser(
+        "check", help="check a PIN against a set version a build wrote"
+    )
+    checked.add_argument("--set-id", required=True)
+    checked.add_argument("--version", type=int, required=True)
+    checked.add_argument(
+        "--output",
+        type=Path,
+        default=DEFAULT_OUTPUT,
+        help=f"{DEFAULT_OUTPUT} by default",
+    )
     args = parser.parse_args()
     try:
         if args.command == "publish-scan":
             print(f"Validated {publish_scan(args.directory)} encrypted packages")
+        elif args.command == "pin" and args.pin_command == "new":
+            if not 1 <= args.count <= 100:
+                raise ValueError("--count must be 1..100")
+            for _ in range(args.count):
+                print(new_pin())
+        elif args.command == "pin":
+            package = check_pin(
+                args.output, args.set_id, args.version, read_pin(confirm=False)
+            )
+            where = f"version {args.version} of set {args.set_id} in {args.output}"
+            if package is None:
+                raise ValueError(f"the PIN does not open {where}")
+            what = (
+                "a defense set"
+                if is_defense(package)
+                else f"{len(package['problems'])} tasks"
+            )
+            print(f"The PIN opens {where}: {what}.")
         elif args.command == "references":
             try:
                 for task_id, title, kind in references():
@@ -185,13 +232,17 @@ def main():
                 f" then give learners the page {landing} or these links and,"
                 " separately, the PIN:"
             )
-            for task_id, variant in sorted(package["variants"].items()):
+            for task_id, title in sorted(task_titles(package).items()):
                 link = assignment_link(site, set_id, task_id, version)
-                print(f"  {variant['title']}: {link}")
+                print(f"  {title}: {link}")
         else:
             package = load_bank(args.bank, args.set_id, args.version)
             if args.command == "validate":
-                print(f"Validated {len(package['problems'])} tasks")
+                print(
+                    "Validated a defense set"
+                    if is_defense(package)
+                    else f"Validated {len(package['problems'])} tasks"
+                )
             elif args.command == "render-prompt":
                 task_id = chosen_task(package, args.task_id)
                 print(render_prompt(package, task_id, args.language))

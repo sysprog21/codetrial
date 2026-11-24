@@ -208,6 +208,7 @@ fn parse_agent_args(args: &[String]) -> Result<(Vec<String>, CliOptions), String
             }
             "--allowed-hosts" => options.allowed_hosts = Some(value),
             "--web-dir" => options.web_dir = Some(value),
+            "--workspace" => options.workspace = Some(PathBuf::from(value)),
             "--task-mode" => return Err("--task-mode takes no value".to_string()),
             "--no-update-check" => return Err("--no-update-check takes no value".to_string()),
             "--room-prefix" => options.room_prefix = Some(value),
@@ -233,6 +234,13 @@ fn parse_agent_args(args: &[String]) -> Result<(Vec<String>, CliOptions), String
             "--config and --data-dir cannot be combined: --data-dir already names the \
              folder the config file is read from"
                 .to_string(),
+        );
+    }
+
+    // Only a defense task reads a checkout, and only task mode serves one.
+    if options.workspace.is_some() && !options.task_mode {
+        return Err(
+            "--workspace needs --task-mode: only a defense task reads a checkout".to_string(),
         );
     }
 
@@ -265,7 +273,7 @@ fn print_help(usage: Option<&str>) {
         }
     }
     println!(
-        "\nOptions:\n  --config PATH        Use PATH instead of config/codetrial.env.local\n  --data-dir DIR       Keep the config, accounts and error log in DIR only\n  --import-config PATH Offer the Setup keys in PATH on DIR's Setup page\n  --web-addr ADDR      Listen on ADDR\n  --allowed-hosts LIST Answer only these comma-separated Host values\n  --web-dir PATH       Serve files from PATH\n  --room-prefix PREFIX Prefix generated room names\n  --duration-min MIN   Set the interview duration\n  --task-mode          Serve learner task mode, off unless given (web only)\n  --no-update-check    Never ask GitHub for a newer release (web only)\n  -h, --help           Show this help\n  -V, --version        Show the package version and build commit\n\nEvery option also takes `--flag=value`, which is the only way to pass a value\nthat starts with a dash. `--` ends the options."
+        "\nOptions:\n  --config PATH        Use PATH instead of config/codetrial.env.local\n  --data-dir DIR       Keep the config, accounts and error log in DIR only\n  --import-config PATH Offer the Setup keys in PATH on DIR's Setup page\n  --web-addr ADDR      Listen on ADDR\n  --allowed-hosts LIST Answer only these comma-separated Host values\n  --web-dir PATH       Serve files from PATH\n  --room-prefix PREFIX Prefix generated room names\n  --duration-min MIN   Set the interview duration\n  --task-mode          Serve learner task mode, off unless given (web only)\n  --workspace PATH     The ca2026-mycpu checkout a defense task examines\n  --no-update-check    Never ask GitHub for a newer release (web only)\n  -h, --help           Show this help\n  -V, --version        Show the package version and build commit\n\nEvery option also takes `--flag=value`, which is the only way to pass a value\nthat starts with a dash. `--` ends the options."
     );
 }
 

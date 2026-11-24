@@ -206,6 +206,13 @@
                   hidden
                   >Download</a
                 >
+                <span data-local-note class="muted small">
+                  Download saves this tab's recording as a WebM: the page as it
+                  was shown, and with Share tab audio, Jim's voice and your
+                  microphone. CodeTrial never uploads it: save it before you
+                  close the tab, then upload it to YouTube yourself. Remux it
+                  with ffmpeg first if you need to seek in it.
+                </span>
               </div>
             </section>
             <div class="start-row">
@@ -232,6 +239,9 @@
             <h2>Public cases</h2>
             <ul id="public-cases" aria-label="Public cases"></ul>
             <ul id="checks" aria-label="Understanding checks"></ul>
+            <!-- A defense's items, filled by task-defense.js once work
+                 starts. -->
+            <section id="defense" class="defense-panel" hidden></section>
           </div>
           <div class="task-editor">
             <label
@@ -371,8 +381,38 @@
         <div class="review-actions">
           <button id="new-attempt">Start a new attempt</button>
           <button id="export-review">Download result</button
-          ><button id="export-code">Download code</button>
+          ><button id="export-code">Download code</button
+          ><button id="export-submission" class="primary" hidden>
+            Download submission (.zip)
+          </button>
         </div>
+        <div id="submission-help" class="muted small" hidden>
+          <p>
+            Hand in two things for the attempt you choose. The recording goes on
+            YouTube, public or unlisted but not private: upload the WebM that
+            Download saved, then paste its link here. The ZIP that Download
+            submission saves holds your code (code.txt), the transcript of the
+            conversation (transcript.txt), the result, and a manifest with the
+            SHA-256 of each file and the link of your video, so one attempt's
+            files cannot be mixed up with another's.
+          </p>
+          <p>
+            Starting a new attempt clears this page. Download the submission of
+            every attempt you may want to hand in, then choose one.
+          </p>
+          <label>
+            YouTube link of your recording
+            <input
+              id="recording-url"
+              type="url"
+              inputmode="url"
+              autocomplete="off"
+              spellcheck="false"
+              placeholder="https://youtu.be/..."
+            />
+          </label>
+        </div>
+        <p id="submission-status" role="status" class="small"></p>
       </section>
     </main>
     <script type="module" src="/task.js"></script>
