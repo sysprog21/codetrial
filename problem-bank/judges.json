@@ -283,6 +283,29 @@
           1
         ],
         "expected": []
+      },
+      {
+        "label": "last unchecked element is the target",
+        "input": [
+          [
+            1,
+            4
+          ],
+          4
+        ],
+        "expected": [
+          1
+        ]
+      },
+      {
+        "label": "only element is the target",
+        "input": [
+          [
+            4
+          ],
+          4
+        ],
+        "expected": []
       }
     ],
     "paramNames": [
