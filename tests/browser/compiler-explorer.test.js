@@ -389,6 +389,192 @@ const assertRejects = (problem, label, run, message) => {
   assert.notEqual(run(...structuredClone(input)), expected, message);
 };
 
+test("word-pattern cases reject shortcuts that skip a length or mapping check", () => {
+  const distinct = (values) => new Set(values).size;
+  const sameDistinct = (p, w) =>
+    distinct([...p].slice(0, w.length).map((c, i) => `${c} ${w[i]}`)) ===
+      distinct(p) && distinct(p) === distinct(w);
+  const counts = (v) => v.map((x) => v.filter((y) => y === x).length).sort();
+  // A letter keeps its first word; clash(i) can refuse a new letter's word.
+  const oneWay = (p, w, clash) => {
+    const wordOf = new Map();
+    return [...p].every((c, i) =>
+      wordOf.has(c) ? wordOf.get(c) === w[i] : !clash(i) && wordOf.set(c, w[i]),
+    );
+  };
+  const sameLength = (answer) => (p, w) =>
+    p.length === w.length && answer(p, w);
+  // Each word is compared with every earlier one through same(later, earlier).
+  const wordsCompared = (same) =>
+    sameLength((p, w) =>
+      [...p].every((c, i) =>
+        w.slice(0, i).every((x, j) => (c === p[j]) === same(w[i], x)),
+      ),
+    );
+  const letterSum = (word) =>
+    [...word].reduce((sum, c) => sum + c.charCodeAt(0), 0);
+  for (const [name, answer, label] of [
+    [
+      "distinct counts without a length check",
+      sameDistinct,
+      "fewer words than letters",
+    ],
+    [
+      "distinct counts that refuse only a short message",
+      (p, w) => w.length >= p.length && sameDistinct(p, w),
+      "extra word repeats an earlier one",
+    ],
+    [
+      "distinct counts that refuse only a long message",
+      (p, w) => w.length <= p.length && sameDistinct(p, w),
+      "fewer words than letters",
+    ],
+    [
+      "letter and word counts",
+      sameLength((p, w) => `${counts([...p])}` === `${counts(w)}`),
+      "alternating words for a mirrored template",
+    ],
+    [
+      "comparison with the first position",
+      sameLength((p, w) =>
+        [...p].every((c, i) => (c === p[0]) === (w[i] === w[0])),
+      ),
+      "new letter takes a word already used",
+    ],
+    [
+      "one-way map with a neighbour check",
+      sameLength(
+        (p, w) =>
+          oneWay(p, w, () => false) &&
+          [...p].every(
+            (c, i) => i === 0 || (c === p[i - 1]) === (w[i] === w[i - 1]),
+          ),
+      ),
+      "new letter takes a word already used",
+    ],
+    [
+      "one-way map checked against the last new word",
+      sameLength((p, w) => {
+        let last;
+        return oneWay(p, w, (i) => {
+          const clash = w[i] === last;
+          last = w[i];
+          return clash;
+        });
+      }),
+      "third letter reuses the first word",
+    ],
+    [
+      "one map for both directions",
+      sameLength((p, w) => {
+        const seen = new Map();
+        const claim = (k, v) => (seen.get(k) ?? seen.set(k, v).get(k)) === v;
+        return [...p].every((c, i) => claim(c, w[i]) && claim(w[i], c));
+      }),
+      "one-letter words named like template letters",
+    ],
+    [
+      "boxed indices compared by reference",
+      sameLength((p, w) => {
+        // Integer.valueOf shares a box only from -128 to 127.
+        const box = (i) => (i < 128 ? i : [i]);
+        const letterAt = new Map();
+        const wordAt = new Map();
+        return [...p].every((c, i) => {
+          const same = letterAt.get(c) === wordAt.get(w[i]);
+          letterAt.set(c, box(i));
+          wordAt.set(w[i], box(i));
+          return same;
+        });
+      }),
+      "one word repeated 130 times",
+    ],
+    [
+      "words compared by the earlier word's prefix",
+      wordsCompared((word, earlier) => word.startsWith(earlier)),
+      "second word extends the first",
+    ],
+    [
+      "words compared by the later word's prefix",
+      wordsCompared((word, earlier) => earlier.startsWith(word)),
+      "second word shortens the first",
+    ],
+    [
+      "words compared by letter sum",
+      wordsCompared((word, earlier) => letterSum(word) === letterSum(earlier)),
+      "second word reorders the first",
+    ],
+    [
+      "words compared by their first eight bytes",
+      // strncmp(a, b, sizeof a) with a 64-bit pointer; four bytes fails here too.
+      wordsCompared(
+        (word, earlier) => word.slice(0, 8) === earlier.slice(0, 8),
+      ),
+      "words differ only at the ninth letter",
+    ],
+    [
+      "words kept in a plain object",
+      sameLength((p, w) => {
+        const letterOf = {};
+        const wordOf = {};
+        return [...p].every((c, i) => {
+          if (wordOf[c] && wordOf[c] !== w[i]) return false;
+          if (letterOf[w[i]] && letterOf[w[i]] !== c) return false;
+          wordOf[c] = w[i];
+          letterOf[w[i]] = c;
+          return true;
+        });
+      }),
+      "second word is constructor",
+    ],
+    [
+      "two-way map that refuses only a long message",
+      // Past the last word w[i] is undefined, and no earlier word equals it.
+      (p, w) =>
+        w.length <= p.length &&
+        oneWay(p, w, (i) => w.slice(0, i).includes(w[i])),
+      "last letter has no word",
+    ],
+    [
+      "first-seen indices joined into a string",
+      // Once an index has two digits, 10 1 10 and 10 11 0 join alike.
+      (p, w) =>
+        [...p].map((c) => p.indexOf(c)).join("") ===
+        w.map((x) => w.indexOf(x)).join(""),
+      "twelfth word is new where its letter repeats",
+    ],
+  ]) {
+    assertRejects(
+      "word-pattern",
+      label,
+      (pattern, s) => answer(pattern, s.split(" ")),
+      `"${label}" must reject the ${name} shortcut`,
+    );
+  }
+  const correct = sameLength((p, w) => {
+    const wordOf = new Map();
+    const letterOf = new Map();
+    return [...p].every((c, i) => {
+      if (!wordOf.has(c) && !letterOf.has(w[i])) {
+        wordOf.set(c, w[i]);
+        letterOf.set(w[i], c);
+      }
+      return wordOf.get(c) === w[i] && letterOf.get(w[i]) === c;
+    });
+  });
+  for (const {
+    label,
+    input: [pattern, s],
+    expected,
+  } of judges["word-pattern"].cases) {
+    assert.equal(
+      correct(pattern, s.split(" ")),
+      expected,
+      `"${label}" must expect the two-way mapping answer`,
+    );
+  }
+});
+
 test("jump-game cases reject each hop-by-hop shortcut", () => {
   const travel = (choose) => (nums) => {
     let at = 0;

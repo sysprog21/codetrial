@@ -757,6 +757,26 @@ fn static_problem_bank_and_judges_cover_each_problem() {
             "best-time-to-buy-and-sell-stock-iii",
             "small rise then two equal rises",
         ),
+        ("word-pattern", "fewer words than letters"),
+        ("word-pattern", "extra word repeats an earlier one"),
+        ("word-pattern", "alternating words for a mirrored template"),
+        ("word-pattern", "new letter takes a word already used"),
+        ("word-pattern", "third letter reuses the first word"),
+        (
+            "word-pattern",
+            "one-letter words named like template letters",
+        ),
+        ("word-pattern", "one word repeated 130 times"),
+        ("word-pattern", "second word extends the first"),
+        ("word-pattern", "second word shortens the first"),
+        ("word-pattern", "second word reorders the first"),
+        ("word-pattern", "words differ only at the ninth letter"),
+        ("word-pattern", "second word is constructor"),
+        ("word-pattern", "last letter has no word"),
+        (
+            "word-pattern",
+            "twelfth word is new where its letter repeats",
+        ),
     ] {
         let labels = judges[id]["cases"]
             .as_array()
