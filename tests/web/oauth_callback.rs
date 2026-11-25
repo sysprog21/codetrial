@@ -2,6 +2,20 @@
 
 use super::*;
 
+fn oauth_login_pair(headers: &reqwest::header::HeaderMap) -> (String, String) {
+    let state = query_parameter(headers["location"].to_str().unwrap(), "state")
+        .expect("OAuth login must include a state");
+
+    let cookies = headers
+        .get_all("set-cookie")
+        .iter()
+        .map(|cookie| cookie.to_str().unwrap().split(';').next().unwrap())
+        .collect::<Vec<_>>()
+        .join("; ");
+
+    (state, cookies)
+}
+
 fn oauth_test_config(path: &std::path::Path) -> WebServerConfig {
     initialize_account_database(path).unwrap();
 
