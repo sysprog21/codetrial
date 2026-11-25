@@ -1091,8 +1091,20 @@ fn finish_offers_a_launchers_child_change_keys_only_on_the_code_it_was_handed() 
     assert!(config.tasks.is_none(), "task mode was not asked for");
 
     let code = "0123456789abcdef0123456789abcdef";
+    // Only a launcher that said it restarts its child is left to do so.
+    let handed = |setup: Option<codetrial::web::SetupContext>| {
+        setup.map(|setup| (setup.code().to_string(), setup.after_save()))
+    };
     let (_, setup) = finish(super::LaunchedBy::Parent(Some(code.to_string())));
-    assert_eq!(setup.as_ref().map(|setup| setup.code()), Some(code));
+    assert_eq!(
+        handed(setup),
+        Some((code.to_string(), codetrial::web::AfterSave::Operator))
+    );
+    let (_, setup) = finish(super::LaunchedBy::RestartingParent(Some(code.to_string())));
+    assert_eq!(
+        handed(setup),
+        Some((code.to_string(), codetrial::web::AfterSave::Launcher))
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 

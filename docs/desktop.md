@@ -22,7 +22,7 @@ the binary's: `src/main.rs` runs the Setup handover and binds the socket, and
 builds the server from `src/launch.rs` (config search, every refusal it makes
 before serving). Calling that from the app would have meant a second launcher
 beside the one the CLI's behavior is pinned to. As a child it is the binary the CLI
-tests already cover, started with six things a launcher needs that the CLI
+tests already cover, started with seven things a launcher needs that the CLI
 did not have. Each is decided in the server, so the app keeps no copy of the
 server's rules:
 
@@ -75,22 +75,28 @@ server's rules:
   least 24 letters and digits, and never prints it. The app fills it into the
   Setup page in its own window, or, with the interview in the browser, shows
   it on the page it leaves in its window. Read from the environment for the
-  same reason as the pipe above. After Change keys saves, a child with a
-  Google key, which hosts its interviewer, stops admitting interviews and
+  same reason as the pipe above.
+- `CODETRIAL_RESTART_AFTER_SAVE`: the app restarts its server when asked to,
+  so it says so here. After Change keys saves, a server told this that has a
+  Google key, and so hosts its interviewer, stops admitting interviews and
   prints `codetrial: keys saved and no interview running: restart now` once
-  none is running or writing its report. It admits nothing more, so whatever
-  launched it has to restart it then; the app does. A child without a Google
-  key keeps its old keys until it is restarted.
+  none is running or writing its report and the save's response has gone out.
+  A candidate who starts an interview meanwhile is told the server is
+  restarting. It admits nothing more, so the app starts it again then. Without
+  this variable, or without a Google key, the server keeps its old keys until
+  it is restarted, as one started from a terminal does. Read from the
+  environment for the same reason as the pipe above.
 - `--no-update-check`: the lobby never offers a newer release, whatever the
   config file says about `CODETRIAL_UPDATE_CHECK`. That check compares the
   server with the `latest` release, and the app is published as
   `desktop-latest`, so it would offer every desktop install an update to the
   CLI binary.
 
-All six are ordinary server options, and a CLI install can use them the same
-way, except that the server takes `CODETRIAL_CHANGE_KEYS_CODE` only when
-`CODETRIAL_EXIT_WITH_STDIN` says it was started as a child: a launch from a
-terminal makes and prints its own code. `codetrial --help` lists the four
+All of these are ordinary server options, and a CLI install can use them the
+same way, except that the server takes `CODETRIAL_CHANGE_KEYS_CODE` and
+`CODETRIAL_RESTART_AFTER_SAVE` only when `CODETRIAL_EXIT_WITH_STDIN` says it
+was started as a child: a launch from a terminal makes and prints its own code
+and is restarted by hand. `codetrial --help` lists the four
 flags, and the README's configuration table lists `CODETRIAL_ALLOWED_HOSTS`.
 
 ## Where it keeps things

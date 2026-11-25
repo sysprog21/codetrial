@@ -111,6 +111,18 @@ pub fn handed_change_keys_code() -> Option<String> {
     config::change_keys_code(std::env::var("CODETRIAL_CHANGE_KEYS_CODE").ok().as_deref())
 }
 
+/// Whether the launcher said in `CODETRIAL_RESTART_AFTER_SAVE` that it restarts
+/// this server once Change keys saves. From the process environment for the
+/// same reason as `handed_change_keys_code`: it describes the launcher, not the
+/// configuration.
+pub fn handed_restart_after_save() -> bool {
+    config::restart_after_save(
+        std::env::var("CODETRIAL_RESTART_AFTER_SAVE")
+            .ok()
+            .as_deref(),
+    )
+}
+
 /// Writes a new file that only its owner can read, and refuses rather than
 /// replacing one: the config file Setup writes and the session key a
 /// `--data-dir` launch makes both hold secrets.

@@ -227,17 +227,26 @@ async fn change_keys_rewrites_the_config_the_launch_read() {
 /// does reach it after the save is the line the app restarts the child on.
 #[test]
 fn a_child_saves_with_the_code_its_launcher_handed_over_and_never_prints_it() {
-    save_as_a_child("GOOGLE_API_KEY=old-google\n", true);
+    save_as_a_child("GOOGLE_API_KEY=old-google\n", true, true);
+}
+
+/// A program that starts the server as its child and hands over a code, but
+/// has not said it restarts the child, keeps a server that serves on its old
+/// keys after the save, as before: it never closes admission for a restart
+/// that no one performs.
+#[test]
+fn a_child_whose_launcher_does_not_restart_it_never_asks_for_one() {
+    save_as_a_child("GOOGLE_API_KEY=old-google\n", false, false);
 }
 
 /// A child without a Google key serves interviews hosted elsewhere, which it
 /// cannot see, so it never says that none is running: the person restarts it.
 #[test]
 fn a_child_without_an_interviewer_of_its_own_never_asks_for_a_restart() {
-    save_as_a_child("", false);
+    save_as_a_child("", true, false);
 }
 
-fn save_as_a_child(google: &str, restarts: bool) {
+fn save_as_a_child(google: &str, opts_in: bool, restarts: bool) {
     use std::io::{BufRead, BufReader};
 
     const CODE: &str = "0123456789abcdef0123456789abcdef";
@@ -270,6 +279,9 @@ fn save_as_a_child(google: &str, restarts: bool) {
             .env("CODETRIAL_CHANGE_KEYS_CODE", CODE)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped());
+        if opts_in {
+            command.env("CODETRIAL_RESTART_AFTER_SAVE", "1");
+        }
         command
     });
     let stdout = server.stdout.take().unwrap();

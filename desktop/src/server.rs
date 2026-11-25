@@ -138,6 +138,10 @@ fn command(launch: &Launch) -> Command {
         .current_dir(&launch.data_dir)
         .env("CODETRIAL_EXIT_WITH_STDIN", "1")
         .env("CODETRIAL_CHANGE_KEYS_CODE", &launch.change_keys_code)
+        // This app starts the server again when it asks to be, once Change keys
+        // has saved: without this the server keeps serving on its old keys, as
+        // it does for any other program that starts it as a child.
+        .env("CODETRIAL_RESTART_AFTER_SAVE", "1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());

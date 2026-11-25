@@ -46,8 +46,9 @@ fn the_server_is_started_on_the_data_dir_and_told_the_rest() {
     );
     assert_eq!(command.get_current_dir(), Some(Path::new("/data")));
 
-    // The pipe and the Change keys code are the two things it is told through
-    // the environment, which a `--data-dir` launch reads no configuration from.
+    // The pipe, the Change keys code and that this app restarts the server when
+    // asked to are what it is told through the environment, which a
+    // `--data-dir` launch reads no configuration from.
     let env = |key: &str| {
         command
             .get_envs()
@@ -58,6 +59,7 @@ fn the_server_is_started_on_the_data_dir_and_told_the_rest() {
     assert_eq!(command.get_envs().count(), 2);
     assert_eq!(env("CODETRIAL_EXIT_WITH_STDIN").as_deref(), Some("1"));
     assert_eq!(env("CODETRIAL_CHANGE_KEYS_CODE").as_deref(), Some(CODE));
+    assert_eq!(env("CODETRIAL_RESTART_AFTER_SAVE").as_deref(), Some("1"));
 }
 
 #[test]

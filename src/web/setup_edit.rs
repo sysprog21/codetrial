@@ -23,17 +23,18 @@ use super::{AppState, RoomDispatcher, json_response};
 const RESTART_LINE: &str = "codetrial: keys saved and no interview running: restart now";
 
 /// Who restarts the server onto keys a save wrote.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AfterSave {
     /// The operator, by hand and whenever they choose. Until then the server
     /// admits interviews on the keys it started with.
     Operator,
-    /// The launcher that owns this child, as soon as it reads `RESTART_LINE`.
-    /// Interviews that were already admitted finish first, and no new one is
-    /// admitted in the meantime, so the restart cuts nothing off. Only a child
-    /// that hosts its interviewer prints it: one without sees none of the
-    /// interviews hosted elsewhere, so it is restarted by hand, as an
-    /// operator's is.
+    /// The launcher that owns this child and said, in
+    /// `CODETRIAL_RESTART_AFTER_SAVE`, that it restarts it: as soon as it reads
+    /// `RESTART_LINE`. Interviews that were already admitted finish first, and
+    /// no new one is admitted in the meantime, so the restart cuts nothing off.
+    /// Only a child that hosts its interviewer prints it: one without sees none
+    /// of the interviews hosted elsewhere, so it is restarted by hand, as an
+    /// operator's is, and so is the child of a launcher that did not say so.
     Launcher,
 }
 
@@ -90,6 +91,11 @@ impl SetupContext {
     /// For `run_web` to print, and for nothing else.
     pub fn code(&self) -> &str {
         &self.code
+    }
+
+    /// Who restarts the server after a save, as the launch decided it.
+    pub fn after_save(&self) -> AfterSave {
+        self.after_save
     }
 
     /// Whether the launcher restarts this server once a save is drained, so the
