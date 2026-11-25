@@ -51,6 +51,21 @@ fn startup_failure_identifies_exhausted_rotations() {
 thread_local! {
     static CONSTRAIN_STARTUP_SOCKET: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static STARTUP_OUTPUT_PAUSE: std::cell::RefCell<Option<StartupOutputPause>> = const { std::cell::RefCell::new(None) };
+    static STARTUP_WRITE_PAUSE: std::cell::RefCell<Option<StartupWritePause>> = const { std::cell::RefCell::new(None) };
+}
+
+struct StartupWritePause {
+    entered: tokio::sync::oneshot::Sender<()>,
+    resume: tokio::sync::oneshot::Receiver<()>,
+}
+
+// Hold the sink-owned flush, rather than assuming a short TCP stall stays
+// blocked when the peer sends its answer and advertises another window.
+pub(in crate::gemini) async fn pause_startup_write(audio: bool) {
+    if audio && let Some(pause) = STARTUP_WRITE_PAUSE.take() {
+        let _ = pause.entered.send(());
+        let _ = pause.resume.await;
+    }
 }
 
 pub(in crate::gemini) struct StartupOutputPause {
@@ -89,6 +104,23 @@ pub(in crate::gemini) fn constrain_startup_socket(stream: &super::super::socket:
 }
 
 impl GeminiLiveSession {
+    pub(crate) fn pause_next_startup_test_write() -> (
+        tokio::sync::oneshot::Receiver<()>,
+        tokio::sync::oneshot::Sender<()>,
+    ) {
+        let (entered, writing) = tokio::sync::oneshot::channel();
+        let (resume, release) = tokio::sync::oneshot::channel();
+        assert!(
+            STARTUP_WRITE_PAUSE
+                .replace(Some(StartupWritePause {
+                    entered,
+                    resume: release
+                }))
+                .is_none()
+        );
+        (writing, resume)
+    }
+
     pub(crate) fn startup_test_events(
         &mut self,
     ) -> tokio::sync::mpsc::Sender<(std::time::Instant, GeminiEvent)> {
