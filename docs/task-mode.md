@@ -214,7 +214,10 @@ never unreleased ones, and the platform serves one requested rung at a time.
 
 Task records keep the existing bank format and structural validation, and
 packaging additionally refuses unknown judge/case fields, unsupported checkers
-or languages, missing Python starters and text over 32 KiB. The instructor's
+or languages, missing Python starters, text over 32 KiB, and a case input
+holding NUL or a surrogate with no partner, which C and C++ cannot pass on as
+typed. CodeTrial's reader refuses both as well: the first by name, the second
+by refusing to read the package. The instructor's
 `render-prompt --language` previews the prompt in any of a task's languages,
 the first by default. Custom records
 declare `origin: "original"` and omit published `title` and `examples`; the
