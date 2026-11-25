@@ -15,6 +15,7 @@ mod server;
 use std::collections::HashSet;
 use std::io::Write as _;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{LazyLock, Mutex, mpsc};
 use std::time::Duration;
 
@@ -78,19 +79,32 @@ enum Phase {
     Failed,
 }
 
+/// What a restart request from the server comes to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Restart {
+    /// Start the server again now, leaving the shell in this phase.
+    Now(Phase),
+    /// Not yet: the server is ready but the starting page has not said whether
+    /// this web view has WebRTC. The server prints its request once and has
+    /// already stopped admitting interviews, so it is kept until `open_server`
+    /// has settled the phase and then acted on.
+    WhenServing,
+    /// No server is running to restart.
+    Never,
+}
+
 impl Phase {
-    /// Where a restart leaves the shell, or `None` when no server is serving
-    /// this window: still starting, or failed. A second request while starting
-    /// cannot follow a save, since the first save leaves the config changed and
-    /// a second is refused. WebRTC is already known from the launch being
-    /// replaced, so `open_server` acts on the new server's ready line alone.
-    fn restarting(self) -> Option<Phase> {
+    /// What a restart request comes to in this phase. WebRTC is already known
+    /// from the launch being replaced, so `open_server` acts on the new
+    /// server's ready line alone.
+    fn restart_request(self) -> Restart {
         let webrtc = match self {
             Phase::Serving => true,
             Phase::InBrowser => false,
-            Phase::Starting { .. } | Phase::Failed => return None,
+            Phase::Starting { .. } => return Restart::WhenServing,
+            Phase::Failed => return Restart::Never,
         };
-        Some(Phase::Starting {
+        Restart::Now(Phase::Starting {
             server_ready: false,
             webrtc: Some(webrtc),
         })
@@ -113,6 +127,9 @@ struct Shell {
     /// The running server's Change keys code, shown or filled in this window.
     change_keys_code: Mutex<Option<String>>,
     phase: Mutex<Phase>,
+    /// A restart the server asked for before the phase was settled, to be
+    /// done once it is. See `Restart::WhenServing`.
+    restart_pending: AtomicBool,
     close: Mutex<Close>,
 }
 
@@ -141,6 +158,7 @@ fn main() {
                 server_ready: false,
                 webrtc: None,
             }),
+            restart_pending: AtomicBool::new(false),
             close: Mutex::new(Close::Open),
         })
         .setup(|app| {
@@ -355,8 +373,14 @@ fn launch(app: &AppHandle) {
         .expect("code lock") = Some(launch.change_keys_code.clone());
     let data_dir = launch.data_dir.clone();
     let reporter = app.clone();
+
+    // Held until the server is put in its slot below: what it reports is not
+    // acted on before then.
+    let shell = app.state::<Shell>();
+    let installing = shell.server.installing();
     let started = server::start(&launch, move |status| {
         let app = &reporter;
+        app.state::<Shell>().server.installed();
         match status {
             server::Status::Ready => {
                 let shell = app.state::<Shell>();
@@ -376,11 +400,10 @@ fn launch(app: &AppHandle) {
         }
     });
     match started {
-        Ok(server) => {
-            app.state::<Shell>().server.put(server);
-        }
+        Ok(server) => shell.server.put(server),
         Err(message) => show_failure(app, &message, Some(launch.data_dir.as_path())),
     }
+    drop(installing);
 }
 
 /// Starts the server again on the keys Change keys saved, which only a new
@@ -394,10 +417,17 @@ fn restart(app: &AppHandle) {
     let shell = app.state::<Shell>();
     {
         let mut phase = shell.phase.lock().expect("phase lock");
-        let Some(next) = phase.restarting() else {
-            return;
-        };
-        *phase = next;
+        match phase.restart_request() {
+            Restart::Now(next) => *phase = next,
+            Restart::WhenServing => {
+                shell.restart_pending.store(true, Ordering::SeqCst);
+                return;
+            }
+            Restart::Never => {
+                shell.restart_pending.store(false, Ordering::SeqCst);
+                return;
+            }
+        }
     }
     note("Change keys saved: starting the server again");
     let relauncher = app.clone();
@@ -464,6 +494,13 @@ fn open_server(app: &AppHandle) {
         };
         webrtc
     };
+
+    // The server asked to be restarted while this was still being settled, and
+    // has stopped admitting interviews: nothing is to be shown from it.
+    if shell.restart_pending.swap(false, Ordering::SeqCst) {
+        restart(app);
+        return;
+    }
     if webrtc {
         note("the web view has WebRTC: the interview runs in this window");
         let _ = window.navigate(SERVER_URL.clone());

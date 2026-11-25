@@ -56,7 +56,7 @@ fn the_server_is_started_on_the_data_dir_and_told_the_rest() {
             .and_then(|(_, value)| value)
             .map(|value| value.to_string_lossy().into_owned())
     };
-    assert_eq!(command.get_envs().count(), 2);
+    assert_eq!(command.get_envs().count(), 3);
     assert_eq!(env("CODETRIAL_EXIT_WITH_STDIN").as_deref(), Some("1"));
     assert_eq!(env("CODETRIAL_CHANGE_KEYS_CODE").as_deref(), Some(CODE));
     assert_eq!(env("CODETRIAL_RESTART_AFTER_SAVE").as_deref(), Some("1"));
@@ -267,12 +267,16 @@ fn running(dir: &Path, name: &str, body: &str) -> (Server, String) {
     let dir = dir.join(name);
     std::fs::create_dir_all(&dir).unwrap();
     let pid = dir.join("pid");
+
+    // Written to a name of its own and then moved into place, so the file never
+    // exists empty: `>` creates it before it writes the id, and a read in
+    // between would take no id for a server that is not running.
     let server = start_fake(
         &dir,
         &format!(
-            "echo $$ > '{}'
+            "echo $$ > '{pid}.tmp' && mv '{pid}.tmp' '{pid}'
 {body}",
-            pid.display()
+            pid = pid.display()
         ),
         |_| {},
     );
@@ -280,10 +284,47 @@ fn running(dir: &Path, name: &str, body: &str) -> (Server, String) {
     while !pid.exists() && began.elapsed() < Duration::from_secs(10) {
         std::thread::sleep(Duration::from_millis(10));
     }
-    (
-        server,
-        std::fs::read_to_string(pid).unwrap().trim().to_string(),
-    )
+    let id = std::fs::read_to_string(pid).unwrap().trim().to_string();
+    assert!(
+        id.parse::<u32>().is_ok(),
+        "no process id was written: {id:?}"
+    );
+    (server, id)
+}
+
+/// What a server reports is acted on only once it is installed in its slot: a
+/// restart asked for in the gap between `start` returning and `put` would find
+/// nothing to stop and start a second server beside the first.
+#[cfg(unix)]
+#[test]
+fn a_report_waits_until_the_server_it_came_from_is_installed() {
+    let dir = temp_dir("report-after-install");
+    let slot = Arc::new(Slot::default());
+    let events = Arc::new(Mutex::new(Vec::new()));
+
+    let installing = slot.installing();
+    let (started_sender, started) = std::sync::mpsc::channel();
+    let reporter = {
+        let (slot, events) = (Arc::clone(&slot), Arc::clone(&events));
+        std::thread::spawn(move || {
+            started_sender.send(()).unwrap();
+            slot.installed();
+            events.lock().unwrap().push("reported");
+        })
+    };
+    started.recv().unwrap();
+    // Time for a report that was not held back to have gone ahead.
+    std::thread::sleep(Duration::from_millis(200));
+
+    let (server, _) = running(&dir, "only", "cat >/dev/null");
+    events.lock().unwrap().push("installed");
+    slot.put(server);
+    drop(installing);
+    reporter.join().unwrap();
+
+    assert_eq!(*events.lock().unwrap(), ["installed", "reported"]);
+    slot.stop(Duration::from_secs(5));
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// A quit while a restart is still stopping the old server waits for that stop,

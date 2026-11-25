@@ -292,9 +292,25 @@ impl Server {
 pub struct Slot {
     server: Mutex<Option<Server>>,
     replacing: Mutex<Option<std::thread::JoinHandle<()>>>,
+    /// Held from before a server starts until it has been put here.
+    installing: Mutex<()>,
 }
 
 impl Slot {
+    /// Taken before `start` and dropped after `put`, so that what the server
+    /// reports is acted on only once it is here to be stopped. `start` runs its
+    /// reporter threads before it returns the server: a restart asked for in
+    /// that gap would find nothing to stop and start a second one beside it.
+    pub fn installing(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.installing.lock().expect("installing lock")
+    }
+
+    /// Returns once any server being started has been put here. Called first
+    /// by a report, which `installing` holds back until then.
+    pub fn installed(&self) {
+        drop(self.installing());
+    }
+
     pub fn put(&self, server: Server) {
         *self.server.lock().expect("server lock") = Some(server);
     }
