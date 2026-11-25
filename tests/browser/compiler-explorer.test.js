@@ -27,6 +27,7 @@ import {
   stripAnsi,
 } from "../../web/compiler-explorer.js";
 import { checkAnswer } from "../../web/lib.js";
+import { parseCandidateCase } from "../../web/runners.js";
 import { createSyntaxParser } from "../../web/syntax-parser.js";
 
 const cppSyntax = createSyntaxParser({
@@ -233,6 +234,74 @@ test("character literals spell control characters in octal", () => {
     nativeLiteral([["X", "\n"]], "character[][]", "c"),
     "{{'X', '\\012'}}",
   );
+});
+
+// What adding a case says about a character no compiled harness can pass on
+// as typed, and the judges whose parameters hold strings at each depth.
+const addCase = (id, input) =>
+  parseCandidateCase(judges[id], JSON.stringify(input));
+const addTrieWord = (word) =>
+  addCase("implement-trie-prefix-tree", [
+    ["CommandIndex", "insert"],
+    [[], [word]],
+  ]);
+const HOLDS_NUL = `"\\u0000" (U+0000), which C and C++ read as the end of a string`;
+const HOLDS_HALF_PAIR = `"\\ud800" (U+D800), which is half of a surrogate pair and does not compile in C or C++`;
+const LONGEST = "longest-substring-without-repeating-characters";
+
+// `\000` compiles, but C and C++ hand the solution a string that ends there, so
+// the case would run on "a" alone and fail a correct solution.
+test("an added string holding NUL is refused and named", () => {
+  assert.throws(() => addCase(LONGEST, ["a\u0000b"]), {
+    message: `Parameter 1 (s) holds ${HOLDS_NUL}.`,
+  });
+  // A typed backslash before "u0000" is text, not NUL.
+  assert.deepEqual(addCase(LONGEST, ["\\u0000"]), ["\\u0000"]);
+  // Word Search II takes a `string[]` of words, and Evaluate Division nests its
+  // strings two lists deep.
+  assert.throws(() => addCase("word-search-ii", [[["a"]], ["x", "a\u0000"]]), {
+    message: `Parameter 2 (words) holds ${HOLDS_NUL}.`,
+  });
+  assert.throws(
+    () => addCase("evaluate-division", [[["a", "b\u0000"]], [2], [["a", "b"]]]),
+    { message: `Parameter 1 (pairs) holds ${HOLDS_NUL}.` },
+  );
+});
+
+// JSON writes a lone surrogate as `\ud800`, a universal character name clang
+// and gcc refuse in C and C++, so the whole run stops compiling.
+test("an added string holding a lone surrogate is refused and named", () => {
+  assert.throws(() => addCase(LONGEST, ["a\ud800b"]), {
+    message: `Parameter 1 (s) holds ${HOLDS_HALF_PAIR}.`,
+  });
+  assert.throws(() => addCase("word-search-ii", [[["a"]], ["x", "a\ud800"]]), {
+    message: `Parameter 2 (words) holds ${HOLDS_HALF_PAIR}.`,
+  });
+  // A whole pair is one character outside the Basic Multilingual Plane.
+  assert.deepEqual(addCase(LONGEST, ["a\u{1F600}b"]), ["a\u{1F600}b"]);
+});
+
+// A NUL cell reaches a C solution as 0, but Surrounded Regions returns its
+// board in place, and C's `json_char_matrix` prints that cell as "", so a
+// correct solution is graded wrong.
+test("an added character holding NUL is refused and named", () => {
+  assert.throws(() => addCase("surrounded-regions", [[["X", "\u0000"]]]), {
+    message: `Parameter 1 (board) holds ${HOLDS_NUL}.`,
+  });
+  assert.throws(() => addCase("word-search-ii", [[["a", "\u0000"]], ["ab"]]), {
+    message: `Parameter 1 (board) holds ${HOLDS_NUL}.`,
+  });
+});
+
+// A class operation's strings reach C++ through the same string literal.
+test("an added class operation holding NUL or a lone surrogate is refused and named", () => {
+  assert.throws(() => addTrieWord("a\u0000b"), {
+    message: `Arguments for operation insert hold ${HOLDS_NUL}.`,
+  });
+  assert.throws(() => addTrieWord("a\ud800b"), {
+    message: `Arguments for operation insert hold ${HOLDS_HALF_PAIR}.`,
+  });
+  assert.deepEqual(addTrieWord("\\u0000")[1][1], ["\\u0000"]);
 });
 
 test("C harness refuses a string case holding NUL rather than truncating it", () => {

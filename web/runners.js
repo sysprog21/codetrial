@@ -89,11 +89,9 @@ export function parseCandidateCase(spec, input) {
         throw new Error(`Parameter ${index + 1}${name} holds ${OUT_OF_INT32}.`);
       throw new Error(`Parameter ${index + 1}${name} must match ${required}.`);
     }
-    const wide = nonAsciiCharacter(args[index], required);
-    if (wide !== undefined) {
-      throw new Error(
-        `Parameter ${index + 1}${name} holds ${describeCharacter(wide)}, ${NON_ASCII_CHARACTER}.`,
-      );
+    const refused = refusedCharacter(args[index], required);
+    if (refused) {
+      throw new Error(`Parameter ${index + 1}${name} holds ${refused}.`);
     }
   }
   // A node reference is checked against the argument the runner will resolve it
@@ -153,20 +151,46 @@ const OUT_OF_INT32 = "an integer outside -2147483648 to 2147483647";
 const NON_ASCII_CHARACTER =
   "which is outside ASCII and cannot be passed as one char";
 
-/// The first character in `value` that sits outside ASCII. Called only after
-/// the shape matched, so every `character` position already holds one code
-/// point, and containers are unwrapped by `elementType`, as the shape check
-/// unwraps them.
-function nonAsciiCharacter(value, type) {
-  if (type === "character")
-    return value.codePointAt(0) > 0x7f ? value : undefined;
+/// C and C++ hand the solution a string that ends at NUL, so a case holding
+/// one would run on less than was typed, and C prints a NUL cell of an output
+/// `character[][]` as "". Java would carry it, but a case runs in every
+/// language, so it is refused for all of them.
+const NUL_CHARACTER = "which C and C++ read as the end of a string";
+
+/// JSON writes a surrogate with no partner as `\ud800`, a universal character
+/// name clang and gcc refuse, so the whole C or C++ run stops compiling.
+const LONE_SURROGATE =
+  "which is half of a surrogate pair and does not compile in C or C++";
+
+/// The first character in `value` that a compiled harness cannot pass on as
+/// typed, described with the reason, or undefined. Called only after the shape
+/// matched, so every `character` position already holds one code point, and
+/// containers are unwrapped by `elementType`, as the shape check unwraps them.
+function refusedCharacter(value, type) {
+  if (type === "character") {
+    if (value.codePointAt(0) > 0x7f)
+      return `${describeCharacter(value)}, ${NON_ASCII_CHARACTER}`;
+    return value === "\0"
+      ? `${describeCharacter(value)}, ${NUL_CHARACTER}`
+      : undefined;
+  }
+  if (type === "string") return refusedStringCharacter(value);
   const item = elementType(type);
   if (item === undefined || !Array.isArray(value)) return undefined;
   for (const entry of value) {
-    const found = nonAsciiCharacter(entry, item);
+    const found = refusedCharacter(entry, item);
     if (found !== undefined) return found;
   }
   return undefined;
+}
+
+/// With the `u` flag a whole surrogate pair is one code point, so `\p{Cs}`
+/// matches only a half that has no partner.
+function refusedStringCharacter(text) {
+  const found = /[\0\p{Cs}]/u.exec(text)?.[0];
+  if (found === undefined) return undefined;
+  const reason = found === "\0" ? NUL_CHARACTER : LONE_SURROGATE;
+  return `${describeCharacter(found)}, ${reason}`;
 }
 
 /// The character in quotes, then its code point, such as `(U+00E9)`: the
@@ -340,6 +364,15 @@ function parseClassCandidateCase(spec, input) {
         `Arguments for operation ${operation} do not match its parameter types.`,
       );
     }
+    // `inferredCandidateType` types each string as a `string`, never as a
+    // `character`, so every string an operation takes is checked as one.
+    const refused = args
+      .flat(Infinity)
+      .filter((value) => typeof value === "string")
+      .map(refusedStringCharacter)
+      .find(Boolean);
+    if (refused)
+      throw new Error(`Arguments for operation ${operation} hold ${refused}.`);
   }
   return input;
 }
