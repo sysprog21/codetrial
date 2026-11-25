@@ -727,6 +727,160 @@ test("remove-element cases reject skipping a last unchecked target", () => {
   }
 });
 
+test("longest-substring cases reject shortcuts in moving the stretch", () => {
+  const problem = "longest-substring-without-repeating-characters";
+  const longest = (s) => {
+    const last = new Map();
+    let best = 0;
+    let left = 0;
+    [...s].forEach((key, i) => {
+      if (last.has(key) && last.get(key) >= left) left = last.get(key) + 1;
+      last.set(key, i);
+      best = Math.max(best, i - left + 1);
+    });
+    return best;
+  };
+  for (const { label, input, expected } of judges[problem].cases) {
+    assert.equal(
+      longest(...input),
+      expected,
+      `"${label}" must expect the longest stretch`,
+    );
+  }
+  // Both keep only the repeated key, so a key between its two copies is lost.
+  const restart = (s) => {
+    const seen = new Set();
+    let best = 0;
+    for (const key of s) {
+      if (seen.has(key)) seen.clear();
+      seen.add(key);
+      best = Math.max(best, seen.size);
+    }
+    return best;
+  };
+  const leftAtRepeat = (s) => {
+    const last = new Map();
+    let best = 0;
+    let left = 0;
+    [...s].forEach((key, i) => {
+      if (last.has(key) && last.get(key) >= left) left = i;
+      last.set(key, i);
+      best = Math.max(best, i - left + 1);
+    });
+    return best;
+  };
+  // `if` where `while` belongs: the left edge drops one key per repeat.
+  const oneStep = (s) => {
+    const seen = new Set();
+    let best = 0;
+    let left = 0;
+    for (const key of s) {
+      if (seen.has(key)) seen.delete(s[left++]);
+      seen.add(key);
+      best = Math.max(best, seen.size);
+    }
+    return best;
+  };
+  // Measures only the stretch from the first key and the one to the last.
+  const endsOnly = (s) => {
+    const run = (keys) => {
+      const seen = new Set();
+      for (const key of keys) {
+        if (seen.has(key)) break;
+        seen.add(key);
+      }
+      return seen.size;
+    };
+    return Math.max(run(s), run([...s].reverse()));
+  };
+  // The edge starts at 0, not -1, so a stretch from the first key is one short.
+  const edgeAtZero = (s) => {
+    const last = new Map();
+    let best = 0;
+    let edge = 0;
+    [...s].forEach((key, i) => {
+      if (last.has(key)) edge = Math.max(edge, last.get(key));
+      last.set(key, i);
+      best = Math.max(best, i - edge);
+    });
+    return best;
+  };
+  // Measures a stretch only when a repeat ends it, so the last one is never counted.
+  const bestAtRepeat = (s) => {
+    const last = new Map();
+    let best = 0;
+    let left = 0;
+    [...s].forEach((key, i) => {
+      if (last.has(key) && last.get(key) >= left) {
+        best = Math.max(best, i - left);
+        left = last.get(key) + 1;
+      }
+      last.set(key, i);
+    });
+    return best;
+  };
+  // The contract compares case-sensitively and counts every character.
+  const lowercased = (s) => longest(s.toLowerCase());
+  const lettersOnly = (s) => longest(s.replace(/[^A-Za-z]/g, ""));
+  const symbolsDropped = (s) => longest(s.replace(/[^A-Za-z0-9 ]/g, ""));
+  const trimmed = (s) => longest(s.trim());
+  const trimmedStart = (s) => longest(s.trimStart());
+  const trimmedEnd = (s) => longest(s.trimEnd());
+  // A last-seen table of 26 slots: a key outside a to z is never recorded.
+  const slots26 = (s) => {
+    const last = new Int32Array(26).fill(-1);
+    let best = 0;
+    let left = 0;
+    [...s].forEach((key, i) => {
+      const slot = key.charCodeAt(0) - 97;
+      if (slot >= 0 && slot < 26) {
+        if (last[slot] >= left) left = last[slot] + 1;
+        last[slot] = i;
+      }
+      best = Math.max(best, i - left + 1);
+    });
+    return best;
+  };
+  const mid = "repeat in the middle of the stretch";
+  for (const [name, shortcut, label] of [
+    ["clearing the stretch and restarting at the repeat", restart, mid],
+    ["moving the left edge to the repeat itself", leftAtRepeat, mid],
+    [
+      "moving the left edge one key per repeat",
+      oneStep,
+      "left edge jumps more than one key",
+    ],
+    [
+      "measuring only the stretches at the ends",
+      endsOnly,
+      "longest stretch away from both ends",
+    ],
+    ["starting the edge at 0 instead of -1", edgeAtZero, "every key distinct"],
+    [
+      "measuring a stretch only when a repeat ends it",
+      bestAtRepeat,
+      "every key distinct",
+    ],
+    ["lowercasing the keys first", lowercased, "case and symbols count"],
+    [
+      "dropping keys that are not letters",
+      lettersOnly,
+      "case and symbols count",
+    ],
+    ["a 26-slot last-seen table", slots26, "space before and after the keys"],
+    ["dropping symbols", symbolsDropped, "space before and after the keys"],
+    [
+      "trimming the spaces at the ends",
+      trimmed,
+      "space before and after the keys",
+    ],
+    ["trimming only the leading spaces", trimmedStart, "leading space only"],
+    ["trimming only the trailing spaces", trimmedEnd, "trailing space only"],
+  ]) {
+    assertRejects(problem, label, shortcut, `"${label}" must reject ${name}`);
+  }
+});
+
 test("basic-calculator cases reject parsers without a unary minus", () => {
   // One parser for the wrong ones, which differ only in when a "-" that starts
   // a term is read as a sign, and in what that sign negates. `sign` sees the
