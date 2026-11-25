@@ -127,6 +127,301 @@
           10
         ]
       ]
+    },
+    {
+      "label": "chained overlaps: [[1,3],[2,5],[4,8]]",
+      "input": [
+        [
+          [
+            1,
+            3
+          ],
+          [
+            2,
+            5
+          ],
+          [
+            4,
+            8
+          ]
+        ]
+      ],
+      "expected": [
+        [
+          1,
+          8
+        ]
+      ]
+    },
+    {
+      "label": "later window inside the first: [[1,10],[2,3],[4,5]]",
+      "input": [
+        [
+          [
+            1,
+            10
+          ],
+          [
+            2,
+            3
+          ],
+          [
+            4,
+            5
+          ]
+        ]
+      ],
+      "expected": [
+        [
+          1,
+          10
+        ]
+      ]
+    },
+    {
+      "label": "four windows in one chain: [[1,3],[2,5],[4,8],[7,10]]",
+      "input": [
+        [
+          [
+            1,
+            3
+          ],
+          [
+            2,
+            5
+          ],
+          [
+            4,
+            8
+          ],
+          [
+            7,
+            10
+          ]
+        ]
+      ],
+      "expected": [
+        [
+          1,
+          10
+        ]
+      ]
+    },
+    {
+      "label": "overlap after a separate first window: [[1,2],[4,6],[5,7]]",
+      "input": [
+        [
+          [
+            1,
+            2
+          ],
+          [
+            4,
+            6
+          ],
+          [
+            5,
+            7
+          ]
+        ]
+      ],
+      "expected": [
+        [
+          1,
+          2
+        ],
+        [
+          4,
+          7
+        ]
+      ]
+    },
+    {
+      "label": "overlapping windows apart in the input: [[1,3],[5,6],[2,4]]",
+      "input": [
+        [
+          [
+            1,
+            3
+          ],
+          [
+            5,
+            6
+          ],
+          [
+            2,
+            4
+          ]
+        ]
+      ],
+      "expected": [
+        [
+          1,
+          4
+        ],
+        [
+          5,
+          6
+        ]
+      ]
+    },
+    {
+      "label": "window joining two earlier ones: [[1,2],[5,6],[2,5]]",
+      "input": [
+        [
+          [
+            1,
+            2
+          ],
+          [
+            5,
+            6
+          ],
+          [
+            2,
+            5
+          ]
+        ]
+      ],
+      "expected": [
+        [
+          1,
+          6
+        ]
+      ]
+    },
+    {
+      "label": "later window inside a second window: [[1,2],[4,10],[5,6]]",
+      "input": [
+        [
+          [
+            1,
+            2
+          ],
+          [
+            4,
+            10
+          ],
+          [
+            5,
+            6
+          ]
+        ]
+      ],
+      "expected": [
+        [
+          1,
+          2
+        ],
+        [
+          4,
+          10
+        ]
+      ]
+    },
+    {
+      "label": "touching endpoints after a separate first window: [[1,2],[4,5],[5,6]]",
+      "input": [
+        [
+          [
+            1,
+            2
+          ],
+          [
+            4,
+            5
+          ],
+          [
+            5,
+            6
+          ]
+        ]
+      ],
+      "expected": [
+        [
+          1,
+          2
+        ],
+        [
+          4,
+          6
+        ]
+      ]
+    },
+    {
+      "label": "zero-length and zero-end windows: [[0,0],[0,3],[5,5]]",
+      "input": [
+        [
+          [
+            0,
+            0
+          ],
+          [
+            0,
+            3
+          ],
+          [
+            5,
+            5
+          ]
+        ]
+      ],
+      "expected": [
+        [
+          0,
+          3
+        ],
+        [
+          5,
+          5
+        ]
+      ]
+    },
+    {
+      "label": "longer window first at a shared start: [[1,4],[1,2]]",
+      "input": [
+        [
+          [
+            1,
+            4
+          ],
+          [
+            1,
+            2
+          ]
+        ]
+      ],
+      "expected": [
+        [
+          1,
+          4
+        ]
+      ]
+    },
+    {
+      "label": "window starting at the time limit: [[1,2],[10000,10000]]",
+      "input": [
+        [
+          [
+            1,
+            2
+          ],
+          [
+            10000,
+            10000
+          ]
+        ]
+      ],
+      "expected": [
+        [
+          1,
+          2
+        ],
+        [
+          10000,
+          10000
+        ]
+      ]
     }
   ],
   "paramNames": [
