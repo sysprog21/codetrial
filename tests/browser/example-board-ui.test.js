@@ -4,6 +4,7 @@ import {
   exerciseTextDraft,
   exerciseTextBaseline,
 } from "./board-text-fixture.js";
+import { exerciseLimitAnnouncement } from "./board-limit-fixture.js";
 import { read, launchChromium, startStaticServer } from "./source.js";
 import {
   exampleMarkup,
@@ -388,6 +389,12 @@ for (const [tool, pointCount] of [
       const final = await canvas.evaluate((node) => node.toDataURL());
       assert.notEqual(final, before);
       await page.evaluate(() => window.pointer("pointerdown", 900, 300));
+      await page.waitForFunction(
+        (expected) =>
+          document.querySelector(".example-pane > [role=status]")
+            ?.textContent === expected,
+        await page.evaluate(() => window.limits.MAX_STROKES_MESSAGE),
+      );
       assert.equal(
         await page.locator(".example-pane > [role=status]").textContent(),
         await page.evaluate(() => window.limits.MAX_STROKES_MESSAGE),
@@ -2152,4 +2159,94 @@ test("closing Example drawing shrinks an expanded board and frees the editor", a
       .locator(".editor-stack")
       .evaluate((node) => node.checkVisibility({ visibilityProperty: true })),
   );
+});
+
+test("a refused stroke on a full Example drawing is announced every time", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const page = await browser.newPage();
+  t.after(() => page.close());
+  await page.goto(base);
+  await page.setContent(exampleMarkup());
+  await page.evaluate(async (base) => {
+    const { mountExampleBoard } = await import(`${base}/example-board.js`);
+    const { MAX_STROKES, applyOp, createBoard } = await import(
+      `${base}/whiteboard.js`
+    );
+    const root = document.querySelector("#example-board");
+    root.open = true;
+    const canvas = root.querySelector("canvas");
+    // Synthetic pointer events have no native capture slot.
+    canvas.setPointerCapture = () => {};
+    let locked = false;
+    let online = false;
+    // The board reports every edit it makes. Replaying those onto a second
+    // board gives the count the board itself holds, with no tally kept here.
+    const replay = createBoard();
+    const board = mountExampleBoard(root, {
+      connected: () => online,
+      locked: () => locked,
+      record: (ops) => ops.forEach((op) => applyOp(replay, op)),
+      publish: async () => true,
+    });
+    const button = (selector) => {
+      const node = root.querySelector(selector);
+      if (!node || node.disabled)
+        throw new Error(`probe: ${selector} is missing or disabled`);
+      return node;
+    };
+    const press = (x, y) => {
+      const box = canvas.getBoundingClientRect();
+      for (const type of ["pointerdown", "pointerup"])
+        canvas.dispatchEvent(
+          new PointerEvent(type, {
+            pointerId: 1,
+            pointerType: "mouse",
+            isPrimary: true,
+            button: 0,
+            buttons: type === "pointerup" ? 0 : 1,
+            clientX: box.x + x,
+            clientY: box.y + y,
+          }),
+        );
+    };
+    globalThis.limitProbe = {
+      status: root.querySelector(
+        ":scope > [role=status], :scope > .example-pane > [role=status]",
+      ),
+      count: () => replay.strokeCount(),
+      fill() {
+        for (let i = 0; i < MAX_STROKES * 2; i++) {
+          if (replay.strokeCount() >= MAX_STROKES) return;
+          press(20, 20);
+        }
+        throw new Error("probe: the board never reached the limit");
+      },
+      useTool: (name) => button(`[data-tools] [data-tool=${name}]`).click(),
+      refuse: () => press(40, 40),
+      makeRoom: () => button("[data-action=undo]").click(),
+      clear: () => button("[data-action=clear]").click(),
+      lock(on) {
+        locked = on;
+        board.refresh();
+      },
+      setLocked(on) {
+        locked = on;
+      },
+      repaint: () => board.refresh(),
+      finish: () => board.finish(),
+      async flush() {
+        online = true;
+        try {
+          await board.flush();
+        } finally {
+          online = false;
+        }
+      },
+      setStatus(value) {
+        globalThis.limitProbe.status.textContent = value;
+      },
+    };
+  }, base);
+  // The line also carries sync messages, which the plan must leave alone.
+  await exerciseLimitAnnouncement(page, { sharedStatus: true });
 });

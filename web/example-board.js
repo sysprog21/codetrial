@@ -110,8 +110,14 @@ export function mountExampleBoard(
     activity?.();
   }
 
+  let limitFrame = 0;
   function paint() {
     textDraft.refresh();
+    if (locked() || model.strokeCount() < MAX_STROKES) {
+      cancelAnimationFrame(limitFrame);
+      limitFrame = 0;
+      if (status.textContent === MAX_STROKES_MESSAGE) status.textContent = "";
+    }
     root.querySelector("[data-action=clear]").disabled = locked();
     const strokes = model.strokes();
     drawBoard(context, strokes);
@@ -256,7 +262,16 @@ export function mountExampleBoard(
     const start = boundedPoint(event);
     if (model.strokeCount() >= MAX_STROKES) {
       pointers.up(event);
-      status.textContent = MAX_STROKES_MESSAGE;
+      // A live region speaks only when its text changes, so a repeated
+      // refusal empties the line and sets it again a frame later. `paint`
+      // cancels that frame once the reason is gone.
+      status.textContent = "";
+      cancelAnimationFrame(limitFrame);
+      limitFrame = requestAnimationFrame(() => {
+        limitFrame = 0;
+        if (!stopped && !locked() && status.textContent === "")
+          status.textContent = MAX_STROKES_MESSAGE;
+      });
       return;
     }
     if (

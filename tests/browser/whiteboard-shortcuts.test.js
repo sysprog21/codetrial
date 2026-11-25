@@ -11,6 +11,7 @@ import {
   startStaticServer,
 } from "./source.js";
 import { MAX_STROKES, MAX_STROKES_MESSAGE } from "../../web/whiteboard.js";
+import { exerciseLimitAnnouncement } from "./board-limit-fixture.js";
 
 let browser;
 let server;
@@ -824,27 +825,6 @@ test("a full board says why the pen and the eraser draw nothing", async (t) => {
   await status.waitFor();
   assert.equal(await count(), MAX_STROKES, "the refused stroke left no mark");
 
-  // The same text written again is not a change a screen reader announces,
-  // so a repeated refusal empties the line and then sets it, as two updates.
-  await page.evaluate(() => {
-    const node = document.querySelector("#board-status");
-    globalThis.statusUpdates = [];
-    new MutationObserver(() =>
-      globalThis.statusUpdates.push(node.textContent),
-    ).observe(node, { childList: true, characterData: true, subtree: true });
-  });
-  await draw(page, 40);
-  await page.evaluate(
-    () =>
-      new Promise((frame) =>
-        requestAnimationFrame(() => requestAnimationFrame(frame)),
-      ),
-  );
-  assert.deepEqual(await page.evaluate(() => globalThis.statusUpdates), [
-    "",
-    MAX_STROKES_MESSAGE,
-  ]);
-
   // Keyboard Undo is how most candidates take a stroke back.
   await page.locator("#board").focus();
   await page.keyboard.press("Control+z");
@@ -888,12 +868,9 @@ test("a full board says why the pen and the eraser draw nothing", async (t) => {
   );
   assert.equal(await count(), MAX_STROKES);
   assert.equal(await status.count(), 0, "a stale refusal stays silent");
-  await draw(page);
-  await status.waitFor();
 
-  // Undo frees one slot, and the message goes with the reason for it.
+  // Undo frees one slot, and a stroke drawn into it is accepted silently.
   await page.locator("#board-undo").click();
-  assert.equal(await status.count(), 0, "Undo clears the message");
   await draw(page);
   assert.equal(await count(), MAX_STROKES);
   assert.equal(await status.count(), 0, "an accepted stroke shows nothing");
@@ -1205,4 +1182,61 @@ test("P shortcut uses event.code for a non-Latin event.key", async (t) => {
     "true",
     "event.code selects the next pen when event.key is non-Latin",
   );
+});
+
+test("a refused stroke on a full whiteboard is announced every time", async (t) => {
+  const ctx = await boardPage(t);
+  if (!ctx) return;
+  const { page } = ctx;
+  await page.evaluate((max) => {
+    let locked = false;
+    const button = (selector) => {
+      const node = document.querySelector(selector);
+      if (!node || node.disabled)
+        throw new Error(`probe: ${selector} is missing or disabled`);
+      return node;
+    };
+    globalThis.limitProbe = {
+      status: document.querySelector("#board-status"),
+      count: () => globalThis.boardTest.strokeCount(),
+      fill: () => globalThis.boardTest.fill(max),
+      useTool: (name) =>
+        name === "eraser"
+          ? button("#board-eraser").click()
+          : button("#board-pens button").click(),
+      refuse() {
+        const board = document.querySelector("#board");
+        const { left, top } = board.getBoundingClientRect();
+        board.dispatchEvent(
+          new PointerEvent("pointerdown", {
+            bubbles: true,
+            cancelable: true,
+            pointerId: 1,
+            pointerType: "mouse",
+            isPrimary: true,
+            button: 0,
+            buttons: 1,
+            clientX: left + 60,
+            clientY: top + 60,
+          }),
+        );
+      },
+      makeRoom: () => button("#board-undo").click(),
+      clear: () => button("#board-clear").click(),
+      lock(on) {
+        locked = on;
+        globalThis.boardTest.lock(on ? "behavioral" : "live");
+      },
+      repaint: () => globalThis.boardTest.lock(locked ? "behavioral" : "live"),
+      setStatus() {
+        throw new Error(
+          "probe: the whiteboard's status line holds nothing else",
+        );
+      },
+    };
+  }, MAX_STROKES);
+  // Redo and the keyboard shortcuts have no Example drawing counterpart, and a
+  // refused text label reports in the draft's own line on both boards, not in
+  // the status line; the tests above keep their cases.
+  await exerciseLimitAnnouncement(page);
 });
