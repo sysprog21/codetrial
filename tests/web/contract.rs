@@ -712,6 +712,81 @@ fn static_problem_bank_and_judges_cover_each_problem() {
         ("basic-calculator", "minus before a two-digit number"),
         ("basic-calculator", "number added after a negated group"),
         ("basic-calculator", "space before a minus inside a group"),
+        ("search-in-rotated-sorted-array", "last entry after a wrap"),
+        (
+            "search-in-rotated-sorted-array",
+            "first entry before a wrap",
+        ),
+        ("search-in-rotated-sorted-array", "target in a single entry"),
+        (
+            "search-in-rotated-sorted-array",
+            "negative target after a wrap",
+        ),
+        ("search-in-rotated-sorted-array", "last entry, not wrapped"),
+        (
+            "search-in-rotated-sorted-array",
+            "first entry in a wrapped quartet",
+        ),
+        (
+            "search-in-rotated-sorted-array",
+            "wrapped pair with target first",
+        ),
+        (
+            "search-in-rotated-sorted-array",
+            "smallest entry after a wrap",
+        ),
+        (
+            "search-in-rotated-sorted-array",
+            "target between entries before a wrap",
+        ),
+        (
+            "search-in-rotated-sorted-array",
+            "target between entries after a wrap",
+        ),
+        (
+            "search-in-rotated-sorted-array",
+            "last entry before a five-entry wrap",
+        ),
+        (
+            "search-in-rotated-sorted-array",
+            "smallest entry in a six-entry wrap",
+        ),
+        (
+            "search-in-rotated-sorted-array",
+            "smallest entry in a seven-entry wrap",
+        ),
+        (
+            "search-in-rotated-sorted-array",
+            "last entry before a six-entry wrap",
+        ),
+        (
+            "search-in-rotated-sorted-array",
+            "pair not wrapped with target last",
+        ),
+        (
+            "search-in-rotated-sorted-array",
+            "target between the wrap and the midpoint",
+        ),
+        (
+            "search-in-rotated-sorted-array",
+            "target past the midpoint before the wrap",
+        ),
+        (
+            "search-in-rotated-sorted-array",
+            "target before the midpoint of a dump wrapped at its end",
+        ),
+        (
+            "search-in-rotated-sorted-array",
+            "target before the midpoint of a seven-entry dump wrapped at its end",
+        ),
+        (
+            "search-in-rotated-sorted-array",
+            "entry just past the midpoint of a seven-entry wrap",
+        ),
+        (
+            "search-in-rotated-sorted-array",
+            "wrapped pair with target last",
+        ),
         ("linked-list-cycle", "tail points to itself"),
         ("add-two-numbers", "carry extends result"),
         ("merge-two-sorted-lists", "negative values"),
