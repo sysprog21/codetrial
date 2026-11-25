@@ -1001,6 +1001,42 @@ async fn a_closed_dispatcher_admits_no_new_room_but_keeps_the_ones_it_has() {
     );
 }
 
+/// Closed for a restart, a refused start is told the server is coming back, not
+/// that it is shutting down: the keys Change keys saved are about to be served.
+#[tokio::test]
+async fn a_dispatcher_closed_for_a_restart_refuses_starts_as_restarting() {
+    let dispatcher = release_dispatcher(8);
+    let provider = Provider {
+        id: crate::config::PRIMARY_PROVIDER_ID.to_string(),
+        url: "wss://primary.example".to_string(),
+        api_key: "primary-key".to_string(),
+        api_secret: "primary-secret".to_string(),
+        google_api_keys: Vec::new(),
+    };
+    dispatcher.close_admission_for_restart();
+
+    assert!(matches!(
+        dispatcher.reserve_with_kind("interview-after-restart-close", false),
+        Reservation::Closed
+    ));
+    assert_eq!(
+        dispatcher.ensure_agent("interview-via-ensure", &provider, AgentJob::Interview),
+        Err(DispatchRefusal::Restarting)
+    );
+    assert_eq!(
+        dispatcher.ensure_guest_agent("guest-via-ensure", &provider, "candidate"),
+        Err(DispatchRefusal::Restarting)
+    );
+
+    // A quit during the drain closes admission again, and the server is then
+    // shutting down rather than coming back.
+    dispatcher.close_admission();
+    assert_eq!(
+        dispatcher.ensure_agent("interview-after-quit", &provider, AgentJob::Interview),
+        Err(DispatchRefusal::Stopping)
+    );
+}
+
 #[test]
 fn a_dispatcher_with_nothing_to_close_ignores_the_request() {
     struct Plain;
