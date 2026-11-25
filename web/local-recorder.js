@@ -10,7 +10,6 @@ export function initLocalRecording({
   stopFocusTarget,
   canStart,
   onSetupChange,
-  saveReplacedTake = false,
 }) {
   const panel = nodes.localRecording;
   const start = panel.querySelector("[data-local-start]");
@@ -27,7 +26,6 @@ export function initLocalRecording({
   let startedAt = 0;
   let failure = "";
   let discarded = false;
-  let downloadRequested = false;
   let displacedFocus = null;
   // Setup cannot retry until the previous recording's final chunks are saved.
   let stopped = Promise.resolve();
@@ -148,7 +146,6 @@ export function initLocalRecording({
   function revoke() {
     if (url) URL.revokeObjectURL(url);
     url = null;
-    downloadRequested = false;
     download.hidden = true;
     download.removeAttribute("href");
   }
@@ -158,22 +155,15 @@ export function initLocalRecording({
     release();
     try {
       if (!disposed && !discarded && chunks.length) {
-        const previous = url;
-        const next = URL.createObjectURL(
+        url = URL.createObjectURL(
           new Blob(chunks, { type: recorder.mimeType }),
         );
-        // With `saveReplacedTake`, a take never downloaded is saved now: its
-        // link is about to point at the new one, and the browser has read the
-        // blob by the time click returns.
-        if (saveReplacedTake && previous && !downloadRequested)
-          download.click();
-        url = next;
-        downloadRequested = false;
         download.href = url;
         download.download = `codetrial-${new Date().toISOString().replace(/[:.]/g, "-")}.webm`;
         download.hidden = false;
-        if (previous) URL.revokeObjectURL(previous);
-        if (!failure) download.click();
+        // A take that stopped on an error is saved too: leaving the page
+        // revokes it in `dispose`, possibly before anyone used the link.
+        download.click();
       }
     } catch {
       failure =
@@ -207,7 +197,7 @@ export function initLocalRecording({
       recorder.stop();
     } catch {
       failure =
-        "Local recording could not finish. Your interview can continue.";
+        "Local recording could not finish. Your interview can continue; download any available recording.";
       finalize();
     }
     return stopped;
@@ -302,7 +292,8 @@ export function initLocalRecording({
         } catch (error) {
           if (phase === "requesting") cancelStartup(error);
           else {
-            failure = `Local recording: ${error.message}`;
+            failure =
+              "Local recording stopped: wrong capture source. Download any available recording, then start again, choose this CodeTrial tab, and enable Share tab audio.";
             stopRecording();
           }
         }
@@ -354,7 +345,7 @@ export function initLocalRecording({
       };
       recorder.start(1000);
       stopped = new Promise((resolve) => (resolveStopped = resolve));
-      if (downloadRequested) revoke();
+      revoke();
       phase = "recording";
       onRecordingChange?.(true);
       startedAt = Date.now();
@@ -384,9 +375,6 @@ export function initLocalRecording({
   }
   start.addEventListener("click", startRecording);
   stop.addEventListener("click", stopRecording);
-  download.addEventListener("click", () => {
-    if (url) downloadRequested = true;
-  });
   panel.hidden = recordingEnabled;
   paint();
 
@@ -414,10 +402,7 @@ export function initLocalRecording({
     },
     // Whether closing the tab now would lose media the learner has not saved.
     get unsaved() {
-      return (
-        ["recording", "stopping"].includes(phase) ||
-        Boolean(url && !downloadRequested)
-      );
+      return ["recording", "stopping"].includes(phase);
     },
     finish(target) {
       ended = true;

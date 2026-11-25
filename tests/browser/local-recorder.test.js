@@ -208,7 +208,6 @@ async function setup(t, options = {}) {
       state: window.recordingState,
       nodes: { localRecording: document.querySelector("#local-recording") },
       recordingEnabled: options.serverRecording === true,
-      saveReplacedTake: options.saveReplacedTake === true,
       onRecordingChange: (active) => window.recordingChanges.push(active),
     });
   }, options);
@@ -402,7 +401,10 @@ test("switching away from this tab stops once and preserves the partial recordin
   assert.equal(await page.evaluate(() => window.stopCalls), 1);
   await ready(page);
   assert.equal(await page.evaluate(() => window.created.length), 1);
-  assert.match(await page.locator(status).textContent(), /this CodeTrial tab/);
+  assert.match(
+    await page.locator(status).textContent(),
+    /wrong capture source\. Download any available recording, then start again/,
+  );
   assert.equal(
     await page.evaluate(() => window.mic.getAudioTracks()[0].readyState),
     "live",
@@ -1005,81 +1007,40 @@ test("a recorder error finalizes available chunks without releasing the intervie
   assert.equal(await page.evaluate(() => window.created.length), 1);
 });
 
-test("an undownloaded partial remains available until a new take is ready", async (t) => {
+test("a recording that cannot finish still points to its partial take", async (t) => {
   const page = await setup(t);
   if (!page) return;
   await record(page);
   await page.evaluate(() => {
-    window.nativeRecorder.onerror();
-    window.nativeRecorder.stop();
-  });
-  await ready(page);
-  const partial = await page.locator(download).getAttribute("href");
-  assert.equal(await page.evaluate(() => window.downloadClicks), 0);
-  await page.evaluate(() => (window.rejectCapture = true));
-  await page.locator(start).click();
-  await page.waitForFunction(() =>
-    document
-      .querySelector("[data-local-status]")
-      .textContent.includes("permission was denied"),
-  );
-  assert.equal(await page.locator(download).getAttribute("href"), partial);
-  await page.evaluate(() => (window.rejectCapture = false));
-  await record(page);
-  assert.equal(await page.locator(download).isVisible(), true);
-  assert.equal(await page.locator(download).getAttribute("href"), partial);
-  assert.deepEqual(await page.evaluate(() => window.revoked), []);
-  assert.ok(
-    await page.evaluate(
-      async (url) => (await (await fetch(url)).blob()).size > 0,
-      partial,
-    ),
-  );
-  await page.evaluate(() => {
-    window.createRecordingURL = URL.createObjectURL;
-    URL.createObjectURL = () => {
-      throw new Error("Disposable save failure");
+    window.nativeRecorder.stop = () => {
+      throw new Error("Stop refused");
     };
-    window.stopped = window.local.stop();
   });
-  await recorderResult(page, "stopped");
-  assert.equal(await page.locator(download).getAttribute("href"), partial);
-  assert.deepEqual(await page.evaluate(() => window.revoked), []);
-  await page.evaluate(() => (URL.createObjectURL = window.createRecordingURL));
-  await record(page);
-  await page.locator(download).focus();
-  await page.evaluate(() => {
-    window.stopped = window.local.stop();
-  });
-  await recorderResult(page, "stopped");
-  assert.notEqual(await page.locator(download).getAttribute("href"), partial);
-  assert.deepEqual(await page.evaluate(() => window.revoked), [partial]);
-  assert.equal(await page.evaluate(() => window.downloadClicks), 1);
-  assert.equal(
-    await page
-      .locator(download)
-      .evaluate((node) => node === document.activeElement),
-    true,
+  await page.locator(stop).click();
+  await ready(page);
+  assert.ok(await page.locator(download).getAttribute("href"));
+  assert.match(
+    await page.locator(status).textContent(),
+    /could not finish.*download any available recording/,
   );
 });
 
-test("a host can keep an undownloaded take by saving it when another replaces it", async (t) => {
-  const page = await setup(t, { saveReplacedTake: true });
+test("an error stop saves the partial take before leaving the page releases it", async (t) => {
+  const page = await setup(t);
   if (!page) return;
   await record(page);
   await page.evaluate(() => {
-    window.nativeRecorder.onerror();
-    window.nativeRecorder.stop();
+    const mic = window.mic.getAudioTracks()[0];
+    mic.stop();
+    mic.dispatchEvent(new Event("ended"));
   });
   await ready(page);
-  assert.equal(await page.evaluate(() => window.downloadClicks), 0);
-  await record(page);
-  await page.evaluate(() => {
-    window.stopped = window.local.stop();
-  });
-  await recorderResult(page, "stopped");
-  // The earlier take, then the new one.
-  assert.equal(await page.evaluate(() => window.downloadClicks), 2);
+  const partial = await page.locator(download).getAttribute("href");
+  // Saved when the recording stops, not by `dispose`, and the error stays.
+  assert.equal(await page.evaluate(() => window.downloadClicks), 1);
+  assert.match(await page.locator(status).textContent(), /microphone stopped/);
+  await page.evaluate(() => window.local.dispose());
+  assert.deepEqual(await page.evaluate(() => window.revoked), [partial]);
 });
 
 test("a downloaded partial is released when another recording starts", async (t) => {
@@ -1092,7 +1053,6 @@ test("a downloaded partial is released when another recording starts", async (t)
   });
   await ready(page);
   const partial = await page.locator(download).getAttribute("href");
-  await page.locator(download).click();
   await record(page);
   assert.deepEqual(await page.evaluate(() => window.revoked), [partial]);
   assert.equal(await page.locator(download).isHidden(), true);
@@ -1100,6 +1060,7 @@ test("a downloaded partial is released when another recording starts", async (t)
     window.stopped = window.local.stop();
   });
   await recorderResult(page, "stopped");
+  // The automatic save at the error stop, then the new take.
   assert.equal(await page.evaluate(() => window.downloadClicks), 2);
 });
 
@@ -1134,7 +1095,7 @@ test("microphone loss saves a partial take and ignores a replaced input", async 
       files: window.created.length,
       downloads: window.downloadClicks,
     })),
-    { stops: 1, files: 1, downloads: 0 },
+    { stops: 1, files: 1, downloads: 1 },
   );
   assert.ok(await page.evaluate(() => window.result.size > 0));
   assert.ok(
@@ -1204,7 +1165,7 @@ test("a stranded microphone switch stops once and preserves the partial recordin
   );
   await ready(page);
   assert.equal(await page.evaluate(() => window.created.length), 1);
-  assert.equal(await page.evaluate(() => window.downloadClicks), 0);
+  assert.equal(await page.evaluate(() => window.downloadClicks), 1);
   assert.equal(await page.evaluate(() => window.local.needsMicrophone), false);
   assert.deepEqual(await page.evaluate(() => window.recordingChanges), [
     true,
@@ -1661,7 +1622,7 @@ for (const outcome of [
         if (failed || disconnected) {
           await ready(page);
           assert.equal(await page.evaluate(() => window.recordedStops), 1);
-          assert.equal(await page.evaluate(() => window.downloadClicks), 0);
+          assert.equal(await page.evaluate(() => window.downloadClicks), 1);
           assert.match(
             await page.locator(status).textContent(),
             /microphone stopped.*Download/,
