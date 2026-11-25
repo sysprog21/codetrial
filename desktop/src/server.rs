@@ -4,7 +4,7 @@
 //! Nothing here touches the window, so all of it can be tested without one.
 
 use std::collections::VecDeque;
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
@@ -165,10 +165,7 @@ pub fn start(
     launch: &Launch,
     report: impl Fn(Status) + Send + Sync + 'static,
 ) -> Result<Server, String> {
-    let log_path = launch.data_dir.join(SERVER_LOG);
-    let log = Arc::new(Mutex::new(File::create(&log_path).map_err(|error| {
-        format!("cannot write {}: {error}", log_path.display())
-    })?));
+    let log = Arc::new(Mutex::new(open_log(&launch.data_dir)?));
 
     let mut child = command(launch).spawn().map_err(|error| {
         format!(
@@ -347,6 +344,37 @@ impl Slot {
             server.stop(grace);
         }
     }
+}
+
+/// Empties the server log, once, when the app opens: it then holds what every
+/// server this app ran has printed since, a restart's included.
+pub fn clear_log(data_dir: &Path) -> Result<(), String> {
+    let path = data_dir.join(SERVER_LOG);
+    File::create(&path)
+        .map(drop)
+        .map_err(|error| format!("cannot write {}: {error}", path.display()))
+}
+
+/// A line of this app's own in the server log, where a restart ends one run
+/// and begins the next. Lost, as `note` is, if the log cannot be opened.
+pub fn log_line(data_dir: &Path, line: &str) {
+    if let Ok(mut log) = open_log(data_dir) {
+        let _ = writeln!(log, "{line}");
+    }
+}
+
+/// For appending. A restart opens the log while the old server's output may
+/// still be on its way in: something the server started can hold its pipe
+/// open after it exits, so its copiers cannot be waited for. Appended, every
+/// write lands at the end whichever handle makes it, where emptying the file
+/// under them would leave their next lines past its end, after a run of NULs.
+fn open_log(data_dir: &Path) -> Result<File, String> {
+    let path = data_dir.join(SERVER_LOG);
+    OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .map_err(|error| format!("cannot write {}: {error}", path.display()))
 }
 
 /// Lossy rather than `lines()`, which ends at the first line that is not

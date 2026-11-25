@@ -163,7 +163,7 @@ fn main() {
         })
         .setup(|app| {
             open_window(app.handle())?;
-            launch(app.handle());
+            launch(app.handle(), false);
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -344,7 +344,10 @@ fn open_window(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
-fn launch(app: &AppHandle) {
+/// Starts the server: the first time, on an emptied server log; again after
+/// Change keys, with a line in that log where the old run ends, so what the
+/// old keys were failing on is still there to read.
+fn launch(app: &AppHandle, restarted: bool) {
     let prepared = (|| -> Result<server::Launch, String> {
         let data_dir = app
             .path()
@@ -366,6 +369,14 @@ fn launch(app: &AppHandle) {
         Ok(launch) => launch,
         Err(message) => return show_failure(app, &message, None),
     };
+    if restarted {
+        server::log_line(
+            &launch.data_dir,
+            &format!("codetrial-desktop: {RESTARTING}"),
+        );
+    } else if let Err(message) = server::clear_log(&launch.data_dir) {
+        return show_failure(app, &message, Some(launch.data_dir.as_path()));
+    }
 
     *app.state::<Shell>()
         .change_keys_code
@@ -429,14 +440,18 @@ fn restart(app: &AppHandle) {
             }
         }
     }
-    note("Change keys saved: starting the server again");
+    note(RESTARTING);
     let relauncher = app.clone();
     shell.server.replace(STOP_GRACE, move || {
         if !relauncher.state::<Shell>().quitting() {
-            launch(&relauncher);
+            launch(&relauncher, true);
         }
     });
 }
+
+/// Said on stderr and in the server log, which a release build on Windows has
+/// in place of stderr.
+const RESTARTING: &str = "Change keys saved: starting the server again";
 
 /// The script that puts `code`, hex digits only, into the Setup page's code
 /// field. The page shows and enables that field itself once `/api/setup`

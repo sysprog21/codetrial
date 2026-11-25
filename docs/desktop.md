@@ -135,7 +135,8 @@ In it:
   a data folder never uses it. A damaged file stops the server rather than
   being replaced, because replacing it signs everyone out and hides what
   damaged it.
-- `codetrial-server.log`: everything the server printed on its last launch.
+- `codetrial-server.log`: everything the server printed since the app last
+  opened, with a line where Change keys restarted it.
 - `codetrial-error.log`: why the last launch failed, when it did.
 
 What the page itself stores (practice history among it) is the web view's,

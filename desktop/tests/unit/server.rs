@@ -260,6 +260,72 @@ fn a_server_asks_to_restart_once_change_keys_has_saved() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A restart appends to the server log rather than emptying it. The old server
+/// leaves a child holding its stdout, so a line arrives after it has stopped
+/// and the next one has started: emptied, the log would take that line past
+/// its end, after a run of NULs, and lose what the old run printed.
+#[cfg(unix)]
+#[test]
+fn a_restart_keeps_the_log_of_the_run_it_ends() {
+    let dir = temp_dir("log-restart");
+    let log = dir.join(SERVER_LOG);
+    let read = || std::fs::read(&log).unwrap();
+    clear_log(&dir).unwrap();
+    let old = start_fake(
+        &dir,
+        "echo 'first run: LiveKit rejected the key'\n\
+         (sleep 1; echo 'first run: written after the restart') &\n\
+         cat >/dev/null",
+        |_| {},
+    );
+    let began = Instant::now();
+    while !String::from_utf8_lossy(&read()).contains("rejected") {
+        assert!(
+            began.elapsed() < Duration::from_secs(10),
+            "the old run wrote nothing"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    old.stop(Duration::from_secs(5));
+    log_line(&dir, "codetrial-desktop: restarted");
+    let next = start_fake(&dir, "echo 'second run'\ncat >/dev/null", |_| {});
+    let began = Instant::now();
+    while !String::from_utf8_lossy(&read()).contains("after the restart") {
+        assert!(
+            began.elapsed() < Duration::from_secs(10),
+            "the late line never came"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    next.stop(Duration::from_secs(5));
+
+    let bytes = read();
+    assert!(!bytes.contains(&0), "{:?}", String::from_utf8_lossy(&bytes));
+    let text = String::from_utf8(bytes).unwrap();
+    let at = |line: &str| {
+        text.find(line)
+            .unwrap_or_else(|| panic!("{line:?} in {text:?}"))
+    };
+    assert!(at("first run: LiveKit rejected the key") < at("codetrial-desktop: restarted"));
+    assert!(at("codetrial-desktop: restarted") < at("second run"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Opening the app empties what the last run left in the server log, and makes
+/// the file when there is none, so a restart has something to append to.
+#[test]
+fn opening_the_app_empties_the_log_of_the_last_run() {
+    let dir = temp_dir("log-clear");
+    let log = dir.join(SERVER_LOG);
+    clear_log(&dir).unwrap();
+    assert_eq!(std::fs::read(&log).unwrap(), b"");
+
+    std::fs::write(&log, "left by the last run\n").unwrap();
+    clear_log(&dir).unwrap();
+    assert_eq!(std::fs::read(&log).unwrap(), b"");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A fake server started in a folder of its own under `dir`, with the process
 /// id it wrote there once running.
 #[cfg(unix)]
