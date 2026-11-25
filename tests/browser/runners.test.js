@@ -12,7 +12,15 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { runInNewContext } from "node:vm";
 import { MAX_QUAD_TREE_NODES } from "../../web/compiler-explorer.js";
-import { failFetchWith, functionBody, read } from "./source.js";
+import {
+  assertVoidTable,
+  failFetchWith,
+  finalVoidJudge,
+  functionBody,
+  operationsOf,
+  read,
+  SENTINEL,
+} from "./source.js";
 import { checkAnswer, testPayload } from "../../web/lib.js";
 import { parseCandidateCase, runBrowserTests } from "../../web/runners.js";
 
@@ -1337,4 +1345,42 @@ test("each compiled request is cut off by a timer of its own", async (t) => {
   } finally {
     restoreFetch();
   }
+});
+
+// A JavaScript candidate for a class judge: the constructor ignores its
+// arguments and every operation returns the sentinel with its call number.
+function sentinelCandidate(spec) {
+  class Candidate {
+    calls = 0;
+  }
+  for (const method of operationsOf(spec))
+    Candidate.prototype[method] = function () {
+      return `${SENTINEL} ${++this.calls}`;
+    };
+  return Candidate;
+}
+
+function runJavaScriptClass(spec, Candidate = sentinelCandidate(spec)) {
+  let response;
+  const self = {
+    __codetrialEntry: Candidate,
+    postMessage: (message) => (response = message),
+  };
+  runInNewContext(jsWorkerSource(), { self, performance });
+  self.onmessage({ data: { spec, name: spec.className } });
+  return response.results;
+}
+
+test("JavaScript records null for every void class operation", () => {
+  assertVoidTable(runJavaScriptClass);
+});
+
+test("JavaScript reports what a final void call throws", () => {
+  class Counter {
+    finish() {
+      throw new Error("final void ran");
+    }
+  }
+  const [result] = runJavaScriptClass(finalVoidJudge, Counter);
+  assert.match(result.error, /final void ran/);
 });

@@ -824,6 +824,10 @@ const JS_RUNNER_SOURCE = `
         });
         return converted;
       };
+      // A void operation has nothing to compare, so whatever it hands back is
+      // dropped, as the C++ and Java harnesses already do. A judge without
+      // methodReturnTypes names no void operation and records every return.
+      const returnsVoid = (method) => spec.methodReturnTypes?.[method] === "void";
       // Resolved by the prelude this worker was built with, not by evaluating
       // the candidate's code here. See runWorker below.
       const entry = self.__codetrialEntry;
@@ -840,7 +844,10 @@ const JS_RUNNER_SOURCE = `
             const [methods, argsList] = testCase.input;
             const instance = new entry(...prepareArgs({ input: argsList[0] }, spec.constructorArgTypes));
             actual = [null];
-            for (let i = 1; i < methods.length; i++) actual.push(instance[methods[i]](...argsList[i]) ?? null);
+            for (let i = 1; i < methods.length; i++) {
+              const returned = instance[methods[i]](...argsList[i]);
+              actual.push(returnsVoid(methods[i]) ? null : (returned ?? null));
+            }
           } else {
             const args = prepareArgs(testCase);
             const returned = entry(...args);
@@ -1241,6 +1248,7 @@ def _codetrial_run(user_code, spec_json):
         return json.dumps({"setupError": f"Could not find {name} in your code - keep the starter signature."})
 
     results = []
+    void_methods = {name for name, kind in (spec.get("methodReturnTypes") or {}).items() if kind == "void"}
     for case in spec["cases"]:
         t0 = time.perf_counter()
         try:
@@ -1249,7 +1257,9 @@ def _codetrial_run(user_code, spec_json):
                 instance = target(*_prepare_args({"input": args_list[0]}, spec, spec.get("constructorArgTypes")))
                 actual = [None]
                 for method, args in zip(methods[1:], args_list[1:]):
-                    actual.append(getattr(instance, method)(*args))
+                    returned = getattr(instance, method)(*args)
+                    # A void operation has nothing to compare, as in the JavaScript runner.
+                    actual.append(None if method in void_methods else returned)
             else:
                 args = _prepare_args(case, spec)
                 returned = target(*args)
