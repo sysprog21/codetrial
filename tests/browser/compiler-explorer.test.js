@@ -304,58 +304,6 @@ test("an added class operation holding NUL or a lone surrogate is refused and na
   assert.deepEqual(addTrieWord("\\u0000")[1][1], ["\\u0000"]);
 });
 
-test("C harness refuses a string case holding NUL rather than truncating it", () => {
-  // `\000` compiles, but the solution's string ends there, so the case would
-  // run on "a" alone. The refusal names the case, as the workspace does.
-  const spec = {
-    ...judges["longest-substring-without-repeating-characters"],
-    cases: [
-      { input: ["ab"], expected: 2 },
-      { input: ["a\u0000b"], expected: 3, label: "Your case 1" },
-    ],
-  };
-  assert.throws(
-    () => generateHarness("c", spec, ""),
-    /^Error: Your case 1 holds a NUL character/,
-  );
-  // A typed backslash before "u0000" is text, not NUL.
-  assert.doesNotThrow(() =>
-    generateHarness("c", { ...spec, cases: [{ input: ["\\u0000"] }] }, ""),
-  );
-  // Word Search II takes a `character[][]` board and a `string[]` of words.
-  // A NUL item in the words truncates; a NUL cell is written `'\000'` and
-  // reaches the solution as 0.
-  const grid = (board, words) => ({
-    ...judges["word-search-ii"],
-    cases: [{ input: [board, words], expected: [] }],
-  });
-  assert.throws(
-    () => generateHarness("c", grid([["a"]], ["x", "a\u0000"]), ""),
-    /^Error: Case 1 holds a NUL character/,
-  );
-  assert.doesNotThrow(() =>
-    generateHarness("c", grid([["a", "\u0000"]], ["ab"]), ""),
-  );
-  // Evaluate Division nests its strings two lists deep.
-  assert.throws(
-    () =>
-      generateHarness(
-        "c",
-        {
-          ...judges["evaluate-division"],
-          cases: [
-            {
-              input: [[["a", "b\u0000"]], [2], [["a", "b"]]],
-              expected: [2],
-            },
-          ],
-        },
-        "",
-      ),
-    /^Error: Case 1 holds a NUL character/,
-  );
-});
-
 test("harness generator builds one batched function harness", () => {
   const spec = judges["two-sum"];
   const c = generateHarness(

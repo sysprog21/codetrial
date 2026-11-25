@@ -410,7 +410,6 @@ function remapDiagnostics(text, { offset, lineCount }) {
 }
 
 function cHarness(spec, candidateCode) {
-  refuseNulCases(spec);
   return `#include <limits.h>
 #include <math.h>
 #include <stdbool.h>
@@ -1102,31 +1101,6 @@ function cStringLiteral(value) {
       return match === "?" ? "\\?" : match;
     },
   );
-}
-
-/// NUL would compile as `\000`, but C hands the solution a string that ends
-/// there, so the case would run on less than was typed and fail a correct
-/// solution. Refused, naming the case, until adding a case refuses NUL itself.
-/// Only string parameters truncate on the way in: `charLiteral` writes a
-/// `character` NUL as `'\000'`, and the solution receives 0. A `character[][]`
-/// that is also the output still loses that cell on the way out, since
-/// `json_char_matrix` prints it as "".
-function refuseNulCases(spec) {
-  const holdsNul = (value) =>
-    typeof value === "string"
-      ? value.includes("\0")
-      : Array.isArray(value) && value.some(holdsNul);
-  const isString = (type) => nestedItemType(type) === "string";
-  for (const [index, testCase] of spec.cases.entries()) {
-    if (
-      testCase.input.some(
-        (value, i) => isString(spec.paramTypes[i]) && holdsNul(value),
-      )
-    )
-      throw new Error(
-        `${testCase.label ?? `Case ${index + 1}`} holds a NUL character, which a C string cannot carry.`,
-      );
-  }
 }
 
 /// A raw newline or carriage return between quotes ends a character literal in
