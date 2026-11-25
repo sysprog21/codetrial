@@ -294,37 +294,51 @@ fn save_as_a_child(google: &str, opts_in: bool, restarts: bool) {
 
     let save = |code: &str| {
         let body = format!(r#"{{"code":"{code}","livekitApiKey":"new-key"}}"#);
-        http_request(
-            &addr,
-            &format!(
-                "POST /api/setup HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\n\
-                 Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
-            ),
+        format!(
+            "POST /api/setup HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\n\
+             Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
         )
     };
-    let refused = save("ffffffffffffffffffffffffffffffff");
-    let saved = save(CODE);
-    let written = std::fs::read_to_string(&config).unwrap();
+    let refused = http_request(&addr, &save("ffffffffffffffffffffffffffffffff"));
 
-    // Printed once nothing is running, which here is at once, but after the
-    // response rather than before it. Where it never comes, a quiet wait as
-    // long as it would take is what shows that.
+    // Sent from a thread of its own while this one plays the launcher, which
+    // closes the server's stdin, and so ends it, the moment the restart line
+    // arrives: the response has to be out by then.
+    let saving = {
+        let (addr, request) = (addr.clone(), save(CODE));
+        thread::spawn(move || http_request(&addr, &request))
+    };
+
+    // Printed once nothing is running, which here is at once. Where it never
+    // comes, a quiet wait as long as it would take is what shows that.
     let quiet = Duration::from_secs(if restarts { 10 } else { 2 });
     let mut printed = Vec::new();
     while let Ok(line) = lines.recv_timeout(quiet) {
         let restart = line == RESTART;
         printed.push(line);
         if restart {
+            drop(server.stdin.take());
             break;
         }
     }
+    let saved = saving
+        .join()
+        .expect("the save was answered before the server ended");
+    let written = std::fs::read_to_string(&config).unwrap();
     drop(server);
     printed.extend(lines.try_iter());
     let _ = std::fs::remove_dir_all(&dir);
 
     assert!(refused.starts_with("HTTP/1.1 403"), "{refused}");
     assert!(saved.starts_with("HTTP/1.1 200 OK"), "{saved}");
+
+    // Whole, however the server frames it, though the launcher ended the server
+    // on the restart line: that line waits for this to have gone out.
+    assert!(
+        saved.ends_with(&format!(r#"{{"appRestarts":{restarts},"saved":true}}"#)),
+        "{saved}"
+    );
     assert_eq!(written, contents("new-key"));
     assert_eq!(
         printed.iter().any(|line| line == RESTART),

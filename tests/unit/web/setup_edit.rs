@@ -565,6 +565,9 @@ async fn an_edit_saved_while_the_keys_are_checked_is_kept() {
 struct Closable {
     busy: std::sync::atomic::AtomicBool,
     closed: std::sync::atomic::AtomicBool,
+    /// Whether it was closed for a restart, which a start is refused with its
+    /// own words for.
+    restarting: std::sync::atomic::AtomicBool,
 }
 
 impl RoomDispatcher for Closable {
@@ -574,6 +577,12 @@ impl RoomDispatcher for Closable {
 
     fn close_admission(&self) {
         self.closed.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    fn close_admission_for_restart(&self) {
+        self.close_admission();
+        self.restarting
+            .store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
     fn supports_guest_admission(&self) -> bool {
@@ -629,7 +638,42 @@ async fn only_a_launchers_child_stops_admitting_interviews_once_it_saves() {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
         assert_eq!(closed(), closes);
+
+        // Closed for the restart, not as for a stop: a candidate who starts an
+        // interview meanwhile is told the server is coming back.
+        assert_eq!(
+            dispatcher
+                .restarting
+                .load(std::sync::atomic::Ordering::SeqCst),
+            closes
+        );
     }
+}
+
+/// A config file edited by hand is a restart pending that nothing schedules: a
+/// launcher's child says the app restarts it only once a save here has asked
+/// for that, so the page keeps telling the person to restart it themselves.
+#[tokio::test]
+async fn a_config_edited_by_hand_keeps_the_restart_by_hand_notice() {
+    let (livekit, _livekit) = livekit().await;
+    let dispatcher = Arc::new(Closable::default());
+    let server = Server::start_after(
+        &livekit,
+        Some(Arc::clone(&dispatcher) as Arc<dyn RoomDispatcher>),
+        AfterSave::Launcher,
+    )
+    .await;
+    assert_eq!(server.summary().await["appRestarts"], false);
+
+    std::fs::write(
+        &server.path,
+        format!("{}# added by hand\n", server.contents),
+    )
+    .unwrap();
+    let summary = server.summary().await;
+    assert_eq!(summary["restartPending"], true);
+    assert_eq!(summary["appRestarts"], false);
+    assert!(!dispatcher.closed.load(std::sync::atomic::Ordering::SeqCst));
 }
 
 /// A launcher's child without an interviewer of its own never asks for the
@@ -658,7 +702,9 @@ async fn the_restart_waits_for_an_interview_admitted_before_the_close() {
     dispatcher
         .busy
         .store(true, std::sync::atomic::Ordering::SeqCst);
-    let drained = drain(&dispatcher);
+    let (sent, gone_out) = oneshot::channel();
+    sent.send(()).unwrap();
+    let drained = drain(&dispatcher, gone_out);
     tokio::pin!(drained);
     let hour = std::time::Duration::from_secs(3600);
     assert!(tokio::time::timeout(hour, &mut drained).await.is_err());
@@ -670,6 +716,57 @@ async fn the_restart_waits_for_an_interview_admitted_before_the_close() {
     tokio::time::timeout(std::time::Duration::from_secs(1), drained)
         .await
         .unwrap();
+}
+
+/// The launcher closes the server's stdin as soon as it reads the restart line,
+/// so the line waits for the save's response to have gone out, however idle the
+/// server already is. Admission closes at once all the same.
+#[tokio::test(start_paused = true)]
+async fn the_restart_waits_for_the_save_response_to_go_out() {
+    let dispatcher = Closable::default();
+    let (sent, gone_out) = oneshot::channel();
+    let drained = drain(&dispatcher, gone_out);
+    tokio::pin!(drained);
+    let hour = std::time::Duration::from_secs(3600);
+    assert!(tokio::time::timeout(hour, &mut drained).await.is_err());
+    assert!(dispatcher.closed.load(std::sync::atomic::Ordering::SeqCst));
+
+    sent.send(()).unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(1), drained)
+        .await
+        .unwrap();
+}
+
+/// The response goes out whole, with its length, and its receiver has a value
+/// only once the transport has taken the body and asked for its end: not while
+/// the body is still waiting to be read.
+#[tokio::test]
+async fn the_sent_signal_comes_after_the_body_is_read_out() {
+    let response = json_response(StatusCode::OK, json!({ "saved": true }));
+    let (response, mut sent) = sent_signal(response).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers().get(header::CONTENT_LENGTH).unwrap(),
+        "14"
+    );
+    assert!(sent.try_recv().is_err(), "nothing has been read yet");
+
+    let body = axum::body::to_bytes(response.into_body(), 1024)
+        .await
+        .unwrap();
+    assert_eq!(body.as_ref(), br#"{"saved":true}"#);
+    assert!(sent.try_recv().is_ok(), "the body has been read out");
+}
+
+/// A client that leaves before reading the response does not hold the restart
+/// back: nothing more of it is coming.
+#[tokio::test]
+async fn the_sent_signal_also_comes_when_the_response_is_dropped_unread() {
+    let (response, mut sent) =
+        sent_signal(json_response(StatusCode::OK, json!({ "saved": true }))).await;
+    assert!(sent.try_recv().is_err());
+    drop(response);
+    assert!(sent.try_recv().is_ok());
 }
 
 /// A refused save leaves a launcher's child admitting interviews on the keys
