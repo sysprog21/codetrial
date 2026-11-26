@@ -276,6 +276,16 @@ fn every_public_judge_and_starter_matches_the_instructor_preview() {
     }
 }
 
+/// The packaging tool refuses a surrogate with no partner when it encodes the
+/// package as UTF-8; this reader relies on serde_json refusing it while it
+/// reads, so a version that started accepting it would let one reach C and C++.
+#[test]
+fn a_lone_surrogate_in_a_bank_is_refused_while_it_is_read() {
+    assert!(serde_json::from_str::<Value>(r#"["(\ud800)"]"#).is_err());
+    assert!(serde_json::from_str::<Value>(r#"["(\udc00)"]"#).is_err());
+    assert!(serde_json::from_str::<Value>(r#"["(😀)"]"#).is_ok());
+}
+
 #[test]
 fn shared_downloaded_record_refusals_match_the_instructor_tool() {
     let refusals: Value =

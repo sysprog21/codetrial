@@ -62,6 +62,21 @@ def name(value):
         raise ValueError("invalid identifier")
 
 
+def case_input_text(value, label):
+    """Refuse a case whose input holds NUL: C and C++ end a string there, so the
+    case would run on less than was written."""
+    if isinstance(value, dict):
+        value = list(value.values())
+    if isinstance(value, list):
+        for item in value:
+            case_input_text(item, label)
+    elif isinstance(value, str):
+        if "\0" in value:
+            raise ValueError(
+                f"case {label!r} holds U+0000, which C and C++ read as the end of a string"
+            )
+
+
 def judge_options(judge):
     if judge.get("kind") == "function" and "className" in judge:
         raise ValueError("judge carries a name for the wrong kind")
@@ -251,6 +266,7 @@ def structural(problem, judge, variant):
         text(case["label"])
         if not isinstance(case["input"], list):
             raise ValueError("invalid case input")
+        case_input_text(case["input"], case["label"])
         if declared == "className":
             inputs = case["input"]
             if len(inputs) != 2 or not all(isinstance(row, list) for row in inputs):

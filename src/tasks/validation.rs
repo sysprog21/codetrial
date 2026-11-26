@@ -28,6 +28,18 @@ fn text(value: &Value) -> Result<(), TaskError> {
     Ok(())
 }
 
+/// Whether a string anywhere in a case input holds NUL. C and C++ end a string
+/// there, so the case would run on less than its author wrote. serde_json
+/// already refuses a lone surrogate, which they cannot compile either.
+fn holds_nul(value: &Value) -> bool {
+    match value {
+        Value::String(text) => text.contains('\0'),
+        Value::Array(items) => items.iter().any(holds_nul),
+        Value::Object(fields) => fields.values().any(holds_nul),
+        Value::Null | Value::Bool(_) | Value::Number(_) => false,
+    }
+}
+
 fn texts(value: &Value, min: usize, max: usize) -> Result<(), TaskError> {
     let list = value
         .as_array()
@@ -380,6 +392,12 @@ pub(super) fn bank(problem: &Value, judge: &Value, variant: &Value) -> Result<()
         text(&case["label"])?;
         if !case["input"].is_array() {
             return Err(invalid("invalid case input"));
+        }
+        if holds_nul(&case["input"]) {
+            return Err(invalid(format!(
+                "case {} holds U+0000, which C and C++ read as the end of a string",
+                case["label"]
+            )));
         }
         if declared == "className" {
             let input = case["input"]

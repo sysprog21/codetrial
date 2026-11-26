@@ -531,5 +531,32 @@
       "paramNames"
     ],
     "remove": true
+  },
+  {
+    "name": "NUL in a case input string",
+    "structural": true,
+    "path": [
+      "judge",
+      "cases",
+      "0",
+      "input",
+      "0"
+    ],
+    "value": "(\u0000)"
+  },
+  {
+    "name": "NUL in a class operation argument",
+    "fixture": "class-renamed-method",
+    "structural": true,
+    "path": [
+      "judge",
+      "cases",
+      "0",
+      "input",
+      "1",
+      "1",
+      "0"
+    ],
+    "value": "a\u0000"
   }
 ]
