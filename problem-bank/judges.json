@@ -1069,6 +1069,144 @@
           ]
         ],
         "expected": 2
+      },
+      {
+        "label": "two pads with room to spare",
+        "input": [
+          [
+            2,
+            0
+          ]
+        ],
+        "expected": 1
+      },
+      {
+        "label": "three pads with room to spare",
+        "input": [
+          [
+            3,
+            1,
+            1
+          ]
+        ],
+        "expected": 1
+      },
+      {
+        "label": "range grows after the first pad",
+        "input": [
+          [
+            1,
+            3,
+            1,
+            1
+          ]
+        ],
+        "expected": 2
+      },
+      {
+        "label": "weaker pad sits closer to the end",
+        "input": [
+          [
+            3,
+            2,
+            0,
+            1,
+            0
+          ]
+        ],
+        "expected": 2
+      },
+      {
+        "label": "two pads in range both reach farther",
+        "input": [
+          [
+            2,
+            2,
+            2,
+            1
+          ]
+        ],
+        "expected": 2
+      },
+      {
+        "label": "one pad with charge remaining",
+        "input": [
+          [
+            1
+          ]
+        ],
+        "expected": 0
+      },
+      {
+        "label": "two pads with just enough range",
+        "input": [
+          [
+            1,
+            0
+          ]
+        ],
+        "expected": 1
+      },
+      {
+        "label": "empty pads between charging stops",
+        "input": [
+          [
+            1,
+            3,
+            0,
+            0,
+            1
+          ]
+        ],
+        "expected": 2
+      },
+      {
+        "label": "last pad in range beside a farther-reaching pad",
+        "input": [
+          [
+            2,
+            2,
+            0
+          ]
+        ],
+        "expected": 1
+      },
+      {
+        "label": "three charged pads followed by two empty pads",
+        "input": [
+          [
+            2,
+            2,
+            2,
+            0,
+            0
+          ]
+        ],
+        "expected": 2
+      },
+      {
+        "label": "second pad has room beyond the destination",
+        "input": [
+          [
+            2,
+            3,
+            0,
+            0
+          ]
+        ],
+        "expected": 2
+      },
+      {
+        "label": "last pad shares the second flight's range",
+        "input": [
+          [
+            1,
+            2,
+            3,
+            0
+          ]
+        ],
+        "expected": 2
       }
     ],
     "paramNames": [
