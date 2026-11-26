@@ -116,16 +116,17 @@ In it:
 - `codetrial.env.local`: the keys the Setup page takes, in plain text, the
   same file the CLI writes. Change keys in the lobby rewrites its keys, and
   once no interview is running or writing its report, the app starts its
-  server again on them and returns to the lobby. Without a Google key the
-  interviews are hosted elsewhere, out of the server's sight, so the keys
-  take effect when the app next starts, as an edit adding an option does.
-  The first
-  launch writes it from exported LiveKit keys without asking (see `--data-dir`
-  above); otherwise Setup asks, and offers to use a CLI config found in the
-  folder the app was started in (see `--import-config`). An app opened from the Dock,
-  Finder or the Start menu sees no shell exports and starts where no CLI config
-  is, so Setup's "Import from a config file" button is the way to bring one in:
-  it fills the form from a file you choose. Either way it asks once: later
+  server again on them and returns to the lobby, or, with the interview in
+  the browser, leaves the tab the save was made from open on the restarted
+  server. Without a Google key the interviews are hosted elsewhere, out of
+  the server's sight, so the keys take effect when the app next starts, as
+  an edit adding an option does. The first launch writes it from exported
+  LiveKit keys without asking (see `--data-dir` above); otherwise Setup
+  asks, and offers to use a CLI config found in the folder the app was
+  started in (see `--import-config`). An app opened from the Dock, Finder or
+  the Start menu sees no shell exports and starts where no CLI config is, so
+  Setup's "Import from a config file" button is the way to bring one in: it
+  fills the form from a file you choose. Either way it asks once: later
   launches read this file.
 - `codetrial.db`: accounts and saved reports.
 - `session-secret`: the key session cookies are signed with, which the server

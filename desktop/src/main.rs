@@ -71,6 +71,9 @@ enum Phase {
     Starting {
         server_ready: bool,
         webrtc: Option<bool>,
+        /// The default browser already has a tab on the server's port, left
+        /// open by the launch a restart replaced.
+        tab_open: bool,
     },
     Serving,
     /// Serving, to the default browser rather than to this window, because
@@ -107,8 +110,44 @@ impl Phase {
         Restart::Now(Phase::Starting {
             server_ready: false,
             webrtc: Some(webrtc),
+            tab_open: !webrtc,
         })
     }
+
+    /// The phase the server is shown in and how, once it is ready and the
+    /// starting page has said whether this web view has WebRTC; `None` until
+    /// both are known.
+    fn settle(self) -> Option<(Phase, Show)> {
+        let Phase::Starting {
+            server_ready: true,
+            webrtc: Some(webrtc),
+            tab_open,
+        } = self
+        else {
+            return None;
+        };
+        Some(if webrtc {
+            (Phase::Serving, Show::Window)
+        } else {
+            (
+                Phase::InBrowser,
+                Show::Browser {
+                    open_tab: !tab_open,
+                },
+            )
+        })
+    }
+}
+
+/// How `open_server` shows a server that is ready.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Show {
+    /// In this window.
+    Window,
+    /// In the default browser, opening a tab there unless the person already
+    /// has one on the server: a save made from it would otherwise leave one
+    /// more lobby tab beside the Setup page it was made from.
+    Browser { open_tab: bool },
 }
 
 /// Where a close stands. One value rather than two flags, so "quitting but not
@@ -157,6 +196,7 @@ fn main() {
             phase: Mutex::new(Phase::Starting {
                 server_ready: false,
                 webrtc: None,
+                tab_open: false,
             }),
             restart_pending: AtomicBool::new(false),
             close: Mutex::new(Close::Open),
@@ -493,21 +533,13 @@ fn open_server(app: &AppHandle) {
 
     // Decided and recorded under the lock, acted on after it is released: the
     // navigation below reaches `on_navigation`, which takes the same lock.
-    let webrtc = {
+    let show = {
         let mut phase = shell.phase.lock().expect("phase lock");
-        let Phase::Starting {
-            server_ready: true,
-            webrtc: Some(webrtc),
-        } = *phase
-        else {
+        let Some((settled, show)) = phase.settle() else {
             return;
         };
-        *phase = if webrtc {
-            Phase::Serving
-        } else {
-            Phase::InBrowser
-        };
-        webrtc
+        *phase = settled;
+        show
     };
 
     // The server asked to be restarted while this was still being settled, and
@@ -516,14 +548,19 @@ fn open_server(app: &AppHandle) {
         restart(app);
         return;
     }
-    if webrtc {
-        note("the web view has WebRTC: the interview runs in this window");
-        let _ = window.navigate(SERVER_URL.clone());
-        return;
+    match show {
+        Show::Window => {
+            note("the web view has WebRTC: the interview runs in this window");
+            let _ = window.navigate(SERVER_URL.clone());
+        }
+        Show::Browser { open_tab } => {
+            note("the web view has no WebRTC: the interview runs in the default browser");
+            if open_tab {
+                open_in_browser(SERVER_URL.as_str());
+            }
+            show_start_page(app, &[("browser", "")]);
+        }
     }
-    note("the web view has no WebRTC: the interview runs in the default browser");
-    open_in_browser(SERVER_URL.as_str());
-    show_start_page(app, &[("browser", "")]);
 }
 
 /// Errors are ignored: there is no better place to report a browser that will
