@@ -938,6 +938,13 @@ fn static_problem_bank_and_judges_cover_each_problem() {
         ("factorial-trailing-zeroes", "maximum job count"),
         ("triangle", "cheapest values not connected"),
         ("triangle", "cheaper step misses the deep saving"),
+        ("house-robber", "high offer between two modest ones"),
+        ("house-robber", "both ends lose to the middle"),
+        ("house-robber", "last site pays the most"),
+        ("house-robber", "zero offer between two sites"),
+        ("house-robber", "two adjacent sites"),
+        ("house-robber", "large offer after five sites"),
+        ("house-robber", "two empty sites before the last"),
         (
             "best-time-to-buy-and-sell-stock-iii",
             "best trades span a dip",

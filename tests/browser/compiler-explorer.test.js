@@ -1648,6 +1648,110 @@ test("insert-interval cases reject reading the last block before checking for on
   );
 });
 
+test("house-robber cases reject greedy leasing shortcuts", () => {
+  const best = (nums) => {
+    let [skip, take] = [0, 0];
+    for (const offer of nums)
+      [skip, take] = [take, Math.max(take, skip + offer)];
+    return take;
+  };
+  // Leases sites from the largest offer down, each one whose neighbours are
+  // still free, so a large site can block two smaller ones worth more. Equal
+  // offers go to the earlier site unless laterOnTie is set.
+  const largestFirst = (nums, laterOnTie = false) => {
+    const leased = new Set();
+    let total = 0;
+    const order = [...nums.keys()].sort(
+      (a, b) => nums[b] - nums[a] || (laterOnTie ? b - a : a - b),
+    );
+    for (const site of order) {
+      if (leased.has(site - 1) || leased.has(site + 1)) continue;
+      leased.add(site);
+      total += nums[site];
+    }
+    return total;
+  };
+  for (const { label, input, expected } of judges["house-robber"].cases) {
+    assert.equal(
+      best(...structuredClone(input)),
+      expected,
+      `"${label}" must expect the best non-adjacent total`,
+    );
+  }
+  // Sums every other site from whichever end pays more, which is the answer
+  // only when the best lease never skips two sites in a row.
+  const alternateSites = (nums) =>
+    Math.max(
+      ...[0, 1].map((start) =>
+        nums.reduce(
+          (sum, offer, site) => sum + (site % 2 === start ? offer : 0),
+          0,
+        ),
+      ),
+    );
+  // Leases one end site and solves the rest, so it misses a best lease that
+  // skips both ends.
+  const oneEndFirst = (nums) =>
+    nums.length === 1
+      ? nums[0]
+      : Math.max(
+          nums[0] + best(nums.slice(2)),
+          nums.at(-1) + best(nums.slice(0, -2)),
+        );
+  // Leases a site when it and the site two ahead beat the one between.
+  const lookAhead = (nums) => {
+    let total = 0;
+    for (let site = 0; site < nums.length;) {
+      if (nums[site] + (nums[site + 2] ?? 0) >= (nums[site + 1] ?? 0)) {
+        total += nums[site];
+        site += 2;
+      } else site += 1;
+    }
+    return total;
+  };
+  for (const [name, shortcut, label] of [
+    [
+      "leasing the largest free offer first",
+      largestFirst,
+      "high offer between two modest ones",
+    ],
+    ["leasing every other site", alternateSites, "uneven neighbors"],
+    ["leasing one end site first", oneEndFirst, "both ends lose to the middle"],
+    ...[false, true].map((laterOnTie) => [
+      `the better of largest-first (ties to the ${laterOnTie ? "later" : "earlier"} site) and every-other`,
+      (nums) => Math.max(largestFirst(nums, laterOnTie), alternateSites(nums)),
+      "two empty sites before the last",
+    ]),
+    [
+      "comparing each site with the one two ahead",
+      lookAhead,
+      "last site pays the most",
+    ],
+    [
+      "dropping zero offers first",
+      (nums) => best(nums.filter((offer) => offer !== 0)),
+      "zero offer between two sites",
+    ],
+    [
+      "adding both offers of a two-site road",
+      (nums) => (nums.length === 2 ? nums[0] + nums[1] : best(nums)),
+      "two adjacent sites",
+    ],
+    [
+      "reading only the first five sites",
+      (nums) => best(nums.slice(0, 5)),
+      "large offer after five sites",
+    ],
+  ]) {
+    assertRejects(
+      "house-robber",
+      label,
+      shortcut,
+      `"${label}" must reject ${name}`,
+    );
+  }
+});
+
 test("remove-element cases reject skipping a last unchecked target", () => {
   const kept = (nums, val) => nums.filter((code) => code !== val);
   // Swaps kept codes in from the right, but tests left === right only
