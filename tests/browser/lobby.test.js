@@ -6000,25 +6000,35 @@ lobbyTest("deleting one report keeps another unticked", async (page) => {
 });
 
 lobbyTest(
-  "signing in does not carry a device untick onto the account copy",
+  "signing in does not carry device attempt state onto the account copy",
   async (page) => {
     const entry = {
       id: "shared",
-      problemId: EASY[0],
+      problemId: "retired-problem",
       problemTitle: "Shared attempt",
       language: "python",
       date: "2026-01-01T00:00:00Z",
       report: { decision: "HIRE" },
     };
     session = { signedIn: false, loginRequired: true };
-    reports = [{ id: entry.id, problemId: EASY[0], payload: entry }];
+    reports = [{ id: entry.id, problemId: entry.problemId, payload: entry }];
+    await page.route("**/problem-pages.json", (route) =>
+      route.fulfill({ status: 503 }),
+    );
     await page.addInitScript((entry) => {
       localStorage.setItem("codetrial_history", JSON.stringify([entry]));
     }, entry);
     await lobby(page);
     const summary = page.locator("#progress-summary");
+    const row = page.locator("#attempt-history > li");
+    const availability = row.locator(".attempt-unavailable");
     const box = page.getByRole("checkbox", { name: " · Shared attempt · " });
     assert.match(await summary.textContent(), /saved on this device/);
+    await availability.waitFor();
+    assert.match(
+      await availability.textContent(),
+      /^Could not check problem availability\./,
+    );
     await box.uncheck();
 
     await page.fill("#github-login", "candidate");
@@ -6027,6 +6037,16 @@ lobbyTest(
     // The account copy shares the device row's id, so only the change of
     // source keeps the untick made on the device off it.
     assert.equal(await box.isChecked(), true);
+    assert.equal(
+      await availability.textContent(),
+      "Problem no longer available",
+    );
+    assert.equal(
+      await row.getByRole("button", { name: "Try again" }).count(),
+      0,
+    );
+    await row.getByRole("button", { name: "Open report" }).click();
+    assert.equal(await row.locator(".report-card").isVisible(), true);
   },
 );
 
@@ -6250,6 +6270,165 @@ lobbyTest("try again selects the problem", async (page) => {
     /Selected problem:/,
   );
 });
+
+lobbyTest(
+  "past attempts explain when a problem cannot be retried",
+  async (page) => {
+    session = { signedIn: false, guestModeAvailable: true };
+    const date = new Date().toISOString();
+    await page.addInitScript(
+      (attempts) => {
+        localStorage.setItem("codetrial_history", JSON.stringify(attempts));
+      },
+      [
+        { ...savedAttempt(EASY[0]).payload, date },
+        {
+          ...savedAttempt("retired-problem").payload,
+          date,
+          problemTitle: "Retired problem",
+        },
+      ],
+    );
+    await lobby(page);
+
+    const rows = page.locator("#attempt-history > li");
+    const retired = rows.filter({ hasText: "Retired problem" });
+    const availability = retired.locator(".attempt-unavailable");
+    await availability.waitFor();
+    const retry = { name: "Try again", exact: true };
+    assert.equal(await retired.getByRole("button", retry).count(), 0);
+    assert.equal(
+      await availability.textContent(),
+      "Problem no longer available",
+    );
+    const downloading = page.waitForEvent("download");
+    await retired.getByRole("button", { name: /^Download report/ }).click();
+    const chunks = [];
+    for await (const chunk of await (await downloading).createReadStream())
+      chunks.push(chunk);
+    assert.match(Buffer.concat(chunks).toString("utf8"), /Retired problem/);
+    await retired.getByRole("button", { name: "Open report" }).click();
+    assert.equal(await retired.locator(".report-card").isVisible(), true);
+    assert.equal(
+      await retired
+        .getByRole("button", { name: "Collapse report" })
+        .isVisible(),
+      true,
+    );
+
+    const current = rows.filter({ hasNotText: "Retired problem" });
+    assert.equal(await current.locator(".attempt-unavailable").count(), 0);
+    assert.notEqual((await snapshot(page)).card, EASY[0]);
+    await current.getByRole("button", retry).click();
+    assert.equal((await snapshot(page)).card, EASY[0]);
+    assert.match(
+      await page.locator("#recommendation").textContent(),
+      /Selected problem:/,
+    );
+  },
+  { acceptDownloads: true },
+);
+
+lobbyTest(
+  "past attempts recover retry after the legacy problem lookup fails",
+  async (page) => {
+    session = { signedIn: false, guestModeAvailable: true };
+    const date = new Date().toISOString();
+    await page.addInitScript(
+      (attempts) => {
+        if (!localStorage.getItem("codetrial_history")) {
+          localStorage.setItem("codetrial_history", JSON.stringify(attempts));
+        }
+      },
+      [
+        {
+          ...savedAttempt("retired-problem").payload,
+          date,
+          pageMapChecked: true,
+          problemTitle: "Checked attempt",
+        },
+        {
+          ...savedAttempt("two-sum").payload,
+          date,
+          problemTitle: "Legacy attempt",
+        },
+      ],
+    );
+    const pageMap = "**/problem-pages.json";
+    await page.route(pageMap, (route) =>
+      route.fulfill({ status: 503, body: "unavailable" }),
+    );
+    await lobby(page);
+
+    const rows = page.locator("#attempt-history > li");
+    const row = rows.filter({ hasText: "Legacy attempt" });
+    const checked = rows.filter({ hasText: "Checked attempt" });
+    const availability = row.locator(".attempt-unavailable");
+    const checkedAvailability = checked.locator(".attempt-unavailable");
+    const retry = row.getByRole("button", { name: "Try again", exact: true });
+    await availability.waitFor();
+    assert.match(
+      await availability.textContent(),
+      /^Could not check problem availability\./,
+    );
+    assert.equal(await retry.count(), 0);
+    assert.equal(await checkedAvailability.isVisible(), true);
+    assert.equal(
+      await checkedAvailability.textContent(),
+      "Problem no longer available",
+    );
+
+    await page.unroute(pageMap);
+    await lobby(page);
+    await retry.waitFor();
+    assert.notEqual((await snapshot(page)).card, EASY[0]);
+    await retry.click();
+    assert.equal(await availability.count(), 0);
+    assert.equal((await snapshot(page)).card, EASY[0]);
+  },
+);
+
+lobbyTest(
+  "past attempts can retry a legacy problem when the history write is refused",
+  async (page) => {
+    session = { signedIn: false, guestModeAvailable: true };
+    await page.addInitScript(
+      (attempt) => {
+        const key = "codetrial_history";
+        localStorage.setItem(key, JSON.stringify([attempt]));
+        const setItem = Storage.prototype.setItem;
+        Storage.prototype.setItem = function (name, value) {
+          if (this === localStorage && name === key)
+            throw new DOMException(
+              "History write refused",
+              "QuotaExceededError",
+            );
+          return setItem.call(this, name, value);
+        };
+      },
+      {
+        ...savedAttempt("two-sum").payload,
+        date: new Date().toISOString(),
+        id: "legacy-attempt",
+        problemTitle: "Legacy attempt",
+      },
+    );
+    await lobby(page);
+
+    const row = page.locator("#attempt-history > li").filter({
+      hasText: "Legacy attempt",
+    });
+    await row.waitFor();
+    assert.equal(await row.locator(".attempt-unavailable").count(), 0);
+    assert.notEqual((await snapshot(page)).card, EASY[0]);
+    await row.getByRole("button", { name: "Try again", exact: true }).click();
+    assert.equal((await snapshot(page)).card, EASY[0]);
+    const storedId = await page.evaluate(
+      () => JSON.parse(localStorage.getItem("codetrial_history"))[0].problemId,
+    );
+    assert.equal(storedId, "two-sum");
+  },
+);
 
 for (const filter of ["difficulty", "topic"]) {
   lobbyTest(

@@ -231,6 +231,11 @@ export function renameLocalHistory(pages, storage, markUnmapped = false) {
   }
 }
 
+/// Resolve displayed rows even when the rename could not be saved.
+export function resolveHistoryProblemIds(entries, pages) {
+  return renamedEntries(entries, pages, false).next;
+}
+
 function renamedEntries(entries, pages, markUnmapped) {
   let renamed = false;
   const next = entries.map((entry) => {
