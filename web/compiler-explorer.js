@@ -462,6 +462,15 @@ ${spec.cases.map((testCase, index) => cCase(spec, testCase, index)).join("\n")}
 }`;
 }
 
+export const ORIGINAL_TREE_NODE_ERROR =
+  "Returned ancestor must be an original input node.";
+
+export function requiresOriginalTreeNode(spec) {
+  return (
+    spec.outputType === "binaryTree" && spec.argTypes?.includes("treeNodeValue")
+  );
+}
+
 function cCase(spec, testCase, index) {
   const declarations = spec.paramTypes
     .map((type, paramIndex) => cDeclaration(spec, testCase, type, paramIndex))
@@ -469,6 +478,19 @@ function cCase(spec, testCase, index) {
   return `  ${index ? 'printf(",");' : ""}
   {
 ${declarations}
+    ${
+      requiresOriginalTreeNode(spec)
+        ? `int originalTreeSize = 0;
+    struct TreeNode** originalTreeNodes = calloc(${Math.max(1, testCase.input[spec.nodeRefRootParam ?? 0].length)}, sizeof(*originalTreeNodes));
+    if (!originalTreeNodes) exit(EXIT_FAILURE);
+    if (${spec.paramNames[spec.nodeRefRootParam ?? 0]}) originalTreeNodes[originalTreeSize++] = ${spec.paramNames[spec.nodeRefRootParam ?? 0]};
+    for (int i = 0; i < originalTreeSize; i++) {
+      struct TreeNode* node = originalTreeNodes[i];
+      if (node->left) originalTreeNodes[originalTreeSize++] = node->left;
+      if (node->right) originalTreeNodes[originalTreeSize++] = node->right;
+    }`
+        : ""
+    }
     int returnSize = 0;
     int* returnColumnSizes = NULL;
     clock_t start = clock();
@@ -525,7 +547,15 @@ function cPrintActual(spec) {
     return `if (actualSize < 0 || actualSize > ${prefixName}Size) { printf("null,\\"error\\":"); json_string(stdout, "Return value must be an integer length for the kept prefix."); } else { json_int_array(stdout, ${prefixName}, actualSize); }`;
   }
   if (spec.outputType === "linkedList") return `json_list(stdout, ${name});`;
-  if (spec.outputType === "binaryTree") return `json_tree(stdout, ${name});`;
+  if (spec.outputType === "binaryTree") {
+    if (requiresOriginalTreeNode(spec))
+      return `bool original = false;
+    for (int i = 0; i < originalTreeSize; i++) if (originalTreeNodes[i] == ${name}) { original = true; break; }
+    free(originalTreeNodes);
+    if (${name} && !original) { printf("null,\\\"error\\\":"); json_string(stdout, ${JSON.stringify(ORIGINAL_TREE_NODE_ERROR)}); }
+    else json_tree(stdout, ${name});`;
+    return `json_tree(stdout, ${name});`;
+  }
   if (spec.outputType === "randomList")
     return `json_random_list(stdout, ${name});`;
   if (spec.outputType === "graphNode") return `json_graph(stdout, ${name});`;
@@ -640,10 +670,30 @@ function cppCase(spec, testCase) {
       : `auto actual = solution.${spec.entry}(${callArgs});`;
   return `  try {
 ${declarations}
+    ${
+      requiresOriginalTreeNode(spec)
+        ? `std::vector<TreeNode*> originalTreeNodes;
+    if (${spec.paramNames[spec.nodeRefRootParam ?? 0]}) originalTreeNodes.push_back(${spec.paramNames[spec.nodeRefRootParam ?? 0]});
+    for (size_t i = 0; i < originalTreeNodes.size(); i++) {
+      auto* node = originalTreeNodes[i];
+      if (node->left) originalTreeNodes.push_back(node->left);
+      if (node->right) originalTreeNodes.push_back(node->right);
+    }`
+        : ""
+    }
     Solution solution;
     auto start = chrono::steady_clock::now();
     ${call}
     auto elapsed = chrono::duration<double, milli>(chrono::steady_clock::now() - start).count();
+    ${
+      requiresOriginalTreeNode(spec)
+        ? `bool original = false;
+    for (size_t i = 0; i < originalTreeNodes.size(); i++) {
+      if (originalTreeNodes[i] == actual) { original = true; break; }
+    }
+    if (actual && !original) throw runtime_error(${JSON.stringify(ORIGINAL_TREE_NODE_ERROR)});`
+        : ""
+    }
     results.push_back("{\\"actual\\":" + ${cppJsonExpression(spec, "actual")} + ",\\"timeMs\\":" + toJson(elapsed) + "}");
   } catch (const exception& error) {
     results.push_back("{\\"error\\":" + jsonEscape(error.what()) + ",\\"timeMs\\":0}");
@@ -831,10 +881,30 @@ function javaCase(spec, testCase) {
       : `Object actual = solution.${spec.entry}(${callArgs});`;
   return `    try {
 ${declarations}
+      ${
+        requiresOriginalTreeNode(spec)
+          ? `java.util.ArrayList<TreeNode> originalTreeNodes = new java.util.ArrayList<>();
+      if (${spec.paramNames[spec.nodeRefRootParam ?? 0]} != null) originalTreeNodes.add(${spec.paramNames[spec.nodeRefRootParam ?? 0]});
+      for (int i = 0; i < originalTreeNodes.size(); i++) {
+        TreeNode node = originalTreeNodes.get(i);
+        if (node.left != null) originalTreeNodes.add(node.left);
+        if (node.right != null) originalTreeNodes.add(node.right);
+      }`
+          : ""
+      }
       Solution solution = new Solution();
       long start = System.nanoTime();
       ${call}
       double elapsed = (System.nanoTime() - start) / 1000000.0;
+      ${
+        requiresOriginalTreeNode(spec)
+          ? `boolean original = false;
+      for (int i = 0; i < originalTreeNodes.size(); i++) {
+        if (originalTreeNodes.get(i) == actual) { original = true; break; }
+      }
+      if (actual != null && !original) throw new IllegalArgumentException(${JSON.stringify(ORIGINAL_TREE_NODE_ERROR)});`
+          : ""
+      }
       results.add("{\\"actual\\":" + ${javaJsonExpression(spec, "actual")} + ",\\"timeMs\\":" + json(elapsed) + "}");
     } catch (Throwable error) {
       results.add("{\\"error\\":" + json(error.toString()) + ",\\"timeMs\\":0}");

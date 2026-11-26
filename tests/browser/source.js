@@ -29,6 +29,8 @@ import {
   generateHarness,
   parseCompilerResults,
   MAX_QUAD_TREE_NODES,
+  ORIGINAL_TREE_NODE_ERROR,
+  requiresOriginalTreeNode,
 } from "../../web/compiler-explorer.js";
 import { pythonDriver } from "../../web/runners.js";
 
@@ -77,6 +79,17 @@ export function jsWorkerSource() {
   });
 }
 
+// Direct driver tests supply the contract normally stamped on runBrowserTests'
+// runnable spec before it crosses the worker boundary.
+export function runnerSpec(spec) {
+  return {
+    ...spec,
+    originalTreeNodeError: requiresOriginalTreeNode(spec)
+      ? ORIGINAL_TREE_NODE_ERROR
+      : null,
+  };
+}
+
 const toolProbes = new Map();
 function probeTool(command, versionArg) {
   const key = JSON.stringify([command, versionArg]);
@@ -120,7 +133,12 @@ export function compiledSkip(language) {
 
 const runProcess = promisify(execFile);
 
-export async function runCompiled(language, spec, code, { flags = [] } = {}) {
+export async function runCompiled(
+  language,
+  spec,
+  code,
+  { flags = [], transformHarness = (source) => source } = {},
+) {
   for (const probe of compiledProbes(language)) {
     assert.equal(probe.skip, false, probe.skip);
     assert.equal(probe.failure, undefined, probe.failure);
@@ -133,7 +151,10 @@ export async function runCompiled(language, spec, code, { flags = [] } = {}) {
       dir,
       process.platform === "win32" ? "candidate.exe" : "candidate",
     );
-    writeFileSync(source, generateHarness(language, spec, code));
+    writeFileSync(
+      source,
+      transformHarness(generateHarness(language, spec, code)),
+    );
     await runProcess(
       config.compiler,
       language === "java"
@@ -187,7 +208,7 @@ export function runPythonDriver(code, spec) {
     input: JSON.stringify({
       driver: pythonDriver,
       code,
-      spec: JSON.stringify(spec),
+      spec: JSON.stringify(runnerSpec(spec)),
     }),
     encoding: "utf8",
     timeout: 10000,
