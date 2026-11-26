@@ -37,6 +37,62 @@
         ""
       ],
       "expected": 0
+    },
+    {
+      "label": "repeat in the middle of the stretch",
+      "input": [
+        "dvdf"
+      ],
+      "expected": 3
+    },
+    {
+      "label": "left edge jumps more than one key",
+      "input": [
+        "abccad"
+      ],
+      "expected": 3
+    },
+    {
+      "label": "longest stretch away from both ends",
+      "input": [
+        "aabcdaa"
+      ],
+      "expected": 4
+    },
+    {
+      "label": "every key distinct",
+      "input": [
+        "abc"
+      ],
+      "expected": 3
+    },
+    {
+      "label": "case and symbols count",
+      "input": [
+        "aA 1"
+      ],
+      "expected": 4
+    },
+    {
+      "label": "space before and after the keys",
+      "input": [
+        " A!1 "
+      ],
+      "expected": 4
+    },
+    {
+      "label": "leading space only",
+      "input": [
+        " abca"
+      ],
+      "expected": 4
+    },
+    {
+      "label": "trailing space only",
+      "input": [
+        "abca "
+      ],
+      "expected": 4
     }
   ],
   "paramNames": [

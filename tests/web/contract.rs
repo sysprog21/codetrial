@@ -609,7 +609,39 @@ fn static_problem_bank_and_judges_cover_each_problem() {
         ("happy-number", "loops through four"),
         (
             "longest-substring-without-repeating-characters",
-            "left edge",
+            "left edge must not move backward",
+        ),
+        (
+            "longest-substring-without-repeating-characters",
+            "repeat in the middle of the stretch",
+        ),
+        (
+            "longest-substring-without-repeating-characters",
+            "left edge jumps more than one key",
+        ),
+        (
+            "longest-substring-without-repeating-characters",
+            "longest stretch away from both ends",
+        ),
+        (
+            "longest-substring-without-repeating-characters",
+            "every key distinct",
+        ),
+        (
+            "longest-substring-without-repeating-characters",
+            "case and symbols count",
+        ),
+        (
+            "longest-substring-without-repeating-characters",
+            "space before and after the keys",
+        ),
+        (
+            "longest-substring-without-repeating-characters",
+            "leading space only",
+        ),
+        (
+            "longest-substring-without-repeating-characters",
+            "trailing space only",
         ),
         ("minimum-window-substring", "duplicate required"),
         (
