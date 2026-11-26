@@ -389,6 +389,92 @@ const assertRejects = (problem, label, run, message) => {
   assert.notEqual(run(...structuredClone(input)), expected, message);
 };
 
+test("longest-common-prefix cases reject incomplete comparisons", () => {
+  const firstAndLast = (strs) => {
+    const first = strs[0];
+    const last = strs.at(-1);
+    let at = 0;
+    while (at < first.length && first[at] === last[at]) at += 1;
+    return first.slice(0, at);
+  };
+
+  const containsPrefix = (strs) => {
+    let prefix = strs[0];
+    for (const str of strs.slice(1)) {
+      while (!str.includes(prefix)) prefix = prefix.slice(0, -1);
+    }
+    return prefix;
+  };
+
+  const ignoresEndedString = (strs) => {
+    const first = strs[0];
+    for (let i = 0; i < first.length; i += 1) {
+      for (const str of strs.slice(1)) {
+        if (i < str.length && str[i] !== first[i]) return first.slice(0, i);
+      }
+    }
+    return first;
+  };
+
+  const lengthSortedEndpoints = (strs) =>
+    firstAndLast([...strs].sort((a, b) => a.length - b.length));
+
+  const matchingColumns = (strs) => {
+    let count = 0;
+    const shortest = Math.min(...strs.map((str) => str.length));
+    for (let i = 0; i < shortest; i += 1) {
+      if (strs.every((str) => str[i] === strs[0][i])) count += 1;
+    }
+    return strs[0].slice(0, count);
+  };
+
+  for (const [label, shortcut, why] of [
+    [
+      "middle string breaks prefix",
+      firstAndLast,
+      "a middle string must be checked even when the endpoints share a prefix",
+    ],
+    [
+      "same substring appears later",
+      containsPrefix,
+      "a prefix must start each string, not just appear in it",
+    ],
+    [
+      "later string ends first",
+      ignoresEndedString,
+      "the prefix must end when any string ends",
+    ],
+    [
+      "middle differs at second letter",
+      lengthSortedEndpoints,
+      "sorting by length does not make endpoint comparison sufficient",
+    ],
+    [
+      "matching column after mismatch",
+      matchingColumns,
+      "matching columns after a mismatch cannot extend the prefix",
+    ],
+  ]) {
+    assertRejects("longest-common-prefix", label, shortcut, why);
+  }
+
+  for (const {
+    label,
+    input: [strs],
+    expected,
+  } of judges["longest-common-prefix"].cases) {
+    let prefix = strs[0];
+    while (!strs.every((str) => str.startsWith(prefix))) {
+      prefix = prefix.slice(0, -1);
+    }
+    assert.equal(
+      prefix,
+      expected,
+      `"${label}" must expect the longest shared prefix`,
+    );
+  }
+});
+
 test("word-pattern cases reject shortcuts that skip a length or mapping check", () => {
   const distinct = (values) => new Set(values).size;
   const sameDistinct = (p, w) =>

@@ -594,6 +594,11 @@ fn static_problem_bank_and_judges_cover_each_problem() {
         ("integer-to-roman", "compound subtractive"),
         ("length-of-last-word", "trailing spaces"),
         ("longest-common-prefix", "empty string"),
+        ("longest-common-prefix", "middle string breaks prefix"),
+        ("longest-common-prefix", "same substring appears later"),
+        ("longest-common-prefix", "later string ends first"),
+        ("longest-common-prefix", "middle differs at second letter"),
+        ("longest-common-prefix", "matching column after mismatch"),
         ("reverse-words-in-a-string", "collapse internal spaces"),
         ("zigzag-conversion", "single row"),
         (
