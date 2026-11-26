@@ -43,6 +43,15 @@ again. A PR whose only open threads are the maintainer's own, with nothing new
 to say, still gets its review: an empty draft is a result, and recording it is
 what stops the next sweep from reading the same head again.
 
+Two cases need no review agent: `since` equals `head` (the ledger read this very
+head and only the open-thread count moved, with no push), and a head that a full
+review by hand or by another skill (a manual `/gh-review`, or `post-review.sh`)
+already covered this session, with every finding posted. A partial review does
+not qualify: run the agent. For either case, bundle the PR, do the similar-work
+and open-thread checks of step 2 below, write the draft with empty `comments`,
+and finish it as below. `review-finish.sh` records the head itself on exit 0;
+after an exit 4, record it once the remaining actions succeed.
+
 An author's reply that says a change was made is checked against the head, not
 believed: look for the named test, entry or line at the head, and compare the
 reply's time with the head commit's. A reply posted after the head was pushed (its first check suite, not the
@@ -222,7 +231,11 @@ each of this PR's entries in outdated, or none>.
    at the head addresses it>"}], "refine": [{"url": "<url>", "path": "<path>", "kind": "unaddressed" or "resolve"}]}` and return which reviewers and lenses ran or
    were skipped and why, then each finding as `path:line`, the defect in a
    sentence, and how it was verified, then the questions, each similar match
-   and each thread to resolve, and why. Empty lists are a result.
+   and each thread to resolve, and why. Empty lists are a result. Return
+   only what the agent alone knows: the held back and dropped findings,
+   security findings and the maintainer's calls, each in a line. The sweep adds
+   the posted links, and the agent recaps neither the scope checklist nor the
+   code paths traced that held up.
 
    The comment text, the summary rule and what never goes on a public thread
    are [comments.md](../codetrial-review/comments.md): a security finding goes

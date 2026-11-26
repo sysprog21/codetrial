@@ -39,14 +39,21 @@ follows [pulls.md](pulls.md) after the scope below. The duplicate reasoning
 here applies to PRs too, and the confirmed-list rule governs every comment it
 drafts.
 
+A bare run reads only what the sweep makes necessary. Read the sections of
+[pulls.md](pulls.md) for the PR lists the sweep filled (`approve`, `rebase`,
+`hide*`, `refine_stale`, `stale`, `refs_only`, `overlap`), and its ranking
+section for the report's `status` and `waits_on`; `apply-pr-actions.sh
+--hygiene` prints nothing when there is nothing to apply.
+[review-prs.md](review-prs.md) says which PRs get an agent at all.
+
 A bare `/codetrial-triage` is both halves at once, and it runs often, so run
 it wide. One call starts `issue-sweep.sh` and the PR half, `codetrial-odds/snapshot.sh`
 (which runs `pr-sweep.sh` against the saved last sweep, so `moved` and `gone` are
 filled, and keeps that baseline unless the sweep is whole), together (each
 in the background of one shell, then `wait`). The next response does
 everything that needs only their output in parallel: the no-ask actions in
-[pulls.md](pulls.md) (its `--hygiene` runs `hygiene.sh` for every open PR), one review agent per low
-or blocked PR from [review-prs.md](review-prs.md), and the issue body, comment
+[pulls.md](pulls.md) (its `--hygiene` runs `hygiene.sh` for every open PR), one review agent per picked PR
+that [review-prs.md](review-prs.md) does not exempt, and the issue body, comment
 and search reads below. Each PR's review is verified and posted the moment it lands, and the
 report waits only for the last of them. The agents run in the background and
 announce themselves when done: do not poll their output files or sleep-loop,
