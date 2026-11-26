@@ -12,6 +12,7 @@ __pycache__/
 .next/
 out/
 target/
+.ephyra/
 tests/artifacts/
 scripts/leetcode-cache/
 problem-bank/leetcode/

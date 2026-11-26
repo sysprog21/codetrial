@@ -153,6 +153,34 @@ installing its tools, so a PR with no Rust changes starts no mutation shards and
 pays no mutation-tool setup cost. Rust diffs still use the complete
 diff-selected mutant set and the existing exclusions.
 
+The properties in `tests/unit/tasks/defense_properties.rs` and `package_properties.rs`
+(library unit tests, so no extra test binary is linked per mutant) use fixed seeds and bounded case counts
+to keep ordinary test and mutation runs bounded. They check line selection
+(prefix and input-order stability), the added lines of generated diffs against
+a model of the diff (including names Git quotes), trace decoding and its
+damaged forms, constant changes, and close dates against a calendar model
+written without chrono. The same close-date strings in
+`tests/fixtures/close-dates.json` are given to `parse_close` there and to
+`valid_close` in `tests/test_task_package.py`, so the server and the packager
+cannot drift apart. The real Git diffs of names with spaces, multibyte letters
+and quoted characters are read in `tests/unit/tasks/defense_checkout.rs`,
+through the production reader, using synthetic data.
+
+Run the properties alone with `cargo test --locked --lib property_tests`. Ephyra
+prints a replay value for a failure and stores local regression data in
+`.ephyra/`, which it replays before the generated cases; turn a confirmed
+counterexample into a checked-in regression test and delete the entry. The CI
+mutation step sets `EPHYRA_REGRESSIONS=0`: a mutant that a property kills would
+otherwise leave an entry that every later mutant in the in-place tree replays.
+`make mutants` and the reproduction below set it; set it too for a bare
+`cargo mutants` run. Property tests complement the mutation gate; they do not
+replace it.
+
+Fixed seeds draw the same inputs on every run. For new ones, run
+`make explore-properties`: a fresh seed (printed first, repeatable with
+`SEED=<n>`), twenty thousand cases a property, no replay. The variables apply
+to every property in the file, so keep them out of the mutation lane.
+
 To reproduce a failed mutation shard, or to answer a reviewer who asks for a
 mutation run, run the same diff-scoped check CI runs. `make mutants` is not
 that: it audits a fixed set of files with `-j 6 --timeout 900`, whatever your
@@ -169,6 +197,7 @@ if [ "$(uname -sm)" = "Linux x86_64" ]; then
 else
     : "${CXX:?set CXX to Clang 21 or later}"
 fi
+export EPHYRA_REGRESSIONS=0   # as CI's mutation step: no replay of saved failures
 git diff origin/main...HEAD -- '*.rs' > "$SCRATCH/pr.diff"
 cargo mutants --list --cargo-arg=--locked --in-diff "$SCRATCH/pr.diff"   # optional preview
 cargo mutants --in-place --in-diff "$SCRATCH/pr.diff" --cargo-arg=--locked

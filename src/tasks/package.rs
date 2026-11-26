@@ -554,3 +554,7 @@ fn site_seconds(headers: &reqwest::header::HeaderMap) -> Option<u64> {
 #[cfg(test)]
 #[path = "../../tests/unit/tasks/package.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../tests/unit/tasks/package_properties.rs"]
+mod property_tests;

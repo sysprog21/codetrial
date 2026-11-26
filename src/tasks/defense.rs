@@ -703,3 +703,7 @@ mod attempt_tests;
 #[cfg(test)]
 #[path = "../../tests/unit/tasks/defense_hints.rs"]
 mod hint_tests;
+
+#[cfg(test)]
+#[path = "../../tests/unit/tasks/defense_properties.rs"]
+mod property_tests;

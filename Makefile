@@ -1,4 +1,4 @@
-.PHONY: all build clean indent indent-check check mutants fetch-vendor \
+.PHONY: all build clean indent indent-check check mutants explore-properties fetch-vendor \
 	fetch-clang verify-vendor web hooks uninstall-hooks
 
 all: build
@@ -77,7 +77,13 @@ MUTANTS_SCOPE ?= -f 'src/recording/*.rs' -f src/accounts.rs -f 'src/accounts/*.r
 # own flags and forwards this one to every cargo it runs, which is what keeps a
 # mutant from being judged against a lockfile it quietly updated.
 mutants: fetch-vendor $(CLANG)
-	cargo mutants --cargo-arg=--locked $(MUTANTS_FLAGS) $(MUTANTS_SCOPE)
+	EPHYRA_REGRESSIONS=0 cargo mutants --cargo-arg=--locked $(MUTANTS_FLAGS) $(MUTANTS_SCOPE)
+
+# New inputs for the properties in tests/unit/tasks/*_properties.rs, whose fixed seeds draw
+# the same ones every run; docs/development.md says how to use it.
+explore-properties: fetch-vendor $(CLANG)
+	@seed=$${SEED:-$$(date +%s)}; echo "EPHYRA_SEED=$$seed"; \
+	EPHYRA_SEED=$$seed EPHYRA_TESTS=20000 EPHYRA_REGRESSIONS=0 cargo test --locked --lib property_tests
 
 # The hooks run the fast half of the gate over the staged content and hold the
 # commit message to the rules the log already follows. The wrappers resolve the
