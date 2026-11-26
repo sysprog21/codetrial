@@ -22,6 +22,8 @@ only thing in the repo that crosses that boundary.
 | `task-state.json`, `task-error.json`, `task-review.json` | written by the generator; the Rust side that must agree is `TaskSession::snapshot` (state), `ErrorMessage` (error) and `tasks::report` (review) | `web/task.js`, driven from these files by `tests/browser/task-workspace.test.js` and `task-controller.test.js`; Rust reads them in `tests/unit/tasks/session.rs` and `report.rs` |
 | `acquisition-report.json` | `Arming::report` in `src/livekit/probe/acquisition.rs`, written by `acquisition_report_is_the_wire_fixture_the_consumer_reads` (regenerate with `CODETRIAL_UPDATE_FIXTURES=1 cargo test --lib acquisition_report_is_the_wire`) | `scripts/long-interview-evidence.cjs`, read by `tests/browser/long-interview-evidence.test.js` |
 
+`close-dates.json` is not wire data either: close-date strings with the verdict both `parse_close` (`tests/unit/tasks/package.rs`) and `valid_close` (`tests/test_task_package.py`) must give, so the server and the packaging tool refuse and accept the same dates.
+
 `tests/fixtures/task-mode/` is not wire data: it is the packaged task set, its
 encrypted package and the patches both the server and the packaging tool must
 refuse, shared by the Rust and Python tests.
