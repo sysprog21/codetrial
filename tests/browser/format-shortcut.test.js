@@ -319,11 +319,16 @@ test("code that does not parse is left as it was, selection and history included
 
 test("a formatter that cannot load changes nothing, and the next press loads it", async (t) => {
   let online = false;
+  let aborted = 0;
   const ctx = await interviewPage(t, {
+    // A regular expression, not a glob: a retry asks for the module under a
+    // query string, which a `**/standalone.mjs` glob does not match.
     prepare: (page) =>
-      page.route("**/vendor/prettier/standalone.mjs", (route) =>
-        online ? route.continue() : route.abort(),
-      ),
+      page.route(/\/vendor\/prettier\/standalone\.mjs(\?.*)?$/, (route) => {
+        if (online) return route.continue();
+        aborted += 1;
+        return route.abort();
+      }),
   });
   if (!ctx) return;
   const { page, errors } = ctx;
@@ -335,8 +340,13 @@ test("a formatter that cannot load changes nothing, and the next press loads it"
       "Formatting failed: The formatter could not be loaded. The code was not changed.",
     );
     assert.equal(await buffer(page), MESSY);
+    // The retry fails too, under a fresh URL, so the route really sees it.
+    await formatNow(page);
+    assert.equal(aborted, 2);
+    assert.equal(await buffer(page), MESSY);
     online = true;
     await formatNow(page);
+    assert.match(await status(page).textContent(), /^Formatted the code\./);
     assert.equal(await buffer(page), tidy);
     assert.deepEqual(errors, []);
   } finally {

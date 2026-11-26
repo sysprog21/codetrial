@@ -16,18 +16,27 @@ const MODULES = [
 /// at their defaults, so the output depends only on the code, the indentation
 /// the lobby chose and the pinned version.
 export function createJavaScriptFormatter(load = (url) => import(url.href)) {
-  let loading = null;
+  // A failed import is cached by the browser under its URL, so a retry asks
+  // for that module under `?retry=n` (the server ignores the query) and keeps
+  // the modules that loaded.
+  const slots = MODULES.map(() => ({ attempt: 0, loading: null }));
+  function importModule(slot, url) {
+    slot.loading ??= load(
+      slot.attempt ? new URL(`?retry=${slot.attempt}`, url) : url,
+    ).catch((error) => {
+      slot.attempt += 1;
+      slot.loading = null;
+      throw error;
+    });
+    return slot.loading;
+  }
   function loaded() {
-    loading ??= Promise.all(MODULES.map(load)).then(
-      ([prettier, estree, acorn]) => ({ prettier, plugins: [estree, acorn] }),
-      (error) => {
-        // A dropped connection is not the formatter's last word: the next
-        // press tries again rather than replaying a cached rejection.
-        loading = null;
-        throw error;
-      },
-    );
-    return loading;
+    return Promise.all(
+      MODULES.map((url, index) => importModule(slots[index], url)),
+    ).then(([prettier, estree, acorn]) => ({
+      prettier,
+      plugins: [estree, acorn],
+    }));
   }
 
   return async function formatJavaScript(code, caret, indent) {
