@@ -1188,6 +1188,9 @@ def _random_list_to_array(node):
         rows.append([node.val, None if node.random is None else nodes.index(node.random)])
     return rows
 
+def _graph_neighbors(node):
+    return getattr(node, "neighbors", None) or []
+
 def _graph_to_adjacency(node):
     if node is None:
         return []
@@ -1201,13 +1204,13 @@ def _graph_to_adjacency(node):
                 raise TypeError("Returned graph must not contain distinct nodes with the same ID.")
             continue
         by_value[current.val] = current
-        for neighbor in getattr(current, "neighbors", []) or []:
+        for neighbor in _graph_neighbors(current):
             if neighbor is None:
                 raise TypeError("Returned graph has a NULL neighbor.")
             queue.append(neighbor)
     if node.val != 1:
         raise TypeError("Returned graph must start at node 1.")
-    return [sorted(neighbor.val for neighbor in by_value[value].neighbors) for value in sorted(by_value)]
+    return [sorted(neighbor.val for neighbor in _graph_neighbors(by_value[value])) for value in sorted(by_value)]
 
 # The JavaScript runner turns a non-finite number into null, and so does the
 # Java harness. Here json.dumps would write a bare Infinity or NaN, which is not
