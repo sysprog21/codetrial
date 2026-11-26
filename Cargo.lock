@@ -308,6 +308,7 @@ dependencies = [
  "axum",
  "base64 0.23.1",
  "chrono",
+ "ephyra",
  "futures-util",
  "hmac",
  "hyper-util",
@@ -581,6 +582,30 @@ name = "either"
 version = "1.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0e9c71c2167ca323c882b99918929403426e2373ea17242ff5653e0d5e1058be"
+
+[[package]]
+name = "ephyra"
+version = "0.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fd1a1caa1aec3df700ce0d4d791f725cbea8db09c6df739f1768c84bf3f44d67"
+dependencies = [
+ "ephyra-macros",
+ "rand_chacha",
+ "rand_core 0.9.5",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "ephyra-macros"
+version = "0.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4f9ccd9870afa5da6d9450ec5d7a1f5815cc4ef27c06b12cb8e0726796d5c9f9"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.9",
+]
 
 [[package]]
 name = "equivalent"

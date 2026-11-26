@@ -25,6 +25,7 @@ from problem_bank.task_package import (  # noqa: E402
     publish_scan,
     render_prompt,
     rules_in_words,
+    valid_close,
     validate_package,
     validated_rules,
 )
@@ -83,6 +84,18 @@ def published(directory, ciphertext, manifest):
 
 
 class TaskPackageTests(unittest.TestCase):
+    def test_close_dates_agree_with_the_servers_corpus(self):
+        # The strings tests/unit/tasks/package.rs gives `parse_close`.
+        rows = json.loads(
+            (Path(__file__).parent / "fixtures" / "close-dates.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertGreater(len(rows), 20)
+        for row in rows:
+            with self.subTest(text=row["text"]):
+                self.assertIs(valid_close(row["text"]), row["valid"])
+
     def test_instructor_preview_matches_readable_runtime_golden(self):
         for task_id in ("delimiter-closer", "two-sum"):
             expected = (

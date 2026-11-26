@@ -1,0 +1,122 @@
+[
+ {
+  "text": "1970-01-01T00:00:00Z",
+  "valid": true
+ },
+ {
+  "text": "2000-02-29T00:00:00Z",
+  "valid": true
+ },
+ {
+  "text": "2024-02-29T23:59:59Z",
+  "valid": true
+ },
+ {
+  "text": "2038-01-19T03:14:07Z",
+  "valid": true
+ },
+ {
+  "text": "2400-02-29T12:00:00Z",
+  "valid": true
+ },
+ {
+  "text": "9999-12-31T23:59:59Z",
+  "valid": true
+ },
+ {
+  "text": "2026-12-31T23:59:59Z",
+  "valid": true
+ },
+ {
+  "text": "1969-12-31T23:59:59Z",
+  "valid": false
+ },
+ {
+  "text": "1970-01-01T23:59:60Z",
+  "valid": false
+ },
+ {
+  "text": "1900-02-29T00:00:00Z",
+  "valid": false
+ },
+ {
+  "text": "2100-02-29T00:00:00Z",
+  "valid": false
+ },
+ {
+  "text": "2023-02-29T00:00:00Z",
+  "valid": false
+ },
+ {
+  "text": "2026-02-31T00:00:00Z",
+  "valid": false
+ },
+ {
+  "text": "2026-04-31T00:00:00Z",
+  "valid": false
+ },
+ {
+  "text": "2026-00-10T00:00:00Z",
+  "valid": false
+ },
+ {
+  "text": "2026-13-10T00:00:00Z",
+  "valid": false
+ },
+ {
+  "text": "2026-01-00T00:00:00Z",
+  "valid": false
+ },
+ {
+  "text": "2026-12-31T24:00:00Z",
+  "valid": false
+ },
+ {
+  "text": "2026-12-31T23:60:00Z",
+  "valid": false
+ },
+ {
+  "text": "2026-12-31T23:59:59",
+  "valid": false
+ },
+ {
+  "text": "2026-12-31T23:59:59.000Z",
+  "valid": false
+ },
+ {
+  "text": "2026-12-31t23:59:59Z",
+  "valid": false
+ },
+ {
+  "text": "2026-12-31T23:59:59z",
+  "valid": false
+ },
+ {
+  "text": "2026-12-31 23:59:59Z",
+  "valid": false
+ },
+ {
+  "text": " 2026-12-31T23:59:59Z",
+  "valid": false
+ },
+ {
+  "text": "2026-12-31T23:59:59+00:00",
+  "valid": false
+ },
+ {
+  "text": "2026-12-31T23:59:59Z\n",
+  "valid": false
+ },
+ {
+  "text": "\u0662026-12-31T23:59:59Z",
+  "valid": false
+ },
+ {
+  "text": "0000-01-01T00:00:00Z",
+  "valid": false
+ },
+ {
+  "text": "",
+  "valid": false
+ }
+]

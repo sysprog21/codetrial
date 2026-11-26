@@ -2,6 +2,7 @@
 //! `scripts/review.py` and `scripts/defense.py`, keyed with the package's
 //! salt.
 
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 
 use ring::hmac;
@@ -47,10 +48,50 @@ pub(super) fn exercise_id(text: &str) -> bool {
 /// The longest line an item asks about.
 pub(super) const MAX_LINE_BYTES: usize = 300;
 
+/// A path as Git prints it: as it is, or, when it holds a quote, a backslash or
+/// a control character, in double quotes with C escapes (`\"`, `\\`, `\t`,
+/// `\001`). `None` for an escape Git does not write.
+pub(super) fn git_name(text: &str) -> Option<Cow<'_, str>> {
+    let Some(inner) = text
+        .strip_prefix('"')
+        .and_then(|rest| rest.strip_suffix('"'))
+    else {
+        return Some(Cow::Borrowed(text));
+    };
+    let mut bytes = Vec::with_capacity(inner.len());
+    let mut rest = inner.bytes();
+    while let Some(byte) = rest.next() {
+        if byte != b'\\' {
+            bytes.push(byte);
+            continue;
+        }
+        let escaped = rest.next()?;
+        bytes.push(match escaped {
+            b'a' => 7,
+            b'b' => 8,
+            b'f' => 12,
+            b'n' => b'\n',
+            b'r' => b'\r',
+            b't' => b'\t',
+            b'v' => 11,
+            b'\\' | b'"' => escaped,
+            b'0'..=b'3' => {
+                let tail = [rest.next()?, rest.next()?];
+                if !tail.iter().all(|digit| (b'0'..=b'7').contains(digit)) {
+                    return None;
+                }
+                (escaped - b'0') * 64 + (tail[0] - b'0') * 8 + (tail[1] - b'0')
+            }
+            _ => return None,
+        });
+    }
+    String::from_utf8(bytes).ok().map(Cow::Owned)
+}
+
 /// The lines `git diff -U0` adds, by file and new line number.
 pub fn added_lines(diff: &str) -> Vec<Added> {
     let mut out = Vec::new();
-    let mut file: Option<&str> = None;
+    let mut file: Option<String> = None;
     let mut line = 0;
 
     // Between `diff --git` and the first hunk: an added line that itself starts
@@ -61,7 +102,8 @@ pub fn added_lines(diff: &str) -> Vec<Added> {
             header = true;
             file = None;
         } else if let Some(path) = text.strip_prefix("+++ ").filter(|_| header) {
-            file = path.strip_prefix("b/");
+            file = git_name(path.strip_suffix('\t').unwrap_or(path))
+                .and_then(|name| name.strip_prefix("b/").map(str::to_owned));
         } else if let Some(hunk) = text.strip_prefix("@@") {
             header = false;
             line = hunk
@@ -70,9 +112,9 @@ pub fn added_lines(diff: &str) -> Vec<Added> {
                 .and_then(|range| range.split(',').next())
                 .and_then(|start| start.parse().ok())
                 .unwrap_or(0);
-        } else if let (Some(added), Some(path)) = (text.strip_prefix('+'), file) {
+        } else if let (Some(added), Some(path)) = (text.strip_prefix('+'), &file) {
             out.push(Added {
-                file: path.to_owned(),
+                file: path.clone(),
                 line,
                 text: added.to_owned(),
             });

@@ -857,8 +857,10 @@ jobs:
       # The mutant list is printed before the run. cargo-mutants draws progress
       # with a terminal bar that renders as nothing in a log, so without this a
       # shard looks identical whether it is working or wedged.
+      # No Ephyra regression replay: docs/development.md says why.
       - name: Mutation-test the diff
         env:
+          EPHYRA_REGRESSIONS: "0"
           BASE_REF: ${{ github.base_ref }}
           SHARD: ${{ matrix.shard }}/${{ needs.plan-mutants.outputs.width }}
         run: |

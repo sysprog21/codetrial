@@ -62,6 +62,10 @@ pub fn parse_close(text: &str) -> Result<u64, TaskError> {
     if !shape {
         return Err(invalid("close date must be UTC to the second"));
     }
+    // The package builder refuses a leap second, which Chrono accepts.
+    if text.as_bytes()[17..19] == *b"60" {
+        return Err(invalid("invalid close date"));
+    }
     let time =
         chrono::DateTime::parse_from_rfc3339(text).map_err(|_| invalid("invalid close date"))?;
     u64::try_from(time.timestamp()).map_err(|_| invalid("close date predates epoch"))
@@ -550,3 +554,7 @@ fn site_seconds(headers: &reqwest::header::HeaderMap) -> Option<u64> {
 #[cfg(test)]
 #[path = "../../tests/unit/tasks/package.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../tests/unit/tasks/package_properties.rs"]
+mod property_tests;

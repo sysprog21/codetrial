@@ -599,3 +599,17 @@ fn a_defense_set_is_refused_whole_when_any_part_is_wrong() {
         );
     }
 }
+
+/// The strings both parsers must agree on, read by `parse_close` here and by
+/// `valid_close` in `tests/test_task_package.py`.
+#[test]
+fn close_date_agrees_with_the_packagers_corpus() {
+    let rows: Vec<serde_json::Value> =
+        serde_json::from_str(include_str!("../../fixtures/close-dates.json")).expect("corpus");
+    assert!(rows.len() > 20);
+    for row in rows {
+        let text = row["text"].as_str().expect("text");
+        let valid = row["valid"].as_bool().expect("valid");
+        assert_eq!(parse_close(text).is_ok(), valid, "{text:?}");
+    }
+}

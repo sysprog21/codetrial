@@ -141,6 +141,7 @@ tokio = { version = "1.54.1", features = ["signal", "test-util"] }
 # The continuity fixture installs a logger to read the SDK's queue-overflow
 # line; the SDK already depends on this crate.
 log = "0.4.34"
+ephyra = "=0.0.1"
 
 # scripts/hook-check holds every `cargo build` to the git hooks being in
 # effect; its build.rs says why it is a member of its own. `vendor/` holds path

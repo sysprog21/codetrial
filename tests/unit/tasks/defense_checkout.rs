@@ -14,6 +14,81 @@ fn added(file: &str, line: usize) -> Added {
     }
 }
 
+/// What `git_name` reads back from what Git writes, and nothing else.
+#[test]
+fn git_name_decodes_what_git_writes() {
+    for (written, name) in [
+        ("plain name.scala", Some("plain name.scala")),
+        ("\"Qu\\\"ote\"", Some("Qu\"ote")),
+        ("\"Back\\\\slash\"", Some("Back\\slash")),
+        ("\"tab\\there\"", Some("tab\there")),
+        ("\"\\a\\b\\f\\n\\r\\v\"", Some("\x07\x08\x0c\n\r\x0b")),
+        ("\"\\177\"", Some("\x7f")),
+        ("\"\\303\\251\"", Some("\u{e9}")),
+        ("\"\\377\"", None),
+        ("\"\\400\"", None),
+        ("\"\\18\"", None),
+        ("\"\\q\"", None),
+        ("\"trailing\\\"", None),
+    ] {
+        assert_eq!(
+            super::select::git_name(written).as_deref(),
+            name,
+            "{written}"
+        );
+    }
+}
+
+#[test]
+fn every_spelling_of_a_graded_path_reaches_the_candidates_and_its_source() {
+    // Graded names as Git lists and diffs them: spaces, multibyte letters, and
+    // the characters it quotes (a quote, a backslash, a tab) or a pathspec
+    // reads as a pattern (`*`, `[`).
+    const SPELLINGS: [&str; 12] = [
+        "Branch Unit.scala",
+        "Branch  Unit.scala",
+        " Lead.scala",
+        "α Unit.scala",
+        "dir name/Unit.scala",
+        "Plain.scala",
+        "Qu\"ote.scala",
+        "Quote \"and\" space.scala",
+        "Back\\slash.scala",
+        "Tab\tname.scala",
+        "Star*.scala",
+        "Set[1].scala",
+    ];
+    let repo = student_repo("spellings");
+    let dir = "4-pipeline/src/main/scala/mycpu/pipeline";
+    for name in SPELLINGS {
+        repo.write(
+            &format!("{dir}/{name}"),
+            "val flush = branch && valid\nval other = taken || stall\n",
+        );
+    }
+    repo.commit("add units");
+    let checkout = Checkout::open(repo.path()).unwrap();
+    let stamp = checkout.stamp().unwrap();
+    let candidates = checkout.candidates(&stamp).unwrap();
+    for name in SPELLINGS {
+        let path = format!("{dir}/{name}");
+        let lines: Vec<(usize, &str)> = candidates
+            .iter()
+            .filter(|c| c.file == path)
+            .map(|c| (c.line, c.text.as_str()))
+            .collect();
+        assert_eq!(
+            lines,
+            [
+                (1, "val flush = branch && valid"),
+                (2, "val other = taken || stall")
+            ],
+            "{path}"
+        );
+        assert!(checkout.source(&stamp.head, &path).is_some(), "{path}");
+    }
+}
+
 /// The order and the file rule of `scripts/defense.py`, computed with its own
 /// HMAC for this salt, student and head.
 #[test]

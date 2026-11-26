@@ -170,27 +170,31 @@ test("a large buffer formats within the budget", async (t) => {
   assert.ok(elapsed < 5000, `${Math.round(elapsed)} ms`);
 });
 
-test("a formatter that cannot load says so, and the next call loads again", async () => {
-  let calls = 0;
+test("a formatter that cannot load says so, and a retry asks again only for the module that failed", async () => {
+  const seen = [];
   let online = false;
-  const flaky = createJavaScriptFormatter((url) => {
-    calls += 1;
-    return online
-      ? import(url.href)
-      : Promise.reject(new TypeError("Failed to fetch"));
+  const formatter = createJavaScriptFormatter((url) => {
+    seen.push(url.pathname.split("/").pop() + url.search);
+    return url.pathname.endsWith("estree.mjs") && !online
+      ? Promise.reject(new TypeError("Failed to fetch"))
+      : import(url.href);
   });
-  assert.deepEqual(await flaky("let a=1", 0, FOUR), {
+  assert.deepEqual(await formatter("let a=1", 0, FOUR), {
     ok: false,
     message: "The formatter could not be loaded",
   });
   online = true;
-  assert.deepEqual(await flaky("let a=1", 0, FOUR), {
+  assert.deepEqual(await formatter("let a=1", 0, FOUR), {
     ok: true,
     value: "let a = 1;\n",
     cursor: 0,
   });
-  // Three modules each time: the failure was not cached.
-  assert.equal(calls, 6);
+  assert.deepEqual(seen, [
+    "standalone.mjs",
+    "estree.mjs",
+    "acorn.mjs",
+    "estree.mjs?retry=1",
+  ]);
 });
 
 // A Prettier error with no parser position still says what went wrong.
