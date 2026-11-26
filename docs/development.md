@@ -305,9 +305,17 @@ for backtraces, and workspace packages keep full debug information. In
 the Linux measurement from issue #755, a clean
 `cargo test --no-run --all-targets` used 8.0 GB with line tables only,
 down from 9.9 GB with full debug information. Its `web` test executable
-shrunk from 404 MB to 270 MB. On Apple Silicon, a clean build of the
+shrank from 404 MB to 270 MB. On Apple Silicon, a clean build of the
 `web` test alone used 49.3 MiB (1.06%) less target directory space.
 
+Line tables retain source file and line information for backtraces, but
+debuggers lack type and local variable information when stepping into
+dependencies. To restore full debug information for Tokio in the test
+profile, run:
+
+```sh
+cargo test --config 'profile.test.package.tokio.debug=2'
+```
 ## Environment check
 
 `scripts/env-check.sh` is the one place that says what a run needs. It only
