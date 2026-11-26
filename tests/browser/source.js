@@ -425,3 +425,95 @@ export function reaches(page, predicate, arg) {
 export function captures(source, pattern) {
   return [...source.matchAll(pattern)].map((match) => match[1]);
 }
+
+export const SENTINEL = "returned";
+
+// The class judges the page serves, plus tentative-bid-ledger with
+// methodReturnTypes removed, which pins what a judge generated without that
+// field records: every return. runners.test.js runs them through the
+// JavaScript runner and python-driver.test.js through the Python driver.
+function voidTable() {
+  const judges = readdirSync(join(root, "web/judges"))
+    .filter((file) => file.endsWith(".json"))
+    .map((file) => [file, JSON.parse(read(`web/judges/${file}`))])
+    .filter(([, spec]) => spec.kind === "class");
+  // expectedFor reads the same field the runners do, so a missing or misspelled
+  // entry would make both agree on the wrong value.
+  for (const [file, spec] of judges) {
+    const kinds = spec.methodReturnTypes ?? {};
+    assert.deepEqual(
+      Object.keys(kinds).sort(),
+      operationsOf(spec).sort(),
+      file,
+    );
+    assert.ok(
+      Object.values(kinds).every((kind) => kind === "void" || kind === "value"),
+      file,
+    );
+  }
+  assert.ok(
+    judges.some(([, spec]) =>
+      Object.values(spec.methodReturnTypes ?? {}).includes("void"),
+    ),
+    "no served class judge has a void operation left to check",
+  );
+  const untyped = JSON.parse(read("web/judges/tentative-bid-ledger.json"));
+  delete untyped.methodReturnTypes;
+  return [
+    ...judges,
+    ["tentative-bid-ledger.json without methodReturnTypes", untyped],
+  ];
+}
+
+export const operationsOf = (spec) => [
+  ...new Set(spec.cases.flatMap((testCase) => testCase.input[0].slice(1))),
+];
+
+// Each candidate operation returns the sentinel with its call number on the
+// instance, so a runner that records null for a void operation without calling
+// it shifts every value after it. The constructor's slot is null either way.
+const expectedFor = (spec, testCase) => [
+  null,
+  ...testCase.input[0]
+    .slice(1)
+    .map((method, call) =>
+      spec.methodReturnTypes?.[method] === "void"
+        ? null
+        : `${SENTINEL} ${call + 1}`,
+    ),
+];
+
+// A void call that is the last operation has no later return to shift, so only
+// an error it raises shows that the runner made the call.
+export const finalVoidJudge = {
+  kind: "class",
+  className: "Counter",
+  methodReturnTypes: { finish: "void" },
+  cases: [
+    {
+      input: [
+        ["Counter", "finish"],
+        [[], []],
+      ],
+    },
+  ],
+};
+
+// One definition of what a void row must look like, for every runner: run maps
+// a judge to the runner's results for its cases.
+export function assertVoidTable(run) {
+  for (const [file, spec] of voidTable()) {
+    const results = run(spec);
+    assert.equal(results.length, spec.cases.length, file);
+    spec.cases.forEach((testCase, index) => {
+      const where = `${file}: ${testCase.label}`;
+      assert.equal(results[index].error, undefined, where);
+      // Copied into this realm: the JavaScript worker's arrays come from a vm context.
+      assert.deepEqual(
+        [...results[index].actual],
+        expectedFor(spec, testCase),
+        where,
+      );
+    });
+  }
+}

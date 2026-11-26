@@ -6,7 +6,13 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
 import { pythonDriver } from "../../web/runners.js";
-import { read } from "./source.js";
+import {
+  assertVoidTable,
+  finalVoidJudge,
+  operationsOf,
+  read,
+  SENTINEL,
+} from "./source.js";
 
 const python = process.env.PYTHON || "python3";
 // Only a missing interpreter skips. One that is there but does not start, or
@@ -225,6 +231,38 @@ test("a class judge calls a case's methods on one instance", { skip }, () => {
       [null, 1],
     ],
   );
+});
+
+// The Python counterpart of the JavaScript candidate in runners.test.js: every
+// operation returns the sentinel with its call number on the instance.
+const sentinelClass = (spec) =>
+  [
+    `class ${spec.className}:`,
+    "    def __init__(self, *args):",
+    "        self.calls = 0",
+    ...operationsOf(spec).map(
+      (method) =>
+        `    def ${method}(self, *args):\n        self.calls += 1\n        return ${JSON.stringify(SENTINEL)} + " " + str(self.calls)`,
+    ),
+  ].join("\n") + "\n";
+
+test(
+  "a void class operation records null whatever it returns",
+  { skip },
+  () => {
+    assertVoidTable((spec) => runDriver(sentinelClass(spec), spec).results);
+  },
+);
+
+test("a final void call still reports its error", { skip }, () => {
+  const reply = runDriver(
+    `class Counter:
+    def finish(self):
+        raise ValueError("final void ran")
+`,
+    finalVoidJudge,
+  );
+  assert.match(reply.results[0].error, /final void ran/);
 });
 
 test("an answer written as a plain function still runs", { skip }, () => {
