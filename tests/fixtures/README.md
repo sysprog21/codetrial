@@ -26,6 +26,15 @@ only thing in the repo that crosses that boundary.
 encrypted package and the patches both the server and the packaging tool must
 refuse, shared by the Rust and Python tests.
 
+`tests/fixtures/candidates/` is not wire data either: it is the code a
+candidate would type, which the browser tests hand to a compiled harness or to
+the Python driver, one folder per test file and read through
+`candidateSource` in `tests/browser/source.js`. Correct answers are named by
+judge id (`two-sum.c`), and an answer a test expects the harness to refuse
+adds what is wrong with it (`copy-list-with-random-pointer.shallow-loop.c`).
+They are not reference solutions for a judge's expected values, and Ruff skips
+them, since the Python ones lean on names the driver defines.
+
 ## Regenerating
 
 Both startup payloads travel from the browser to the agent on `control`.
