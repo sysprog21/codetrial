@@ -29,7 +29,7 @@ import {
 import { checkAnswer } from "../../web/lib.js";
 import { parseCandidateCase } from "../../web/runners.js";
 import { createSyntaxParser } from "../../web/syntax-parser.js";
-import { candidateSource } from "./source.js";
+import { candidateSource, runCompiled, compiledSkip } from "./source.js";
 
 const cppSyntax = createSyntaxParser({
   loadBytes: async (url) => new Uint8Array(readFileSync(url)),
@@ -4092,35 +4092,10 @@ test("a candidate case without an expected value builds the C++ and Java class h
   }
 });
 
-// Async subprocesses keep independent fixtures concurrent; a blocking
-// `execFileSync` would serialize them. The suite bounds compiler jobs so
-// candidates can finish before their execution timeout.
 const run = promisify(execFile);
-
-/// Whether a tool answers at all. Probed once per tool rather than once per
-/// test, and synchronously, which is safe here because a blocking call cannot
-/// interleave with the concurrent bodies below: this all runs before they do.
-function present(command, versionArg) {
-  try {
-    execFileSync(command, [versionArg], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-// Declared, not performed. `node:test` takes `skip` as a reason string in the
-// options, so a missing compiler is stated where the test is named and the body
-// never runs. The imperative form this replaces called `t.skip()` inside the
-// body, which only marks the result: one guard was written without the `return`
-// that has to follow it, and that test reported itself skipped and then failed
-// on the missing compiler. There is nothing left here to forget.
-const noCc = present("cc", "--version") ? false : "cc is not available";
-const noGpp = present("g++", "--version") ? false : "g++ is not available";
-const noJava =
-  present("javac", "-version") && present("java", "-version")
-    ? false
-    : "javac/java are not available";
+const noCc = compiledSkip("c");
+const noGpp = compiledSkip("cpp");
+const noJava = compiledSkip("java");
 
 /// Whether cc builds and runs a program under AddressSanitizer. A write one
 /// slot past a global array lands on whatever the linker put next to it, so
@@ -5226,56 +5201,17 @@ void* failing_malloc(size_t size) {
     );
   }
 
-  // Compiles a candidate into the named judge's harness and returns its
-  // results. The timeout keeps a serializer that walks forever from hanging
-  // the lane, and the buffer holds the output of the largest tree the bank
-  // allows. `cases` replaces the judge's own when a test needs inputs of its
-  // own.
-  async function runJudge(
+  // Fixtures select a bank judge and may override only its cases.
+  function runJudge(
     language,
     id,
     candidate,
     cases = judges[id].cases,
     flags = [],
   ) {
-    const dir = mkdtempSync(join(tmpdir(), `codetrial-${language}-${id}-`));
-    try {
-      const source = join(
-        dir,
-        language === "java" ? "Main.java" : `candidate.${language}`,
-      );
-      const binary = join(dir, "candidate");
-      writeFileSync(
-        source,
-        generateHarness(language, { ...judges[id], cases }, candidate),
-      );
-      if (language === "java") await run("javac", [source]);
-      else
-        await run(language === "c" ? "cc" : "g++", [
-          language === "c" ? "-std=c17" : "-std=c++20",
-          ...flags,
-          source,
-          "-o",
-          binary,
-        ]);
-      // The harness never frees what a case built, so the leak report
-      // AddressSanitizer prints at exit would fail every sanitized run; other
-      // runs keep the caller's environment.
-      const options = {
-        encoding: "utf8",
-        timeout: 10000,
-        maxBuffer: 1 << 24,
-        env: flags.some((flag) => flag.startsWith("-fsanitize"))
-          ? { ...process.env, ASAN_OPTIONS: "detect_leaks=0" }
-          : process.env,
-      };
-      const { stdout } = await (language === "java"
-        ? run("java", ["-cp", dir, "Main"], options)
-        : run(binary, [], options));
-      return parseCompilerResults(stdout).results;
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+    return runCompiled(language, { ...judges[id], cases }, candidate, {
+      flags,
+    });
   }
   const flattenLanguages = [
     ["c", noCc],

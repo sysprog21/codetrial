@@ -3,9 +3,7 @@
 // needs no Pyodide download.
 
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import test from "node:test";
-import { pythonDriver } from "../../web/runners.js";
 import {
   assertVoidTable,
   candidateSource,
@@ -13,53 +11,11 @@ import {
   operationsOf,
   read,
   SENTINEL,
+  pythonSkip,
+  runPythonDriver as runDriver,
 } from "./source.js";
 
-const python = process.env.PYTHON || "python3";
-// Only a missing interpreter skips. One that is there but does not start, or
-// exits nonzero, fails every test with what the probe saw, rather than reading
-// as absent.
-const probe = spawnSync(python, ["--version"], {
-  encoding: "utf8",
-  timeout: 10000,
-});
-const skip =
-  probe.error?.code === "ENOENT" ? `${python} is not installed` : false;
-let startFailure;
-if (!skip && probe.error) {
-  startFailure = `${python} did not start: ${probe.error.message}`;
-} else if (!skip && probe.status !== 0) {
-  const detail = probe.stderr.trim();
-  startFailure = `${python} --version exited with ${probe.status ?? probe.signal}${detail && `: ${detail}`}`;
-}
-
-// The worker sets the code and the judge as two globals and reads back the
-// value of the driver's last line, which pyodide.runPython returns. CPython's
-// exec returns nothing, so the last line is split off and evaluated on its own.
-const host = `
-import ast, json, sys
-request = json.load(sys.stdin)
-module = ast.parse(request["driver"])
-last = module.body.pop()
-scope = {"_CODETRIAL_CODE": request["code"], "_CODETRIAL_SPEC": request["spec"]}
-exec(compile(module, "<driver>", "exec"), scope)
-print(eval(compile(ast.Expression(last.value), "<driver>", "eval"), scope))
-`;
-
-function runDriver(code, spec) {
-  assert.equal(startFailure, undefined, startFailure);
-  const run = spawnSync(python, ["-I", "-c", host], {
-    input: JSON.stringify({
-      driver: pythonDriver,
-      code,
-      spec: JSON.stringify(spec),
-    }),
-    encoding: "utf8",
-    timeout: 10000,
-  });
-  assert.equal(run.status, 0, run.error?.message ?? run.stderr);
-  return JSON.parse(run.stdout);
-}
+const skip = pythonSkip();
 
 const maxPathSum = () =>
   JSON.parse(read("web/judges/grid-segment-net-yield.json"));
@@ -109,6 +65,27 @@ test("add-binary cases reject per-character Python recursion", { skip }, () => {
   const index = spec.cases.indexOf(row);
   assert.match(reply.results[index].error ?? "", /RecursionError/, label);
 });
+
+test(
+  "candidate diagnostics do not corrupt the Python host protocol",
+  { skip },
+  () => {
+    const reply = runDriver(
+      `print('module diagnostic')
+class Solution:
+    def count(self, value):
+        print('{"results": []}')
+        return value
+`,
+      countToThree,
+    );
+    assert.deepEqual(reply.results.map(outcome), [
+      { actual: 1 },
+      { actual: 2 },
+      { actual: 3 },
+    ]);
+  },
+);
 
 test(
   "state an answer keeps on self starts fresh in every case",

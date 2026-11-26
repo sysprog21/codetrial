@@ -11,7 +11,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { runInNewContext } from "node:vm";
-import { MAX_QUAD_TREE_NODES } from "../../web/compiler-explorer.js";
 import {
   assertVoidTable,
   failFetchWith,
@@ -20,6 +19,7 @@ import {
   operationsOf,
   read,
   SENTINEL,
+  jsWorkerSource,
 } from "./source.js";
 import { checkAnswer, testPayload } from "../../web/lib.js";
 import {
@@ -29,22 +29,6 @@ import {
 } from "../../web/runners.js";
 
 const runners = read("web/runners.js");
-
-function jsWorkerSource() {
-  const start = runners.indexOf("const JS_RUNNER_SOURCE = `");
-  assert.notEqual(start, -1, "JS_RUNNER_SOURCE is gone from web/runners.js");
-  const stop = runners.indexOf("\n  `;\n", start);
-  assert.notEqual(stop, -1, "JS_RUNNER_SOURCE has no closing delimiter");
-  const source = runners.slice(start, stop + "\n  `;".length);
-  assert.doesNotMatch(
-    source.replaceAll("${MAX_QUAD_TREE_NODES}", ""),
-    /\$\{/,
-    "an interpolation here would read from a scope it no longer has",
-  );
-  return runInNewContext(source + "\nJS_RUNNER_SOURCE;", {
-    MAX_QUAD_TREE_NODES,
-  });
-}
 
 test("a malformed candidate case is refused", () => {
   const spec = {

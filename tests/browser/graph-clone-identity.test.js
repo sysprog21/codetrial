@@ -1,15 +1,11 @@
 import { after, before, describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { execFile, execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { promisify } from "node:util";
 import {
-  generateHarness,
-  parseCompilerResults,
-} from "../../web/compiler-explorer.js";
-import { launchChromium, startStaticServer } from "./source.js";
+  launchChromium,
+  startStaticServer,
+  runCompiled,
+  compiledSkip,
+} from "./source.js";
 
 const message =
   "Returned graph must not contain distinct nodes with the same ID.";
@@ -236,23 +232,9 @@ for (const language of ["javascript", "python"]) {
   }
 }
 
-const run = promisify(execFile);
 describe("graph clone toolchain harnesses", { concurrency: 4 }, () => {
-  for (const [language, compiler, flags, extension] of [
-    ["c", "cc", ["-std=c17"], "c"],
-    ["cpp", "g++", ["-std=c++20"], "cpp"],
-    ["java", "javac", [], "java"],
-  ]) {
-    let available = true;
-    try {
-      execFileSync(compiler, [language === "java" ? "-version" : "--version"], {
-        stdio: "ignore",
-      });
-      if (language === "java")
-        execFileSync("java", ["-version"], { stdio: "ignore" });
-    } catch {
-      available = false;
-    }
+  for (const language of ["c", "cpp", "java"]) {
+    const skip = compiledSkip(language);
     const scenarios = [{}, { duplicate: 1 }, { duplicate: 2 }];
     scenarios.push({ root: "b" }, { root: "c" });
     if (language === "c")
@@ -286,66 +268,33 @@ describe("graph clone toolchain harnesses", { concurrency: 4 }, () => {
         originalNeighbors,
         root = "a",
       } = scenario;
-      test(
-        title(language, scenario),
-        {
-          skip: available
-            ? false
-            : language === "java"
-              ? "javac/java are not available"
-              : `${compiler} is not available`,
-        },
-        async () => {
-          const dir = mkdtempSync(join(tmpdir(), "codetrial-graph-"));
-          try {
-            const source = join(
-              dir,
-              language === "java" ? "Main.java" : `graph.${extension}`,
-            );
-            const binary = join(dir, "graph");
-            writeFileSync(
-              source,
-              generateHarness(language, spec, candidate(language, scenario)),
-            );
-            await run(
-              compiler,
-              language === "java" ? [source] : [...flags, source, "-o", binary],
-            );
-            const output =
-              language === "java"
-                ? await run("java", ["-cp", dir, "Main"])
-                : await run(binary);
-            const results = parseCompilerResults(output.stdout).results;
-            assert.equal(results.length, 1);
-            if (root !== "a")
-              assert.match(results[0].error, /must start at node 1/);
-            else if (originalNeighbors || (mixed && language === "c"))
-              assert.equal(
-                results[0].error,
-                "Returned graph must be a deep copy.",
-              );
-            else if (nullNeighbor || mixed)
-              assert.ok(
-                results[0].error.endsWith(
-                  "Returned graph has a NULL neighbor.",
-                ),
-                results[0].error,
-              );
-            else if (invalidId !== undefined)
-              assert.equal(
-                results[0].error,
-                "Returned graph node IDs must be between 1 and 1023.",
-              );
-            else if (duplicate) assert.ok(results[0].error.endsWith(message));
-            else if (nullList) {
-              assert.equal(results[0].error, undefined);
-              assert.deepEqual(results[0].actual, [[2, 3], [], [1, 2]]);
-            } else assert.deepEqual(results[0].actual, spec.cases[0].expected);
-          } finally {
-            rmSync(dir, { recursive: true, force: true });
-          }
-        },
-      );
+      test(title(language, scenario), { skip }, async () => {
+        const results = await runCompiled(
+          language,
+          spec,
+          candidate(language, scenario),
+        );
+        assert.equal(results.length, 1);
+        if (root !== "a")
+          assert.match(results[0].error, /must start at node 1/);
+        else if (originalNeighbors || (mixed && language === "c"))
+          assert.equal(results[0].error, "Returned graph must be a deep copy.");
+        else if (nullNeighbor || mixed)
+          assert.ok(
+            results[0].error.endsWith("Returned graph has a NULL neighbor."),
+            results[0].error,
+          );
+        else if (invalidId !== undefined)
+          assert.equal(
+            results[0].error,
+            "Returned graph node IDs must be between 1 and 1023.",
+          );
+        else if (duplicate) assert.ok(results[0].error.endsWith(message));
+        else if (nullList) {
+          assert.equal(results[0].error, undefined);
+          assert.deepEqual(results[0].actual, [[2, 3], [], [1, 2]]);
+        } else assert.deepEqual(results[0].actual, spec.cases[0].expected);
+      });
     }
   }
 });
