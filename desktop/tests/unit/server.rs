@@ -311,6 +311,19 @@ fn a_restart_keeps_the_log_of_the_run_it_ends() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The lines this app waits for are the server's own words, and the desktop
+/// crate cannot share the server's constants. The fake servers here print this
+/// crate's copies, so without this a reworded line on either side keeps every
+/// test green while the app stops hearing it: a missed restart line leaves a
+/// server that admits nothing until the app quits.
+#[test]
+fn the_lines_waited_for_are_the_ones_the_server_prints() {
+    let setup_edit = include_str!("../../../src/web/setup_edit.rs");
+    assert!(setup_edit.contains(&format!("\"{RESTART_LINE}\"")));
+    let launch = include_str!("../../../src/launch.rs");
+    assert!(launch.contains(&format!("\"{BOUND_LINE}{{bound}}")));
+}
+
 /// Opening the app empties what the last run left in the server log, and makes
 /// the file when there is none, so a restart has something to append to.
 #[test]
