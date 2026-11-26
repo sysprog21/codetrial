@@ -2,6 +2,7 @@
 //! the work under defense, the candidate lines, and the private worktree every
 //! edit and build happens in. Nothing here writes to the student's own tree.
 
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -9,7 +10,7 @@ use std::process::Command;
 use serde::Serialize;
 use serde_json::Value;
 
-use super::select::{Added, added_lines, graded, worth_asking};
+use super::select::{Added, added_lines, git_name, graded, worth_asking};
 
 /// The refs `scripts/review.py` reads the course's upstream main from.
 const UPSTREAM_REFS: [&str; 2] = ["refs/remotes/upstream/main", "refs/mycpu-review/upstream"];
@@ -106,7 +107,12 @@ impl Checkout {
         for entry in log.split('\0').filter(|entry| !entry.trim().is_empty()) {
             let mut lines = entry.lines();
             own.extend(lines.next().map(str::to_owned));
-            files.extend(lines.filter(|f| graded(f)).map(str::to_owned));
+            files.extend(
+                lines
+                    .filter_map(git_name)
+                    .filter(|f| graded(f))
+                    .map(Cow::into_owned),
+            );
         }
         let noted =
             git(&self.root, &["notes", &format!("--ref={NOTES}"), "list"]).unwrap_or_default();
