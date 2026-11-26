@@ -14,7 +14,11 @@ import { runInNewContext } from "node:vm";
 import { MAX_QUAD_TREE_NODES } from "../../web/compiler-explorer.js";
 import { failFetchWith, functionBody, read } from "./source.js";
 import { checkAnswer, testPayload } from "../../web/lib.js";
-import { parseCandidateCase, runBrowserTests } from "../../web/runners.js";
+import {
+  parseCandidateCase,
+  refusedSavedCharacter,
+  runBrowserTests,
+} from "../../web/runners.js";
 
 const runners = read("web/runners.js");
 
@@ -245,6 +249,17 @@ test("a candidate case is typed by paramTypes", () => {
     () => parseCandidateCase(spec, '[[["ab"]], "edge"]'),
     /Parameter 1 \(grid\)/,
   );
+});
+
+// A saved case is checked with no judge, so a string at any depth counts and
+// a row that is not an argument array is left to the form's other checks.
+test("a saved input is refused by its first string holding NUL or half a pair", () => {
+  assert.match(
+    refusedSavedCharacter([1, [["ok", "a\u0000"]], "a\ud800"]),
+    /^"\\u0000" \(U\+0000\), which C and C\+\+ read as the end of a string$/,
+  );
+  for (const kept of [[1, "😀", null], undefined, { s: "a" }])
+    assert.equal(refusedSavedCharacter(kept), undefined);
 });
 
 // C and C++ take a `character` as one `char`, so a code point past ASCII

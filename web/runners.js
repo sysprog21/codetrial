@@ -119,6 +119,19 @@ export function parseCandidateCase(spec, input) {
   return args;
 }
 
+/// A saved case comes back from tab storage without passing the form, and the
+/// build that saved it may have taken a string this one refuses, which C and
+/// C++ would run cut short or fail to compile. The form refuses such a string
+/// whatever its parameter type, so no judge is needed: this names the first
+/// refused character in a saved input, or answers undefined.
+export function refusedSavedCharacter(input) {
+  return [input]
+    .flat(Infinity)
+    .filter((value) => typeof value === "string")
+    .map(refusedStringCharacter)
+    .find(Boolean);
+}
+
 /// The values a level-order array actually builds a node for, which is not the
 /// same as the values it contains: the worker only queues non-null nodes, so
 /// `[1, null, null, 5]` builds one node and never reaches the 5. Membership in

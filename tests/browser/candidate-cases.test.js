@@ -1015,6 +1015,80 @@ test("a case cannot be removed while tests are running", async (t) => {
   }
 });
 
+const SAVED_KEY = "codetrial.candidateCases.distinct-keystroke-stretch";
+
+/// Opens a page whose tab storage holds a valid case, then one holding NUL and
+/// one holding half a surrogate pair, which an older build took and C and C++
+/// would run cut short or fail to compile.
+async function openWithRefusedSavedCases(page) {
+  await page.addInitScript(
+    (key) =>
+      sessionStorage.setItem(
+        key,
+        JSON.stringify([
+          { input: ["abc"] },
+          { input: ["a\u0000b"] },
+          { input: ["a\ud800b"] },
+        ]),
+      ),
+    SAVED_KEY,
+  );
+  await page.goto(`${base}/interview.html?problem=distinct-keystroke-stretch`, {
+    waitUntil: "domcontentloaded",
+  });
+  await page.waitForFunction(
+    () => document.querySelector("#candidate-case-list").children.length === 1,
+  );
+}
+
+test("a saved case holding NUL or half a surrogate pair is not restored", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const page = await browser.newPage();
+  try {
+    await openWithRefusedSavedCases(page);
+    await closeSetupCheck(page);
+    const status = page.locator("#candidate-case-status");
+    assert.equal(
+      await status.textContent(),
+      'A saved case was removed: it holds "\\u0000" (U+0000), which C and C++ read as the end of a string. ' +
+        'A saved case was removed: it holds "\\ud800" (U+D800), which is half of a surrogate pair and does not compile in C or C++.',
+    );
+    assert.equal(await status.isVisible(), true);
+    assert.equal(
+      await page.evaluate((key) => sessionStorage.getItem(key), SAVED_KEY),
+      JSON.stringify([{ input: ["abc"] }]),
+    );
+  } finally {
+    await page.close();
+  }
+});
+
+// A live region inside the inert workspace is not read out.
+test("the saved-case notice waits for the setup check to close", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  const page = await browser.newPage();
+  try {
+    await openWithRefusedSavedCases(page);
+    // Any dialog's change sets the workspace inert again, which must not
+    // count as its release.
+    await page.evaluate(() => {
+      document.querySelector("#ending-overlay").hidden = true;
+    });
+    assert.doesNotMatch(
+      await page.locator("#candidate-case-status").textContent(),
+      /A saved case was removed/,
+    );
+    await closeSetupCheck(page);
+    await page.waitForFunction(() =>
+      document
+        .querySelector("#candidate-case-status")
+        .textContent.startsWith("A saved case was removed: "),
+    );
+  } finally {
+    await page.close();
+  }
+});
+
 /// Holds every judge request until the returned function is called, so a test
 /// can look at the page before the judge has loaded.
 async function holdJudge(page) {

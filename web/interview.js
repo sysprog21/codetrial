@@ -219,7 +219,11 @@ import {
   harnessAvailability,
   languagesFor,
 } from "./compiler-explorer.js";
-import { parseCandidateCase, runBrowserTests } from "./runners.js";
+import {
+  parseCandidateCase,
+  refusedSavedCharacter,
+  runBrowserTests,
+} from "./runners.js";
 import { mountBehavioralReview } from "./behavioral-review.js";
 import { consumeGroundingPacket } from "./document-grounding.js";
 
@@ -4248,7 +4252,7 @@ async function initializeCandidateCases() {
   } catch {
     state.candidateCases = [];
   }
-  renderCandidateCases();
+  dropRefusedSavedCases();
   if (state.candidateCases.length) return;
   // A placeholder rather than a value: `runTests` adds whatever the input
   // holds, so a prefilled value became a case the candidate never wrote.
@@ -4256,6 +4260,47 @@ async function initializeCandidateCases() {
   if (spec?.cases?.[0]?.input)
     state.candidateCaseHint = JSON.stringify(spec.cases[0].input);
   renderCandidateCasePlaceholder();
+}
+
+/// Leaves out each restored case holding a character the form now refuses,
+/// before the list can be used, and says why.
+function dropRefusedSavedCases() {
+  const reasons = [];
+  state.candidateCases = state.candidateCases.filter((testCase) => {
+    const refused = refusedSavedCharacter(testCase?.input);
+    if (refused) reasons.push(`A saved case was removed: it holds ${refused}.`);
+    return !refused;
+  });
+  renderCandidateCases();
+  if (!reasons.length) return;
+  writeStored(
+    candidateCaseStorageKey,
+    JSON.stringify(state.candidateCases),
+    tabStorage,
+  );
+  // The status sits inside the closed panel, and a case that vanished with
+  // its reason folded away would read as lost.
+  nodes.candidateCase.open = true;
+  announceWhenHeard(reasons.join(" "));
+}
+
+/// A live region inside the inert workspace is not read out, and saved cases
+/// are restored while the setup check holds it, so the notice waits for the
+/// workspace to be released.
+function announceWhenHeard(text) {
+  const write = () => {
+    nodes.candidateCaseStatus.textContent = text;
+  };
+  if (!nodes.editorPanel.inert) return write();
+  const observer = new MutationObserver(() => {
+    if (nodes.editorPanel.inert) return;
+    observer.disconnect();
+    write();
+  });
+  observer.observe(nodes.editorPanel, {
+    attributes: true,
+    attributeFilter: ["inert"],
+  });
 }
 
 function renderCandidateCasePlaceholder() {
