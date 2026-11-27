@@ -148,7 +148,14 @@ impl RuntimeActivity {
             self.buffered_startup_output_at = None;
         }
         match turn_boundary(event, &mut self.socket, held) {
-            TurnBoundary::Stale => return false,
+            TurnBoundary::Stale => {
+                // A discard armed for the same old turn ends with its last
+                // ending, or it would eat the next reply.
+                if !self.socket.stale_turn_pending {
+                    self.end_discard(false);
+                }
+                return false;
+            }
             TurnBoundary::InterruptedTail => {
                 self.end_discard(false);
                 return false;

@@ -3342,5 +3342,5 @@ fn the_handoff_reply_wait_ends_when_the_socket_speaks_is_prompted_or_replaced() 
         assert!(!activity.handoff_reply_due(late, SILENCE, false), "{case}");
     }
 }
-
 include!("turn_parts/latency_traces.rs");
+include!("turn_parts/stale_discard.rs");
