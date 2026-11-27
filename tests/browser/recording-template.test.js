@@ -13,6 +13,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { getAvatarModel } from "../../web/avatar/model.js";
 import {
   assertIncludesCompact,
   functionBody,
@@ -31,6 +32,72 @@ function withoutInterviewComments(source) {
   return source.replace(/^\s*\/\/.*$/gm, "").replace(/^\s*\/\/\/.*$/gm, "");
 }
 const code = withoutComments(script);
+
+function recordingAvatarHarness() {
+  const loads = [];
+  const expressions = [];
+  const nodes = {
+    jimAvatar: { dataset: {} },
+    jimState: {},
+    problemTitle: {},
+    problemMeta: {},
+    timer: {},
+  };
+  const createAvatar = ({ loadModel }) => {
+    void loadModel();
+    return {
+      setExpression: (state) => expressions.push(state),
+      ready: Promise.resolve(false),
+    };
+  };
+  const body = ["applyReplayEvent", "startAvatar"]
+    .map((name) => `${functionBody(script, name).replace(/^export /, "")}\n}`)
+    .join("\n");
+  const apply = new Function(
+    "nodes",
+    "createAvatar",
+    "getAvatarModel",
+    "loadAvatarModel",
+    `
+    let avatar = null;
+    let avatarSelectionMade = false;
+    let avatarExpression = "listening";
+    const jimLabel = (state) => state;
+    ${body}
+    return applyReplayEvent;
+  `,
+  )(nodes, createAvatar, getAvatarModel, async (_mount, _signal, id) =>
+    loads.push(getAvatarModel(id).id),
+  );
+  return { apply, loads, expressions, nodes };
+}
+
+test("recording waits for a stage selection and loads that avatar only once", () => {
+  const h = recordingAvatarHarness();
+  h.apply({ kind: "avatar", payload: { state: "thinking" } });
+  assert.deepEqual(h.loads, []);
+  h.apply({ kind: "stage", payload: { avatarId: "jim-business-male-04" } });
+  h.apply({ kind: "stage", payload: { avatarId: "jim-business-male-04" } });
+  assert.deepEqual(h.loads, ["jim-business-male-04"]);
+  assert.deepEqual(h.expressions, ["thinking"]);
+});
+
+test("old stage records default to Jim and unknown selections stay voice-only", () => {
+  const legacy = recordingAvatarHarness();
+  legacy.apply({ kind: "stage", payload: { title: "Old recording" } });
+  assert.deepEqual(legacy.loads, ["jim"]);
+  for (const avatarId of ["unknown", null, "https://example.com/model.vrm"]) {
+    const h = recordingAvatarHarness();
+    h.apply({ kind: "stage", payload: { avatarId } });
+    assert.deepEqual(h.loads, []);
+    assert.equal(h.nodes.jimAvatar.dataset.avatarState, "unavailable");
+  }
+});
+
+test("connecting the recorder cannot eagerly download the default avatar", () => {
+  const connect = withoutComments(functionBody(script, "connect"));
+  assert.doesNotMatch(connect, /startAvatar\(/);
+});
 
 test("recording-template dom ids", () => {
   // Every id the fixture, the CSS and the bootstrap in 8b all agree on. A

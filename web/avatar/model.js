@@ -28,6 +28,33 @@ export const MODEL_URL =
 export const MODEL_SHA256 =
   "624d0d554bc205bbdc33e22a68a2c3c20edebb3e573011ead8878a65e5329b23";
 
+export const DEFAULT_MODEL_ID = "jim";
+export const SUPPORTED_MODELS = Object.freeze([
+  Object.freeze({
+    id: DEFAULT_MODEL_ID,
+    label: "Jim (younger engineer, default)",
+    suggestedVoice: "Puck",
+    url: MODEL_URL,
+    sha256: MODEL_SHA256,
+    license: "web/vendor/avatar/LICENSE-jim-vrm.txt",
+  }),
+  Object.freeze({
+    id: "jim-business-male-04",
+    label: "Jim (middle-aged senior engineer)",
+    suggestedVoice: "Charon",
+    url: "https://raw.githubusercontent.com/jiawei110/codetrial-avatar-assets/4a08e53e50c53e52122cfbeb09280294448f77fd/jim-business-male-04-upperbody-v3.vrm",
+    sha256: "d78146bc5edb21fce98d31d17127a2199a276f6f60396242dd432501fd922aef",
+    license: "web/vendor/avatar/LICENSE-jim-vrm.txt",
+  }),
+]);
+
+/// Callers pass only IDs, so a replay cannot substitute a URL or a digest.
+export function getAvatarModel(id = DEFAULT_MODEL_ID) {
+  const model = SUPPORTED_MODELS.find((entry) => entry.id === id);
+  if (!model) throw new Error("unsupported avatar model");
+  return model;
+}
+
 // What the fetch will accept, in binary megabytes. `docs/avatar-contract.md`
 // sets 5 to 15 MB as the budget for a commissioned replacement and records the
 // model above at 10,917,800 bytes, so this is that budget's top and leaves
@@ -58,12 +85,13 @@ async function sha256Hex(bytes) {
 /// QuotaExceededError once 11 MB will not fit, and both of those describe a
 /// browser that can still download and render the model perfectly well. Losing
 /// the cache costs a download; refusing to load over it would cost the avatar.
-export async function openModelCache(caches = globalThis.caches) {
+export async function openModelCache(caches = globalThis.caches, modelId) {
+  const model = getAvatarModel(modelId);
   // Outside the try: it cannot reject, and a catch that covers more than the
   // calls that can fail hides the ones that do.
   if (!caches) return null;
   try {
-    const cache = await caches.open(MODEL_CACHE);
+    const cache = await caches.open(`${CACHE_PREFIX}${model.sha256}`);
     void evictSuperseded(caches);
     return cache;
   } catch {
@@ -78,9 +106,12 @@ export async function openModelCache(caches = globalThis.caches) {
 /// Exported for the test, which has to await it: asserting on the side effect
 /// of a call nobody awaits would pass or fail on scheduling luck.
 export async function evictSuperseded(caches) {
+  const supported = new Set(
+    SUPPORTED_MODELS.map((model) => `${CACHE_PREFIX}${model.sha256}`),
+  );
   try {
     for (const name of await caches.keys()) {
-      if (SUPERSEDED_CACHE.test(name) && name !== MODEL_CACHE)
+      if (SUPERSEDED_CACHE.test(name) && !supported.has(name))
         await caches.delete(name);
     }
   } catch {
@@ -397,16 +428,17 @@ async function store(cache, url, bytes) {
 /// demonstrated, and it is the one place where quietly loading 11 MB of
 /// unverified third-party geometry would matter most. A browser that cannot
 /// check the pin gets the neutral panel, which is a state the page already has.
-export async function loadModelBytes(signal) {
+export async function loadModelBytes(signal, modelId) {
+  const model = getAvatarModel(modelId);
   if (!globalThis.crypto?.subtle) {
     throw new Error(
       "the avatar model cannot be verified without a secure context",
     );
   }
   return modelBytes(
-    MODEL_URL,
-    await openModelCache(),
-    MODEL_SHA256,
+    model.url,
+    await openModelCache(globalThis.caches, model.id),
+    model.sha256,
     undefined,
     signal,
   );
@@ -427,8 +459,8 @@ export async function loadModelBytes(signal) {
 /// import, and the WebGL context and glTF parse after it. Hiding the avatar is
 /// how a candidate under load asks for their CPU back, and a load that ran to
 /// the end only to be disposed spent it anyway.
-export async function loadAvatarModel(mount, signal) {
-  const bytes = await loadModelBytes(signal);
+export async function loadAvatarModel(mount, signal, modelId) {
+  const bytes = await loadModelBytes(signal, modelId);
   signal?.throwIfAborted();
   const renderer = await import("./vrm.js");
   signal?.throwIfAborted();

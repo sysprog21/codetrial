@@ -2,6 +2,11 @@ import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { topics } from "../../web/lib.js";
+import {
+  DEFAULT_MODEL_ID,
+  SUPPORTED_MODELS,
+  getAvatarModel,
+} from "../../web/avatar/model.js";
 import { DEFAULT_RUNTIME_CONFIG, read, startStaticServer } from "./source.js";
 
 let browser;
@@ -432,7 +437,10 @@ async function joinedPage(
   await page.route("**/avatar/model.js", (route) =>
     route.fulfill({
       contentType: "text/javascript",
-      body: `export async function loadAvatarModel() {
+      body: `export const DEFAULT_MODEL_ID = ${JSON.stringify(DEFAULT_MODEL_ID)};
+      export const SUPPORTED_MODELS = ${JSON.stringify(SUPPORTED_MODELS)};
+      export ${getAvatarModel.toString()}
+      export async function loadAvatarModel() {
       throw new Error("Startup fixture uses voice-only mode");
     }`,
     }),

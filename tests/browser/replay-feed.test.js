@@ -9,6 +9,43 @@ import assert from "node:assert/strict";
 
 const replayFeed = await import("../../web/replay-feed.js");
 
+test("every stage restatement carries the committed avatar selection", async (t) => {
+  const feed = await import("../../web/replay-feed.js?avatar-selection");
+  const originalFetch = globalThis.fetch;
+  const posts = [];
+  globalThis.fetch = async (_url, init) => {
+    posts.push(...JSON.parse(init.body).events);
+    return { status: 204, headers: { get: () => null } };
+  };
+  t.after(() => {
+    feed.closeReplay();
+    globalThis.fetch = originalFetch;
+  });
+  feed.initReplay({
+    state: {
+      interviewId: "i-avatar",
+      interviewerAvatar: "jim-business-male-04",
+    },
+    nodes: {
+      title: { textContent: "A problem" },
+      meta: { textContent: "Python" },
+    },
+    recordingEnabled: true,
+    consentVersion: "v1",
+    replayVersion: 1,
+  });
+  feed.recordStage();
+  await feed.flushReplay();
+  feed.recordStageTick(300);
+  await feed.flushReplay();
+  assert.equal(posts.length, 2);
+  assert.deepEqual(
+    posts.map(({ payload }) => payload.avatarId),
+    ["jim-business-male-04", "jim-business-male-04"],
+  );
+  assert.equal(posts[1].payload.remainingSeconds, 300);
+});
+
 function fakeClock() {
   const real = {
     now: Date.now,

@@ -32,6 +32,7 @@ License texts and source details are shipped with the relevant assets:
 - `web/vendor/tree-sitter/LICENSE` (browser runtime and six grammars)
 - `web/vendor/avatar/LICENSE-three.txt`
 - `web/vendor/avatar/LICENSE-three-vrm.txt`
+- `web/vendor/avatar/LICENSE-jim-vrm.txt` (both runtime-fetched models)
 - `web/vendor/avatar/NOTICE`
 - `web/vendor/avatar/README.md`
 - `web/vendor/pyodide/README.md`

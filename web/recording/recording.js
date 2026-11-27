@@ -19,6 +19,7 @@ import {
   createAvatar,
   mouthFromAmplitude,
 } from "/avatar/avatar.js";
+import { getAvatarModel, loadAvatarModel } from "/avatar/model.js";
 
 // Every panel is written from the replay and from nothing else, so what the
 // video shows and what the replay page shows cannot disagree.
@@ -108,6 +109,8 @@ let started = false;
 let cameraAttached = false;
 let bootstrapped = false;
 let avatar = null;
+let avatarSelectionMade = false;
+let avatarExpression = "listening";
 let audioContext = null;
 let analyser = null;
 let analyserSource = null;
@@ -179,6 +182,7 @@ export function applyReplayEvent(event) {
   const payload = event?.payload || {};
   switch (event?.kind) {
     case "stage":
+      startAvatar(payload.avatarId);
       if (typeof payload.title === "string")
         nodes.problemTitle.textContent = payload.title;
       if (typeof payload.meta === "string")
@@ -216,6 +220,7 @@ export function applyReplayEvent(event) {
       break;
     case "avatar":
       if (typeof payload.state === "string") {
+        avatarExpression = payload.state;
         avatar?.setExpression(payload.state);
         nodes.jimState.textContent = jimLabel(payload.state);
       }
@@ -412,7 +417,6 @@ async function connect() {
 
   await room.connect(serverUrl, token);
   refreshCandidate(room);
-  startAvatar();
 
   // The snapshot first, and only then the loop. Awaiting it here is what makes
   // "one complete snapshot, then ordered events" true rather than hoped for: a
@@ -449,14 +453,22 @@ function schedulePoll() {
 /// is this page's own render driven by that audio. The mouth follows amplitude,
 /// which is the one signal that cannot lie about whether he is speaking; the
 /// expression follows the replay's avatar events.
-function startAvatar() {
+function startAvatar(modelId) {
+  // An empty first snapshot is common before the candidate's first flush.
+  // Only a stage row commits a choice; otherwise keep the voice-only panel.
+  if (avatarSelectionMade) return;
+  avatarSelectionMade = true;
+  try {
+    getAvatarModel(modelId);
+  } catch {
+    nodes.jimAvatar.dataset.avatarState = "unavailable";
+    return;
+  }
   avatar = createAvatar({
     mount: nodes.jimAvatar,
-    loadModel: async (signal) => {
-      const { loadAvatarModel } = await import("/avatar/model.js");
-      return loadAvatarModel(nodes.jimAvatar, signal);
-    },
+    loadModel: (signal) => loadAvatarModel(nodes.jimAvatar, signal, modelId),
   });
+  avatar.setExpression(avatarExpression);
   void avatar.ready.then((rendered) => {
     if (rendered) pumpAvatar();
   });

@@ -646,10 +646,16 @@ test("the page covers the avatar stage for the whole preflight", () => {
     1,
     "called from that one place, nowhere else",
   );
+  const coverAt = page.indexOf("holdWorkspaceBehindDialogs();");
+  const preflightAt = page.indexOf("const preflight = await runAudioCheck();");
+  const startAt = page.indexOf("startAvatar(state.interviewerAvatar);");
   assert.ok(
-    page.indexOf("holdWorkspaceBehindDialogs();") <
-      page.indexOf("startAvatar();"),
+    coverAt >= 0 && startAt >= 0 && coverAt < startAt,
     "covered before the avatar starts",
+  );
+  assert.ok(
+    preflightAt >= 0 && startAt >= 0 && preflightAt < startAt,
+    "the selected model is committed before any download",
   );
 });
 

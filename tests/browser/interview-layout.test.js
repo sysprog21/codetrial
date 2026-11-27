@@ -68,6 +68,19 @@ async function openInterview(width, height, query = "", drawing = false) {
   return page;
 }
 
+async function startAvatarForLayout(page) {
+  // Hold the download: these checks need the loading stage and its Hide
+  // button, independent of model hosting, geometry or WebGL availability.
+  await page.route(
+    "https://raw.githubusercontent.com/**",
+    () => new Promise(() => {}),
+  );
+  await page.evaluate(async () => {
+    const { startAvatar } = await import("/avatar/stage.js");
+    startAvatar();
+  });
+}
+
 // Two frames: the drawer repaints from observers a frame or two after a
 // change, and a wheel scrolls on a later frame.
 const settled = (page) =>
@@ -507,6 +520,7 @@ test("an expanded Example drawing turns Jim's stage into the compact card over t
     const page = await openInterview(width, height, "&exampleDrawing=1");
     try {
       await closeSetupCheck(page);
+      await startAvatarForLayout(page);
       await page
         .locator("#example-board")
         .evaluate((node) => (node.open = true));
@@ -602,6 +616,7 @@ test("expanding with focus on Hide avatar moves it to Jim's stage", async (t) =>
   const page = await openInterview(1440, 900, "&exampleDrawing=1");
   try {
     await closeSetupCheck(page);
+    await startAvatarForLayout(page);
     await page.locator("#example-board").evaluate((node) => (node.open = true));
     await page.locator("#hide-avatar").focus();
     // A resize that leaves the window wide keeps the button, and its focus.

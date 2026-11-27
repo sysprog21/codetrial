@@ -154,6 +154,11 @@ import {
   stopAvatar,
 } from "./avatar/stage.js";
 import {
+  DEFAULT_MODEL_ID,
+  SUPPORTED_MODELS,
+  getAvatarModel,
+} from "./avatar/model.js";
+import {
   flushReplay,
   initReplay,
   recordAvatarState,
@@ -524,6 +529,7 @@ const interviewProfile = {
 };
 const interviewGrounding = consumeGroundingPacket(tabStorage);
 const state = {
+  interviewerAvatar: DEFAULT_MODEL_ID,
   candidateThinking: false,
   // Published by the agent; see `turnWindowMs`. Null draws no ring.
   turnWindowMs: null,
@@ -749,6 +755,8 @@ const nodes = {
   screenRecording: document.querySelector("#screen-recording"),
   interviewerAccent: document.querySelector("#interviewer-accent"),
   interviewerVoice: document.querySelector("#interviewer-voice"),
+  interviewerAvatar: document.querySelector("#interviewer-avatar"),
+  avatarVoiceSuggestion: document.querySelector("#avatar-voice-suggestion"),
   hideExamples: document.querySelector("#hide-examples"),
   recordingConsentStep: document.querySelector("#recording-consent-step"),
   recordingConsent: document.querySelector("#recording-consent"),
@@ -784,6 +792,16 @@ const nodes = {
   hideAvatar: document.querySelector("#hide-avatar"),
   jimAvatarStatus: document.querySelector("#jim-avatar-status"),
 };
+
+nodes.interviewerAvatar.replaceChildren(
+  ...SUPPORTED_MODELS.map((model) => new Option(model.label, model.id)),
+);
+function updateAvatarVoiceSuggestion() {
+  const { suggestedVoice } = getAvatarModel(nodes.interviewerAvatar.value);
+  nodes.avatarVoiceSuggestion.textContent = `Suggested voice: ${suggestedVoice}. You can choose any voice.`;
+}
+nodes.interviewerAvatar.addEventListener("change", updateAvatarVoiceSuggestion);
+updateAvatarVoiceSuggestion();
 
 // Jim's audio element. Named because setSinkId needs a stable target and the
 // avatar analyser will need the same one; an anonymous appendChild left neither
@@ -1062,15 +1080,12 @@ async function init() {
   // and making someone prove their microphone first only to bounce them is a
   // waste of their time.
   if (await signInRequired()) return;
-  // Before the media check, not after it. The media check is an overlay over an
-  // already laid out shell, so the mount is measurable here, and the candidate
-  // is about to spend ten to thirty seconds playing a tone and granting a
-  // camera. The avatar needs roughly that long: 10.9 MB of model and a few
-  // seconds of glTF parse. Starting it afterwards is why Jim's face turned up a
-  // dozen seconds into the interview, behind the neutral panel, which is
-  // indistinguishable from an avatar that is never coming.
-  startAvatar();
   const preflight = await runAudioCheck();
+  // Commit once before the first download. Preloading Jim under the selector
+  // would fetch a model the candidate may never use.
+  state.interviewerAvatar = nodes.interviewerAvatar.value;
+  nodes.interviewerAvatar.disabled = true;
+  startAvatar(state.interviewerAvatar);
   state.localUserStream = preflight.userStream;
   // Before the room, so nothing downstream ever sees the camera: the publisher,
   // the watchers and the heartbeat all read the stream, and handing them a

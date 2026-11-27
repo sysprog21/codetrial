@@ -826,13 +826,24 @@ so a producer from a later deploy does not stop a recording.
 
 | Kind | Payload | Rendered as |
 |---|---|---|
-| `stage` | `{title, meta, remainingSeconds}` | the problem heading and the clock |
+| `stage` | `{title, meta, remainingSeconds, avatarId?}` | the problem heading, clock, and supported Jim appearance |
 | `editor` | `{code, language}` | the code panel, as text |
 | `board` | `{ops, checkpoint?, surface?}`, each op `{op: "stroke", color, width, points}`, `{op: "text", text, color, x, y, fontSize}` or `{op: "undo" \| "redo" \| "clear"}`; `checkpoint` is a completed REACTO phase id; `surface: "example"` accompanies the coding editor | the drawing, redrawn from every op so far, with completed phases named in the replay |
 | `tests` | `{passed, failed, total}` | one line, red if anything failed |
 | `avatar` | `{state}`, one of `speaking`, `thinking`, `listening` | Jim's expression and label |
 | `transcript` | `{speaker, text}` | nothing here; the replay page renders it |
 | `lifecycle` | `{state}` | nothing here |
+
+`avatarId` names a descriptor in `web/avatar/model.js`, never a URL or a hash
+supplied by the replay. Every new stage event restates the selected ID so a
+late snapshot retains it. The recording template starts its avatar once, on
+the first stage row, and retains any expression received before that row.
+An empty first snapshot downloads no model. A legacy stage row without the
+field selects the original Jim; an unsupported value keeps the voice-only
+panel. A refused replay or bootstrap timeout still permits camera and audio
+recording under the existing readiness policy, without a model download.
+This optional presentation field uses the existing version-1 envelope and
+does not change retention, consent, payload limits or event ordering.
 
 Text operations contain confirmed labels only. Draft entry, movement, scaling,
 color changes and cancellation are not recorded. Text uses the board's fixed
