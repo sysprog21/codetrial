@@ -813,6 +813,7 @@ fn static_problem_bank_and_judges_cover_each_problem() {
         ("add-binary", "wide odd value plus zero"),
         ("add-binary", "wide all ones plus one"),
         ("add-binary", "two wide values with multi-bit carry"),
+        ("add-binary", "maximum length all ones plus one"),
         ("triangle", "cheapest values not connected"),
         ("triangle", "cheaper step misses the deep saving"),
         (
