@@ -37,6 +37,55 @@
         100
       ],
       "expected": 24
+    },
+    {
+      "label": "one fewer scheduled job",
+      "input": [
+        124
+      ],
+      "expected": 28
+    },
+    {
+      "label": "medium scheduling batch",
+      "input": [
+        125
+      ],
+      "expected": 31
+    },
+    {
+      "label": "two hundred scheduled jobs",
+      "input": [
+        200
+      ],
+      "expected": 49
+    },
+    {
+      "label": "thousand scheduled jobs",
+      "input": [
+        1000
+      ],
+      "expected": 249
+    },
+    {
+      "label": "large odd batch",
+      "input": [
+        3125
+      ],
+      "expected": 781
+    },
+    {
+      "label": "half capacity",
+      "input": [
+        5000
+      ],
+      "expected": 1249
+    },
+    {
+      "label": "maximum job count",
+      "input": [
+        10000
+      ],
+      "expected": 2499
     }
   ],
   "paramNames": [
