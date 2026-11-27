@@ -125,11 +125,17 @@ list()
     done
 }
 
-rust=$(list 'build.rs' 'src/*.rs' 'tests/*.rs' 'scripts/*.rs')
+rust=$(list 'build.rs' 'src/*.rs' 'tests/*.rs' 'scripts/*.rs' ':!tests/check-structure/*')
 
 # The desktop app is a crate of its own, so `cargo fmt` at the root never sees
 # it and it needs its manifest named.
 desktop=$(list 'desktop/build.rs' 'desktop/src/*.rs' 'desktop/tests/*.rs')
+
+# The architecture linter is one too. Its tests are under tests/check-structure/
+# beside one test file, with fixture crates that are read by line and column, so
+# only the tool's own sources and that test file are formatted and the fixtures
+# are left as they are written.
+structure=$(list 'tools/check-structure/src/*.rs' 'tests/check-structure/end_to_end.rs')
 shell=$(list '*.sh')
 
 # tests/ and the skills as well as scripts/: the Python under tests/ drives the
@@ -148,7 +154,7 @@ web=$(list '*.html' '*.js' '*.mjs' '*.cjs' \
     '.github/ISSUE_TEMPLATE/*.yml' '.github/ISSUE_TEMPLATE/*.yaml')
 prettier=$ROOT/node_modules/.bin/prettier
 
-files=$(printf '%s\n%s\n%s\n%s\n' "$rust" "$desktop" "$shell" "$python" | grep -v '^$')
+files=$(printf '%s\n%s\n%s\n%s\n%s\n' "$rust" "$desktop" "$structure" "$shell" "$python" | grep -v '^$')
 
 # The same refusal as scripts/git-pre-commit.sh makes for the linters, here for
 # the tree, which never goes through the hook.
@@ -187,9 +193,9 @@ lane()
 }
 
 lane commentflow "install a release from github.com/sysprog21/commentflow" \
-    "$rust$desktop$shell" && use_commentflow=1
+    "$rust$desktop$structure$shell" && use_commentflow=1
 lane rustfmt "install Rust with rustup, then rustup component add rustfmt" \
-    "$rust$desktop" && use_rustfmt=1
+    "$rust$desktop$structure" && use_rustfmt=1
 lane ruff "pipx install ruff" "$python" && use_ruff=1
 lane shfmt "brew install shfmt, or apt-get install shfmt" "$shell" && use_shfmt=1
 lane "$prettier" "run npm ci" "$web" && use_prettier=1
@@ -226,13 +232,15 @@ format()
 {
     if [ -n "${use_commentflow:-}" ]; then
         # shellcheck disable=SC2086
-        commentflow $rust $desktop $shell || return 1
+        commentflow $rust $desktop $structure $shell || return 1
     fi
     if [ -n "${use_rustfmt:-}" ]; then
         # shellcheck disable=SC2086
         rustfmt_crate Cargo.toml $rust || return 1
         # shellcheck disable=SC2086
         rustfmt_crate desktop/Cargo.toml $desktop || return 1
+        # shellcheck disable=SC2086
+        rustfmt_crate tools/check-structure/Cargo.toml $structure || return 1
     fi
     if [ -n "${use_ruff:-}" ]; then
         # shellcheck disable=SC2086

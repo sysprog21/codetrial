@@ -1,0 +1,11 @@
+[package]
+name = "gated"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = ["metrics"]
+metrics = []
+export = []
+
+[workspace]

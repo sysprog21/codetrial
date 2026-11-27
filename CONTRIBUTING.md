@@ -111,7 +111,7 @@ publishes commits the pre-commit hook never saw.
 
 A change that touches Rust sources, tests, build files or the directories they
 read (`src/`, `desktop/`, `vendor/`, `problem-bank/`, `scripts/hook-check/`,
-`.cargo/`, `tests/` apart from `tests/browser/`, `tests/stubs/` and the
+`tools/`, `.cargo/`, `tests/` apart from `tests/browser/`, `tests/stubs/` and the
 top-level Python files, `Cargo.toml`, `Cargo.lock`, `build.rs`,
 `rust-toolchain.toml`, `clippy.toml`, `rustfmt.toml` or `deny.toml`, and the few
 docs, scripts and web/ files a Rust test names; most of web/ is not in this

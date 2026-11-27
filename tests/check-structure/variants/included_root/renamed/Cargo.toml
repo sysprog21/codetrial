@@ -1,0 +1,15 @@
+[package]
+name = "wt"
+version = "0.1.0"
+edition = "2024"
+
+# `wt` sorts first: `src/main.rs` is its root, and `wt-git` includes it.
+[[bin]]
+name = "wt"
+path = "src/main.rs"
+
+[[bin]]
+name = "wt-git"
+path = "src/git_wt.rs"
+
+[workspace]

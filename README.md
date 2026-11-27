@@ -440,6 +440,7 @@ problem-bank/   Problem and judge source of truth
 config/         Env file templates and per-provider credentials
 docs/           Contracts and operational notes
 scripts/        Build, verification, and integration checks
+tools/          Rust tools the gate runs on this tree (check-structure)
 vendor/         Patched third-party crates
 tests/          Rust and browser tests
 ```
