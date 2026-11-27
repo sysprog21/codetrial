@@ -36,7 +36,12 @@ impl FromRequestParts<AppState> for Owner {
         parts: &mut Parts,
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
-        let user = match current_user(state.accounts.as_ref(), &parts.headers).await {
+        // Without a database there is no session to read, and that is not a
+        // signed-out caller: `accounts_error` says which problem it is.
+        let Some(accounts) = state.accounts.clone() else {
+            return Err(state.accounts_error());
+        };
+        let user = match current_user(Some(&accounts), &parts.headers).await {
             Ok(Some(user)) => user,
             Ok(None) => return Err(unauthorized_response()),
             Err(_) => {
@@ -46,10 +51,7 @@ impl FromRequestParts<AppState> for Owner {
                 ));
             }
         };
-        match state.accounts.clone() {
-            Some(accounts) => Ok(Self { accounts, user }),
-            None => Err(state.accounts_error()),
-        }
+        Ok(Self { accounts, user })
     }
 }
 
