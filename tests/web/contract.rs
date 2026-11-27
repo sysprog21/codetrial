@@ -682,6 +682,15 @@ fn static_problem_bank_and_judges_cover_each_problem() {
             "duplicate words",
         ),
         ("minimum-size-subarray-sum", "no qualifying window"),
+        ("minimum-size-subarray-sum", "middle pair exceeds target"),
+        (
+            "minimum-size-subarray-sum",
+            "one early file and a later run",
+        ),
+        (
+            "minimum-size-subarray-sum",
+            "exact prefix and larger final pair",
+        ),
         ("valid-sudoku", "duplicate in box only"),
         ("valid-sudoku", "duplicate in last column only"),
         ("valid-sudoku", "duplicate in last row only"),
