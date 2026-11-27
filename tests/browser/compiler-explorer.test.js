@@ -888,6 +888,394 @@ test("word-pattern cases reject shortcuts that skip a length or mapping check", 
   }
 });
 
+test("rotated search cases reject each faulty bound, pivot or shortcut search", () => {
+  const problem = "search-in-rotated-sorted-array";
+  const inclusive = (a, b) => a <= b;
+  const exclusive = (a, b) => a < b;
+  const search =
+    ({
+      leftSorted = inclusive,
+      leftBound = inclusive,
+      rightBound = inclusive,
+      rightLowerBound = exclusive,
+      midpoint = Math.floor,
+    } = {}) =>
+    (nums, target) => {
+      let lo = 0;
+      let hi = nums.length - 1;
+      while (lo <= hi) {
+        const mid = lo + midpoint((hi - lo) / 2);
+        if (nums[mid] === target) return mid;
+        if (leftSorted(nums[lo], nums[mid], nums[hi])) {
+          if (leftBound(nums[lo], target) && target < nums[mid]) hi = mid - 1;
+          else lo = mid + 1;
+        } else if (
+          rightLowerBound(nums[mid], target) &&
+          rightBound(target, nums[hi], nums[nums.length - 1])
+        ) {
+          lo = mid + 1;
+        } else {
+          hi = mid - 1;
+        }
+      }
+      return -1;
+    };
+
+  const searchRightFirst =
+    ({ leftBound = inclusive, useOuterBounds = false } = {}) =>
+    (nums, target) => {
+      let lo = 0;
+      let hi = nums.length - 1;
+      while (lo <= hi) {
+        const mid =
+          lo + (useOuterBounds ? Math.ceil : Math.floor)((hi - lo) / 2);
+        if (nums[mid] === target) return mid;
+        const first = nums[useOuterBounds ? 0 : lo];
+        const last = nums[useOuterBounds ? nums.length - 1 : hi];
+        const sorted = useOuterBounds ? exclusive : inclusive;
+        if (sorted(nums[mid], last)) {
+          if (nums[mid] < target && target <= last) lo = mid + 1;
+          else hi = mid - 1;
+        } else if (leftBound(first, target) && target < nums[mid]) {
+          hi = mid - 1;
+        } else {
+          lo = mid + 1;
+        }
+      }
+      return -1;
+    };
+
+  const rightFirstLeftWithoutMid = (nums, target) => {
+    let lo = 0;
+    let hi = nums.length - 1;
+    while (lo <= hi) {
+      const mid = lo + Math.floor((hi - lo) / 2);
+      if (nums[mid] === target) return mid;
+      if (nums[mid] <= nums[hi]) {
+        if (nums[mid] < target && target <= nums[hi]) lo = mid + 1;
+        else hi = mid - 1;
+      } else if (nums[lo] <= target) {
+        hi = mid - 1;
+      } else {
+        lo = mid + 1;
+      }
+    }
+    return -1;
+  };
+
+  const pivotAgainstFirst = (nums, target) => {
+    let lo = 0;
+    let hi = nums.length - 1;
+    while (lo < hi) {
+      const mid = lo + Math.floor((hi - lo) / 2);
+      if (nums[mid] >= nums[0]) lo = mid + 1;
+      else hi = mid;
+    }
+    return target >= nums[0]
+      ? searchRange(nums, target, 0, lo - 1)
+      : searchRange(nums, target, lo, nums.length - 1);
+  };
+
+  const pivotAgainstFirstDiscardingMidpoint = (nums, target) => {
+    const last = nums.length - 1;
+    let lo = nums[0] > nums[last] ? 1 : 0;
+    let hi = last;
+    while (lo < hi) {
+      const mid = lo + Math.floor((hi - lo) / 2);
+      if (nums[mid] >= nums[0]) lo = mid + 1;
+      else hi = mid - 1;
+    }
+    return target < nums[0]
+      ? searchRange(nums, target, lo, last)
+      : searchRange(nums, target, 0, lo);
+  };
+
+  const shiftedStartPivotAgainstHi = (nums, target) => {
+    const last = nums.length - 1;
+    let lo = nums[0] > nums[last] ? 1 : 0;
+    let hi = last;
+    while (lo < hi) {
+      const mid = lo + Math.floor((hi - lo) / 2);
+      if (nums[mid] > nums[hi]) lo = mid + 1;
+      else hi = mid - 1;
+    }
+    let [from, to] = target <= nums[last] ? [lo, last] : [0, lo];
+    while (from <= to) {
+      const mid = from + Math.floor((to - from) / 2);
+      if (nums[mid] === target) return mid;
+      if (nums[mid] < target) from = mid + 1;
+      else to = mid - 1;
+    }
+    return -1;
+  };
+
+  const pivotAgainstFirstIncludingPivot = (nums, target) => {
+    let hi = nums.length - 1;
+    // Index zero cannot be the pivot once a wrap is known to exist.
+    let lo = nums[0] > nums[hi] ? 1 : 0;
+    while (lo < hi) {
+      const mid = lo + Math.floor((hi - lo) / 2);
+      if (nums[mid] > nums[0]) lo = mid + 1;
+      else hi = mid;
+    }
+    return target < nums[0]
+      ? searchRange(nums, target, lo, nums.length - 1)
+      : searchRange(nums, target, 0, lo);
+  };
+
+  const searchRange = (nums, target, from, to, requireMatch = true) => {
+    if (from > to) return -1;
+    while (from < to) {
+      const mid = from + Math.floor((to - from) / 2);
+      if (nums[mid] < target) from = mid + 1;
+      else to = mid;
+    }
+    return !requireMatch || nums[from] === target ? from : -1;
+  };
+
+  const pivotWithDiscardedMidpoint =
+    ({ closedLoop = false, includePivot = false, bound = "last" } = {}) =>
+    (nums, target) => {
+      const last = nums.length - 1;
+      let lo = 0;
+      let hi = last;
+      while (lo < hi || (closedLoop && lo === hi)) {
+        const mid = lo + Math.floor((hi - lo) / 2);
+        if (nums[mid] > nums[bound === "hi" ? hi : last]) lo = mid + 1;
+        else hi = mid - 1;
+      }
+      let [from, to] =
+        target <= nums[last] ? [lo, last] : [0, includePivot ? lo : lo - 1];
+      // The inclusive-pivot variants use an equality check at each midpoint.
+      if (!includePivot) return searchRange(nums, target, from, to);
+      while (from <= to) {
+        const mid = from + Math.floor((to - from) / 2);
+        if (nums[mid] === target) return mid;
+        if (nums[mid] < target) from = mid + 1;
+        else to = mid - 1;
+      }
+      return -1;
+    };
+
+  const uncheckedInsertionPoint = (nums, target, afterWrapOnly = false) => {
+    const last = nums.length - 1;
+    let lo = 0;
+    let hi = last;
+    while (lo < hi) {
+      const mid = lo + Math.floor((hi - lo) / 2);
+      if (nums[mid] > nums[hi]) lo = mid + 1;
+      else hi = mid;
+    }
+    const afterWrap = target <= nums[last];
+    if (afterWrap) hi = last;
+    else [lo, hi] = [0, lo - 1];
+    if (lo > hi || target < nums[lo] || target > nums[hi]) return -1;
+    return searchRange(nums, target, lo, hi, afterWrapOnly && !afterWrap);
+  };
+
+  const afterWrapGap = "target between entries after a wrap";
+  const uncheckedAfterWrap = (nums, target) =>
+    uncheckedInsertionPoint(nums, target, true);
+  assertRejects(problem, afterWrapGap, uncheckedAfterWrap, afterWrapGap);
+  const { input: afterWrapInput } = pinnedCase(problem, afterWrapGap);
+  assert.equal(uncheckedAfterWrap(...afterWrapInput), 3);
+
+  const reference = search();
+  const rightFirstReference = searchRightFirst();
+  for (const {
+    label,
+    input: [nums, target],
+    expected,
+  } of judges[problem].cases) {
+    assert.equal(nums.indexOf(target), expected, label);
+    assert.equal(reference(nums, target), expected, label);
+    assert.equal(rightFirstReference(nums, target), expected, label);
+  }
+
+  const left = "first entry before a wrap";
+  const right = "last entry after a wrap";
+  const pair = "wrapped pair with target last";
+  const firstOfFour = "first entry in a wrapped quartet";
+  const roundedUpLeftFirst = search({
+    midpoint: Math.ceil,
+    leftSorted: (_lo, mid, hi) => mid >= hi,
+  });
+  const roundedUpSearchWithGlobalLastBound = search({
+    leftSorted: (_lo, mid, hi) => mid > hi,
+    rightBound: (target, _hi, last) => target <= last,
+    midpoint: Math.ceil,
+  });
+  const halfOpenSearchWithGlobalLastBound = (nums, target) => {
+    let lo = 0;
+    let hi = nums.length - 1;
+    while (lo < hi) {
+      const mid = lo + Math.floor((hi - lo) / 2);
+      if (nums[mid] === target) return mid;
+      if (nums[mid] < nums[hi]) {
+        if (nums[mid] < target && target <= nums[nums.length - 1]) lo = mid + 1;
+        else hi = mid;
+      } else if (nums[lo] <= target && target < nums[mid]) {
+        hi = mid;
+      } else {
+        lo = mid + 1;
+      }
+    }
+    return nums[lo] === target ? lo : -1;
+  };
+  const halfOpenSearchWithGlobalFirstBound = (nums, target) => {
+    let lo = 0;
+    let hi = nums.length - 1;
+    while (lo < hi) {
+      const mid = lo + Math.ceil((hi - lo) / 2);
+      if (nums[mid] === target) return mid;
+      if (nums[lo] < nums[mid]) {
+        if (nums[0] <= target && target < nums[mid]) hi = mid - 1;
+        else lo = mid;
+      } else if (nums[mid] < target && target <= nums[hi]) {
+        lo = mid;
+      } else {
+        hi = mid - 1;
+      }
+    }
+    return nums[lo] === target ? lo : -1;
+  };
+  for (const [label, fault, faultySearch] of [
+    [
+      "target before the midpoint of a dump wrapped at its end",
+      "a rounded-up search that bounds the right half by the dump's last entry",
+      roundedUpSearchWithGlobalLastBound,
+    ],
+    [
+      "target before the midpoint of a seven-entry dump wrapped at its end",
+      "a half-open search that rounds down and bounds the right half by the dump's last entry",
+      halfOpenSearchWithGlobalLastBound,
+    ],
+    [
+      "entry just past the midpoint of a seven-entry wrap",
+      "a half-open search that rounds up and bounds the left half by the dump's first entry",
+      halfOpenSearchWithGlobalFirstBound,
+    ],
+    [
+      "target past the midpoint before the wrap",
+      "a right-first search that omits the midpoint from its left-half bound",
+      rightFirstLeftWithoutMid,
+    ],
+    [
+      firstOfFour,
+      "a closed pivot search compared with nums[hi] that discards its midpoint",
+      pivotWithDiscardedMidpoint({ closedLoop: true, bound: "hi" }),
+    ],
+    [
+      firstOfFour,
+      "a rounded-up midpoint that takes nums[mid] >= nums[hi] as a sorted left half",
+      roundedUpLeftFirst,
+    ],
+    [
+      "last entry before a five-entry wrap",
+      "a closed pivot search compared with nums[hi] that discards its midpoint and searches through the pivot",
+      pivotWithDiscardedMidpoint({
+        closedLoop: true,
+        includePivot: true,
+        bound: "hi",
+      }),
+    ],
+    [
+      "smallest entry in a six-entry wrap",
+      "an open pivot search compared with nums[last] that discards its midpoint and searches through the pivot",
+      pivotWithDiscardedMidpoint({ includePivot: true, bound: "last" }),
+    ],
+    [
+      "smallest entry in a seven-entry wrap",
+      "a pivot search against nums[0] that discards its midpoint",
+      pivotAgainstFirstDiscardingMidpoint,
+    ],
+    [
+      "last entry before a six-entry wrap",
+      "a shifted-start pivot search compared with nums[hi] that discards its midpoint and searches through the pivot",
+      shiftedStartPivotAgainstHi,
+    ],
+    [
+      "wrapped pair with target first",
+      "fixed outer bounds with a rounded-up midpoint, right half first",
+      searchRightFirst({ useOuterBounds: true }),
+    ],
+    [
+      "smallest entry after a wrap",
+      "an open pivot search compared with nums[last] that discards its midpoint",
+      pivotWithDiscardedMidpoint({ bound: "last" }),
+    ],
+    [
+      "pair not wrapped with target last",
+      "a pivot found against nums[0] and included in the left half",
+      pivotAgainstFirstIncludingPivot,
+    ],
+    [
+      "target between the wrap and the midpoint",
+      "a sorted right half searched without checking its lower bound",
+      search({ rightLowerBound: () => true }),
+    ],
+    [
+      "target between entries before a wrap",
+      "an insertion point returned without a match check",
+      uncheckedInsertionPoint,
+    ],
+  ]) {
+    assertRejects(
+      problem,
+      label,
+      faultySearch,
+      `"${label}" must reject ${fault}`,
+    );
+  }
+  assertRejects(
+    problem,
+    "target in a single entry",
+    (nums, target) => (nums.length === 1 ? -1 : reference(nums, target)),
+    "The search must check a singleton for the target",
+  );
+  assertRejects(
+    problem,
+    "negative target after a wrap",
+    (nums, target) => (target < 0 ? -1 : reference(nums, target)),
+    "The search must look for negative targets",
+  );
+  assertRejects(
+    problem,
+    "last entry, not wrapped",
+    pivotAgainstFirst,
+    "The search must include the last entry when the dump does not wrap",
+  );
+  assertRejects(
+    problem,
+    left,
+    searchRightFirst({ leftBound: exclusive }),
+    `"${left}" must reject an exclusive left bound when testing the right half first`,
+  );
+  for (const [fault, labels] of [
+    [{ leftBound: exclusive }, [left]],
+    [{ rightBound: exclusive }, [right]],
+    [{ leftSorted: exclusive }, [pair]],
+    [{ leftBound: exclusive, rightBound: exclusive }, [left, right]],
+    [{ leftBound: exclusive, leftSorted: exclusive }, [left, pair]],
+    [{ rightBound: exclusive, leftSorted: exclusive }, [right, pair]],
+    [
+      { leftBound: exclusive, rightBound: exclusive, leftSorted: exclusive },
+      [left, right, pair],
+    ],
+  ]) {
+    const faultySearch = search(fault);
+    const comparisons = Object.keys(fault).join(", ");
+    for (const label of labels) {
+      assertRejects(
+        problem,
+        label,
+        faultySearch,
+        `"${label}" must reject exclusive comparisons for ${comparisons}`,
+      );
+    }
+  }
+});
+
 test("jump-game cases reject each hop-by-hop shortcut", () => {
   const travel = (choose) => (nums) => {
     let at = 0;

@@ -14851,6 +14851,285 @@
           7
         ],
         "expected": 1
+      },
+      {
+        "label": "last entry after a wrap",
+        "input": [
+          [
+            3,
+            1,
+            2
+          ],
+          2
+        ],
+        "expected": 2
+      },
+      {
+        "label": "wrapped pair with target last",
+        "input": [
+          [
+            2,
+            1
+          ],
+          1
+        ],
+        "expected": 1
+      },
+      {
+        "label": "first entry before a wrap",
+        "input": [
+          [
+            1,
+            2,
+            0
+          ],
+          1
+        ],
+        "expected": 0
+      },
+      {
+        "label": "target in a single entry",
+        "input": [
+          [
+            1
+          ],
+          1
+        ],
+        "expected": 0
+      },
+      {
+        "label": "negative target after a wrap",
+        "input": [
+          [
+            1,
+            -3,
+            -2
+          ],
+          -2
+        ],
+        "expected": 2
+      },
+      {
+        "label": "last entry, not wrapped",
+        "input": [
+          [
+            1,
+            2,
+            3,
+            4
+          ],
+          4
+        ],
+        "expected": 3
+      },
+      {
+        "label": "first entry in a wrapped quartet",
+        "input": [
+          [
+            3,
+            0,
+            1,
+            2
+          ],
+          3
+        ],
+        "expected": 0
+      },
+      {
+        "label": "wrapped pair with target first",
+        "input": [
+          [
+            2,
+            1
+          ],
+          2
+        ],
+        "expected": 0
+      },
+      {
+        "label": "smallest entry after a wrap",
+        "input": [
+          [
+            3,
+            0,
+            1,
+            2
+          ],
+          0
+        ],
+        "expected": 1
+      },
+      {
+        "label": "target between entries before a wrap",
+        "input": [
+          [
+            3,
+            5,
+            0,
+            1
+          ],
+          4
+        ],
+        "expected": -1
+      },
+      {
+        "label": "target between entries after a wrap",
+        "input": [
+          [
+            4,
+            6,
+            0,
+            2
+          ],
+          1
+        ],
+        "expected": -1
+      },
+      {
+        "label": "last entry before a five-entry wrap",
+        "input": [
+          [
+            3,
+            4,
+            0,
+            1,
+            2
+          ],
+          4
+        ],
+        "expected": 1
+      },
+      {
+        "label": "smallest entry in a six-entry wrap",
+        "input": [
+          [
+            4,
+            5,
+            0,
+            1,
+            2,
+            3
+          ],
+          0
+        ],
+        "expected": 2
+      },
+      {
+        "label": "pair not wrapped with target last",
+        "input": [
+          [
+            1,
+            2
+          ],
+          2
+        ],
+        "expected": 1
+      },
+      {
+        "label": "target between the wrap and the midpoint",
+        "input": [
+          [
+            4,
+            0,
+            1,
+            2,
+            3
+          ],
+          0
+        ],
+        "expected": 1
+      },
+      {
+        "label": "target past the midpoint before the wrap",
+        "input": [
+          [
+            1,
+            2,
+            3,
+            4,
+            0
+          ],
+          4
+        ],
+        "expected": 3
+      },
+      {
+        "label": "target before the midpoint of a dump wrapped at its end",
+        "input": [
+          [
+            1,
+            2,
+            3,
+            4,
+            5,
+            0
+          ],
+          3
+        ],
+        "expected": 2
+      },
+      {
+        "label": "target before the midpoint of a seven-entry dump wrapped at its end",
+        "input": [
+          [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            0
+          ],
+          3
+        ],
+        "expected": 2
+      },
+      {
+        "label": "entry just past the midpoint of a seven-entry wrap",
+        "input": [
+          [
+            4,
+            5,
+            6,
+            0,
+            1,
+            2,
+            3
+          ],
+          1
+        ],
+        "expected": 4
+      },
+      {
+        "label": "smallest entry in a seven-entry wrap",
+        "input": [
+          [
+            4,
+            5,
+            6,
+            0,
+            1,
+            2,
+            3
+          ],
+          0
+        ],
+        "expected": 3
+      },
+      {
+        "label": "last entry before a six-entry wrap",
+        "input": [
+          [
+            3,
+            4,
+            5,
+            0,
+            1,
+            2
+          ],
+          5
+        ],
+        "expected": 2
       }
     ],
     "paramNames": [
