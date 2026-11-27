@@ -54,6 +54,58 @@
         ]
       ],
       "expected": "inter"
+    },
+    {
+      "label": "middle string breaks prefix",
+      "input": [
+        [
+          "flower",
+          "dog",
+          "flow"
+        ]
+      ],
+      "expected": ""
+    },
+    {
+      "label": "same substring appears later",
+      "input": [
+        [
+          "flower",
+          "reflow"
+        ]
+      ],
+      "expected": ""
+    },
+    {
+      "label": "later string ends first",
+      "input": [
+        [
+          "flower",
+          "flow"
+        ]
+      ],
+      "expected": "flow"
+    },
+    {
+      "label": "middle differs at second letter",
+      "input": [
+        [
+          "ab",
+          "axc",
+          "abcd"
+        ]
+      ],
+      "expected": "a"
+    },
+    {
+      "label": "matching column after mismatch",
+      "input": [
+        [
+          "abc",
+          "axc"
+        ]
+      ],
+      "expected": "a"
     }
   ],
   "paramNames": [
