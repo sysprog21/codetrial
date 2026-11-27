@@ -160,7 +160,7 @@ class Fixture:
                         status="covered_shared",
                         test="shared notice matrix (all notice rows)",
                         tests=["shared_notice", "alpha_cancels"],
-                        reason="The reader EOF maps to the same RoomClosed terminal as RoomDisconnected in src/livekit/recovery.rs.",
+                        reason="The reader EOF maps to the same RoomClosed terminal as RoomDisconnected in src/livekit/startup/recovery.rs.",
                     )
                 rows.append(row)
         return rows
@@ -844,10 +844,10 @@ ABSENT_C = "c-absence-expiry"
 CLOSED_E = "e-room-closed-during-recovery"
 SHARE_REASON = (
     "Every recovery phase waits through the single Driver::wait select in "
-    "src/livekit/recovery.rs, so the same handler sees the SDK event in every phase."
+    "src/livekit/startup/recovery.rs, so the same handler sees the SDK event in every phase."
 )
 EOF_REASON = (
-    "The SDK has no EOF event: the local channel in src/livekit/recovery.rs closes "
+    "The SDK has no EOF event: the local channel in src/livekit/startup/recovery.rs closes "
     "after Disconnected and maps to the same Terminal::RoomClosed path."
 )
 N_REPRESENTATIVE_FIXTURES = 30

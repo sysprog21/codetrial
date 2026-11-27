@@ -40,9 +40,7 @@ pub(in crate::livekit) async fn send_wrap_up_and_wait(
         &farewell,
     )
     .await?;
-    context
-        .activity
-        .mark_prompted(Instant::now(), Some(&farewell), false);
+    super::mark_asked(context.activity, context.probes, Instant::now(), &farewell);
     let deadline = Instant::now() + WRAP_UP_WAIT;
 
     // The playout deadline this loop has already woken for. The wake exists to
@@ -66,11 +64,11 @@ pub(in crate::livekit) async fn send_wrap_up_and_wait(
                 // The closing message is the one turn that plays to the end.
                 handle_gemini_event(room, context, event, Interruptible::No).await?;
             }
-            _ = tokio::time::sleep_until(context.output_audio.playout_deadline.into()),
+            _ = tokio::time::sleep_until(context.output_audio.playout_ends_at().into()),
                 if context.activity.floor == Floor::AwaitingPlayout
-                    && woken_for != Some(context.output_audio.playout_deadline) =>
+                    && woken_for != Some(context.output_audio.playout_ends_at()) =>
             {
-                woken_for = Some(context.output_audio.playout_deadline);
+                woken_for = Some(context.output_audio.playout_ends_at());
             }
             _ = tokio::time::sleep_until(deadline.into()) => {
                 return Ok(());

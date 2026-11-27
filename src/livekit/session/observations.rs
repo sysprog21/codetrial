@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use crate::agent::RuntimeState;
 use crate::gemini::{GeminiEvent, GeminiFunctionCall};
-use crate::livekit::turn::RuntimeActivity;
+use crate::livekit::turn::{RuntimeActivity, TurnProbes};
 use crate::runtime::{
     TOOL_END_INTERVIEW, TOOL_LOG_HINT, TOOL_READ_BOARD, TOOL_READ_CONVERSATION, TOOL_READ_EDITOR,
     TOOL_RECORD_FRAMEWORK_EVIDENCE,
@@ -33,7 +33,7 @@ pub(super) fn known_tool_name(name: &str) -> &'static str {
 
 pub(super) fn execute_timed_tool_batch(
     state: &mut RuntimeState,
-    activity: &mut RuntimeActivity,
+    probes: &mut TurnProbes,
     calls: Vec<GeminiFunctionCall>,
     reviewed_revision: u64,
     timed: bool,
@@ -45,17 +45,17 @@ pub(super) fn execute_timed_tool_batch(
         reviewed_revision,
         |started, finished, closing| {
             if timed {
-                activity.turn_timing.note_tool_request(started);
-                activity.turn_timing.note_tool_execution(started, finished);
+                probes.turn_timing.note_tool_request(started);
+                probes.turn_timing.note_tool_execution(started, finished);
             }
             if closing {
-                activity.latency.closing_requested(started, finished);
+                probes.latency.closing_requested(started, finished);
             }
         },
     );
     #[cfg(test)]
     {
-        *ticket = super::super::probe::acquisition::observe(&activity.latency, &answers);
+        *ticket = super::super::probe::acquisition::observe(&probes.latency, &answers);
     }
     answers
 }
@@ -72,7 +72,7 @@ pub(super) fn publish_segment(
     // when the candidate has already left.
     if segment.identity.is_none() && segment.id.starts_with("interviewer-") {
         super::super::probe::acquisition::reply(
-            &context.activity.latency,
+            &context.probes.latency,
             &segment.id,
             &segment.text,
             segment.final_segment,
@@ -120,13 +120,13 @@ pub(super) struct ToolTiming {
 }
 
 pub(super) fn tool_timing(
-    activity: &mut RuntimeActivity,
+    probes: &mut TurnProbes,
     state: &RuntimeState,
     answers: &[(GeminiFunctionCall, Value)],
     hints_before: HintCounters,
     timing: ToolTiming,
 ) -> Value {
-    let mut record = activity
+    let mut record = probes
         .latency
         .tool_response(Instant::now(), timing.batch_ms, timing.sent);
     record["tool_batch_ms"] = timing.batch_ms.into();

@@ -25,15 +25,13 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use super::is_interview_participant;
+pub(super) use super::streams::{
+    CANDIDATE_AUDIO_QUEUE_FRAMES, CandidateInput, CandidateStreams, GEMINI_AUDIO_SAMPLE_RATE,
+    Ingress,
+};
 use crate::gemini::GeminiLiveSession;
 
-pub(super) const GEMINI_AUDIO_SAMPLE_RATE: i32 = 16_000;
-
 pub(super) const GEMINI_AUDIO_CHANNELS: i32 = 1;
-
-/// Forty seconds of ten-millisecond frames: the SDK queue and the recovery
-/// buffer hold the same span so neither drops what the other keeps.
-pub(super) const CANDIDATE_AUDIO_QUEUE_FRAMES: usize = 4000;
 
 pub(super) fn candidate_audio_stream(track: RtcAudioTrack) -> NativeAudioStream {
     NativeAudioStream::with_options(
@@ -93,8 +91,7 @@ pub(super) async fn pump_audio<S: AudioSink>(
     // permanently "just spoke": `idle_seconds` never reached
     // SILENCE_THRESHOLD_S and the nudge never fired. Real speech is stamped on
     // `InputTranscript`, where Gemini has already decided that words were said.
-    append_pcm16_bytes(&frame, &mut media.audio_bytes);
-    if media.audio_bytes.len() >= GEMINI_AUDIO_BUFFER_BYTES {
+    if media.push_mic_frame(&frame) {
         flush_candidate_audio(gemini, media).await?;
     }
     Ok(())
@@ -116,70 +113,175 @@ pub(super) fn release_if_ended<T>(stream: &mut Option<T>, ended: bool) {
 /// of the board take their own path and are not held back by this.
 pub(super) async fn pump_video(
     media: &mut CandidateMedia,
+    streams: &mut CandidateStreams,
     gemini: &mut GeminiLiveSession,
     frame: Option<BoxVideoFrame>,
     candidate_speaking: bool,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let Some(frame) = frame else {
-        media.video = None;
+        streams.video = None;
         return Ok(());
     };
-    if !should_send_video_frame(
-        media.last_video_frame.elapsed(),
-        candidate_speaking,
-        media.presence_frame_sent,
-    ) {
-        return Ok(());
-    }
 
     // Stamped on the attempt, not the success: the dimensions come off the
     // wire, and a source stuck emitting frames that will not encode must cost
     // one try per interval rather than one per arriving frame.
-    media.last_video_frame = Instant::now();
+    if !media.begin_video_attempt(Instant::now(), candidate_speaking) {
+        return Ok(());
+    }
     match encode_video_frame_jpeg_off_thread(&frame, GEMINI_VIDEO_JPEG_QUALITY).await {
         Ok(bytes) => {
             gemini
                 .send_video_frame(&bytes, crate::gemini::GEMINI_IMAGE_MIME_TYPE)
                 .await?;
-            media.presence_frame_sent = true;
+            media.mark_presence_sent();
         }
         Err(error) => eprintln!("skipping unencodable video frame: {error}"),
     }
     Ok(())
 }
 
+/// Voice within the quiet window a pause between sentences fits in.
+pub(super) fn voiced_recently(voiced_at: Option<Instant>, now: Instant) -> bool {
+    voiced_at
+        .is_some_and(|at| now.saturating_duration_since(at) < super::timing::CHECKPOINT_VOICE_QUIET)
+}
+
 /// The candidate's inbound media, plus the identity their tracks arrived on.
 /// Bundled because every track event touches two or three of these together.
 pub(super) struct CandidateMedia {
-    pub(super) recovery_audio: super::recovery::Ingress,
-    pub(super) audio: Option<NativeAudioStream>,
-    pub(super) video: Option<NativeVideoStream>,
-    pub(super) audio_bytes: Vec<u8>,
-    pub(super) audio_unconfirmed: bool,
-    pub(super) quarantined_audio_bytes: usize,
+    pub(super) uplink: Uplink,
     pub(super) identity: Option<String>,
     last_video_frame: Instant,
     /// Whether the current socket has a camera frame yet. A replacement clears
     /// it, since a cold socket has seen none and a resumed one may predate it.
     pub(super) presence_frame_sent: bool,
-    /// When the microphone last carried voice, measured on every frame. The
-    /// camera gate reads this rather than provider speech events, which a
-    /// session may never receive.
-    pub(super) voiced_at: Option<Instant>,
     /// Set when a new audio stream is attached, so the first frame taken from
     /// it is not measured against the last frame of an earlier stream.
     mic_stream_fresh: bool,
 }
 
+/// The microphone samples buffered for Gemini, and what is known about whether
+/// a write of them reached it.
+#[derive(Default)]
+pub(super) struct Uplink {
+    /// Samples not yet confirmed written.
+    pub(super) bytes: Vec<u8>,
+    /// Whether a write of `bytes` was attempted and may have reached the
+    /// provider, so replaying them could say the same words twice.
+    pub(super) unconfirmed: bool,
+    /// Bytes dropped rather than replayed for that reason, until logged.
+    pub(super) quarantined: usize,
+}
+
+impl Uplink {
+    /// Adds one frame; whether a write is due.
+    fn push(&mut self, frame: &AudioFrame<'_>) -> bool {
+        append_pcm16_bytes(frame, &mut self.bytes);
+        self.bytes.len() >= GEMINI_AUDIO_BUFFER_BYTES
+    }
+
+    /// Keeps provenance before the first suspension: a failed or cancelled
+    /// write cannot be replayed as if no bytes could have reached the provider.
+    async fn flush<S: AudioSink>(
+        &mut self,
+        gemini: &mut S,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.unconfirmed |= !self.bytes.is_empty();
+        flush_audio(gemini, &mut self.bytes).await?;
+        self.unconfirmed = false;
+        Ok(())
+    }
+
+    /// Moves an ambiguous attempted write's bytes to the quarantine count.
+    fn quarantine_unconfirmed(&mut self) {
+        if self.unconfirmed {
+            self.quarantined = self.quarantined.saturating_add(self.bytes.len());
+            self.bytes.clear();
+            self.unconfirmed = false;
+        }
+    }
+
+    /// What a socket replacement carries over: the unsent samples, and how
+    /// many bytes were quarantined, that count including an unconfirmed write.
+    fn hand_over(&mut self) -> (Vec<u8>, usize) {
+        self.quarantine_unconfirmed();
+        (
+            std::mem::take(&mut self.bytes),
+            std::mem::take(&mut self.quarantined),
+        )
+    }
+}
+
 impl CandidateMedia {
+    /// Whether a camera frame is due at `now`, given when one was last tried
+    /// and whether the candidate is speaking. A due frame counts as tried from
+    /// here, whatever becomes of it.
+    fn begin_video_attempt(&mut self, now: Instant, candidate_speaking: bool) -> bool {
+        let due = should_send_video_frame(
+            now.saturating_duration_since(self.last_video_frame),
+            candidate_speaking,
+            self.presence_frame_sent,
+        );
+        if due {
+            self.last_video_frame = now;
+        }
+        due
+    }
+
+    fn mark_presence_sent(&mut self) {
+        self.presence_frame_sent = true;
+    }
+
+    /// A replacement socket has seen no camera frame yet.
+    pub(super) fn forget_presence_frame(&mut self) {
+        self.presence_frame_sent = false;
+    }
+
+    /// Adds a microphone frame to the uplink; whether a write is due.
+    pub(super) fn push_mic_frame(&mut self, frame: &AudioFrame<'_>) -> bool {
+        self.uplink.push(frame)
+    }
+
+    /// Writes the uplink to `gemini`; see [`Uplink::flush`].
+    pub(super) async fn flush_audio_to<S: AudioSink>(
+        &mut self,
+        gemini: &mut S,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.uplink.flush(gemini).await
+    }
+
+    /// Forgets the samples not yet written, for a silenced or ended input.
+    pub(super) fn drop_unsent_audio(&mut self) {
+        self.uplink.bytes.clear();
+    }
+
+    /// The unsent samples and the quarantined byte count, for a socket
+    /// replacement to carry over or to log.
+    pub(super) fn hand_over_audio(&mut self) -> (Vec<u8>, usize) {
+        self.uplink.hand_over()
+    }
+
+    /// Puts back the samples a replacement carried over, all of them
+    /// unattempted on the new socket.
+    pub(super) fn restore_audio(&mut self, bytes: Vec<u8>) {
+        self.uplink.bytes = bytes;
+        self.uplink.unconfirmed = false;
+    }
+
+    /// Bytes quarantined and not yet logged.
+    pub(super) fn quarantined_bytes(&self) -> usize {
+        self.uplink.quarantined
+    }
+
+    /// Takes the quarantine count, to log it once.
+    pub(super) fn take_quarantined(&mut self) -> usize {
+        std::mem::take(&mut self.uplink.quarantined)
+    }
+
     pub(super) fn new() -> Self {
         Self {
-            recovery_audio: super::recovery::Ingress::default(),
-            audio: None,
-            video: None,
-            audio_bytes: Vec::new(),
-            audio_unconfirmed: false,
-            quarantined_audio_bytes: 0,
+            uplink: Uplink::default(),
             identity: None,
 
             // Seeded in the past so the first frame sends immediately. The
@@ -189,7 +291,6 @@ impl CandidateMedia {
                 .checked_sub(GEMINI_VIDEO_FRAME_INTERVAL)
                 .unwrap_or_else(Instant::now),
             presence_frame_sent: false,
-            voiced_at: None,
             mic_stream_fresh: false,
         }
     }
@@ -218,38 +319,26 @@ impl CandidateMedia {
         }
     }
 
-    /// Voice within the quiet window a pause between sentences fits in.
-    pub(super) fn voiced_recently(&self, now: Instant) -> bool {
-        self.voiced_at.is_some_and(|at| {
-            now.saturating_duration_since(at) < super::turn::CHECKPOINT_VOICE_QUIET
-        })
-    }
-
     /// Never-attempted samples and whole retained frames still precede a new
     /// publication if republish wins the select just after recovery commits.
     /// Only an ambiguous attempted write is quarantined instead of replayed.
-    pub(super) fn begin_audio_publication(&mut self) {
-        if self.audio_unconfirmed {
-            self.quarantined_audio_bytes = self
-                .quarantined_audio_bytes
-                .saturating_add(self.audio_bytes.len());
-            self.audio_bytes.clear();
-            self.audio_unconfirmed = false;
-        }
-        if !self.recovery_audio.is_empty() {
-            self.recovery_audio.yielded(Instant::now());
+    pub(super) fn begin_audio_publication(&mut self, streams: &mut CandidateStreams) {
+        self.uplink.quarantine_unconfirmed();
+        if !streams.recovery_audio.is_empty() {
+            streams.recovery_audio.yielded(Instant::now());
         }
     }
 
     pub(super) fn attach_audio(
         &mut self,
+        streams: &mut CandidateStreams,
         track: &RemoteAudioTrack,
         participant: &RemoteParticipant,
     ) {
-        self.begin_audio_publication();
+        self.begin_audio_publication(streams);
         self.identity = Some(participant.identity().to_string());
         self.begin_mic_stream();
-        self.audio = Some(candidate_audio_stream(track.rtc_track()));
+        streams.audio = Some(candidate_audio_stream(track.rtc_track()));
     }
 }
 
@@ -257,6 +346,7 @@ impl CandidateMedia {
 /// was media, so the caller's match only has to carry what is left.
 pub(super) async fn handle_media_event(
     media: &mut CandidateMedia,
+    streams: &mut CandidateStreams,
     gemini: &mut GeminiLiveSession,
     candidate_identity: &str,
     forward_video_to_gemini: bool,
@@ -268,7 +358,7 @@ pub(super) async fn handle_media_event(
             participant,
             ..
         } if is_interview_participant(Some(&participant.identity().0), candidate_identity) => {
-            media.attach_audio(track, participant);
+            media.attach_audio(streams, track, participant);
         }
         RoomEvent::TrackSubscribed {
             track: RemoteTrack::Video(track),
@@ -280,7 +370,7 @@ pub(super) async fn handle_media_event(
             forward_video_to_gemini,
         ) =>
         {
-            media.video = Some(NativeVideoStream::new(track.rtc_track()));
+            streams.video = Some(NativeVideoStream::new(track.rtc_track()));
         }
 
         // Guarded like the subscribe arms: an unrelated participant leaving
@@ -291,14 +381,14 @@ pub(super) async fn handle_media_event(
             ..
         } if is_interview_participant(Some(&participant.identity().0), candidate_identity) => {
             flush_candidate_audio(gemini, media).await?;
-            media.audio = None;
+            streams.audio = None;
         }
         RoomEvent::TrackUnsubscribed {
             track: RemoteTrack::Video(_),
             participant,
             ..
         } if is_interview_participant(Some(&participant.identity().0), candidate_identity) => {
-            media.video = None;
+            streams.video = None;
         }
         _ => return Ok(false),
     }
@@ -343,10 +433,7 @@ pub(super) async fn flush_candidate_audio<S: AudioSink>(
     gemini: &mut S,
     media: &mut CandidateMedia,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    media.audio_unconfirmed |= !media.audio_bytes.is_empty();
-    flush_audio(gemini, &mut media.audio_bytes).await?;
-    media.audio_unconfirmed = false;
-    Ok(())
+    media.flush_audio_to(gemini).await
 }
 
 pub(super) async fn flush_audio<S: AudioSink>(
@@ -360,16 +447,9 @@ pub(super) async fn flush_audio<S: AudioSink>(
     Ok(())
 }
 
-pub(super) enum CandidateInput {
-    Frame(AudioFrame<'static>),
-    BufferedFrame(AudioFrame<'static>),
-    Yield,
-    End,
-}
-
 pub(super) async fn next_candidate_input(
     audio: &mut Option<NativeAudioStream>,
-    pending: &mut super::recovery::Ingress,
+    pending: &mut Ingress,
 ) -> CandidateInput {
     if let Some(input) = pending.pop(Instant::now()) {
         return input;
@@ -466,6 +546,50 @@ pub(super) fn trim_silence(pcm: &[u8], sample_rate: u32) -> Vec<u8> {
 }
 
 impl OutputAudio {
+    /// How far past `now` what has been queued keeps playing.
+    pub(super) fn playout_ahead(&self, now: Instant) -> Duration {
+        self.playout_deadline.saturating_duration_since(now)
+    }
+
+    /// When what has been queued stops playing.
+    pub(super) fn playout_ends_at(&self) -> Instant {
+        self.playout_deadline
+    }
+
+    /// Keeps the latency record of the reply's first audio, with when it was
+    /// accepted.
+    pub(super) fn mark_first_audio(&mut self, record: serde_json::Value, accepted_at: Instant) {
+        self.latency_marker = Some((record, accepted_at));
+    }
+
+    /// Whether the tool acknowledgement has been generated and has sound in it.
+    pub(super) fn tool_ack_ready(&self) -> bool {
+        self.tool_ack.get().is_some_and(|clip| !clip.is_empty())
+    }
+
+    /// Queues the generated acknowledgement, if there is one, as filler the
+    /// reply's first chunk cuts. Whether it was queued.
+    pub(super) async fn queue_tool_ack(
+        &mut self,
+    ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+        let slot = std::sync::Arc::clone(&self.tool_ack);
+        let Some(clip) = slot.get().filter(|clip| !clip.is_empty()) else {
+            return Ok(false);
+        };
+        let mime = format!("audio/pcm;rate={}", self.sample_rate);
+        self.capture_tool_ack(clip, &mime).await
+    }
+
+    /// Takes the acknowledgement being generated and the request generating it.
+    pub(super) fn adopt_tool_ack(
+        &mut self,
+        slot: std::sync::Arc<std::sync::OnceLock<Vec<u8>>>,
+        task: Option<AbortOnDrop>,
+    ) {
+        self.tool_ack = slot;
+        self.tool_ack_task = task;
+    }
+
     /// Frames sent to the worker and not yet taken by it.
     pub(super) fn queued_frames(&self) -> usize {
         self.frames.max_capacity() - self.frames.capacity()

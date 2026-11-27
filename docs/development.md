@@ -163,7 +163,7 @@ written without chrono. The same close-date strings in
 `tests/fixtures/close-dates.json` are given to `parse_close` there and to
 `valid_close` in `tests/test_task_package.py`, so the server and the packager
 cannot drift apart. The real Git diffs of names with spaces, multibyte letters
-and quoted characters are read in `tests/unit/tasks/defense_checkout.rs`,
+and quoted characters are read in `tests/unit/tasks/defense/checkout.rs`,
 through the production reader, using synthetic data.
 
 Run the properties alone with `cargo test --locked --lib property_tests`. Ephyra

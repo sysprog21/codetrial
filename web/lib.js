@@ -841,7 +841,7 @@ export function boardOpBatches(ops, budget = 24 * 1024) {
 /// carries in one packet, so it travels as a stream that LiveKit chunks over
 /// the same data channel. The agent reads `strokes` and the optional validated
 /// phase checkpoint off these attributes, so this shape is a wire contract
-/// with `src/livekit/board.rs`; `tests/fixtures/board-stream.json` pins it.
+/// with `src/livekit/turn/board.rs`; `tests/fixtures/board-stream.json` pins it.
 export function boardStreamOptions(sequence, strokes, size, checkpoint = "") {
   const attributes = { strokes: String(strokes) };
   if (whiteboardPhaseLabel(checkpoint)) attributes.checkpoint = checkpoint;

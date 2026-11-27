@@ -3,8 +3,8 @@
 use super::{
     GeminiEventContext, GeminiFunctionCall, HintCounters, Instant, RoomLink, TOOL_LOG_HINT,
     TOOL_READ_BOARD, TOOL_READ_CONVERSATION, TOOL_READ_EDITOR, TOOL_RECORD_FRAMEWORK_EVIDENCE,
-    ToolTiming, TurnCause, board, execute_timed_tool_batch, flush_framework_progress,
-    known_tool_name, latency, log_clock, observations, play_tool_ack,
+    ToolTiming, TurnCause, execute_timed_tool_batch, flush_framework_progress, known_tool_name,
+    latency, log_clock, observations, play_tool_ack,
 };
 
 #[cfg(test)]
@@ -43,7 +43,7 @@ pub(super) async fn on_tool_calls(
     // Before every await below, any of which can cancel the batch.
     #[cfg(test)]
     crate::livekit::probe::acquisition::receive(
-        &context.activity.latency,
+        &context.probes.latency,
         &calls,
         context.activity.socket.discarding_output || context.state.interviewer_silenced(),
     );
@@ -69,7 +69,7 @@ pub(super) async fn on_tool_calls(
     let mut ticket = None;
     let answers = execute_timed_tool_batch(
         context.state,
-        context.activity,
+        context.probes,
         calls,
         reviewed_revision,
         timed,
@@ -96,7 +96,7 @@ pub(super) async fn on_tool_calls(
         && let Err(error) = {
             #[cfg(test)]
             owner::before(Stage::BoardResend, context).await;
-            board::resend(context.board, context.gemini).await
+            context.board.resend(context.gemini).await
         }
     {
         eprintln!("board resend failed ({error}); waiting for the close to be reported");
@@ -117,7 +117,7 @@ pub(super) async fn on_tool_calls(
     }
     if timed {
         context
-            .activity
+            .probes
             .turn_timing
             .note_tool_response(send_started, Instant::now(), sent.is_ok());
     }
@@ -126,7 +126,7 @@ pub(super) async fn on_tool_calls(
     // for the lines below waits until after the send.
     if !context.activity.socket.discarding_output && !context.state.interviewer_silenced() {
         let timing = observations::tool_timing(
-            context.activity,
+            context.probes,
             context.state,
             &answers,
             hints_before,

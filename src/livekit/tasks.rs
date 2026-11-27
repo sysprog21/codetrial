@@ -6,8 +6,11 @@ use serde_json::{Value, json};
 use std::collections::VecDeque;
 use tokio::time::{Duration, Instant};
 
-use super::board::{Board, BoardSnapshot, handle_board_event, keep, resend};
-use super::media::{CandidateMedia, handle_media_event, publish_output_audio, pump_audio};
+use super::RoomLease;
+use super::board::{Board, BoardSnapshot};
+use super::media::{
+    CandidateMedia, CandidateStreams, handle_media_event, publish_output_audio, pump_audio,
+};
 use super::{
     GEMINI_OUTPUT_AUDIO_SAMPLE_RATE, REPORT_TIMEOUT, Room, RoomEvent, browser_packet, join_room,
 };
@@ -171,6 +174,12 @@ impl LiveUsage {
         }
     }
 
+    /// Takes what a socket being let go recorded, and counts the one after it.
+    fn retire(&mut self, room: &str, gemini: &mut GeminiLiveSession) {
+        self.drain(room, gemini);
+        self.socket += 1;
+    }
+
     fn summary(&self, room: &str, model: &str, outcome: super::LiveOutcome) -> String {
         super::live_usage_line(
             room,
@@ -206,10 +215,8 @@ fn recovery_conversation(session: &TaskSession, last_reply: &str, unanswered: &s
     // A defense's panel is the platform's to report, outside the learner's
     // material.
     let panel = session
-        .task
-        .preparation
-        .defense
-        .as_ref()
+        .facts()
+        .defense()
         .map(|slot| format!("\n{}", slot.progress()))
         .unwrap_or_default();
     format!(
@@ -229,8 +236,7 @@ async fn retire_socket(
 ) {
     let mut old = std::mem::replace(gemini, replacement);
     let _ = old.shutdown().await;
-    usage.drain(room, &mut old);
-    usage.socket += 1;
+    usage.retire(room, &mut old);
 }
 
 /// Tells a replacement socket where the task stands and what the dropped one
@@ -296,7 +302,7 @@ async fn publish(room: &Room, topic: &str, value: &Value) {
 }
 
 fn wrap_up_request(session: &TaskSession, id: &str) -> String {
-    let question = session.task.exercise.check_question(id).unwrap_or_default();
+    let question = session.facts().check_question(id).unwrap_or_default();
     format!("Ask only this wrap-up question, then wait: {question}")
 }
 
@@ -332,7 +338,7 @@ fn lost_room_review(session: &mut TaskSession, room: &str) -> Option<Value> {
 
 fn silence_output(output: &mut super::media::OutputAudio, media: &mut CandidateMedia) {
     output.interrupt();
-    media.audio_bytes.clear();
+    media.drop_unsent_audio();
 }
 
 /// Whether the room loop goes on after an event.
@@ -353,6 +359,7 @@ struct TaskRoom<'a> {
     gemini: GeminiLiveSession,
     output: super::media::OutputAudio,
     media: CandidateMedia,
+    streams: CandidateStreams,
     /// The learner's whiteboard drawing, shown to the model only when it asks
     /// with `read_board`, and how many strokes the page counted on it.
     board: Board,
@@ -401,7 +408,7 @@ struct TaskRoom<'a> {
 /// the work is frozen. Before every state the page is sent, so the page never
 /// sees work start before the panel can act on it.
 fn sync_defense_panel(session: &TaskSession) {
-    if let Some(slot) = &session.task.preparation.defense {
+    if let Some(slot) = session.facts().defense() {
         slot.set_open(session.work_open());
         slot.set_items_open(session.phase == Phase::Work);
     }
@@ -438,17 +445,17 @@ impl TaskRoom<'_> {
     async fn on_room_event(&mut self, event: RoomEvent) -> Flow {
         // A whiteboard drawing arrives as a byte stream, read on its own task
         // so the learner's audio is not held behind it.
-        if handle_board_event(
+        if self.board.handle_event(
             crate::agent::InterviewMode::Coding,
             true,
             self.candidate,
-            &self.board,
             &event,
         ) {
             return Flow::Continue;
         }
         if handle_media_event(
             &mut self.media,
+            &mut self.streams,
             &mut self.gemini,
             self.candidate,
             false,
@@ -606,10 +613,10 @@ impl TaskRoom<'_> {
                 self.alive = false;
             }
         } else {
-            self.media.audio_bytes.clear();
+            self.media.drop_unsent_audio();
         }
         if ended {
-            self.media.audio = None;
+            self.streams.audio = None;
         }
     }
 
@@ -726,7 +733,7 @@ impl TaskRoom<'_> {
     /// count. Nothing is sent: the model sees it only through `read_board`.
     fn keep_board(&mut self, snapshot: BoardSnapshot) {
         self.board_strokes = snapshot.strokes();
-        keep(&mut self.board, snapshot);
+        self.board.keep(snapshot);
         self.session.note_activity(crate::current_epoch_seconds());
     }
 
@@ -743,7 +750,7 @@ impl TaskRoom<'_> {
         if !self.board.has_board() {
             return json!({"error": "the learner has drawn nothing yet; ask them to sketch it or to explain it aloud"});
         }
-        if resend(&mut self.board, &mut self.gemini).await.is_err() {
+        if self.board.resend(&mut self.gemini).await.is_err() {
             self.alive = false;
             return json!({"error": "the drawing could not be shown"});
         }
@@ -868,7 +875,7 @@ impl TaskRoom<'_> {
             || self.reply_owed_since.is_some()
             || speaking(self.last_speech, now))
             && self.session.page_present();
-        let notes = match (&self.session.task.preparation.defense, quiet) {
+        let notes = match (self.session.facts().defense(), quiet) {
             (Some(slot), true) => slot.take_notes(),
             _ => Vec::new(),
         };
@@ -953,7 +960,7 @@ impl TaskRoom<'_> {
                     self.unanswered_context = Some(wrap_up_request(&self.session, &id));
                 }
             }
-            None if self.session.final_revision_id.is_some() => self.session.feedback(now),
+            None if self.session.evidence().has_final_revision() => self.session.feedback(now),
             None => {}
         }
     }
@@ -972,7 +979,7 @@ impl TaskRoom<'_> {
         {
             return;
         }
-        self.boot.instructions = self.session.recovery_instructions();
+        self.boot.refresh_instructions(&self.session);
         let opened = tokio::time::timeout(
             Duration::from_secs(5),
             crate::gemini::live_session_with_keys(&self.keys, &self.boot, None),
@@ -1022,7 +1029,7 @@ impl TaskRoom<'_> {
 
     /// Generates, retains and publishes the Learning review once the task
     /// reached feedback.
-    async fn deliver_review(&mut self, slot: &crate::dispatch::Slot) {
+    async fn deliver_review(&mut self, slot: &dyn RoomLease) {
         self.output.interrupt();
         let _ = self.gemini.shutdown().await;
         slot.assessment_finished();
@@ -1032,12 +1039,12 @@ impl TaskRoom<'_> {
         let review = if let Some(review) = review_without_model(&self.session, self.room_name) {
             review
         } else {
-            let reference = self.session.task.exercise.review_reference();
+            let reference = self.session.facts().review_reference();
             tokio::time::timeout(
                 REPORT_TIMEOUT,
                 crate::gemini::generate_task_feedback(
                     &self.keys,
-                    self.boot.config.gemini_report_model.as_str(),
+                    self.boot.report_model(),
                     &self.session,
                     &reference,
                     self.room_name,
@@ -1048,7 +1055,7 @@ impl TaskRoom<'_> {
             .flatten()
             .unwrap_or_else(|| crate::tasks::report::unavailable(&self.session, self.room_name))
         };
-        self.session.task.retain_result(
+        self.session.retain_result(
             self.room_name,
             review.clone(),
             crate::current_epoch_seconds(),
@@ -1059,7 +1066,6 @@ impl TaskRoom<'_> {
     async fn close(mut self) -> Result<(), Error> {
         if let Some(review) = lost_room_review(&mut self.session, self.room_name) {
             self.session
-                .task
                 .retain_result(self.room_name, review, crate::current_epoch_seconds());
         }
         let _ = self.gemini.shutdown().await;
@@ -1068,7 +1074,7 @@ impl TaskRoom<'_> {
             "{}",
             self.usage.summary(
                 self.room_name,
-                &self.boot.config.gemini_live_model,
+                self.boot.live_model(),
                 super::LiveOutcome::Ok,
             )
         );
@@ -1082,7 +1088,7 @@ pub(crate) async fn run(
     room_name: &str,
     candidate: &str,
     task: PinnedTask,
-    slot: &crate::dispatch::Slot,
+    slot: &dyn RoomLease,
 ) -> Result<(), Error> {
     let now = crate::current_epoch_seconds();
     let admitted_at = Instant::now();
@@ -1091,6 +1097,7 @@ pub(crate) async fn run(
         room_name,
         &crate::runtime::task_agent_identity(room_name),
         now,
+        super::MAX_BOARD_BYTES,
     )
     .await?;
     let keys = GeminiKeys::from_config(config);
@@ -1140,6 +1147,7 @@ pub(crate) async fn run(
         gemini,
         output,
         media: CandidateMedia::new(),
+        streams: CandidateStreams::default(),
         board: Board::example(),
         board_strokes: 0,
         session,
@@ -1181,7 +1189,7 @@ impl TaskRoom<'_> {
     async fn serve(
         &mut self,
         events: &mut tokio::sync::mpsc::UnboundedReceiver<RoomEvent>,
-        slot: &crate::dispatch::Slot,
+        slot: &dyn RoomLease,
     ) {
         self.publish_state(true).await;
         let mut interval = tokio::time::interval(Duration::from_secs(1));
@@ -1192,11 +1200,11 @@ impl TaskRoom<'_> {
                     None => Flow::Stop,
                 },
                 frame = async {
-                    match self.media.audio.as_mut() {
+                    match self.streams.audio.as_mut() {
                         Some(audio) => audio.next().await,
                         None => std::future::pending().await,
                     }
-                }, if self.media.audio.is_some() => {
+                }, if self.streams.audio.is_some() => {
                     self.on_audio_frame(frame).await;
                     Flow::Continue
                 }
@@ -1208,7 +1216,7 @@ impl TaskRoom<'_> {
                 // Drained as they arrive, not when Jim asks: a reader holds its
                 // permit while it waits for room in the queue, so drawings
                 // nobody takes would end by refusing the learner's next one.
-                Some(snapshot) = self.board.rx.recv() => {
+                Some(snapshot) = self.board.recv() => {
                     self.keep_board(snapshot);
                     Flow::Continue
                 }
@@ -1253,6 +1261,21 @@ impl<'a> TaskLive<'a> {
                 .expect("validated task prompt"),
             tools: task_tools(task),
         }
+    }
+
+    /// The model the final review is written with.
+    pub(crate) fn report_model(&self) -> &str {
+        self.config.gemini_report_model.as_str()
+    }
+
+    /// The Live model the room speaks through.
+    pub(crate) fn live_model(&self) -> &str {
+        &self.config.gemini_live_model
+    }
+
+    /// What a replacement socket is told first, from where the task stands.
+    pub(crate) fn refresh_instructions(&mut self, session: &TaskSession) {
+        self.instructions = session.recovery_instructions();
     }
 }
 
@@ -1351,13 +1374,13 @@ fn refusal_is_moot(session: &TaskSession) -> bool {
 /// Whether a confirmed Finish should end wrap-up while no interviewer socket is
 /// open: only once recovery has nothing left to try.
 fn finish_without_interviewer(session: &TaskSession, recovery_exhausted: bool) -> bool {
-    recovery_exhausted && session.final_revision_id.is_some()
+    recovery_exhausted && session.evidence().has_final_revision()
 }
 
 /// The task's hints the learner has had, never past the task's own list: a
 /// count that outran it must not take a live room down.
 fn delivered_hints(session: &TaskSession) -> &[String] {
-    let hints = session.task.exercise.hints();
+    let hints = session.facts().hints();
     &hints[..session.hint_rungs_used.min(hints.len())]
 }
 

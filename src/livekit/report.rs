@@ -1061,7 +1061,7 @@ fn stamp_report_debrief(
         .and_then(|object| object.remove("followUps"));
     let released = crate::agent::coding_round_complete(state);
     let cut = crate::agent::report_transcript_cut(&crate::agent::report_transcript_lines(state))
-        || !state.interviewer_delivery.uncertain.is_empty();
+        || state.interviewer_delivery.any_uncertain_from(0);
     let judgment = |number: usize| {
         judged
             .as_ref()

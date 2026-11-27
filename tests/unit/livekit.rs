@@ -7,8 +7,7 @@ use super::packets::{
     HoldEffects, begin_button_hold, owes_failed_reply, reduce_data_packet, settle_hold,
     test_run_line,
 };
-use super::session::accept_gemini_event;
-use super::*;
+use super::{turn::speakers::closing_order, *};
 #[path = "livekit/handoff.rs"]
 mod handoff;
 use crate::agent::ThinkingHold;
@@ -18,7 +17,7 @@ use tokio::sync::mpsc;
 
 use crate::config::load_from_pairs;
 
-#[path = "livekit/startup.rs"]
+#[path = "livekit/startup/startup.rs"]
 pub(crate) mod startup;
 
 // Only the tests below reach for it now: the report packet that carries this
@@ -239,12 +238,12 @@ fn a_published_packet_carries_its_topic_and_arrives_reliably() {
 fn both_ways_a_live_socket_opens_count_its_instruction() {
     for (source, opener) in [
         (
-            include_str!("../../src/livekit/open.rs"),
+            include_str!("../../src/livekit/startup/open.rs"),
             "async fn start_interview",
         ),
         (
-            include_str!("../../src/livekit/recovery.rs"),
-            "async fn replace_once(",
+            include_str!("../../src/livekit/startup/recovery.rs"),
+            "async fn run_replacement(",
         ),
     ] {
         let body = source
@@ -269,7 +268,7 @@ fn both_ways_a_live_socket_opens_count_its_instruction() {
 /// connected.
 #[test]
 fn only_a_replacement_publishes_its_reconnect_wait() {
-    let startup = include_str!("../../src/livekit/open.rs")
+    let startup = include_str!("../../src/livekit/startup/open.rs")
         .split("async fn open_session")
         .nth(1)
         .expect("the startup owner is still defined");
@@ -283,13 +282,13 @@ fn only_a_replacement_publishes_its_reconnect_wait() {
     // silent. Recovery supplies its room and retains the caller-owned slot.
     for (source, opener, room) in [
         (
-            include_str!("../../src/livekit/open.rs"),
+            include_str!("../../src/livekit/startup/open.rs"),
             "async fn open_cold_session(",
             "None",
         ),
         (
-            include_str!("../../src/livekit/recovery.rs"),
-            "async fn replace_once(",
+            include_str!("../../src/livekit/startup/recovery.rs"),
+            "async fn run_replacement(",
             "Some(room)",
         ),
     ] {
@@ -315,7 +314,7 @@ fn only_a_replacement_publishes_its_reconnect_wait() {
 /// what notices, read as source for the reason the clock test above is.
 #[test]
 fn the_candidate_wait_listens_for_its_start_being_released() {
-    let source = include_str!("../../src/livekit/open.rs");
+    let source = include_str!("../../src/livekit/startup/open.rs");
     let opener = source
         .split("async fn open_session")
         .nth(1)
@@ -337,14 +336,14 @@ fn the_candidate_wait_listens_for_its_start_being_released() {
         "the wait must be handed the slot a release reaches: {wait}"
     );
     let skipped = body
-        .find("Slot::is_released")
+        .find("slot.is_released()")
         .expect("open_session must skip the join of a start already released");
     assert!(
         body.find("join_room(").is_some_and(|join| skipped < join),
         "the released check must come before the room is joined"
     );
     assert!(
-        body.contains("Slot::claim_join"),
+        body.contains("slot.claim_join()"),
         "an arrival must be claimed against a release that raced it"
     );
     assert!(
@@ -363,7 +362,7 @@ fn the_candidate_wait_listens_for_its_start_being_released() {
 /// sends every abandoned start through it within seconds.
 #[test]
 fn an_agent_nobody_came_to_leaves_the_room() {
-    let source = include_str!("../../src/livekit/open.rs");
+    let source = include_str!("../../src/livekit/startup/open.rs");
     let exit = source
         .split("async fn open_session")
         .nth(1)
@@ -381,7 +380,7 @@ fn an_agent_nobody_came_to_leaves_the_room() {
         })
         .expect("open_session still has an exit for nobody joining");
     assert!(
-        exit.find("leave_room(&room)")
+        exit.find("room.leave()")
             .is_some_and(|leave| exit.find("NoCandidate").is_some_and(|end| leave < end)),
         "the agent must leave before giving up on the room: {exit}"
     );
@@ -944,7 +943,7 @@ async fn only_a_delivered_behavioral_nudge_spends_the_round() {
         completed_coding_nudge: false,
         allows_silence: false,
     };
-    send_watched_prompt(&mut activity, &coding, async {
+    send_watched_prompt(&mut activity, &mut TurnProbes::default(), &coding, async {
         Ok::<(), std::io::Error>(())
     })
     .await
@@ -966,7 +965,7 @@ async fn only_a_delivered_behavioral_nudge_spends_the_round() {
     };
     activity.floor = Floor::Listening;
     activity.prompted_at = None;
-    send_watched_prompt(&mut activity, &review, async {
+    send_watched_prompt(&mut activity, &mut TurnProbes::default(), &review, async {
         Ok::<(), std::io::Error>(())
     })
     .await
@@ -977,7 +976,7 @@ async fn only_a_delivered_behavioral_nudge_spends_the_round() {
     activity.floor = Floor::Listening;
 
     let prompt = activity.watch_prompt(&mut state, now).unwrap();
-    let failed = send_watched_prompt(&mut activity, &prompt, async {
+    let failed = send_watched_prompt(&mut activity, &mut TurnProbes::default(), &prompt, async {
         Err::<(), _>(std::io::Error::new(
             std::io::ErrorKind::BrokenPipe,
             "closed socket",
@@ -988,11 +987,11 @@ async fn only_a_delivered_behavioral_nudge_spends_the_round() {
     assert!(!activity.behavioral_nudged);
     assert_eq!(activity.floor, Floor::Listening);
 
-    clear_abandoned_socket_work(&mut state, &mut activity);
+    clear_abandoned_socket_work(&mut state, &mut activity, &mut TurnProbes::default());
     let prompt = activity
         .watch_prompt(&mut state, now + cooldown)
         .expect("a nudge that never reached Gemini is offered again");
-    send_watched_prompt(&mut activity, &prompt, async {
+    send_watched_prompt(&mut activity, &mut TurnProbes::default(), &prompt, async {
         Ok::<(), std::io::Error>(())
     })
     .await
@@ -1002,7 +1001,7 @@ async fn only_a_delivered_behavioral_nudge_spends_the_round() {
     activity.floor = Floor::Listening;
 
     // One delivered nudge per round, including after a connection replacement.
-    clear_abandoned_socket_work(&mut state, &mut activity);
+    clear_abandoned_socket_work(&mut state, &mut activity, &mut TurnProbes::default());
     assert!(
         activity
             .watch_prompt(&mut state, now + cooldown * 2)
@@ -1485,7 +1484,7 @@ fn the_browser_escape_hatch_outlasts_the_report_deadline() {
 /// standing in for it, and a report goes out only through the receipt wait.
 #[test]
 fn the_ending_leaves_only_after_the_report_delivery_settles() {
-    let source = include_str!("../../src/livekit/packets.rs");
+    let source = include_str!("../../src/livekit/startup/packets.rs");
     let application = source
         .split("async fn apply_data_packet(")
         .nth(1)
@@ -1506,7 +1505,7 @@ fn the_ending_leaves_only_after_the_report_delivery_settles() {
         .find("publish_with_recovery(")
         .expect("the ending publishes through recovery");
     let leave = ending[publish..]
-        .find("leave_room(")
+        .find("room.leave()")
         .map(|offset| publish + offset)
         .expect("the normal report path leaves after publishing");
     assert!(publish < leave);
@@ -1528,11 +1527,11 @@ fn the_ending_leaves_only_after_the_report_delivery_settles() {
 }
 
 /// A skipped report is acknowledged before the agent leaves. The page waits
-/// for that packet before it disconnects, so one published after `leave_room`,
+/// for that packet before it disconnects, so one published after `leave()`,
 /// or dropped from this branch, sends every Skip to the page's timeout.
 #[test]
 fn a_skip_is_acknowledged_before_the_agent_leaves() {
-    let source = include_str!("../../src/livekit/packets.rs");
+    let source = include_str!("../../src/livekit/startup/packets.rs");
     let ending = source
         .split("async fn finish_interview(")
         .nth(1)
@@ -1551,7 +1550,7 @@ fn a_skip_is_acknowledged_before_the_agent_leaves() {
         .find("skip_report_ack()")
         .expect("the skip branch publishes the acknowledgement");
     let leave = skipped
-        .find("leave_room(")
+        .find("room.leave()")
         .expect("the skip branch leaves the room");
     assert!(skipped.contains("publish_control("));
     assert!(ack < leave);
@@ -1850,7 +1849,7 @@ fn replacing_a_socket_drops_its_pending_close_request() {
     activity.socket.discarding_output = true;
     activity.socket.tool_response_outstanding = true;
 
-    clear_abandoned_socket_work(&mut state, &mut activity);
+    clear_abandoned_socket_work(&mut state, &mut activity, &mut TurnProbes::default());
 
     assert!(!state.end_requested);
     assert!(!activity.socket.discarding_output);
@@ -2661,6 +2660,7 @@ async fn replacement_sockets_receive_local_progress_before_continuing() {
             &mut gemini,
             &mut state,
             &mut activity,
+            &mut TurnProbes::default(),
             replacement,
             Some(OWED_EVENT),
         )
@@ -2728,7 +2728,9 @@ fn a_replaced_socket_reports_the_reply_it_owed_before_clearing_it() {
         ),
         (
             "candidate finished",
-            |activity, now| activity.note_candidate_finished(now, false),
+            |activity, now| {
+                activity.note_candidate_finished(now, false);
+            },
             true,
             "candidate=true prompt=none tool=false generating=false",
         ),
@@ -2748,7 +2750,12 @@ fn a_replaced_socket_reports_the_reply_it_owed_before_clearing_it() {
         };
         setup(&mut activity, now);
         assert_eq!(
-            hand_over(&mut state, &mut activity, &mut output_audio),
+            hand_over(
+                &mut state,
+                &mut activity,
+                &mut TurnProbes::default(),
+                &mut output_audio
+            ),
             (
                 owed,
                 debt.to_string(),
@@ -2819,7 +2826,7 @@ fn only_real_output_answers_a_prompt() {
         ),
     ];
     for (event, answers) in cases {
-        assert_eq!(session::answers_prompt(&event), answers, "{event:?}");
+        assert_eq!(turn::answers_prompt(&event), answers, "{event:?}");
     }
 }
 
@@ -2893,6 +2900,7 @@ async fn a_briefing_that_fails_to_send_keeps_its_debt() {
             &mut gemini,
             &mut state,
             &mut activity,
+            &mut TurnProbes::default(),
             replacement,
             Some(REACTION),
         )
@@ -3378,6 +3386,7 @@ fn voiced_frames_feed_the_idle_timers_before_the_first_transcription() {
     assert!(note_candidate_audio_frame(
         &state,
         &mut activity,
+        &mut TurnProbes::default(),
         Some(&loud),
         start
     ));
@@ -3401,6 +3410,7 @@ async fn a_briefing_delivered_during_a_hold_commits_the_editor_snapshot() {
         &mut gemini,
         &mut held,
         &mut activity,
+        &mut TurnProbes::default(),
         Replacement::Cold { owed: false },
         None,
     )
@@ -3573,11 +3583,16 @@ async fn replace_after_stall(
 ) -> (String, RuntimeActivity) {
     let start = Instant::now();
     let mut activity = RuntimeActivity::new(start);
+    let mut probes = TurnProbes::default();
     let (mut output_audio, _frames) = test_output_audio();
     let mut restart = DeferredRestart::default();
     match stall {
-        Stall::CandidateTurn => activity.note_candidate_finished(start, false),
-        Stall::Reaction => activity.mark_prompted(start, Some(REACTION), false),
+        Stall::CandidateTurn => {
+            session::note_candidate_finished(&mut activity, &mut probes, start, false);
+        }
+        Stall::Reaction => {
+            session::mark_prompted(&mut activity, &mut probes, start, Some(REACTION), false);
+        }
     }
     let before = activity.prompt_sequence;
     if advisory {
@@ -3613,13 +3628,15 @@ async fn replace_after_stall(
     }
     assert_eq!(stalls.prompt_released, matches!(stall, Stall::Reaction));
 
-    let (owed, _, owed_prompt) = hand_over(&mut state, &mut activity, &mut output_audio);
+    let (owed, _, owed_prompt) =
+        hand_over(&mut state, &mut activity, &mut probes, &mut output_audio);
     assert!(owed, "{stall:?}: the old socket owed a reply");
     let (mut gemini, server) = fake_resumed_socket().await;
     let spoke = brief_replacement(
         &mut gemini,
         &mut state,
         &mut activity,
+        &mut probes,
         Replacement::Resumed { owed },
         owed_prompt.as_deref(),
     )
@@ -3872,12 +3889,7 @@ fn a_discarded_turn_ending_preserves_work_sent_after_resume() {
             if candidate_spoke {
                 activity.note_candidate_finished(start, false);
             }
-            assert!(!accept_gemini_event(
-                &ending,
-                &mut activity,
-                false,
-                Instant::now()
-            ));
+            assert!(!activity.accept_event(&ending, false, Instant::now()));
             assert!(!activity.socket.discarding_output);
             assert!(activity.owes_reply());
             assert_eq!(activity.reply_in_flight(), candidate_spoke);
@@ -4028,7 +4040,7 @@ fn a_replacement_abandons_an_unconfirmed_thinking_hold() {
         ..RuntimeState::default()
     };
     let mut activity = RuntimeActivity::new(Instant::now());
-    clear_abandoned_socket_work(&mut state, &mut activity);
+    clear_abandoned_socket_work(&mut state, &mut activity, &mut TurnProbes::default());
     assert_eq!(state.thinking_hold, ThinkingHold::Off);
 }
 
@@ -4047,6 +4059,7 @@ async fn a_resumed_socket_waits_through_thinking_and_retains_its_reply() {
             &mut gemini,
             &mut state,
             &mut activity,
+            &mut TurnProbes::default(),
             Replacement::Resumed { owed: true },
             Some("the outstanding question")
         )
@@ -4082,7 +4095,12 @@ async fn a_socket_replacement_answers_an_unconfirmed_request_instead_of_strandin
     activity.note_candidate_finished(start, false);
     activity.observe_thinking_fragment(&mut state, "Let me think", Instant::now(), 100);
     let (mut output_audio, _frames) = test_output_audio();
-    let (owed, _, _) = hand_over(&mut state, &mut activity, &mut output_audio);
+    let (owed, _, _) = hand_over(
+        &mut state,
+        &mut activity,
+        &mut TurnProbes::default(),
+        &mut output_audio,
+    );
     assert!(owed);
     assert!(!state.thinking_hold.is_active());
     let (mut gemini, server) = fake_resumed_socket().await;
@@ -4091,6 +4109,7 @@ async fn a_socket_replacement_answers_an_unconfirmed_request_instead_of_strandin
             &mut gemini,
             &mut state,
             &mut activity,
+            &mut TurnProbes::default(),
             Replacement::Cold { owed },
             None
         )
@@ -4106,7 +4125,7 @@ async fn a_socket_replacement_answers_an_unconfirmed_request_instead_of_strandin
     state.thinking_hold = ThinkingHold::Held {
         since: std::time::Instant::now(),
     };
-    clear_abandoned_socket_work(&mut state, &mut activity);
+    clear_abandoned_socket_work(&mut state, &mut activity, &mut TurnProbes::default());
     assert!(
         state.thinking_hold.is_active(),
         "a confirmed hold survives replacement"
@@ -4186,6 +4205,7 @@ async fn choosing_thinking_ends_the_audio_stream_and_ignores_the_transcript_it_r
         &mut gemini,
         &mut media,
         &mut activity,
+        &mut TurnProbes::default(),
         click,
         THINKING_TRANSCRIPT_GRACE,
     )
@@ -4233,6 +4253,8 @@ pub(super) fn hold_turn(state: RuntimeState) -> TurnState {
         state,
         agent_state: Default::default(),
         activity: RuntimeActivity::new(Instant::now()),
+        probes: TurnProbes::default(),
+        streams: CandidateStreams::default(),
         turns: SpeakerTurns::default(),
         transcripts: Default::default(),
     }
@@ -4312,7 +4334,7 @@ async fn yielding_flushes_buffered_speech_then_ends_the_stream() {
     let (mut output_audio, _frames) = test_output_audio();
     let (mut gemini, server) = fake_recording_socket(Some("checkpoint-before-the-run"), 2).await;
     let mut media = CandidateMedia::new();
-    media.audio_bytes = vec![0; 640];
+    media.uplink.bytes = vec![0; 640];
     let result = crate::agent::DataEventResult {
         yield_turn: true,
         ..Default::default()
@@ -4328,7 +4350,7 @@ async fn yielding_flushes_buffered_speech_then_ends_the_stream() {
     )
     .await;
     assert_eq!(effects, HoldEffects::default());
-    assert!(media.audio_bytes.is_empty());
+    assert!(media.uplink.bytes.is_empty());
     let sent = server.await.unwrap();
     assert!(sent[0]["realtimeInput"]["audio"].is_object(), "{sent:?}");
     assert_eq!(sent[1], crate::gemini::realtime_audio_end_message());
@@ -4355,7 +4377,7 @@ async fn repeated_thinking_acknowledges_without_finalizing_resumed_speech() {
     let (mut output_audio, _frames) = test_output_audio();
     let (mut gemini, server) = fake_recording_socket(Some("checkpoint-before-the-run"), 1).await;
     let mut media = CandidateMedia::new();
-    media.audio_bytes = vec![0; 640];
+    media.uplink.bytes = vec![0; 640];
     let result = crate::agent::apply_data_event(
         &mut turn.state,
         crate::runtime::TOPIC_CONTROL,
@@ -4379,7 +4401,7 @@ async fn repeated_thinking_acknowledges_without_finalizing_resumed_speech() {
         .await
     };
     assert_eq!(effects, HoldEffects::default());
-    assert_eq!(media.audio_bytes.len(), 640);
+    assert_eq!(media.uplink.bytes.len(), 640);
     assert_eq!(
         turn.activity.socket.thinking_ignore_input_until,
         original_window
@@ -4496,8 +4518,8 @@ async fn releasing_into_an_open_candidate_turn_delivers_the_prompt_as_context() 
     assert_eq!(sent[0]["clientContent"]["turnComplete"], false);
     assert!(sent[0].to_string().contains("The candidate is ready."));
     assert_eq!(sent[1], crate::gemini::realtime_audio_end_message());
-    turn.activity.latency.voice(Instant::now());
-    let record = turn.activity.latency.audio(Instant::now()).unwrap();
+    turn.probes.latency.voice(Instant::now());
+    let record = turn.probes.latency.audio(Instant::now()).unwrap();
     assert_eq!(record["origin"], "prompt");
 }
 
@@ -4520,6 +4542,7 @@ async fn a_cold_replacement_during_a_hold_is_briefed_at_once_without_a_reply() {
             &mut gemini,
             &mut state,
             &mut activity,
+            &mut TurnProbes::default(),
             Replacement::Cold { owed: true },
             Some("the outstanding question"),
         )
@@ -4552,6 +4575,7 @@ async fn a_resumed_reply_carries_the_unheard_note_it_pays() {
             &mut gemini,
             &mut state,
             &mut activity,
+            &mut TurnProbes::default(),
             Replacement::Resumed { owed: true },
             Some("the outstanding question"),
         )
@@ -4572,7 +4596,7 @@ async fn an_ordinary_reply_leaves_the_audio_stream_alone() {
     let (mut output_audio, _frames) = test_output_audio();
     let (mut gemini, server) = fake_recording_socket(Some("checkpoint-before-the-run"), 1).await;
     let mut media = CandidateMedia::new();
-    media.audio_bytes = vec![0; 640];
+    media.uplink.bytes = vec![0; 640];
     let result = crate::agent::DataEventResult::default();
     let mut reply = Some("[SYSTEM EVENT] The tests passed.".to_string());
     let effects = settle(
@@ -4587,7 +4611,7 @@ async fn an_ordinary_reply_leaves_the_audio_stream_alone() {
     assert_eq!(effects, HoldEffects::default());
     assert_eq!(reply.as_deref(), Some("[SYSTEM EVENT] The tests passed."));
     assert_eq!(
-        media.audio_bytes.len(),
+        media.uplink.bytes.len(),
         640,
         "buffered speech is not flushed"
     );
@@ -4732,7 +4756,15 @@ fn a_generation_that_stops_making_progress_times_out() {
     assert!(activity.reply_timed_out(start + REPLY_TIMEOUT, false));
     let (mut output_audio, _) = test_output_audio();
     let mut state = RuntimeState::default();
-    assert!(hand_over(&mut state, &mut activity, &mut output_audio).0);
+    assert!(
+        hand_over(
+            &mut state,
+            &mut activity,
+            &mut TurnProbes::default(),
+            &mut output_audio
+        )
+        .0
+    );
     activity.note_output(start);
     assert!(!activity.reply_timed_out(start + REPLY_TIMEOUT, true));
     activity.note_tool_response(start + Duration::from_secs(20));
@@ -4786,24 +4818,14 @@ fn discarded_tool_calls_do_not_answer_a_resume_prompt() {
         if !tool_before_resume {
             activity.mark_prompted(start, Some("resume"), false);
         }
-        assert!(accept_gemini_event(
-            &GeminiEvent::ToolCall(Vec::new()),
-            &mut activity,
-            false,
-            Instant::now()
-        ));
+        assert!(activity.accept_event(&GeminiEvent::ToolCall(Vec::new()), false, Instant::now()));
         activity.note_tool_response(start);
         assert!(!activity.generating);
         assert!(!activity.socket.tool_response_outstanding);
         if tool_before_resume {
             activity.mark_prompted(start, Some("resume"), false);
         }
-        assert!(!accept_gemini_event(
-            &GeminiEvent::TurnComplete,
-            &mut activity,
-            false,
-            Instant::now()
-        ));
+        assert!(!activity.accept_event(&GeminiEvent::TurnComplete, false, Instant::now()));
         assert!(activity.owes_prompt());
         assert!(!activity.prompt_behind_turn);
         assert!(activity.reply_timed_out(start + REPLY_TIMEOUT, false));
@@ -4838,12 +4860,7 @@ fn a_late_interrupted_turn_complete_does_not_settle_new_work() {
         let mut activity = RuntimeActivity::new(start);
         let (mut output_audio, _) = test_output_audio();
         activity.socket.discarding_output = discarded;
-        let dispatch = accept_gemini_event(
-            &GeminiEvent::Interrupted,
-            &mut activity,
-            false,
-            Instant::now(),
-        );
+        let dispatch = activity.accept_event(&GeminiEvent::Interrupted, false, Instant::now());
         assert_eq!(dispatch, !discarded);
         if dispatch {
             cut_off_turn(
@@ -4853,12 +4870,7 @@ fn a_late_interrupted_turn_complete_does_not_settle_new_work() {
             );
         }
         activity.note_candidate_finished(start, false);
-        assert!(!accept_gemini_event(
-            &GeminiEvent::TurnComplete,
-            &mut activity,
-            false,
-            Instant::now()
-        ));
+        assert!(!activity.accept_event(&GeminiEvent::TurnComplete, false, Instant::now()));
         assert!(activity.reply_timed_out(start + REPLY_TIMEOUT, false));
         assert!(!activity.socket.interrupted_turn_pending);
     }
@@ -4868,26 +4880,15 @@ fn a_late_interrupted_turn_complete_does_not_settle_new_work() {
 fn new_output_clears_the_interrupted_boundary_guard() {
     let start = Instant::now();
     let mut activity = RuntimeActivity::new(start);
-    assert!(accept_gemini_event(
-        &GeminiEvent::Interrupted,
-        &mut activity,
-        false,
-        Instant::now()
-    ));
+    assert!(activity.accept_event(&GeminiEvent::Interrupted, false, Instant::now()));
     activity.note_candidate_finished(start, false);
-    assert!(accept_gemini_event(
+    assert!(activity.accept_event(
         &GeminiEvent::OutputTranscript("new reply".into()),
-        &mut activity,
         false,
         Instant::now()
     ));
     assert!(!activity.socket.interrupted_turn_pending);
-    assert!(accept_gemini_event(
-        &GeminiEvent::TurnComplete,
-        &mut activity,
-        false,
-        Instant::now()
-    ));
+    assert!(activity.accept_event(&GeminiEvent::TurnComplete, false, Instant::now()));
     assert!(!activity.owes_reply());
 }
 
@@ -4967,6 +4968,7 @@ fn a_successful_event_prompt_owns_the_floor_without_rebasing_candidate_debt() {
     activity.note_candidate_finished(start, false);
     record_event_prompt(
         &mut activity,
+        &mut TurnProbes::default(),
         "new event",
         Ok::<_, &str>(()),
         Instant::now(),
@@ -4976,7 +4978,16 @@ fn a_successful_event_prompt_owns_the_floor_without_rebasing_candidate_debt() {
     assert_eq!(activity.awaiting_reply_since, Some(start));
     assert_eq!(activity.prompt_text.as_deref(), Some("new event"));
     let mut idle = RuntimeActivity::new(start);
-    assert!(record_event_prompt(&mut idle, "failed event", Err("closed"), Instant::now()).is_err());
+    assert!(
+        record_event_prompt(
+            &mut idle,
+            &mut TurnProbes::default(),
+            "failed event",
+            Err("closed"),
+            Instant::now()
+        )
+        .is_err()
+    );
     assert!(!idle.owes_reply());
 }
 
@@ -5046,7 +5057,12 @@ async fn a_silent_provider_is_shown_and_recovered_until_its_budget_is_spent() {
             &mut restarts,
             replaced_socket_age(long_lived, true, &activity)
         ));
-        let (owed, _, owed_prompt) = hand_over(&mut state, &mut activity, &mut output_audio);
+        let (owed, _, owed_prompt) = hand_over(
+            &mut state,
+            &mut activity,
+            &mut TurnProbes::default(),
+            &mut output_audio,
+        );
         assert!(owed, "{attempt}");
         let (mut gemini, server) = fake_socket(None).await;
         assert!(
@@ -5054,6 +5070,7 @@ async fn a_silent_provider_is_shown_and_recovered_until_its_budget_is_spent() {
                 &mut gemini,
                 &mut state,
                 &mut activity,
+                &mut TurnProbes::default(),
                 Replacement::Cold { owed },
                 owed_prompt.as_deref(),
             )
@@ -5120,20 +5137,10 @@ fn an_interrupted_turn_ending_inside_a_discard_ends_both() {
     let mut activity = RuntimeActivity::new(Instant::now());
     activity.socket.discarding_output = true;
     activity.socket.interrupted_turn_pending = true;
-    assert!(!accept_gemini_event(
-        &GeminiEvent::TurnComplete,
-        &mut activity,
-        false,
-        Instant::now()
-    ));
+    assert!(!activity.accept_event(&GeminiEvent::TurnComplete, false, Instant::now()));
     assert!(!activity.socket.discarding_output);
     assert!(!activity.socket.interrupted_turn_pending);
-    assert!(accept_gemini_event(
-        &audio_chunk(),
-        &mut activity,
-        false,
-        Instant::now()
-    ));
+    assert!(activity.accept_event(&audio_chunk(), false, Instant::now()));
 }
 
 /// Only a completed turn opens the late-transcript grace. An interruption
@@ -5143,34 +5150,14 @@ fn an_interrupted_turn_ending_inside_a_discard_ends_both() {
 fn only_a_completed_turn_opens_the_late_transcript_grace() {
     let mut activity = RuntimeActivity::new(Instant::now());
     let audio = audio_chunk();
-    assert!(accept_gemini_event(
-        &audio,
-        &mut activity,
-        false,
-        Instant::now()
-    ));
-    assert!(accept_gemini_event(
-        &GeminiEvent::TurnComplete,
-        &mut activity,
-        false,
-        Instant::now()
-    ));
+    assert!(activity.accept_event(&audio, false, Instant::now()));
+    assert!(activity.accept_event(&GeminiEvent::TurnComplete, false, Instant::now()));
     let completed = activity.turn_completed_at.expect("a completed turn stamps");
     activity.note_candidate_finished(completed, false);
     assert!(!activity.reply_in_flight(), "the answered turn's tail");
 
-    assert!(accept_gemini_event(
-        &audio,
-        &mut activity,
-        false,
-        Instant::now()
-    ));
-    assert!(accept_gemini_event(
-        &GeminiEvent::Interrupted,
-        &mut activity,
-        false,
-        Instant::now()
-    ));
+    assert!(activity.accept_event(&audio, false, Instant::now()));
+    assert!(activity.accept_event(&GeminiEvent::Interrupted, false, Instant::now()));
     assert_eq!(activity.turn_completed_at, None);
     activity.note_candidate_finished(completed, false);
     assert!(activity.reply_in_flight(), "the barge-in is a new turn");
@@ -5251,29 +5238,28 @@ fn apply_debt_step(
             false
         }
         DebtStep::Audio => {
-            let delivered = accept_gemini_event(&audio_chunk(), activity, false, now);
+            let delivered = activity.accept_event(&audio_chunk(), false, now);
             if delivered {
                 activity.note_reply_audible();
             }
             delivered
         }
         DebtStep::ToolCall => {
-            let delivered =
-                accept_gemini_event(&GeminiEvent::ToolCall(Vec::new()), activity, false, now);
+            let delivered = activity.accept_event(&GeminiEvent::ToolCall(Vec::new()), false, now);
             if delivered {
                 activity.note_tool_response(now);
             }
             delivered
         }
         DebtStep::TurnComplete => {
-            let delivered = accept_gemini_event(&GeminiEvent::TurnComplete, activity, false, now);
+            let delivered = activity.accept_event(&GeminiEvent::TurnComplete, false, now);
             if delivered {
                 activity.settle_completed_turn(false);
             }
             delivered
         }
         DebtStep::Interrupted => {
-            let delivered = accept_gemini_event(&GeminiEvent::Interrupted, activity, false, now);
+            let delivered = activity.accept_event(&GeminiEvent::Interrupted, false, now);
             if delivered {
                 state.end_requested = false;
                 let spoken = ["Candidate: wait, one thing".to_string()];
@@ -5293,7 +5279,8 @@ fn apply_debt_step(
             delivered
         }
         DebtStep::Replace | DebtStep::ReplaceCold => {
-            let (owed, _, owed_prompt) = hand_over(state, activity, output_audio);
+            let (owed, _, owed_prompt) =
+                hand_over(state, activity, &mut TurnProbes::default(), output_audio);
             let replacement = if step == DebtStep::Replace {
                 Replacement::Resumed { owed }
             } else {
@@ -5473,12 +5460,7 @@ fn a_silent_completion_opens_no_late_transcript_grace() {
     let start = Instant::now();
     let mut activity = RuntimeActivity::new(start);
     activity.note_candidate_finished(start, false);
-    assert!(accept_gemini_event(
-        &GeminiEvent::TurnComplete,
-        &mut activity,
-        false,
-        start
-    ));
+    assert!(activity.accept_event(&GeminiEvent::TurnComplete, false, start));
     assert_eq!(activity.turn_completed_at, None);
     activity.note_candidate_finished(start + Duration::from_millis(500), false);
     assert!(activity.reply_in_flight());
@@ -5495,7 +5477,7 @@ fn a_reply_left_partway_is_owed_everywhere_it_is_read() {
     let mut activity = RuntimeActivity::new(start);
     let chunk = audio_chunk();
     activity.note_candidate_finished(start, false);
-    assert!(accept_gemini_event(&chunk, &mut activity, false, start));
+    assert!(activity.accept_event(&chunk, false, start));
     activity.note_reply_audible();
     assert!(!activity.owes_reply(), "the reply started");
 
@@ -5519,12 +5501,7 @@ fn a_reply_left_partway_is_owed_everywhere_it_is_read() {
         ReplyWatch::Owed { shown: true }
     );
 
-    assert!(accept_gemini_event(
-        &GeminiEvent::TurnComplete,
-        &mut activity,
-        false,
-        shown
-    ));
+    assert!(activity.accept_event(&GeminiEvent::TurnComplete, false, shown));
     assert!(!activity.reply_unfinished());
     assert_eq!(
         reply_watch(&state, &activity, shown, false),
@@ -5550,12 +5527,7 @@ fn a_late_acknowledgement_ending_does_not_cut_the_goodbye() {
     let wrap_up_at = start + PROMPT_STALL;
     activity.mark_prompted(wrap_up_at, Some("goodbye"), false);
     assert!(activity.prompt_behind_turn);
-    assert!(accept_gemini_event(
-        &GeminiEvent::TurnComplete,
-        &mut activity,
-        false,
-        wrap_up_at
-    ));
+    assert!(activity.accept_event(&GeminiEvent::TurnComplete, false, wrap_up_at));
     activity.settle_completed_turn(false);
     assert!(
         !session::goodbye_heard(&activity, false),
@@ -5563,19 +5535,9 @@ fn a_late_acknowledgement_ending_does_not_cut_the_goodbye() {
     );
 
     let chunk = audio_chunk();
-    assert!(accept_gemini_event(
-        &chunk,
-        &mut activity,
-        false,
-        wrap_up_at
-    ));
+    assert!(activity.accept_event(&chunk, false, wrap_up_at));
     activity.note_reply_audible();
-    assert!(accept_gemini_event(
-        &GeminiEvent::TurnComplete,
-        &mut activity,
-        false,
-        wrap_up_at
-    ));
+    assert!(activity.accept_event(&GeminiEvent::TurnComplete, false, wrap_up_at));
     activity.settle_completed_turn(true);
     assert!(!session::goodbye_heard(&activity, true), "still playing");
     assert!(session::goodbye_heard(&activity, false));
@@ -5772,7 +5734,11 @@ fn a_replacement_drops_the_briefing_its_predecessor_owed() {
         recovery_reply_pending: true,
         ..RuntimeState::default()
     };
-    clear_abandoned_socket_work(&mut state, &mut RuntimeActivity::new(Instant::now()));
+    clear_abandoned_socket_work(
+        &mut state,
+        &mut RuntimeActivity::new(Instant::now()),
+        &mut TurnProbes::default(),
+    );
     assert!(!state.recovery_reply_pending);
 }
 
@@ -5948,7 +5914,7 @@ async fn a_held_round_transition_waits_for_its_judgment_or_its_deadline() {
 fn the_room_loop_settles_the_end_and_holds_the_transition_before_applying_them() {
     let source = concat!(
         include_str!("../../src/livekit.rs"),
-        include_str!("../../src/livekit/packets.rs"),
+        include_str!("../../src/livekit/startup/packets.rs"),
         include_str!("../../src/livekit/side_calls.rs")
     );
     let body = |name: &str| {
@@ -5974,7 +5940,7 @@ fn the_room_loop_settles_the_end_and_holds_the_transition_before_applying_them()
     assert!(packet[hold..apply].contains("return Ok(ControlFlow::Continue(()))"));
     let parked = body("fn park_round_transition(");
     assert!(parked.contains("reserve_phase_judge("));
-    assert!(parked.contains("pending_round_transition"));
+    assert!(parked.contains("hold_round_transition("));
     assert!(parked.contains("return true;"));
     assert!(body("async fn settle_phase_judge(").contains("reserve_phase_judge("));
 
@@ -5983,7 +5949,7 @@ fn the_room_loop_settles_the_end_and_holds_the_transition_before_applying_them()
         .find("phase_judge.finished()")
         .expect("the tick collects");
     let release = tick
-        .find("parked_transition_ready(")
+        .find("take_ready_parked_transition(")
         .expect("the tick releases");
     let publish = tick
         .find("flush_framework_progress(")
@@ -6144,7 +6110,7 @@ async fn completed_coding_idle_failed_watch_keeps_retry_throttle_without_spendin
         .watch_prompt(&mut state, start + Duration::from_secs(30))
         .unwrap();
     assert!(
-        send_watched_prompt(&mut activity, &failed, async {
+        send_watched_prompt(&mut activity, &mut TurnProbes::default(), &failed, async {
             Err::<(), _>(std::io::Error::other("closed socket"))
         })
         .await
@@ -6159,7 +6125,7 @@ async fn completed_coding_idle_failed_watch_keeps_retry_throttle_without_spendin
     let retry = activity
         .watch_prompt(&mut state, start + Duration::from_secs(60))
         .unwrap();
-    send_watched_prompt(&mut activity, &retry, async {
+    send_watched_prompt(&mut activity, &mut TurnProbes::default(), &retry, async {
         Ok::<(), std::io::Error>(())
     })
     .await
@@ -6248,7 +6214,14 @@ async fn completed_coding_idle_public_thinking_release_preserves_debt_and_quiet_
                 &prompt,
             )
             .await;
-            record_event_prompt(&mut turn.activity, &prompt, sent, Instant::now()).unwrap();
+            record_event_prompt(
+                &mut turn.activity,
+                &mut TurnProbes::default(),
+                &prompt,
+                sent,
+                Instant::now(),
+            )
+            .unwrap();
             assert!(turn.activity.owes_reply());
             assert!(
                 turn.activity
@@ -6310,6 +6283,7 @@ fn completed_coding_idle_data_packet_hook_resets_real_work_but_not_noops() {
     reduce_data_packet(
         &mut state,
         &mut activity,
+        &mut TurnProbes::default(),
         crate::runtime::TOPIC_CODE_UPDATE,
         &serde_json::json!({"code":"def solve(): pass","language":"python"}),
         true,
@@ -6319,6 +6293,7 @@ fn completed_coding_idle_data_packet_hook_resets_real_work_but_not_noops() {
     reduce_data_packet(
         &mut state,
         &mut activity,
+        &mut TurnProbes::default(),
         crate::runtime::TOPIC_CODE_UPDATE,
         &serde_json::json!({"code":code,"language":"python"}),
         true,
@@ -6350,6 +6325,7 @@ fn completed_coding_idle_data_packet_hook_resets_real_work_but_not_noops() {
     reduce_data_packet(
         &mut state,
         &mut activity,
+        &mut TurnProbes::default(),
         crate::runtime::TOPIC_CODE_UPDATE,
         &serde_json::json!({"code":code,"language":"python"}),
         true,
@@ -6358,6 +6334,7 @@ fn completed_coding_idle_data_packet_hook_resets_real_work_but_not_noops() {
     reduce_data_packet(
         &mut state,
         &mut activity,
+        &mut TurnProbes::default(),
         crate::runtime::TOPIC_CODE_UPDATE,
         &serde_json::json!({"language":"javascript"}),
         true,
@@ -6371,6 +6348,7 @@ fn completed_coding_idle_data_packet_hook_resets_real_work_but_not_noops() {
     reduce_data_packet(
         &mut state,
         &mut activity,
+        &mut TurnProbes::default(),
         crate::runtime::TOPIC_CODE_UPDATE,
         &serde_json::json!({"code":"def solve(): return 2","language":"python"}),
         true,
@@ -6390,6 +6368,7 @@ fn completed_coding_idle_data_packet_hook_resets_real_work_but_not_noops() {
     reduce_data_packet(
         &mut state,
         &mut activity,
+        &mut TurnProbes::default(),
         crate::runtime::TOPIC_TEST_RESULTS,
         &serde_json::json!({"passed":0,"total":1,"language":"python"}),
         true,
@@ -6400,165 +6379,6 @@ fn completed_coding_idle_data_packet_hook_resets_real_work_but_not_noops() {
         .watch_prompt(&mut state, start + Duration::from_secs(210))
         .unwrap();
     assert!(tested.completed_coding_nudge && !tested.allows_silence);
-}
-
-/// After the socket has transcribed the candidate, without compression or a
-/// provider speech event, a voiced frame no longer feeds the idle timers but
-/// is still reported, which is what keeps the camera gate open during speech.
-#[test]
-fn voiced_frames_are_reported_after_transcription_without_provider_events() {
-    let start = Instant::now();
-    let state = RuntimeState::default();
-    let mut activity = RuntimeActivity::new(start);
-    activity.transcribed_on_socket = true;
-    let loud = ::livekit::webrtc::audio_frame::AudioFrame {
-        data: vec![1000i16; 1600].into(),
-        sample_rate: 16_000,
-        num_channels: 1,
-        samples_per_channel: 1600,
-    };
-    let quiet = ::livekit::webrtc::audio_frame::AudioFrame {
-        data: vec![0i16; 1600].into(),
-        sample_rate: 16_000,
-        num_channels: 1,
-        samples_per_channel: 1600,
-    };
-    assert!(note_candidate_audio_frame(
-        &state,
-        &mut activity,
-        Some(&loud),
-        start
-    ));
-    assert!(!activity.incoming_speech_active(start));
-    assert!(!note_candidate_audio_frame(
-        &state,
-        &mut activity,
-        Some(&quiet),
-        start
-    ));
-}
-
-#[test]
-fn timing_pcm_ignores_silent_missing_and_thinking_frames() {
-    let start = Instant::now();
-    let loud = ::livekit::webrtc::audio_frame::AudioFrame {
-        data: vec![1000i16; 1600].into(),
-        sample_rate: 16_000,
-        num_channels: 1,
-        samples_per_channel: 1600,
-    };
-    let quiet = ::livekit::webrtc::audio_frame::AudioFrame {
-        data: vec![0i16; 1600].into(),
-        sample_rate: 16_000,
-        num_channels: 1,
-        samples_per_channel: 1600,
-    };
-    for mode in 0..4 {
-        let mut state = RuntimeState::default();
-        if mode == 1 {
-            state.thinking_hold = crate::agent::ThinkingHold::Held { since: start };
-        }
-        let mut activity = RuntimeActivity::new(start);
-        let frame = match mode {
-            2 => Some(&quiet),
-            3 => None,
-            _ => Some(&loud),
-        };
-        note_candidate_audio_frame(&state, &mut activity, frame, start);
-        activity
-            .turn_timing
-            .note_transcript(start + Duration::from_millis(100));
-        let summary = activity
-            .turn_timing
-            .note_audio(start + Duration::from_secs(1), true)
-            .unwrap();
-        assert_eq!(
-            summary.start_source,
-            if mode == 0 {
-                "pcm_level"
-            } else {
-                "last_transcript"
-            },
-            "mode {mode}"
-        );
-        assert_eq!(
-            summary.wait,
-            Some(Duration::from_millis(if mode == 0 { 1000 } else { 900 })),
-            "mode {mode}"
-        );
-    }
-}
-
-#[test]
-fn actual_pcm_path_protects_long_speech_but_not_silent_input() {
-    let start = Instant::now();
-    let state = RuntimeState::default();
-    let mut activity = RuntimeActivity::new(start);
-    activity.mark_prompted(start, Some("resume"), false);
-    activity.note_candidate_voice_activity(true, start);
-    let loud = ::livekit::webrtc::audio_frame::AudioFrame {
-        data: vec![1000i16; 1600].into(),
-        sample_rate: 16_000,
-        num_channels: 1,
-        samples_per_channel: 1600,
-    };
-    let quiet = ::livekit::webrtc::audio_frame::AudioFrame {
-        data: vec![0i16; 1600].into(),
-        sample_rate: 16_000,
-        num_channels: 1,
-        samples_per_channel: 1600,
-    };
-    let mut restart = DeferredRestart::default();
-    assert!(!restart.request(Floor::Listening, false, true, false));
-    for seconds in 0..=180 {
-        let now = start + Duration::from_secs(seconds);
-        note_candidate_audio_frame(&state, &mut activity, Some(&loud), now);
-        let stalls = activity.settle_stalls(now, false);
-        assert!(!stalls.prompt_released && !stalls.spend_restart);
-        assert_eq!(
-            reply_watch(&state, &activity, now, false),
-            ReplyWatch::Owed { shown: false }
-        );
-
-        // An ordinary restart waits the speech out; the handoff that finalizes
-        // the utterance first is what the watch spends instead.
-        assert!(!restart.can_spend(&activity, now));
-        assert!(restart.handoff_due(&activity, now));
-    }
-    let end = start + Duration::from_secs(181);
-    activity.note_candidate_voice_activity(false, end);
-    let after_end = end + PROMPT_STALL;
-    let stalls = activity.settle_stalls(after_end, false);
-    assert!(restart.watch_due(&activity, stalls.spend_restart, after_end));
-    restart.cancel();
-    assert!(!restart.watch_due(&activity, true, after_end));
-    assert_eq!(
-        reply_watch(&state, &activity, end, false),
-        ReplyWatch::Owed { shown: false }
-    );
-    assert_eq!(
-        reply_watch(&state, &activity, end + Duration::from_secs(45), false),
-        ReplyWatch::Recover
-    );
-
-    // Past the quiet window of the last loud frame, a VAD edge carried only by
-    // silent or missing frames is not speech.
-    let quiet_at = end + CHECKPOINT_VOICE_QUIET;
-    activity.mark_prompted(quiet_at, Some("next"), false);
-    activity.note_candidate_voice_activity(true, quiet_at);
-    note_candidate_audio_frame(&state, &mut activity, Some(&quiet), quiet_at);
-    note_candidate_audio_frame(&state, &mut activity, None, quiet_at);
-    assert!(!activity.incoming_speech_active(quiet_at));
-    assert_eq!(
-        reply_watch(&state, &activity, quiet_at + Duration::from_secs(45), false),
-        ReplyWatch::Recover
-    );
-    for resumed in [false, true] {
-        note_candidate_audio_frame(&state, &mut activity, Some(&loud), end);
-        activity.reset_context_observations(resumed);
-        activity.note_candidate_voice_activity(true, end);
-        assert!(!activity.incoming_speech_active(end));
-    }
 }
 
 #[test]
@@ -6592,6 +6412,7 @@ fn silent_editor_fixture(start: Instant) -> (RuntimeState, RuntimeActivity) {
         reduce_data_packet(
             &mut state,
             &mut activity,
+            &mut TurnProbes::default(),
             crate::runtime::TOPIC_CODE_UPDATE,
             &serde_json::json!({"code":code,"language":"python"}),
             true,
@@ -6673,6 +6494,7 @@ fn silent_editor_context_settle_speech_noop_and_hold_boundaries() {
     reduce_data_packet(
         &mut state,
         &mut activity,
+        &mut TurnProbes::default(),
         crate::runtime::TOPIC_CODE_UPDATE,
         &serde_json::json!({"code":unchanged,"language":"python"}),
         true,
@@ -6701,6 +6523,7 @@ async fn silent_editor_context_failed_write_retains_pending_and_retry_uses_newes
     reduce_data_packet(
         &mut state,
         &mut activity,
+        &mut TurnProbes::default(),
         crate::runtime::TOPIC_CODE_UPDATE,
         &serde_json::json!({"code":"def solve(): return 2","language":"python"}),
         true,
@@ -6744,7 +6567,12 @@ async fn silent_editor_context_socket_handoff_clears_delivery_and_successful_bri
     let (mut state, mut activity) = silent_editor_fixture(start);
     activity.commit_silent_editor(&state);
     let (mut output, _frames) = test_output_audio();
-    hand_over(&mut state, &mut activity, &mut output);
+    hand_over(
+        &mut state,
+        &mut activity,
+        &mut TurnProbes::default(),
+        &mut output,
+    );
     assert!(activity.silent_editor_delivery.is_none());
     state.needs_cold_brief = false;
     let (mut gemini, server) = fake_recording_socket(None, 1).await;
@@ -6753,6 +6581,7 @@ async fn silent_editor_context_socket_handoff_clears_delivery_and_successful_bri
             &mut gemini,
             &mut state,
             &mut activity,
+            &mut TurnProbes::default(),
             Replacement::Resumed { owed: false },
             None
         )
@@ -6793,6 +6622,7 @@ fn silent_editor_context_explicit_lifecycle_and_substantive_scope() {
     reduce_data_packet(
         &mut state,
         &mut activity,
+        &mut TurnProbes::default(),
         crate::runtime::TOPIC_CODE_UPDATE,
         &serde_json::json!({"code":"def solve():  return 1","language":"python"}),
         true,
@@ -6808,6 +6638,7 @@ fn silent_editor_context_explicit_lifecycle_and_substantive_scope() {
     reduce_data_packet(
         &mut state,
         &mut activity,
+        &mut TurnProbes::default(),
         crate::runtime::TOPIC_CODE_UPDATE,
         &serde_json::json!({"code":"function solve() { return 2; }","language":"javascript"}),
         true,
@@ -6925,3 +6756,5 @@ async fn self_contained_checkpoint_wire_preserves_mode_context_without_reply() {
 }
 
 include!("livekit_parts/voice_and_handoff_rules.rs");
+include!("livekit_parts/probe_helpers.rs");
+include!("livekit_parts/candidate_audio_frames.rs");

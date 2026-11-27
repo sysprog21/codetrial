@@ -35,7 +35,7 @@ const HARNESS_DURATIONS_MIN = [10, 20, 30, 60, 90];
 /// duration the agent waits before ending the interview itself.
 const SERVER_DEADLINE_GRACE_S = 120;
 
-/// `CLOCK_SAMPLE_MS` in src/livekit/latency.rs.
+/// `CLOCK_SAMPLE_MS` in src/livekit/turn/latency.rs.
 const CLOCK_SAMPLE_S = 60;
 
 /// A run shorter than this has no clock sample to find.

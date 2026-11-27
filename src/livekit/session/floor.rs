@@ -3,7 +3,7 @@ use std::time::Instant;
 
 use crate::agent::RuntimeState;
 use crate::livekit::floor::Event;
-use crate::livekit::turn::RuntimeActivity;
+use crate::livekit::turn::{RuntimeActivity, TurnProbes};
 
 use super::log_clock;
 
@@ -16,12 +16,14 @@ fn value(time: Option<i64>) -> String {
 pub(in crate::livekit) fn observe_floor(
     room: &str,
     activity: &mut RuntimeActivity,
+    probes: &TurnProbes,
     state: &RuntimeState,
     event: Event,
 ) {
     write_floor(
         room,
         activity,
+        probes,
         || log_clock(state),
         event,
         &mut std::io::stderr().lock(),
@@ -31,13 +33,14 @@ pub(in crate::livekit) fn observe_floor(
 pub(super) fn write_floor(
     room: &str,
     activity: &mut RuntimeActivity,
+    probes: &TurnProbes,
     clock: impl Fn() -> String,
     event: Event,
     output: &mut impl std::io::Write,
 ) {
     let session = activity.live_session_id;
     let socket = activity.live_socket;
-    let latency = &activity.latency;
+    let latency = &probes.latency;
     let now = Instant::now();
     // Sampling is lazy: most events emit nothing, including audio chunks.
     let mut at = None;
@@ -59,15 +62,16 @@ pub(super) fn write_floor(
 pub(in crate::livekit) fn reconcile_floor(
     room: &str,
     activity: &mut RuntimeActivity,
+    probes: &TurnProbes,
     clock: impl Fn() -> String,
     playing: bool,
     output: &mut impl std::io::Write,
 ) {
     if !activity.candidate_voice_active {
-        write_floor(room, activity, &clock, Event::ActivityLost, output);
+        write_floor(room, activity, probes, &clock, Event::ActivityLost, output);
     }
     if !activity.generating && !playing {
-        write_floor(room, activity, &clock, Event::Drained, output);
+        write_floor(room, activity, probes, &clock, Event::Drained, output);
     }
 }
 

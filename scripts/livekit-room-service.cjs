@@ -16,7 +16,7 @@
 const crypto = require("node:crypto");
 
 /// The RoomService origin, derived the way `livekit_http_base` in
-/// src/livekit/rooms.rs:216 derives it, because the harness reads the same
+/// src/livekit/room/rooms.rs:216 derives it, because the harness reads the same
 /// `codetrial.env.local` the server does and a URL the server accepts has to
 /// work here too. The query and fragment come off before the Twirp path is
 /// appended, the scheme is rewritten in any case because
@@ -110,7 +110,7 @@ async function roomService(method, body) {
   const text = await response.text();
   if (!response.ok) {
     // Status and Twirp code both, the pair `is_participant_gone` in
-    // src/livekit/rooms.rs:115 matches on: a bare 404 can also mean the route
+    // src/livekit/room/rooms.rs:115 matches on: a bare 404 can also mean the route
     // is wrong, and `not_found` in the body is what says the thing asked for
     // is simply not there.
     const error = new Error(`${method} failed: ${response.status} ${text}`);
@@ -121,7 +121,7 @@ async function roomService(method, body) {
     throw error;
   }
 
-  // Named the way `parse_room_service_response` in src/livekit/rooms.rs:227
+  // Named the way `parse_room_service_response` in src/livekit/room/rooms.rs:227
   // names it. A 200 that is not JSON is a proxy answering instead of LiveKit,
   // and "Unexpected end of JSON input" says nothing about which call, which
   // status, or what came back instead.
@@ -144,7 +144,7 @@ async function listRoomParticipants(roomName) {
 }
 
 /// Already gone counts as removed, the same call `remove_room_participant` in
-/// src/livekit/rooms.rs:99 makes: the caller listed the room a moment ago, and
+/// src/livekit/room/rooms.rs:99 makes: the caller listed the room a moment ago, and
 /// a participant that disconnected in between is the outcome being asked for,
 /// not a failure.
 async function removeParticipant(roomName, identity) {

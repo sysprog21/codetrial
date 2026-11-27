@@ -6,7 +6,7 @@ use super::{Instant, LATE_TRANSCRIPT_GRACE, RuntimeActivity};
 impl RuntimeActivity {
     /// Whether `now` is still inside the grace after the last completed turn,
     /// where the provider may yet send that turn's transcription.
-    pub(super) fn is_late_transcript(&self, now: Instant) -> bool {
+    pub(in crate::livekit) fn is_late_transcript(&self, now: Instant) -> bool {
         self.turn_completed_at
             .is_some_and(|at| now.saturating_duration_since(at) < LATE_TRANSCRIPT_GRACE)
     }

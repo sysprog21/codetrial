@@ -1400,13 +1400,13 @@ test("the CLI writes a schedule, an answer key and labelled synthetic clips", ()
   }
 });
 
-// The native speech-continuity arm (tests/unit/livekit/recovery_continuity.rs)
+// The native speech-continuity arm (tests/unit/livekit/startup/recovery_continuity.rs)
 // keeps its own copy of the smoke schedule's first clips as its answer key, and
 // refuses a clip set whose parts differ from it. A catalogue change that left
 // the copy behind would leave that arm with no clip set it can load.
 test("the native arm's answer key is the smoke schedule's clip text", () => {
   const source = fs.readFileSync(
-    path.join(ROOT, "tests/unit/livekit/recovery_continuity.rs"),
+    path.join(ROOT, "tests/unit/livekit/startup/recovery_continuity.rs"),
     "utf8",
   );
   const turns = [

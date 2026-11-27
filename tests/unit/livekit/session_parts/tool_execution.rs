@@ -4,6 +4,7 @@
 fn real_tool_dispatch_records_only_tools_before_reply_audio() {
     let start = Instant::now();
     let mut activity = RuntimeActivity::new(start);
+    let mut probes = TurnProbes::default();
     let mut state = RuntimeState {
         code: "return 1;".into(),
         ..RuntimeState::default()
@@ -13,10 +14,12 @@ fn real_tool_dispatch_records_only_tools_before_reply_audio() {
         name: TOOL_READ_EDITOR.into(),
         args: serde_json::json!({}),
     };
-    activity.note_candidate_finished(start, false);
+    if activity.note_candidate_finished(start, false) {
+        probes.turn_timing.note_transcript(start);
+    }
     let response = execute_timed_tool_batch(
         &mut state,
-        &mut activity,
+        &mut probes,
         vec![call.clone(), call.clone()],
         0,
         true,
@@ -27,7 +30,7 @@ fn real_tool_dispatch_records_only_tools_before_reply_audio() {
             .as_str()
             .is_some_and(|code| code.contains("return 1;"))
     );
-    let first = activity
+    let first = probes
         .turn_timing
         .note_audio(start + Duration::from_secs(1), true)
         .unwrap();
@@ -36,21 +39,24 @@ fn real_tool_dispatch_records_only_tools_before_reply_audio() {
     assert!(first.pre_tool.is_some());
     execute_timed_tool_batch(
         &mut state,
-        &mut activity,
+        &mut probes,
         vec![call.clone(), call.clone()],
         0,
         true,
         &mut None,
     );
     assert!(
-        activity
+        probes
             .turn_timing
             .finish(start + Duration::from_secs(2), TimingOutcome::NoAudio)
             .is_none()
     );
-    activity.note_candidate_finished(start + Duration::from_secs(3), false);
-    execute_timed_tool_batch(&mut state, &mut activity, vec![call], 0, false, &mut None);
-    let next = activity
+    let later = start + Duration::from_secs(3);
+    if activity.note_candidate_finished(later, false) {
+        probes.turn_timing.note_transcript(later);
+    }
+    execute_timed_tool_batch(&mut state, &mut probes, vec![call], 0, false, &mut None);
+    let next = probes
         .turn_timing
         .note_audio(start + Duration::from_secs(4), true)
         .unwrap();
