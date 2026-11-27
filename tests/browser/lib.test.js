@@ -1528,6 +1528,51 @@ test("sanitizeReport keeps the stamped fields on a normal report", () => {
   assert.equal(report.practiceLevel, "staff");
 });
 
+test("sanitizeReport keeps whole key moments in time order and drops the rest", () => {
+  const note = (atMs, kind, extra = {}) => ({
+    atMs,
+    kind,
+    quote: "three matched itself because I inserted",
+    note: "Look up before you insert.",
+    ...extra,
+  });
+  const report = sanitizeReport({
+    codingScore: 70,
+    communicationScore: 70,
+    decision: "HIRE",
+    keyMoments: [
+      note(200_000, "fixed_run"),
+      note(40_000, "approach"),
+      note(50_000, "unknown"),
+      note(-1, "hint"),
+      note(60_000, "hint", { quote: "" }),
+      note(70_000, "hint", { note: 3 }),
+    ],
+  });
+  assert.deepEqual(report.keyMoments, [
+    note(40_000, "approach"),
+    note(200_000, "fixed_run"),
+  ]);
+  // A time that is not a number, which `Number` would read as the opening
+  // second or as a time, inside the cap so the sanitizer reaches it.
+  assert.deepEqual(
+    sanitizeReport({
+      codingScore: 70,
+      keyMoments: [note(null, "hint"), note("80000", "hint"), note(5, "hint")],
+    }).keyMoments,
+    [note(5, "hint")],
+  );
+  assert.equal(
+    "keyMoments" in sanitizeReport({ codingScore: 70, keyMoments: [] }),
+    false,
+  );
+  assert.equal(
+    "keyMoments" in
+      sanitizeReport({ incomplete: true, keyMoments: [note(1, "hint")] }),
+    false,
+  );
+});
+
 test("sanitizeReport reads judged follow-ups and the bare text schema 2 stored", () => {
   const report = sanitizeReport({
     incomplete: true,

@@ -1,6 +1,6 @@
 //! The side calls made over HTTP rather than the live socket: the interim
-//! review and the phase judgment, with the request, failure and usage handling
-//! they share.
+//! review, the phase judgment and the key-moment notes, with the request,
+//! failure and usage handling they share.
 
 // This module reads the hub's imports and types through `use super::*`.
 #[cfg_attr(
@@ -73,6 +73,48 @@ pub(super) async fn generate_phase_judgment_at(
     // which may run dozens of times an interview, would then be what left a
     // final report without a key. The next judgment simply asks again.
     side_call_once(keys, url, &request, "phase", scope, false).await
+}
+
+/// The notes on the report's key moments: one attempt, beside the report
+/// call rather than after it. A note that fails leaves the report without the
+/// section and changes nothing else, so there is nothing worth a repair.
+pub(crate) async fn generate_key_moments_with_keys(
+    keys: &GeminiKeys,
+    model: &str,
+    prompt: &str,
+    scope: &str,
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    generate_key_moments_at(keys, &gemini_generate_content_url(model), prompt, scope).await
+}
+
+pub(super) async fn generate_key_moments_at(
+    keys: &GeminiKeys,
+    url: &str,
+    prompt: &str,
+    scope: &str,
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    let request = content_request(
+        &crate::agent::key_moments_system_instruction(),
+        prompt,
+        key_moments_generation_config(),
+    );
+
+    // It runs beside the report on the same keys, so a rate limit here must not
+    // cool the key the report is about to need.
+    side_call_once(keys, url, &request, "moments", scope, false).await
+}
+
+/// Deterministic, and held to a schema: the server checks every quote before
+/// a note reaches the report.
+fn key_moments_generation_config() -> Value {
+    json!({
+        "responseMimeType": "application/json",
+        "responseSchema": crate::agent::key_moments_response_schema(),
+        "maxOutputTokens": 2048,
+        "thinkingConfig": { "thinkingBudget": 0 },
+        "temperature": 0.0,
+        "seed": GENERATION_SEED
+    })
 }
 
 /// Deterministic, and JSON: the answer is read by the server, not a person.

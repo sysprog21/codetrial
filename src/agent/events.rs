@@ -608,6 +608,9 @@ fn apply_test_results(
             language: language.to_string(),
             code: code.to_string(),
         });
+        if let Some(tested) = state.tested_code.clone() {
+            state.record_run_event(&tested, all_passed);
+        }
         if state.analysis == Some(super::Analysis::AwaitingRun) {
             state.analysis = state.tested_code.clone().map(super::Analysis::Of);
         }

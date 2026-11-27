@@ -900,9 +900,9 @@ const textEncoder = new TextEncoder();
 /// function-local, moving it left the whole suite green with the supported-card
 /// branch no longer rendering, which is the defect a local constant invites.
 export const ACTIVE_CONTRACT = {
-  bundleVersion: 48,
+  bundleVersion: 49,
   livePromptVersion: 36,
-  reportPromptVersion: 26,
+  reportPromptVersion: 27,
   reportSchemaVersion: 4,
   rubricVersion: 1,
 };
@@ -1196,6 +1196,51 @@ function reportPracticeLevel(raw) {
     : null;
 }
 
+/// MAX_KEY_MOMENTS in src/agent/key_moments.rs, and the kinds it spells.
+export const MAX_KEY_MOMENTS = 6;
+export const KEY_MOMENT_KINDS = [
+  "hint",
+  "hint_withheld",
+  "fixed_run",
+  "approach",
+  "complexity",
+];
+
+/// The key-moment notes, kept only whole: a note without its time, its kind or
+/// its quote is not one the server checked. `undefined` when the report
+/// carries none, which every report before the field and every one whose call
+/// failed is.
+function reportKeyMoments(raw) {
+  if (!Array.isArray(raw?.keyMoments)) return undefined;
+  const moments = raw.keyMoments.slice(0, MAX_KEY_MOMENTS).flatMap((item) => {
+    // A number, not anything `Number` makes one: null and "" would read as
+    // the opening second.
+    const atMs = typeof item?.atMs === "number" ? Math.trunc(item.atMs) : NaN;
+    if (
+      !Number.isFinite(atMs) ||
+      atMs < 0 ||
+      !KEY_MOMENT_KINDS.includes(item?.kind) ||
+      typeof item?.note !== "string" ||
+      typeof item?.quote !== "string" ||
+      !item.note.trim() ||
+      !item.quote.trim()
+    ) {
+      return [];
+    }
+    return [
+      {
+        atMs: Math.min(atMs, 31_536_000_000),
+        kind: item.kind,
+        quote: boundedText(item.quote),
+        note: boundedText(item.note),
+      },
+    ];
+  });
+  return moments.length
+    ? moments.sort((left, right) => left.atMs - right.atMs)
+    : undefined;
+}
+
 function reportInterviewerStyle(value) {
   const text =
     typeof value === "string" ? boundedText(value.trim(), 128).trim() : "";
@@ -1440,6 +1485,7 @@ export function sanitizeReport(raw) {
   const debrief = reportDebrief(raw);
   const topics = reportTopics(raw);
   const practiceLevel = reportPracticeLevel(raw);
+  const keyMoments = reportKeyMoments(raw);
   const interviewerVoice = reportInterviewerStyle(raw?.interviewerVoice);
   const interviewerAccent = reportInterviewerStyle(raw?.interviewerAccent);
 
@@ -1507,6 +1553,7 @@ export function sanitizeReport(raw) {
     practiceLevel,
     interviewerVoice,
     interviewerAccent,
+    ...(keyMoments ? { keyMoments } : {}),
   };
 }
 

@@ -29,6 +29,7 @@ pub(crate) mod communication;
 mod evidence;
 mod framework;
 mod integrity;
+mod key_moments;
 mod phase_judge;
 mod problem_guides;
 mod problem_rubrics;
@@ -112,7 +113,7 @@ pub(crate) use code_work::{
     latest_test_report_provenance_note, real_test_run, rewritten, test_record_after_run,
     test_recordable, test_source, tested_code_is_current, tested_code_is_exact, written_in,
 };
-pub use code_work::{code_untouched, code_written};
+pub use code_work::{TestedCode, code_untouched, code_written};
 pub use communication::{CommunicationEvidence, communication_evidence};
 use framework::record_evidence;
 pub use framework::{
@@ -123,6 +124,10 @@ pub(crate) use framework::{
     RecordOutcome, coding_continues_past_gate, coding_round_complete, evidence_kind_id,
     evidence_source_id, phase_id, phases_evidenced, reconcile_received_test,
     record_framework_evidence_outcome, skip_unassessed_star,
+};
+pub use key_moments::{
+    KeyMomentState, KeyMomentsRequest, MAX_KEY_MOMENTS, key_moments_request,
+    key_moments_response_schema, key_moments_system_instruction, session_started_epoch_ms,
 };
 pub use phase_judge::{
     PhaseJudgeDue, apply_phase_judgment, phase_judge_due, phase_judge_need, phase_judge_open,
@@ -230,9 +235,9 @@ pub const THINKING_CHECK_IN_S: u64 = 120;
 pub(crate) const THINKING_RELEASE_COOLDOWN: std::time::Duration =
     std::time::Duration::from_secs(10);
 
-pub const INTERVIEW_CONTRACT_BUNDLE_VERSION: u32 = 48;
+pub const INTERVIEW_CONTRACT_BUNDLE_VERSION: u32 = 49;
 pub const LIVE_PROMPT_VERSION: u32 = 36;
-pub const REPORT_PROMPT_VERSION: u32 = 26;
+pub const REPORT_PROMPT_VERSION: u32 = 27;
 pub const RUBRIC_VERSION: u32 = 1;
 pub const REPORT_SCHEMA_VERSION: u32 = 4;
 
@@ -994,20 +999,6 @@ pub enum Analysis {
     Of(TestedCode),
 }
 
-/// Code a test run executed; see `RuntimeState::tested_code`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TestedCode {
-    pub language: String,
-    pub code: String,
-}
-
-impl TestedCode {
-    /// The same source the editor holds now, language included.
-    fn is_current(&self, state: &RuntimeState) -> bool {
-        self.language == state.language && self.code == state.code
-    }
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct RuntimeState {
     pub started_at: std::time::Instant,
@@ -1151,6 +1142,8 @@ pub struct RuntimeState {
     pub hint_ladder: &'static [&'static str],
     pub hint_rungs_given: usize,
     pub hint_attempt: HintAttempt,
+    /// What the report's key moments are picked from, and their notes.
+    pub key_moments: KeyMomentState,
     /// The variant's follow-ups, released by the evidence call that completes
     /// the coding round; see `released_follow_ups`.
     pub follow_ups: &'static [&'static str],
@@ -1348,6 +1341,7 @@ impl Default for RuntimeState {
             hint_ladder: &[],
             hint_rungs_given: 0,
             hint_attempt: HintAttempt::default(),
+            key_moments: KeyMomentState::default(),
             follow_ups: &[],
             integrity_events: Vec::new(),
             integrity_chain: None,

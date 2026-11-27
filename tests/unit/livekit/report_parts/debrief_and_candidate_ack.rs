@@ -357,3 +357,24 @@ fn the_candidate_ack_matches_the_receipt_the_agent_accepts() {
     assert!(!is_final_report(br#"{"reportRecovery":{}}"#));
     assert!(!is_final_report(b"invalid"));
 }
+
+/// The checked key-moment notes ride on a report that has a verdict, and an
+/// incomplete one leaves them out: under "No evaluation" they would read as
+/// the review that could not be written.
+#[test]
+fn key_moments_ride_only_on_a_complete_report() {
+    let mut state = RuntimeState::default();
+    let notes = serde_json::json!([{
+        "atMs": 200_000,
+        "kind": "fixed_run",
+        "quote": "three matched itself because I inserted",
+        "note": "Look up before you insert.",
+    }]);
+    state.key_moments.notes = Some(notes.clone());
+    let mut complete = serde_json::json!({ "summary": "Solved it." });
+    stamp_key_moments(&mut complete, &state);
+    assert_eq!(complete["keyMoments"], notes);
+    let mut incomplete = serde_json::json!({ "incomplete": true, "summary": "" });
+    stamp_key_moments(&mut incomplete, &state);
+    assert!(incomplete.get("keyMoments").is_none());
+}
