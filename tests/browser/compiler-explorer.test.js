@@ -112,6 +112,95 @@ test("EventQueue cases reject incorrect queue implementations", () => {
   }
 });
 
+test("ThumbnailStore cases each reject one wrong store", () => {
+  // A Map keeps insertion order, so its first key is the least recently used.
+  // Map.set on a key already present keeps that key where it was, so with
+  // "overwrite keeps its old place" the store overwrites in place and later
+  // evicts the key it just wrote. With "evicts before checking the key" it
+  // evicts on every put to a full store, so overwriting a key that is not the
+  // oldest drops another key the store still had room for. With
+  // "zero read as missing" a stored 0 reads as absent and is never refreshed,
+  // and with "put reads zero as missing" overwriting a stored 0 is taken for an
+  // insert, so a full store evicts another key and the 0 keeps its place.
+  // With "a read moves one step" a read key passes only its newer neighbor,
+  // and with "a read leaves recency alone" it does not move at all. With
+  // "rewriting the same value is skipped" a put that changes nothing returns
+  // before it refreshes the key.
+  const replay = ({ input: [operations, args] }, fault = "correct") => {
+    const capacity = args[0][0];
+    const slots = new Map();
+    const store = {
+      get(key) {
+        const present =
+          fault === "zero read as missing"
+            ? Boolean(slots.get(key))
+            : slots.has(key);
+        if (!present) return -1;
+        const value = slots.get(key);
+        if (fault === "a read leaves recency alone") return value;
+        if (fault === "a read moves one step") {
+          const entries = [...slots];
+          const at = entries.findIndex(([stored]) => stored === key);
+          if (at + 1 < entries.length)
+            [entries[at], entries[at + 1]] = [entries[at + 1], entries[at]];
+          slots.clear();
+          for (const [stored, kept] of entries) slots.set(stored, kept);
+          return value;
+        }
+        slots.delete(key);
+        slots.set(key, value);
+        return value;
+      },
+      put(key, value) {
+        if (
+          fault === "rewriting the same value is skipped" &&
+          slots.get(key) === value
+        )
+          return null;
+        if (fault === "evicts before checking the key") {
+          if (slots.size === capacity) slots.delete(slots.keys().next().value);
+          slots.delete(key);
+        } else if (
+          fault === "put reads zero as missing"
+            ? Boolean(slots.get(key))
+            : slots.has(key)
+        ) {
+          if (fault !== "overwrite keeps its old place") slots.delete(key);
+        } else if (slots.size === capacity) {
+          slots.delete(slots.keys().next().value);
+        }
+        slots.set(key, value);
+        return null;
+      },
+    };
+    return operations.map((operation, index) =>
+      index === 0 ? null : store[operation](...args[index]),
+    );
+  };
+  const cases = judges["lru-cache"].cases;
+  for (const testCase of cases)
+    assert.deepEqual(replay(testCase), testCase.expected, testCase.label);
+  for (const [name, label] of [
+    ["overwrite keeps its old place", "insert after an overwrite at capacity"],
+    ["evicts before checking the key", "overwrite the newest key at capacity"],
+    ["zero read as missing", "zero is a stored value"],
+    ["a read moves one step", "refresh from the middle at capacity 3"],
+    [
+      "rewriting the same value is skipped",
+      "rewrite with the same value at capacity",
+    ],
+    ["a read leaves recency alone", "capacity 2, classic eviction sequence"],
+    ["put reads zero as missing", "overwrite a stored zero at capacity 3"],
+  ]) {
+    const testCase = pinnedCase("lru-cache", label);
+    assert.notDeepEqual(
+      replay(testCase, name),
+      testCase.expected,
+      `${label} must reject ${name}`,
+    );
+  }
+});
+
 const sampleValues = {
   boolean: true,
   "character[][]": [["a", "b"], ["c"]],

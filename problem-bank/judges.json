@@ -10287,6 +10287,63 @@
           null,
           -1
         ]
+      },
+      {
+        "label": "insert after an overwrite at capacity",
+        "input": [
+          ["LRUCache", "put", "put", "put", "put", "get", "get", "get"],
+          [[2], [1, 1], [2, 2], [1, 10], [3, 3], [2], [1], [3]]
+        ],
+        "expected": [null, null, null, null, null, -1, 10, 3]
+      },
+      {
+        "label": "overwrite the newest key at capacity",
+        "input": [
+          ["LRUCache", "put", "put", "get", "put", "get", "get"],
+          [[2], [1, 1], [2, 2], [1], [1, 10], [2], [1]]
+        ],
+        "expected": [null, null, null, 1, null, 2, 10]
+      },
+      {
+        "label": "zero is a stored value",
+        "input": [
+          ["LRUCache", "put", "put", "get", "put", "get", "get"],
+          [[2], [0, 0], [1, 1], [0], [2, 2], [1], [0]]
+        ],
+        "expected": [null, null, null, 0, null, -1, 0]
+      },
+      {
+        "label": "refresh from the middle at capacity 3",
+        "input": [
+          [
+            "LRUCache", "put", "put", "put", "get", "get", "put",
+            "put", "get", "get", "get", "get", "get"
+          ],
+          [
+            [3], [1, 1], [2, 2], [3, 3], [2], [1], [4, 4],
+            [5, 5], [1], [2], [3], [4], [5]
+          ]
+        ],
+        "expected": [null, null, null, null, 2, 1, null, null, 1, -1, -1, 4, 5]
+      },
+      {
+        "label": "rewrite with the same value at capacity",
+        "input": [
+          ["LRUCache", "put", "put", "put", "put", "get", "get"],
+          [[2], [1, 1], [2, 2], [1, 1], [3, 3], [2], [1]]
+        ],
+        "expected": [null, null, null, null, null, -1, 1]
+      },
+      {
+        "label": "overwrite a stored zero at capacity 3",
+        "input": [
+          [
+            "LRUCache", "put", "put", "put", "put", "get", "put",
+            "get", "get", "get", "get"
+          ],
+          [[3], [1, 1], [0, 0], [2, 2], [0, 5], [1], [3, 3], [0], [2], [1], [3]]
+        ],
+        "expected": [null, null, null, null, null, 1, null, 5, -1, 1, 3]
       }
     ]
   },
