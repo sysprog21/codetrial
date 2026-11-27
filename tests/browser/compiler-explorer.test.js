@@ -2017,6 +2017,123 @@ test("jump-game-ii reference strategies match shortest paths", () => {
   }
 });
 
+test("valid-sudoku cases reject a check that misses a rule or a unit", () => {
+  const all = ["row", "column", "box"];
+  // Records each filled cell under the units its `rules` name and refuses a
+  // digit a unit has already seen. A wrong check leaves out a rule, the rows
+  // and columns outside `from` to `to`, or the boxes, numbered in reading
+  // order, that `boxes` does not list.
+  const consistent =
+    ({ rules = all, from = 0, to = 9, boxes = [...Array(9).keys()] } = {}) =>
+    (board) => {
+      const seen = new Set();
+      const inside = (index) => index >= from && index < to;
+      for (let r = 0; r < 9; r += 1) {
+        for (let c = 0; c < 9; c += 1) {
+          const digit = board[r][c];
+          if (digit === ".") continue;
+          const box = 3 * Math.floor(r / 3) + Math.floor(c / 3);
+          const units = {
+            row: inside(r) ? `row ${r}` : "",
+            column: inside(c) ? `column ${c}` : "",
+            box: boxes.includes(box) ? `box ${box}` : "",
+          };
+          for (const rule of rules) {
+            if (!units[rule]) continue;
+            const key = `${units[rule]} ${digit}`;
+            if (seen.has(key)) return false;
+            seen.add(key);
+          }
+        }
+      }
+      return true;
+    };
+  const every = consistent();
+  for (const { label, input, expected } of judges["valid-sudoku"].cases) {
+    assert.equal(
+      every(...structuredClone(input)),
+      expected,
+      `"${label}" must expect whether any row, column or box repeats a digit`,
+    );
+  }
+  // Each of these cases repeats a digit in one unit only, so the check that
+  // misses that unit is the one wrong check that accepts it. The repeats sit
+  // in the first and last row and column, in the last box and in a box off
+  // the diagonal and the corners, so loops that start or stop one short, or
+  // step through the boxes by three, are refused too.
+  for (const [label, wrong, misses] of [
+    ["duplicate in box only", { rules: ["row", "column"] }, "the box rule"],
+    ["duplicate in far box only", { rules: ["row", "column"] }, "the box rule"],
+    ["duplicate in far box only", { boxes: [0] }, "all but the top-left box"],
+    [
+      "duplicate in edge box only",
+      { rules: ["row", "column"] },
+      "the box rule",
+    ],
+    [
+      "duplicate in edge box only",
+      { boxes: [0, 4, 8] },
+      "the boxes off the diagonal",
+    ],
+    [
+      "duplicate in edge box only",
+      { boxes: [0, 2, 6, 8] },
+      "all but the corner boxes",
+    ],
+    ["duplicate in last column only", { rules: ["row", "box"] }, "columns"],
+    ["duplicate in last column only", { to: 8 }, "the last row and column"],
+    ["duplicate in last row only", { rules: ["column", "box"] }, "rows"],
+    ["duplicate in last row only", { to: 8 }, "the last row and column"],
+    ["duplicate in first column only", { rules: ["row", "box"] }, "columns"],
+    ["duplicate in first column only", { from: 1 }, "the first row and column"],
+    ["duplicate in first row only", { rules: ["column", "box"] }, "rows"],
+    ["duplicate in first row only", { from: 1 }, "the first row and column"],
+  ]) {
+    assertRejects(
+      "valid-sudoku",
+      label,
+      consistent(wrong),
+      `"${label}" must reject a check that skips ${misses}`,
+    );
+  }
+  // No other true case is filled in, so a check that wants a blank cell
+  // passed them all.
+  assertRejects(
+    "valid-sudoku",
+    "fully filled board",
+    (board) => board.some((row) => row.includes(".")) && every(board),
+    '"fully filled board" must reject a check that requires a blank cell',
+  );
+  // Fills the first blank cell with each digit the board still allows and
+  // backtracks, so it finds a completion if one exists.
+  const solvable = (board) => {
+    const r = board.findIndex((row) => row.includes("."));
+    if (r < 0) return true;
+    const c = board[r].indexOf(".");
+    return [..."123456789"].some((digit) => {
+      board[r][c] = digit;
+      const found = every(board) && solvable(board);
+      board[r][c] = ".";
+      return found;
+    });
+  };
+  // Every other true case can be completed, so a check that also asks for a
+  // completion passed them all, and the solver must find each completion.
+  for (const { label, input, expected } of judges["valid-sudoku"].cases) {
+    if (!expected || label === "another partial board") continue;
+    assert.ok(
+      solvable(...structuredClone(input)),
+      `"${label}" must have a completion the solver finds`,
+    );
+  }
+  assertRejects(
+    "valid-sudoku",
+    "another partial board",
+    (board) => every(board) && solvable(board),
+    '"another partial board" must reject a check that requires a completion',
+  );
+});
+
 test("harness generator covers every function problem without network access", () => {
   for (const [id, spec] of Object.entries(judges)) {
     if (spec.kind !== "function") continue;
