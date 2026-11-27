@@ -1344,6 +1344,7 @@ class ReferenceTests(unittest.TestCase):
             "find-the-index-of-the-first-occurrence-in-a-string",
             "game-of-life",
             "gas-station",
+            "happy-number",
         }
         self.assertEqual(set(), expected - found, "references missing from the bank")
         GEN.check_references(GEN.read_json(GEN.JUDGE_SOURCE), directory)

@@ -37,6 +37,27 @@
         116
       ],
       "expected": false
+    },
+    {
+      "label": "single digit that settles",
+      "input": [
+        7
+      ],
+      "expected": true
+    },
+    {
+      "label": "seven steps to one",
+      "input": [
+        78999
+      ],
+      "expected": true
+    },
+    {
+      "label": "reaches seven before one",
+      "input": [
+        1112
+      ],
+      "expected": true
     }
   ],
   "paramNames": [
