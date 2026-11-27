@@ -7,11 +7,12 @@ use std::sync::Arc;
 
 use serde_json::{Value, json};
 
+use crate::tasks::Phase;
 use crate::tasks::access::{Admission, Preparation, TaskService};
 use crate::tasks::package::{LoadedSet, decode};
 use crate::tasks::session::{
-    Action, ActionKind, Cause, CheckState, Phase, RevisionMessage, RunMessage, Support,
-    TaskSession, Trigger,
+    Action, ActionKind, Cause, CheckState, RevisionMessage, RunMessage, Support, TaskSession,
+    Trigger,
 };
 use crate::tasks::test_support::{SITE, assignment, preparation};
 

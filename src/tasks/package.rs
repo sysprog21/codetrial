@@ -11,7 +11,6 @@ use ring::{aead, pbkdf2};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::access::Assignment;
 use super::{TaskError, TaskRecord, default_number, invalid};
 
 /// Bytes of a set's manifest.
@@ -416,6 +415,47 @@ pub fn site_base(text: &str) -> Result<reqwest::Url, TaskError> {
 /// would cut short.
 pub const BUILT_IN_DURATION_MIN: u64 = 60;
 
+/// The default task, which needs no sign-in, no PIN and no download. A link
+/// naming this site, set and version is the one assignment every learner may
+/// open: `.invalid` is reserved and never resolves, so no instructor's site can
+/// be mistaken for it.
+pub const BUILT_IN_SITE: &str = "https://built-in.invalid/";
+pub const BUILT_IN_SET: &str = "default";
+pub const BUILT_IN_TASK: &str = "rubik";
+pub const BUILT_IN_VERSION: u32 = 1;
+
+/// One assignment link: the instructor's site and the set version it names.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Assignment {
+    pub site: reqwest::Url,
+    pub set_id: String,
+    pub version: u32,
+}
+
+impl Assignment {
+    /// The default task's assignment.
+    pub fn built_in() -> Self {
+        Self {
+            site: reqwest::Url::parse(BUILT_IN_SITE).expect("the built-in site is a URL"),
+            set_id: BUILT_IN_SET.to_owned(),
+            version: BUILT_IN_VERSION,
+        }
+    }
+
+    /// Whether this is the default task's assignment, which anyone may open.
+    pub fn is_built_in(&self) -> bool {
+        *self == Self::built_in()
+    }
+
+    /// The page address that opens the default task.
+    pub fn built_in_path() -> String {
+        format!(
+            "/t/{BUILT_IN_SET}/{BUILT_IN_TASK}?site={}&version={BUILT_IN_VERSION}",
+            crate::percent_encode_component(BUILT_IN_SITE)
+        )
+    }
+}
+
 /// The set a learner who has not signed in works from: the default task,
 /// shipped with the program, as a set of one with the default rules. It is read
 /// from the same bank row the instructor's tool copies, so the default a
@@ -437,8 +477,8 @@ pub fn built_in_set() -> Arc<LoadedSet> {
         .expect("the shipped default task is a valid task");
         Arc::new(LoadedSet {
             config: Arc::new(SetConfig {
-                id: super::access::BUILT_IN_SET.to_owned(),
-                version: super::access::BUILT_IN_VERSION,
+                id: BUILT_IN_SET.to_owned(),
+                version: BUILT_IN_VERSION,
                 rules: Rules {
                     duration_min: BUILT_IN_DURATION_MIN,
                     max_hint_rungs: default_number("maxHintRungs"),

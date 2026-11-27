@@ -18,10 +18,8 @@ use crate::runtime::{
     TOPIC_TASK_TRANSCRIPT,
 };
 use crate::tasks::access::PinnedTask;
-use crate::tasks::default_number;
-use crate::tasks::session::{
-    Cause, ErrorMessage, Interviewer, MAX_CODE_BYTES, MAX_TURN_BYTES, Phase, TaskSession,
-};
+use crate::tasks::session::{Cause, ErrorMessage, Interviewer, MAX_TURN_BYTES, TaskSession};
+use crate::tasks::{MAX_CODE_BYTES, Phase, default_number};
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
 

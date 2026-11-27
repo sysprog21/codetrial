@@ -3,27 +3,31 @@
 //! ask. Distinct from `crate::token`, which does the signing.
 
 use std::collections::HashMap;
-use std::net::{IpAddr, SocketAddr};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::net::SocketAddr;
+use std::sync::Arc;
+use std::time::Instant;
 
-use axum::body::{Body, Bytes, to_bytes};
+use axum::body::Body;
 use axum::extract::{ConnectInfo, State};
 use axum::http::{Request, StatusCode};
 use axum::response::{IntoResponse, Response};
 use ring::rand::SecureRandom;
 use serde_json::{Value, json};
 
-use crate::config::{MAX_DURATION_MIN, MIN_DURATION_MIN};
+use crate::config::MIN_DURATION_MIN;
 use crate::current_epoch_seconds;
 use crate::token::{LivekitTokenInput, TOKEN_TTL_SECONDS, livekit_observer_token, livekit_token};
 
-use super::auth::{Owner, current_user};
 use super::consent::{checked_consent, claim_consent};
+use super::limits::{
+    TOKEN_BODY_READ_LIMIT, TokenBodyReadError, default_duration, duration_ceiling,
+    read_body_or_refuse, read_token_body,
+};
+use super::owner::{Owner, current_user};
 use super::pool::{ProviderChoice, room_and_available_provider};
 use super::{
     AppState, MAX_BODY_BYTES, NoShowConsent, client_ip, json_response, number_json,
-    rate_limited_response, unauthorized_response,
+    rate_limited_response, suffix, unauthorized_response,
 };
 
 /// No `Debug`, for the reason [`crate::config::AgentConfig`] has none: one
@@ -90,55 +94,6 @@ pub struct TokenResponse {
 /// being small enough to multiply in your head.
 pub const TOKEN_RATE_LIMIT: u32 = 30;
 
-pub(crate) const TOKEN_RATE_WINDOW: Duration = Duration::from_secs(60);
-
-/// A partial upload must not hold a token request open forever. This deadline
-/// ends before any room is reserved, consent is claimed, or agent is started.
-const TOKEN_BODY_READ_LIMIT: Duration = Duration::from_secs(10);
-
-#[derive(Debug, PartialEq, Eq)]
-enum TokenBodyReadError {
-    TimedOut,
-    Rejected,
-}
-
-/// The body of a request nothing has authenticated yet, or a refusal to send
-/// as the answer: a stalled client is told it timed out and an oversized one
-/// that it sent too much, so neither holds the connection open.
-#[expect(
-    clippy::result_large_err,
-    reason = "the error is the response sent to the client"
-)]
-pub(crate) async fn read_body_or_refuse(body: Body, max_bytes: usize) -> Result<Bytes, Response> {
-    read_body_with(body, max_bytes, || {
-        StatusCode::PAYLOAD_TOO_LARGE.into_response()
-    })
-    .await
-}
-
-/// The same read for a route that answers an oversized body in a shape of its
-/// own: the stalled client still gets the timeout, so no route holds a
-/// connection open for a body that is never finished.
-#[expect(
-    clippy::result_large_err,
-    reason = "the error is the response sent to the client"
-)]
-pub(crate) async fn read_body_with(
-    body: Body,
-    max_bytes: usize,
-    too_large: impl FnOnce() -> Response,
-) -> Result<Bytes, Response> {
-    read_token_body(body, TOKEN_BODY_READ_LIMIT, max_bytes)
-        .await
-        .map_err(|error| match error {
-            TokenBodyReadError::TimedOut => json_response(
-                StatusCode::REQUEST_TIMEOUT,
-                json!({ "error": "Request body timed out." }),
-            ),
-            TokenBodyReadError::Rejected => too_large(),
-        })
-}
-
 /// A release carries the join token `/api/token` minted, and that token embeds
 /// the start's metadata, built from a request body of at most
 /// `MAX_BODY_BYTES`. Escaped once more as a string inside the claims it at
@@ -147,89 +102,6 @@ pub(crate) async fn read_body_with(
 /// request's own cap, a start with a full grounding packet could not be
 /// released, and nothing on the page would say so.
 const RELEASE_BODY_BYTES: usize = 4 * MAX_BODY_BYTES;
-
-async fn read_token_body(
-    body: Body,
-    limit: Duration,
-    max_bytes: usize,
-) -> Result<Bytes, TokenBodyReadError> {
-    match tokio::time::timeout(limit, to_bytes(body, max_bytes)).await {
-        Err(_) => Err(TokenBodyReadError::TimedOut),
-        Ok(Err(_)) => Err(TokenBodyReadError::Rejected),
-        Ok(Ok(body)) => Ok(body),
-    }
-}
-
-/// The key is what the route can name a caller by. `/api/token` and
-/// `/api/login` are reachable without a credential, so they key on the address;
-/// replay ingestion runs behind `Owner` and keys on the account. The window is
-/// shared because all three buckets want the same minute.
-#[derive(Clone)]
-pub(crate) struct TokenRateLimit<K = IpAddr> {
-    state: Arc<Mutex<RateLimitState<K>>>,
-    limit: u32,
-}
-
-struct RateLimitState<K> {
-    windows: HashMap<K, Window>,
-    last_sweep: Instant,
-}
-
-impl<K> Default for RateLimitState<K> {
-    fn default() -> Self {
-        Self {
-            windows: HashMap::new(),
-            last_sweep: Instant::now(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-struct Window {
-    started: Instant,
-    count: u32,
-}
-
-impl<K: Eq + std::hash::Hash> TokenRateLimit<K> {
-    pub(crate) fn with_limit(limit: u32) -> Self {
-        Self {
-            state: Arc::default(),
-            limit,
-        }
-    }
-
-    /// Crosses a module boundary: the token handlers, the login handler in
-    /// `super::auth` and the replay handler in `super::interviews` each hold
-    /// their own limiter of this type.
-    pub(crate) fn allow(&self, client: K, now: Instant) -> bool {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-
-        // Sweeping every tracked client on every call cost O(clients) per
-        // request while holding the lock, so a flood from many addresses was
-        // absorbed by the limiter into more work per request: the control
-        // amplifying what it exists to damp. The entry being touched expires
-        // itself below, and the sweep that keeps the map bounded now runs at
-        // most once per window.
-        if now.duration_since(state.last_sweep) >= TOKEN_RATE_WINDOW {
-            state
-                .windows
-                .retain(|_, window| now.duration_since(window.started) < TOKEN_RATE_WINDOW);
-            state.last_sweep = now;
-        }
-        let window = state.windows.entry(client).or_insert(Window {
-            started: now,
-            count: 0,
-        });
-        if now.duration_since(window.started) >= TOKEN_RATE_WINDOW {
-            *window = Window {
-                started: now,
-                count: 0,
-            };
-        }
-        window.count += 1;
-        window.count <= self.limit
-    }
-}
 
 #[derive(Clone, Copy)]
 struct RoomAuthorization {
@@ -446,34 +318,6 @@ pub(crate) fn generated_candidate_identity() -> String {
 }
 
 pub(crate) const CANDIDATE_SUFFIX_LEN: usize = 6;
-
-/// The longest interview this deployment will start, which is its recording's
-/// bound wherever it records: the sweeper reaps a recording that outlives
-/// `max_minutes`, so a longer interview loses the stretch past it.
-///
-/// One function because two callers need the same answer and must not drift.
-/// `/api/token` enforces it, and `/api/session` hands it to the lobby so the
-/// browser stops offering what this server would silently shorten.
-///
-/// Clamped into the range rather than taken as given: a cap above
-/// `MAX_DURATION_MIN` does not buy a longer interview than the endpoint has
-/// ever offered, and one below `MIN_DURATION_MIN` would cross the floor, which
-/// is a panic in `f64::clamp` rather than a short interview.
-pub(crate) fn duration_ceiling(recording_max_min: Option<u32>) -> u32 {
-    recording_max_min.map_or(MAX_DURATION_MIN, |cap| {
-        cap.clamp(MIN_DURATION_MIN, MAX_DURATION_MIN)
-    })
-}
-
-/// The operator's `CODETRIAL_DURATION_MIN` as the lobby and `/api/token` both
-/// use it: inside the range the endpoint offers and no longer than the
-/// deployment can record. One function for the same reason as
-/// [`duration_ceiling`].
-pub(crate) fn default_duration(configured_min: u32, recording_max_min: Option<u32>) -> u32 {
-    configured_min
-        .clamp(MIN_DURATION_MIN, MAX_DURATION_MIN)
-        .min(duration_ceiling(recording_max_min))
-}
 
 pub(crate) fn token_duration_min(
     value: Option<&Value>,
@@ -1120,34 +964,6 @@ pub(crate) async fn observer_token_handler(
             json!({ "error": error.to_string() }),
         ),
     }
-}
-
-/// Room-name suffix. Random, not clock-derived.
-///
-/// Room names are not secrets, so the old `SystemTime::now().as_nanos()` was
-/// not an exploit. It was the wrong tool for a namespace that must not collide,
-/// and it read as random to anyone who did not look. Two tokens minted inside
-/// the same nanosecond tick produced the same suffix.
-///
-/// Falls back to the clock only if the OS entropy source fails, which is the
-/// same behaviour as before rather than a panic in the middle of a request.
-pub(crate) fn suffix(len: usize) -> String {
-    const DIGITS: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyz";
-    let mut bytes = vec![0u8; len];
-    if ring::rand::SystemRandom::new().fill(&mut bytes).is_err() {
-        let mut value = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        for byte in &mut bytes {
-            *byte = (value % 256) as u8;
-            value /= 256;
-        }
-    }
-    bytes
-        .iter()
-        .map(|byte| DIGITS[(*byte as usize) % DIGITS.len()] as char)
-        .collect()
 }
 
 #[cfg(test)]

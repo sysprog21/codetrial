@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 mod attempt;
 mod change;
 mod checkout;
+mod hints;
 mod obs;
 mod record;
 mod runner;
@@ -22,8 +23,9 @@ pub use attempt::{
 };
 pub use change::{Change, change_of};
 pub use checkout::{Checkout, Restore, Stamp, Worktree, safe_name, valid_student_id};
+pub use hints::Hints;
 pub use obs::{Table, first_divergence, read as read_trace, retire_window};
-pub use record::{Hints, facts, marked, ran, record, run_summary};
+pub use record::{marked, ran, record, run_summary};
 pub use runner::{Ended, Ran, TAIL_BYTES, run};
 pub use select::{Added, added_lines, choose, context, graded, worth_asking};
 
@@ -166,8 +168,23 @@ impl Config {
 
     /// The course task a graded file belongs to.
     pub fn task_of(&self, file: &str) -> Option<&CourseTask> {
-        let dir = file.split('/').next()?;
+        self.course_task(file.split('/').next()?)
+    }
+
+    /// The course task in directory `dir`.
+    pub fn course_task(&self, dir: &str) -> Option<&CourseTask> {
         self.tasks.iter().find(|t| t.dir == dir)
+    }
+
+    /// A bug drawn at random from the package's list, with its place in it.
+    pub fn draw_bug(&self) -> Result<(usize, Bug), &'static str> {
+        let index = drawn_bug(self.bugs.len())?;
+        Ok((index, self.bugs[index].clone()))
+    }
+
+    /// Every bug's mutant, in the package's order.
+    pub fn bug_mutants(&self) -> Vec<String> {
+        self.bugs.iter().map(|b| b.mutant.clone()).collect()
     }
 }
 
@@ -211,9 +228,9 @@ struct Shared {
 
 impl Slot {
     pub fn new(attempt: Attempt) -> Self {
-        let brief = examiner_brief(attempt.plan());
-        let items = attempt.plan().lines.iter().map(|l| l.id.clone()).collect();
-        let kept = Mutex::new(facts(&attempt));
+        let brief = attempt.examiner_brief();
+        let items = attempt.item_ids();
+        let kept = Mutex::new(attempt.facts());
         let hints_allowed = attempt.hints_allowed();
         Self(Arc::new(Shared {
             open: std::sync::atomic::AtomicBool::new(false),
@@ -336,7 +353,7 @@ impl Slot {
     /// What the page sees of `attempt`, with the hints and phase this slot
     /// holds.
     pub fn view(&self, attempt: &Attempt) -> serde_json::Value {
-        panel_view(attempt, &self.hints(), self.items_open())
+        attempt.panel_view(&self.hints(), self.items_open())
     }
 
     /// Opens or closes the panel, as the room's phase allows.
@@ -352,7 +369,7 @@ impl Slot {
 
     /// Keep the facts of `attempt` as they are now.
     pub fn keep(&self, attempt: &Attempt) {
-        *self.0.kept.lock().unwrap_or_else(PoisonError::into_inner) = facts(attempt);
+        *self.0.kept.lock().unwrap_or_else(PoisonError::into_inner) = attempt.facts();
     }
 
     /// The facts kept after the last request that changed the attempt.
@@ -539,46 +556,13 @@ pub fn plan(config: &Config, checkout: &Checkout) -> Result<Plan, &'static str> 
             }
         })
         .collect();
-    let bug_index = drawn_bug(config.bugs.len())?;
-    let bug = config.bugs[bug_index].clone();
+    let (bug_index, bug) = config.draw_bug()?;
     Ok(Plan {
         stamp,
         lines,
         bug,
         bug_index,
     })
-}
-
-/// What the panel is shown: the items with the specs each may run, the
-/// predictions waiting for a run, every run, the bug item without its mutant
-/// or rule, the simulations, and the claim as stated. Never the claim's
-/// checks: the first divergence and whether the cycle or the exercise is
-/// right would tell the learner the answer.
-pub fn panel_view(attempt: &Attempt, hints: &Hints, items_open: bool) -> serde_json::Value {
-    use serde_json::json;
-    let plan = attempt.plan();
-    let lines: Vec<serde_json::Value> = plan
-        .lines
-        .iter()
-        .map(|item| {
-            json!({"id": item.id, "file": item.file, "line": item.line, "quote": item.quote,
-                "exercise": item.exercise, "near": item.near, "nearFirst": item.near_first,
-                "change": item.change, "deletes": item.changed_line.is_none(),
-                "specs": attempt.specs_for(&item.id).unwrap_or_default(),
-                "prediction": attempt.prediction(&item.id),
-                "begun": attempt.begun_at(&item.id).is_some()})
-        })
-        .collect();
-    // The last simulation is the one the panel draws; the others are counted.
-    json!({"stamp": {"studentId": plan.stamp.student_id, "head": plan.stamp.head,
-            "auditor": plan.stamp.auditor},
-        "lines": lines, "runs": attempt.runs(), "bug": attempt.bug_brief(),
-        "bugBegun": attempt.begun_at("bug").is_some(),
-        "itemsOpen": items_open,
-        "sims": attempt.sims().last().into_iter().collect::<Vec<_>>(),
-        "simulations": attempt.sims().len(),
-        "claim": attempt.claim().map(|c| &c.stated),
-        "hints": {"allowed": hints.allowed, "given": hints.given}})
 }
 
 /// `Slot::progress` of `facts`: platform facts only, never the learner's
@@ -681,27 +665,27 @@ pub fn edit_matches(item: &LineItem, edited: &str) -> bool {
 mod tests;
 
 #[cfg(test)]
-#[path = "../../tests/unit/tasks/defense_checkout.rs"]
+#[path = "../../tests/unit/tasks/defense/checkout.rs"]
 mod checkout_tests;
 
 #[cfg(test)]
-#[path = "../../tests/unit/tasks/defense_runner.rs"]
+#[path = "../../tests/unit/tasks/defense/runner.rs"]
 mod runner_tests;
 
 #[cfg(test)]
-#[path = "../../tests/unit/tasks/defense_record.rs"]
+#[path = "../../tests/unit/tasks/defense/record.rs"]
 mod record_tests;
 
 #[cfg(test)]
-#[path = "../../tests/unit/tasks/defense_change.rs"]
+#[path = "../../tests/unit/tasks/defense/change.rs"]
 mod change_tests;
 
 #[cfg(test)]
-#[path = "../../tests/unit/tasks/defense_attempt.rs"]
+#[path = "../../tests/unit/tasks/defense/attempt.rs"]
 mod attempt_tests;
 
 #[cfg(test)]
-#[path = "../../tests/unit/tasks/defense_hints.rs"]
+#[path = "../../tests/unit/tasks/defense/hints.rs"]
 mod hint_tests;
 
 #[cfg(test)]

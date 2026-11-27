@@ -34,8 +34,8 @@ use serde_json::json;
 use crate::accounts::{Accounts, blocking, random_token};
 use crate::current_epoch_seconds_i64;
 
-use super::auth::Owner;
 use super::consent::recording_requires_consent;
+use super::owner::Owner;
 use super::{AppState, json_response, rate_limited_response, replay_response};
 
 /// What one account may spend reading its own recordings in a window.

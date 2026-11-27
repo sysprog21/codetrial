@@ -220,12 +220,12 @@ async fn a_hint_needs_an_answer_since_the_item_opened_and_the_last_hint() {
     assert_eq!(slot.hints().given[&item], 2);
     // Once work is over no hint is given, however many remain.
     session.observe_turn("turn-4", "And the trap vector.", opened_at + 3);
-    session.phase = crate::tasks::session::Phase::WrapUp;
+    session.phase = crate::tasks::Phase::WrapUp;
     assert_eq!(
         session.defense_hint(&item, None),
         Err("hints are given only while the items are under way")
     );
-    session.phase = crate::tasks::session::Phase::Work;
+    session.phase = crate::tasks::Phase::Work;
 
     // A Finish freezes the work, which closes the panel though wrap-up has only
     // begun.
@@ -239,7 +239,7 @@ async fn a_hint_needs_an_answer_since_the_item_opened_and_the_last_hint() {
     };
     session.action(finish, opened_at + 4).unwrap();
     assert!(!session.work_open(), "frozen work closes the panel");
-    session.phase = crate::tasks::session::Phase::Work;
+    session.phase = crate::tasks::Phase::Work;
 
     // A defense offers no follow-up, even on a check its task names.
     assert!(session.task.exercise.check_question("explain").is_some());

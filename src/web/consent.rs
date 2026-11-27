@@ -17,7 +17,7 @@ use crate::accounts::{
 };
 use crate::current_epoch_seconds_i64;
 
-use super::auth::Owner;
+use super::owner::Owner;
 use super::{AppState, json_response};
 
 /// Takes consent back.

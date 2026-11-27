@@ -379,11 +379,11 @@ fn an_attempt_records_predictions_runs_and_the_bug_claim() {
         "item_not_begun"
     );
     assert_eq!(attempt.begin("q9", 90).unwrap_err(), "item_unknown");
-    let view = panel_view(&attempt, &Hints::default(), true);
+    let view = attempt.panel_view(&Hints::default(), true);
     assert_eq!(view["lines"][0]["begun"], false);
     assert_eq!(view["bugBegun"], false);
     assert!(attempt.begin(&hazard.id, 90).unwrap());
-    let view = panel_view(&attempt, &Hints::default(), true);
+    let view = attempt.panel_view(&Hints::default(), true);
     let opened = view["lines"]
         .as_array()
         .unwrap()
@@ -391,7 +391,7 @@ fn an_attempt_records_predictions_runs_and_the_bug_claim() {
         .find(|line| line["id"] == hazard.id.as_str())
         .unwrap();
     assert_eq!(opened["begun"], true);
-    let kept = record::facts(&attempt);
+    let kept = attempt.facts();
     let kept_item = kept["items"]
         .as_array()
         .unwrap()
@@ -502,7 +502,7 @@ fn an_attempt_records_predictions_runs_and_the_bug_claim() {
     );
     // The prediction that could not run is still in the record.
     assert_eq!(
-        facts(&attempt)["items"]
+        attempt.facts()["items"]
             .as_array()
             .unwrap()
             .iter()
@@ -565,10 +565,10 @@ fn an_attempt_records_predictions_runs_and_the_bug_claim() {
     );
     assert!(attempt.begin("bug", 20).unwrap());
     assert_eq!(
-        panel_view(&attempt, &Hints::default(), true)["bugBegun"],
+        attempt.panel_view(&Hints::default(), true)["bugBegun"],
         true
     );
-    assert_eq!(record::facts(&attempt)["bug"]["begunAt"], 20);
+    assert_eq!(attempt.facts()["bug"]["begunAt"], 20);
     assert_eq!(
         attempt
             .simulate(Model::Bug, "fib.elf", 0, 8, 20)
@@ -636,7 +636,7 @@ fn an_attempt_records_predictions_runs_and_the_bug_claim() {
         "claim_final",
         "a second claim could probe the first one's checks"
     );
-    let shown = panel_view(&attempt, &Hints::default(), true).to_string();
+    let shown = attempt.panel_view(&Hints::default(), true).to_string();
     assert!(shown.contains("Exercise 4.4."));
     for hidden in [
         "firstDivergence",
@@ -783,9 +783,7 @@ fn a_defense_is_admitted_with_its_attempt_and_examined_by_jim() {
             .is_some_and(|active| active == slot)
     );
     assert!(service.active_defense(2).is_none());
-    let prompt = task
-        .prompt(crate::tasks::session::Phase::Work, None, "")
-        .unwrap();
+    let prompt = task.prompt(crate::tasks::Phase::Work, None, "").unwrap();
     assert!(prompt.contains("examiner"));
     assert!(!prompt.contains("REACTO"));
     // One examiner policy, from one file: no instructor slot, no second copy.
@@ -1228,11 +1226,17 @@ async fn the_panel_acts_only_on_an_open_attempt_it_holds() {
 /// never asks whether one is wanted or calls an answer wrong.
 #[test]
 fn a_hint_policy_gives_the_hint_without_asking_or_judging() {
-    use crate::tasks::{exercise::Exercise, session::Phase};
+    use crate::tasks::{Phase, exercise::Exercise};
     let prompt = Exercise::defense_prompt(Phase::Work, "ITEMS", 2).unwrap();
     assert!(prompt.contains("up to 2 hints"));
     assert!(prompt.contains("without asking whether they want one"));
     assert!(prompt.contains("never that it is wrong or right"));
     assert!(prompt.contains("request_defense_hint"));
     assert!(!prompt.contains("Give no hint"));
+}
+
+#[test]
+fn every_bug_names_its_mutant_in_the_packages_order() {
+    let parsed = Config::parse(&config()).unwrap();
+    assert_eq!(parsed.bug_mutants(), ["no-flush"]);
 }

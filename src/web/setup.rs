@@ -18,6 +18,9 @@ use crate::config::load_from_pairs;
 use crate::gemini::{gemini_live_websocket_url, open_live_session_at};
 use crate::runtime::bootstrap;
 
+/// The address an assignment link opens; the one place it is spelled.
+const TASK_PAGE_ROUTE: &str = "/t/{set_id}/{task_id}";
+
 /// Notified on a successful submission: the caller's shutdown signal to stop
 /// serving Setup and continue as the full app on the same socket.
 ///
@@ -54,7 +57,7 @@ pub fn setup_service(
         .route("/", get(setup_page))
         // An assignment link opened before any config exists lands on Setup
         // and, once Setup saves, reloads into the task it named.
-        .route(super::tasks::TASK_PAGE_ROUTE, get(setup_page))
+        .route(TASK_PAGE_ROUTE, get(setup_page))
         .route(
             "/api/setup/offer",
             get(move || async move { offer_summary(summarized.as_deref()) }),

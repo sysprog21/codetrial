@@ -124,6 +124,182 @@ fn a_task_is_offered_in_the_languages_this_server_can_run() {
 /// sign-in leaves the page and returns to the address it left from.
 #[test]
 fn the_default_tasks_address_survives_a_sign_in() {
-    let path = crate::tasks::access::Assignment::built_in_path();
+    let path = crate::tasks::package::Assignment::built_in_path();
     assert_eq!(task_return_path(&path).as_deref(), Some(path.as_str()));
+}
+
+/// Each code the defense adds answers with its own status, retry hint and
+/// sentence; a code that lost its arm would fall through to the 503 a failed
+/// setup gets.
+#[test]
+fn every_defense_refusal_has_its_status_and_sentence() {
+    let precondition = StatusCode::PRECONDITION_FAILED;
+    let conflict = StatusCode::CONFLICT;
+    let bad = StatusCode::BAD_REQUEST;
+    let unavailable = StatusCode::SERVICE_UNAVAILABLE;
+    let table = [
+        (
+            "workspace_required",
+            precondition,
+            false,
+            "A defense needs your ca2026-mycpu checkout: restart CodeTrial with --task-mode --workspace <checkout>.",
+        ),
+        (
+            "workspace_not_git",
+            precondition,
+            false,
+            "The --workspace path is not the top of a git checkout.",
+        ),
+        (
+            "workspace_upstream",
+            precondition,
+            false,
+            "Your checkout has not fetched the course's upstream main: run `make review` once, or git fetch https://github.com/sysprog21/ca2026-mycpu.git main:refs/mycpu-review/upstream.",
+        ),
+        (
+            "workspace_student_id",
+            precondition,
+            false,
+            "Commit a valid STUDENT_ID (scripts/student-id.py check) before the defense.",
+        ),
+        (
+            "workspace_dirty",
+            conflict,
+            false,
+            "A graded file differs from HEAD: commit your work, then Start again.",
+        ),
+        (
+            "workspace_no_lines",
+            precondition,
+            false,
+            "Your commits add no line the defense can ask about yet.",
+        ),
+        (
+            "defense_none",
+            StatusCode::NOT_FOUND,
+            false,
+            "No defense attempt is running.",
+        ),
+        (
+            "defense_busy",
+            conflict,
+            true,
+            "A run is still going: wait for it to finish.",
+        ),
+        (
+            "defense_closed",
+            conflict,
+            false,
+            "The defense panel acts only while the attempt is under way.",
+        ),
+        ("item_unknown", bad, false, "No such defense item."),
+        (
+            "items_over",
+            conflict,
+            false,
+            "The items are over: answer Jim's wrap-up questions.",
+        ),
+        (
+            "item_not_begun",
+            conflict,
+            false,
+            "Read the item's overview and press Begin first.",
+        ),
+        (
+            "spec_unknown",
+            bad,
+            false,
+            "Choose specs of the item's task.",
+        ),
+        (
+            "prediction_invalid",
+            bad,
+            false,
+            "Say in a sentence how the change fails.",
+        ),
+        (
+            "prediction_unrun",
+            bad,
+            false,
+            "Run every spec your prediction names.",
+        ),
+        (
+            "claim_final",
+            conflict,
+            false,
+            "The bug has been stated already.",
+        ),
+        (
+            "claim_unrun",
+            conflict,
+            false,
+            "Run the program on both models before stating the bug.",
+        ),
+        (
+            "run_limit",
+            conflict,
+            false,
+            "This item has had all the runs it may have.",
+        ),
+        (
+            "prediction_required",
+            conflict,
+            false,
+            "Record your prediction before the run.",
+        ),
+        (
+            "edit_mismatch",
+            bad,
+            false,
+            "Make exactly the change the item states.",
+        ),
+        (
+            "model_not_built",
+            conflict,
+            false,
+            "Build the two models first.",
+        ),
+        (
+            "model_build_failed",
+            unavailable,
+            true,
+            "The models did not build.",
+        ),
+        (
+            "program_unknown",
+            bad,
+            false,
+            "Choose one of your built programs.",
+        ),
+        (
+            "claim_invalid",
+            bad,
+            false,
+            "Give the cycle, the signal, the rule and the exercise.",
+        ),
+        (
+            "run_failed",
+            unavailable,
+            true,
+            "The run could not be recorded.",
+        ),
+        (
+            "run_lost",
+            unavailable,
+            true,
+            "The run could not be recorded.",
+        ),
+    ];
+    for (code, status, retryable, message) in table {
+        assert_eq!(
+            defense_refusal(code),
+            Some((status, retryable, message)),
+            "{code}"
+        );
+    }
+    assert_eq!(
+        defense_refusal("setup_failed"),
+        None,
+        "not the defense's code"
+    );
 }

@@ -2,7 +2,8 @@ use std::sync::{Arc, LazyLock};
 
 use serde_json::json;
 
-use crate::tasks::access::{Admission, Assignment, PinnedTask, Preparation, TaskService};
+use crate::tasks::access::{Admission, PinnedTask, Preparation, TaskService};
+use crate::tasks::package::Assignment;
 use crate::tasks::package::{Download, LoadedSet, open_package};
 
 /// The instructor site the fixture assignments name.
@@ -63,6 +64,18 @@ pub(crate) fn admit(service: &TaskService, request_key: &str, now: u64) -> Pinne
         Admission::New(task) => task,
         Admission::Replayed(_) => panic!("unexpected replay"),
     }
+}
+
+/// An attempt whose admission has answered with `room`.
+pub(crate) fn admit_in_room(service: &TaskService, room: &str) -> PinnedTask {
+    let task = admit(service, "start", 100);
+    service.finish_admission(
+        1,
+        "start",
+        task.claim_id,
+        Some(serde_json::json!({"roomName": room})),
+    );
+    task
 }
 
 /// An admitted attempt at the customized fixture task.

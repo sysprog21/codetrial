@@ -19,7 +19,7 @@ async fn unlocked_for(owner: i64) -> TaskService {
     service
         .open(
             owner,
-            &codetrial::tasks::access::Assignment::new(SITE, "classroom", 7).unwrap(),
+            &codetrial::tasks::package::Assignment::new(SITE, "classroom", 7).unwrap(),
             download,
             PIN,
             100,

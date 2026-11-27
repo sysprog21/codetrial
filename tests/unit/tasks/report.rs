@@ -781,3 +781,36 @@ async fn a_zero_cites_an_unresolved_check_and_a_two_names_its_support() {
     );
     assert_eq!(rated(&session, 2, "conceptual_hint", "turn-1"), Ok(()));
 }
+
+#[tokio::test]
+async fn the_record_says_how_the_attempt_ended_once_it_has() {
+    let mut session = session().await;
+    assert!(session.evidence().outcome().is_none());
+    assert!(session.conclude(crate::tasks::session::Cause::Timeout, 0, 200));
+    let outcome = session.evidence().outcome().expect("the attempt has ended");
+    assert_eq!(outcome.cause, crate::tasks::session::Cause::Timeout);
+}
+
+#[tokio::test]
+async fn a_session_keeps_its_result_for_the_learner_who_reloads() {
+    use crate::tasks::access::ResultLookup;
+    use crate::tasks::test_support::{admit_in_room, unlocked_service};
+    let service = unlocked_service();
+    let task = admit_in_room(&service, "room-1");
+    let session = TaskSession::new(task, 100);
+    session.retain_result("room-1", json!({"x": 1}), 200);
+    drop(session);
+    assert_eq!(
+        service.result(1, "room-1", 201),
+        ResultLookup::Ready(json!({"x": 1}))
+    );
+}
+
+#[tokio::test]
+async fn the_review_is_read_against_the_reference_the_task_declares() {
+    let session = session().await;
+    assert_eq!(
+        session.facts().review_reference(),
+        session.task.exercise.review_reference()
+    );
+}

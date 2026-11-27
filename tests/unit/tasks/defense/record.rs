@@ -150,13 +150,7 @@ fn a_full_attempt_fits_the_result() {
             "reason": "r".repeat(400), "evidence": [{"kind": "turn", "id": "turn-1"}]})
         })
         .collect();
-    let section = record::marked(
-        facts,
-        &json!(explanations),
-        &record::Hints::default(),
-        false,
-        true,
-    );
+    let section = record::marked(facts, &json!(explanations), &Hints::default(), false, true);
     let bytes = section.to_string().len();
     assert!(
         bytes <= 40 * 1024,
@@ -299,13 +293,7 @@ fn the_suggested_marks_add_up_to_a_total() {
     let none =
         json!({"item": "q2", "rating": null, "account": null, "reason": "r", "evidence": []});
     let section = |facts: Value, explanations: Value, completed: bool| {
-        record::marked(
-            facts,
-            &explanations,
-            &record::Hints::default(),
-            false,
-            completed,
-        )
+        record::marked(facts, &explanations, &Hints::default(), false, completed)
     };
 
     // q1: 3 and 3. q2: explained at 2, no run (0). The bug: a claim whose cycle

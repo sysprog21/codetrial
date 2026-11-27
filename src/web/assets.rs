@@ -170,7 +170,7 @@ pub(crate) async fn web_static_handler(
         && uri.path().trim_matches('/').is_empty()
     {
         return axum::response::Redirect::temporary(
-            &crate::tasks::access::Assignment::built_in_path(),
+            &crate::tasks::package::Assignment::built_in_path(),
         )
         .into_response();
     }
