@@ -376,6 +376,47 @@ It also exports `RUSTUP_AUTO_INSTALL=0`, which a rustup that honours it turns
 into a refusal to install; the check does not depend on it. Without rustup (a
 distribution or Nix toolchain) the version comparison decides.
 
+## Architecture lints
+
+`tools/check-structure/` reads this tree and refuses structure that makes it
+harder to hold in mind: `module-cycle` (modules that use each other),
+`tangle` (things in a parent and its child that know each other without a
+module cycle), `field-leak` (a struct's fields worked on from other modules),
+`shallow-module` (a module whose callers use most of what it exposes) and
+`wide-directory` (more than 15 files and directories in one). The idea is
+deep modules behind narrow interfaces. File length is not one of its lints:
+`scripts/check-rust-style.py` owns that with its own ceilings.
+`tools/check-structure/README.md` has the scope and the mechanics.
+
+It is a crate of its own with its own lockfile, like `desktop/`, and indexes
+the tree through `rust-analyzer scip`, a rustup component that
+`rust-toolchain.toml` does not list. `rustup component add rust-analyzer`
+installs it. A first index builds the dependencies' build scripts and takes
+about a quarter of an hour, a warm one about five minutes, and the result is
+kept under `target/check-structure/` until a source file changes.
+
+It is deliberately not in the pre-commit hook, the pre-push hook or the gate
+lanes of `check.yml`: a cold index takes about a quarter of an hour, and a hook
+or lane that slow gets bypassed. `.github/workflows/structure.yml` runs it once
+a day on main, with the tool's own tests, and a red run means a finding the
+debt list does not name or a listed one that is now fixed. Only `structure-fmt`,
+the tool's formatting, is a gate in `scripts/test.sh`. Run it yourself before a
+refactor that moves code between modules, with the command in the tool's README.
+
+The findings that existed when the gate arrived are listed in
+`tools/check-structure/debt.allow`. A finding not listed fails. `--ratchet`
+also fails a listed entry that has been fixed, so the list shrinks in the
+change that fixes it; a day's run is what notices one that was not. When a gate failure is yours, fix the structure rather
+than the list: ask what the module is meant to hide, and narrow its interface
+instead of moving the leak elsewhere. Regenerate the list only to remove fixed
+entries:
+
+```sh
+cargo run --release --manifest-path tools/check-structure/Cargo.toml \
+    --target-dir target/structure-tool -- \
+    --update-allow tools/check-structure/debt.allow
+```
+
 ## Formatting
 
 `scripts/indent.sh` holds the formatter chain: comment reflow with
@@ -1708,7 +1749,7 @@ is reported as a survivor.
 
 ### Native SDK recovery fixture
 
-`tests/unit/livekit/recovery_live.rs` holds the one credentialed recovery
+`tests/unit/livekit/startup/recovery_live.rs` holds the one credentialed recovery
 check that needs no browser: an ignored test,
 `live_sdk_control_presence_and_report_delivery`, that hosts the real room loop
 in the test process with a real LiveKit SDK candidate and the configured
@@ -1786,7 +1827,7 @@ stays uncovered.
 ### Native speech-continuity arms
 
 The same file family holds a second ignored fixture,
-`live_sdk_clip_continuity_arm` in `tests/unit/livekit/recovery_continuity.rs`.
+`live_sdk_clip_continuity_arm` in `tests/unit/livekit/startup/recovery_continuity.rs`.
 It asks whether the SDK's bounded microphone queue keeps what a candidate said
 while the room loop is not reading it. A real SDK candidate publishes two
 authored, numbered speech clips (`c01_say_plan` and `c01_say_loop` of the
