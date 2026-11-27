@@ -79,7 +79,10 @@ async fn isolated(name: &str) -> bool {
         std::process::id(),
         SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
     )));
-    let mut directory = std::fs::DirBuilder::new();
+
+    // Only Unix sets a mode, so on Windows a `let mut` binding would never be
+    // mutated and `-D warnings` refuses it.
+    let directory = &mut std::fs::DirBuilder::new();
     #[cfg(unix)]
     {
         use std::os::unix::fs::DirBuilderExt;

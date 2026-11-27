@@ -1347,9 +1347,7 @@ fn run_launcher(scratch: &Scratch, mode: &str, actions: &[&str]) -> LauncherRun 
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let candidate = scratch.path("candidate");
     std::fs::write(&candidate, "#!/bin/sh\nexit 0\n").unwrap();
-    let mut permissions = std::fs::metadata(&candidate).unwrap().permissions();
-    std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
-    std::fs::set_permissions(&candidate, permissions).unwrap();
+    crate::tasks::test_support::executable(&candidate);
     let manifest = json!({
         "schema_version": 1,
         "run_id": "run-native-1",

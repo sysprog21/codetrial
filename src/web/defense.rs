@@ -361,5 +361,6 @@ pub(crate) async fn defense_claim_handler(
 }
 
 #[cfg(test)]
+#[cfg(unix)]
 #[path = "../../tests/unit/web/defense.rs"]
 mod tests;

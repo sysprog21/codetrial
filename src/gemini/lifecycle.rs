@@ -53,6 +53,7 @@ impl LiveReaderInspection {
 
     /// Ends the reader the way a server hang-up does from the loop's side:
     /// its event stream closes and the room loop takes its Close path.
+    #[cfg(unix)]
     pub(crate) fn abort(&self) {
         self.task.abort();
     }

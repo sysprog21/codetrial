@@ -52,9 +52,7 @@ fn fake_sbt(dir: &Path) -> String {
         "#!/bin/sh\nif echo \"$2\" | grep -q HazardSpec; then\n  echo '[info] Tests: succeeded 1, failed 1'\n  echo '[error] Failed tests:'\n  printf '[error] \\tmycpu.pipeline.HazardSpec\\n'\n  exit 1\nfi\necho '[info] Tests: succeeded 1, failed 0'\necho '[info] All tests passed.'\n",
     )
     .unwrap();
-    let mut permissions = std::fs::metadata(&sbt).unwrap().permissions();
-    std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
-    std::fs::set_permissions(&sbt, permissions).unwrap();
+    crate::tasks::test_support::executable(&sbt);
     sbt.display().to_string()
 }
 
@@ -198,7 +196,6 @@ async fn send(
 
 /// The panel's routes act on the attempt of the learner who holds it, only
 /// while it is open, and tell Jim what each step showed.
-#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread")]
 async fn the_panel_routes_act_on_the_signed_in_learners_open_attempt() {
     let base =

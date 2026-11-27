@@ -59,6 +59,9 @@ pub(super) struct DequeueGate {
     stats: Mutex<DequeueStats>,
 }
 
+// Only the continuity fixture, which is Unix-only, makes a probe and drives its
+// gate; the room loop's seams stay on every target.
+#[cfg(unix)]
 impl DequeueGate {
     pub(super) fn new(epoch: Instant) -> Self {
         Self {
@@ -100,7 +103,9 @@ impl DequeueGate {
     pub(super) fn stats(&self) -> DequeueStats {
         self.stats.lock().unwrap().clone()
     }
+}
 
+impl DequeueGate {
     /// Returns once the gate is open. Only this future waits.
     async fn wait_open(&self) {
         let mut open = self.held.subscribe();
@@ -177,11 +182,13 @@ pub(super) struct Retention {
 
 pub(super) struct ContinuityProbe {
     pub(super) gate: DequeueGate,
+    #[cfg(unix)]
     pub(super) epoch: Instant,
     transcripts: Mutex<Vec<TranscriptLine>>,
     retention: Mutex<Retention>,
 }
 
+#[cfg(unix)]
 impl ContinuityProbe {
     pub(super) fn new() -> Arc<Self> {
         let epoch = Instant::now();
@@ -205,8 +212,10 @@ impl ContinuityProbe {
 static ACTIVE: Mutex<Option<Arc<ContinuityProbe>>> = Mutex::new(None);
 
 /// Keeps a probe installed for the room loop, and removes it on drop.
+#[cfg(unix)]
 pub(super) struct Installed(Arc<ContinuityProbe>);
 
+#[cfg(unix)]
 impl Drop for Installed {
     fn drop(&mut self) {
         let mut active = ACTIVE.lock().unwrap();
@@ -218,6 +227,7 @@ impl Drop for Installed {
 
 /// Installs `probe` for every room loop in this process. A fixture that does
 /// this runs alone in its process: the hooks are process-wide.
+#[cfg(unix)]
 pub(super) fn install(probe: &Arc<ContinuityProbe>) -> Installed {
     *ACTIVE.lock().unwrap() = Some(std::sync::Arc::clone(probe));
     Installed(std::sync::Arc::clone(probe))
