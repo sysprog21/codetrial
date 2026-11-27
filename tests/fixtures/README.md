@@ -14,8 +14,8 @@ only thing in the repo that crosses that boundary.
 |---|---|---|
 | `code-update.json` | `codeUpdatePayload` | `apply_code_update` |
 | `report-recovery.json` | `reportRecoveryLimits` in `web/report-recovery.js` | `recovery_metadata`, `recovery_notice`, `REPORT_TIMEOUT` |
-| `control.json` | `drawingActivityPayload`, `thinkingPayload`, `yieldTurnPayload`, `timeWarningPayload`, `endInterviewPayload`, `retryReportPayload`, `skipReportPayload`, `startupSyncPayload` | `apply_control`, `recovery_request`, `skip_request`, `handle_candidate_packet` in `src/livekit/readiness.rs` |
-| `startup-receipt.json` | `startupReceipt` in `web/lib.js` | `is_startup_receipt` in `src/livekit/readiness.rs` |
+| `control.json` | `drawingActivityPayload`, `thinkingPayload`, `yieldTurnPayload`, `timeWarningPayload`, `endInterviewPayload`, `retryReportPayload`, `skipReportPayload`, `startupSyncPayload` | `apply_control`, `recovery_request`, `skip_request`, `handle_candidate_packet` in `src/livekit/startup/readiness.rs` |
+| `startup-receipt.json` | `startupReceipt` in `web/lib.js` | `is_startup_receipt` in `src/livekit/startup/readiness.rs` |
 | `test-results.json` | `testPayload` | `apply_test_results` |
 | `integrity-chain.json` | `integrityEventPayload` | `apply_integrity` |
 | `task-action.json`, `task-edit.json`, `task-revision.json`, `task-run.json`, `task-start.json`, `task-end.json`, `task-connected.json`, `task-thinking.json` | `taskActionPayload`, `taskEditPayload`, `taskRevisionPayload`, `taskRunPayload`, `taskStartPayload`, `taskEndPayload`, `taskConnectedPayload`, `taskThinkingPayload` in `web/lib.js` | the typed messages `TaskSession::receive` parses, checked in `tests/unit/tasks/session.rs` |

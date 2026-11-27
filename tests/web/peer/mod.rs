@@ -811,13 +811,13 @@ async fn peer_enter_bounds_active_rooms_even_after_members_leave() {
     fixture.close().await;
 }
 
-#[path = "peer_discovery.rs"]
+#[path = "discovery.rs"]
 mod discovery;
 
-#[path = "peer_artifacts.rs"]
+#[path = "artifacts.rs"]
 mod artifacts;
 
-#[path = "peer_routes.rs"]
+#[path = "routes.rs"]
 mod routes;
 
 #[tokio::test]

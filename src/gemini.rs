@@ -1,9 +1,12 @@
 mod side_calls;
+mod usage;
 use side_calls::side_call_once;
 pub(crate) use task_feedback::generate_task_feedback;
+pub use usage::{ModalityUsage, TokenUsage};
 
 mod peer;
 pub(crate) use peer::generate_peer_content;
+pub use peer::{PeerObserverConfig, load_peer_observer};
 
 use std::io;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -56,10 +59,7 @@ use credentials::{
     ApiFailure, ApiSurface, CredentialFailure, credential_failure, failure_from_reason,
 };
 pub(crate) use credentials::{QUOTA_COOLDOWN, exhausted_until, rotation_ran_dry};
-pub(crate) use http_calls::{
-    GENERATION_SEED, REGENERATION_SEED, generate_interim_review_with_keys,
-    generate_phase_judgment_with_keys,
-};
+pub(crate) use http_calls::{GENERATION_SEED, REGENERATION_SEED};
 use http_calls::{
     content_request, generate_content_once, http_usage_label, post_generate_content, response_text,
 };
@@ -68,13 +68,11 @@ pub(crate) use report_calls::{
     ReportMaterial, ReportRun, generate_report_with_keys, is_report_schema_failure,
     report_regeneration_retry_after,
 };
+pub(crate) use side_calls::{generate_interim_review_with_keys, generate_phase_judgment_with_keys};
 use tool_ack::tool_ack_pcm;
 #[cfg(test)]
 use {
-    http_calls::{
-        generate_interim_review_at, generate_phase_judgment_at, http_failure_diagnostic,
-        interim_generation_config,
-    },
+    http_calls::http_failure_diagnostic,
     report_calls::{
         ReportAttemptFailure, ReportAttemptObserver, ReportAttempts, ReportCalls, ReportOutcome,
         ReportStep, ReportTransport, ReportTransportFailure, bounded_errors,
@@ -82,8 +80,17 @@ use {
         is_retryable, parse_report_text, repair_prompt, report_attempt_failure, report_attempts,
         report_key_after_backoff, report_retry_backoff, salvage_report,
     },
+    side_calls::{
+        generate_interim_review_at, generate_phase_judgment_at, interim_generation_config,
+    },
 };
 
+/// How many times in a row the interview may be put back on a fresh Gemini
+/// socket after a close that arrived too quickly to be Gemini's ordinary
+/// connection cap. In a row, because `take_restart_attempt` clears the count
+/// for any socket that lived past `HEALTHY_GEMINI_SOCKET`: this bounds a
+/// failing endpoint, not the length of an interview.
+pub(crate) const GEMINI_RESTART_LIMIT: usize = 8;
 const LIVE_WEBSOCKET_ENDPOINT: &str = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent";
 const SETUP_TIMEOUT: Duration = Duration::from_secs(15);
 /// Bounds the socket itself, where `SETUP_TIMEOUT` bounds the exchange over it.
@@ -534,145 +541,6 @@ impl GeminiLiveSession {
     /// flush wins the `select!` against `next_event`.
     fn gone(&self) -> bool {
         self.dead || self.reader.as_ref().is_none_or(JoinHandle::is_finished)
-    }
-}
-
-/// Modality counts reported by the provider; absent details are not zero usage.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct ModalityUsage {
-    pub text: u64,
-    pub audio: u64,
-    pub image: u64,
-    pub video: u64,
-    pub other: u64,
-    pub samples: u64,
-}
-
-impl ModalityUsage {
-    fn from_details(details: Option<&Value>) -> Self {
-        let mut usage = Self::default();
-        if let Some(details) = details.and_then(Value::as_array) {
-            usage.samples = 1;
-            for detail in details {
-                let count = match detail.get("tokenCount") {
-                    None => 0,
-                    Some(count) => match count.as_u64() {
-                        Some(count) => count,
-                        None => return Self::default(),
-                    },
-                };
-                let target = match detail.get("modality").and_then(Value::as_str) {
-                    Some("TEXT") => &mut usage.text,
-                    Some("AUDIO") => &mut usage.audio,
-                    Some("IMAGE") => &mut usage.image,
-                    Some("VIDEO") => &mut usage.video,
-                    _ => &mut usage.other,
-                };
-                *target += count;
-            }
-        }
-        usage
-    }
-
-    fn add(&mut self, other: Self) {
-        self.text += other.text;
-        self.audio += other.audio;
-        self.image += other.image;
-        self.video += other.video;
-        self.other += other.other;
-        self.samples += other.samples;
-    }
-
-    fn log_fields(&self, direction: &str) -> String {
-        format!(
-            "{direction}_detail_samples={} {direction}_text_tokens={} {direction}_audio_tokens={} {direction}_image_tokens={} {direction}_video_tokens={} {direction}_other_tokens={}",
-            self.samples, self.text, self.audio, self.image, self.video, self.other
-        )
-    }
-}
-
-/// Provider usage observations, not an invoice. Keep completion markers and
-/// totals so observed sums can be checked against turn boundaries and billing;
-/// the bytes sent by this server cannot measure retained provider context.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct TokenUsage {
-    pub prompt: u64,
-    pub response: u64,
-    pub cached: u64,
-    pub thoughts: u64,
-    pub samples: u64,
-    pub total: u64,
-    pub tool_use_prompt: u64,
-    pub turn_complete_samples: u64,
-    pub prompt_details: ModalityUsage,
-    pub response_details: ModalityUsage,
-    pub tool_use_details: ModalityUsage,
-    /// What `cached` is made of. Cached tokens are priced by modality too, so a
-    /// cached-token total without this cannot be priced.
-    pub cache_details: ModalityUsage,
-}
-
-impl TokenUsage {
-    fn from_metadata(metadata: &Value) -> Self {
-        let count = |key: &str| metadata.get(key).and_then(Value::as_u64).unwrap_or(0);
-        Self {
-            prompt: count("promptTokenCount"),
-            response: metadata
-                .get("responseTokenCount")
-                .and_then(Value::as_u64)
-                .unwrap_or_else(|| count("candidatesTokenCount")),
-            cached: count("cachedContentTokenCount"),
-            thoughts: count("thoughtsTokenCount"),
-            samples: 1,
-            total: count("totalTokenCount"),
-            tool_use_prompt: count("toolUsePromptTokenCount"),
-            turn_complete_samples: 0,
-            prompt_details: ModalityUsage::from_details(metadata.get("promptTokensDetails")),
-            tool_use_details: ModalityUsage::from_details(
-                metadata.get("toolUsePromptTokensDetails"),
-            ),
-            response_details: ModalityUsage::from_details(
-                metadata
-                    .get("responseTokensDetails")
-                    .or_else(|| metadata.get("candidatesTokensDetails")),
-            ),
-            cache_details: ModalityUsage::from_details(metadata.get("cacheTokensDetails")),
-        }
-    }
-
-    pub fn add(&mut self, other: Self) {
-        self.prompt += other.prompt;
-        self.response += other.response;
-        self.cached += other.cached;
-        self.thoughts += other.thoughts;
-        self.samples += other.samples;
-        self.total += other.total;
-        self.tool_use_prompt += other.tool_use_prompt;
-        self.turn_complete_samples += other.turn_complete_samples;
-        self.prompt_details.add(other.prompt_details);
-        self.response_details.add(other.response_details);
-        self.tool_use_details.add(other.tool_use_details);
-        self.cache_details.add(other.cache_details);
-    }
-
-    /// The fields of a log line, in one spelling for the Live session's total
-    /// and each HTTP call.
-    pub fn log_fields(&self) -> String {
-        format!(
-            "prompt_tokens={} response_tokens={} cached_tokens={} thought_tokens={} usage_samples={} total_tokens={} tool_use_prompt_tokens={} turn_complete_samples={} {} {} {} {}",
-            self.prompt,
-            self.response,
-            self.cached,
-            self.thoughts,
-            self.samples,
-            self.total,
-            self.tool_use_prompt,
-            self.turn_complete_samples,
-            self.prompt_details.log_fields("prompt"),
-            self.response_details.log_fields("response"),
-            self.tool_use_details.log_fields("tool_use"),
-            self.cache_details.log_fields("cache")
-        )
     }
 }
 
@@ -1702,11 +1570,9 @@ fn parse_server_message(text: &str) -> ServerMessage {
 
     // Completion co-occurrence is kept so periodic observations are not
     // mistaken for distinct model turns.
-    let usage = message.get("usageMetadata").map(|metadata| {
-        let mut usage = TokenUsage::from_metadata(metadata);
-        usage.turn_complete_samples = u64::from(turn_complete);
-        usage
-    });
+    let usage = message
+        .get("usageMetadata")
+        .map(|metadata| TokenUsage::from_live_metadata(metadata, turn_complete));
     if usage.is_some() {
         events.push(GeminiEvent::UsageRecorded);
     }

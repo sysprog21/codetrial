@@ -16,7 +16,7 @@ async fn peer_audio_understanding_requests_only_text_and_uses_existing_credentia
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}/generateContent", listener.local_addr().unwrap());
     let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    let mut config = crate::config::load_peer_observer(&std::collections::BTreeMap::from([(
+    let mut config = crate::gemini::load_peer_observer(&std::collections::BTreeMap::from([(
         "GOOGLE_API_KEY".into(),
         "observer-test-key".into(),
     )]))
@@ -64,7 +64,7 @@ async fn a_rate_limit_on_a_peer_call_leaves_the_report_keys_usable() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}/generateContent", listener.local_addr().unwrap());
     let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    let mut config = crate::config::load_peer_observer(&std::collections::BTreeMap::from([(
+    let mut config = crate::gemini::load_peer_observer(&std::collections::BTreeMap::from([(
         "GOOGLE_API_KEYS".into(),
         "peer-429-key-a,peer-429-key-b".into(),
     )]))

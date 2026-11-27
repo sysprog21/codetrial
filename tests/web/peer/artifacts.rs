@@ -14,7 +14,7 @@ async fn saved_audio_download_and_withdrawal_are_member_scoped_and_expiry_blocks
     let f = PeerFixture::configured("peer-audio-access", move |config| {
         config.web_dir = configured_dir.with_extension("unserved-web");
         config.peer_observer =
-            codetrial::config::load_peer_observer(&std::collections::BTreeMap::from([
+            codetrial::gemini::load_peer_observer(&std::collections::BTreeMap::from([
                 ("GOOGLE_API_KEY".into(), "audio-fixture-key".into()),
                 (
                     "CODETRIAL_PEER_AUDIO_DIR".into(),
@@ -172,7 +172,7 @@ async fn embedded_server_refuses_audio_storage_beneath_its_public_web_root() {
     let f = PeerFixture::configured("peer-public-audio", move |config| {
         config.web_dir = configured.clone();
         config.peer_observer =
-            codetrial::config::load_peer_observer(&std::collections::BTreeMap::from([
+            codetrial::gemini::load_peer_observer(&std::collections::BTreeMap::from([
                 ("GOOGLE_API_KEY".into(), "private-audio-fixture".into()),
                 (
                     "CODETRIAL_PEER_AUDIO_DIR".into(),
@@ -228,7 +228,7 @@ async fn a_withdrawal_that_cannot_unlink_the_file_is_reported_as_pending() {
     let f = PeerFixture::configured("peer-audio-pending", move |config| {
         config.web_dir = configured_dir.with_extension("unserved-web");
         config.peer_observer =
-            codetrial::config::load_peer_observer(&std::collections::BTreeMap::from([
+            codetrial::gemini::load_peer_observer(&std::collections::BTreeMap::from([
                 ("GOOGLE_API_KEY".into(), "audio-fixture-key".into()),
                 (
                     "CODETRIAL_PEER_AUDIO_DIR".into(),

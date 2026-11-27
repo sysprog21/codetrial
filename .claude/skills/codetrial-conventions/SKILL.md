@@ -245,7 +245,7 @@ Four rules follow, and each of them cost something to learn:
 
 - **Never name a file `tests/<dir>/main.rs`.** Cargo reads that as an
   integration-test target and compiles it a second time as a crate root, where
-  every `super::` in it fails. `src/main.rs` declares `tests/unit/bin.rs` for
+  every `super::` in it fails. `src/main.rs` declares `tests/unit/root/bin.rs` for
   this reason. Any other name under `tests/unit/` is inert to autodiscovery.
 - **`include_str!` and `include_bytes!` resolve against the file that writes
   them**, so a test reading its own production source needs the path rewritten

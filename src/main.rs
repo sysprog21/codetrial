@@ -637,5 +637,5 @@ fn load_agent_config(options: &CliOptions) -> Result<AgentConfig, String> {
 // `bin.rs`, not `main.rs`: cargo reads `tests/<dir>/main.rs` as an
 // integration-test target of its own, which would compile this file a second
 // time as a crate root, where every `super::` in it is an error.
-#[path = "../tests/unit/bin.rs"]
+#[path = "../tests/unit/root/bin.rs"]
 mod tests;

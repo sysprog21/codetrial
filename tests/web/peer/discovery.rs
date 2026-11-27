@@ -46,7 +46,7 @@ async fn counted_fixture(
         config.provision_rooms = provision_rooms;
         config.pool = primary_pool(&url, "waiting-key", "waiting-secret");
         config.peer_observer =
-            codetrial::config::load_peer_observer(&std::collections::BTreeMap::from([(
+            codetrial::gemini::load_peer_observer(&std::collections::BTreeMap::from([(
                 "GOOGLE_API_KEY".into(),
                 "peer-fixture-key".into(),
             )]))

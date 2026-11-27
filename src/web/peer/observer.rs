@@ -6,7 +6,8 @@ use crate::accounts::{
     Accounts, blocking,
     peer::{self, Session, observer as record},
 };
-use crate::config::{PeerObserverConfig, Provider};
+use crate::config::Provider;
+use crate::gemini::PeerObserverConfig;
 use crate::peer_audio::PeerAudioWriter;
 use ::livekit::prelude::{RemoteParticipant, RemoteTrack, Room, RoomEvent, RoomOptions, TrackKind};
 use base64::{Engine as _, engine::general_purpose::STANDARD};

@@ -36,28 +36,6 @@ pub(crate) fn audio_path(dir: &Path, id: &str) -> io::Result<PathBuf> {
     Ok(dir.join(format!("{id}.wav")))
 }
 
-pub(crate) fn ensure_private_directory(dir: &Path) -> io::Result<()> {
-    let mut builder = fs::DirBuilder::new();
-    builder.recursive(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt;
-        builder.mode(0o700);
-    }
-    builder.create(dir)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if fs::metadata(dir)?.permissions().mode() & 0o077 != 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "peer audio directory must be private (0700)",
-            ));
-        }
-    }
-    Ok(())
-}
-
 impl PeerAudioWriter {
     pub(crate) fn begin(dir: &Path, id: &str, seconds: u64) -> io::Result<Self> {
         if seconds == 0 || seconds > MAX_AUDIO_SECONDS {
@@ -67,7 +45,7 @@ impl PeerAudioWriter {
             ));
         }
         let destination = audio_path(dir, id)?;
-        ensure_private_directory(dir)?;
+        crate::config::ensure_private_directory(dir)?;
         if destination.try_exists()? {
             return Err(io::Error::new(
                 io::ErrorKind::AlreadyExists,

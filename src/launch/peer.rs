@@ -1,7 +1,6 @@
 //! Startup rules for reciprocal practice, offered once its prerequisites exist.
-use crate::config::{
-    MAX_CAPTURE_SECONDS, PeerConfig, PeerObserverConfig, load_peer, load_peer_observer,
-};
+use crate::config::{MAX_CAPTURE_SECONDS, PeerConfig, load_peer};
+use crate::gemini::{PeerObserverConfig, load_peer_observer};
 use std::collections::BTreeMap;
 
 pub type PeerServices = Option<(PeerConfig, PeerObserverConfig)>;

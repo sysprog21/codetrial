@@ -122,7 +122,7 @@ pub struct WebServerConfig {
     pub recording: Option<crate::config::RecordingConfig>,
     /// Peer practice is opt-in and requires verified GitHub accounts.
     pub peer: Option<crate::config::PeerConfig>,
-    pub peer_observer: Option<crate::config::PeerObserverConfig>,
+    pub peer_observer: Option<crate::gemini::PeerObserverConfig>,
     /// Every LiveKit project this server can hand a candidate to, primary
     /// first. The single source: the primary used to be stored here and again
     /// in three flat fields, which cost a fallback chain at every read and a

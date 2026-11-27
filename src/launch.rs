@@ -1104,5 +1104,5 @@ fn unfinished(served: Result<(), String>) -> String {
 }
 
 #[cfg(test)]
-#[path = "../tests/unit/launch.rs"]
+#[path = "../tests/unit/root/launch.rs"]
 mod tests;
