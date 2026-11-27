@@ -213,3 +213,81 @@ text rule. Clippy provides compiler-aware checks; neither tool establishes
 shutdown correctness, secret redaction, bounded memory or behavioral coverage.
 Keep those in the judgment pass and cite an observable regression when fixing
 one. A passing gate is evidence for its checks, not a production certification.
+
+## Structure lints
+
+`tools/check-structure` indexes the root Cargo workspace (the root crate and
+`scripts/hook-check`; test code is classified apart and does not count as a use) with `rust-analyzer scip` and reports
+module-cycle, tangle, field-leak, shallow-module and wide-directory findings.
+It is slow on a cold index (minutes), so it is not in `scripts/test.sh`, the
+hooks or the CI gate lanes; `.github/workflows/structure.yml` runs it once a day
+and fails on anything `tools/check-structure/debt.allow` does not list. Nothing
+else catches a new tangle or leak before that run, so run it yourself:
+
+- **before** a structural refactor, for the baseline (`--update-allow` into a
+  scratch file and diff it against `debt.allow`);
+- **after** any change that moves a type, adds a module or a file to a
+  directory, or adds a field another module touches;
+- **before calling a structural refactor done**, with `--ratchet`.
+
+```sh
+cargo run --release --manifest-path tools/check-structure/Cargo.toml \
+    --target-dir target/structure-tool -- \
+    --allow tools/check-structure/debt.allow --ratchet
+```
+
+Without `--allow` it prints every finding with the places that cause it; that
+report is where to start. Apply `--update-allow` to `debt.allow` only when the
+diff against the current list is removals. A new `module-cycle`, `tangle`,
+`shallow-module` or `wide-directory` means the change is wrong: reshape it, do
+not list it.
+
+### Reading a finding
+
+| Lint | What it says | Fix |
+|---|---|---|
+| `module-cycle` | Sibling modules use each other. Where a type is *declared* decides it, not where its `impl` sits. | Move the type to a leaf both sides depend on (`livekit/streams.rs` under `media` and `turn`), or pass the value in instead of importing a constant from the other side. |
+| `tangle` | Things that know each other in a circle across modules, or in a circle of more than seven within one module. | Break the one edge that points up a layer. |
+| `field-leak` | Code outside a type writes, borrows or calls a method on a field the type guards, directly or through a getter or setter. | Give the owner a method that does the whole step. |
+| `shallow-module` | A module shows many functions and hides few. | Hide more or merge; splitting it keeps the interface. |
+| `wide-directory` | More than 15 files and directories. | Group by concept into a subdirectory (`turn/activity/`), counting first. |
+
+### What is not a fix
+
+The tool follows forwarders and accessors, but not every one: it accepted a
+predicate (`has_entries`) and a pass-through (`cost_line`) that hid nothing. It
+cannot tell an honest fix from a quiet one, so judge it yourself. Not a fix:
+
+- a getter, a setter or a one-line forwarder that moves the leak;
+- a type split or a wrapper made only so the field is no longer "guarded"
+  (a bag of fields with no methods is fine when a real seam needs it, such as
+  receivers a `select!` borrows independently, and says so in its comment);
+- code moved to another module to hide the edge.
+
+An intent method carries behavior the caller should not know the fields for:
+stamp the clocks a result moved, take and clear, decide and write together.
+Where only a setter would do, keep the entry and say why in the PR.
+
+### Pitfalls met doing this
+
+- A fix can create the next finding. Moving a type to quiet one lint made a
+  cycle; check the report again after every move, not at the end.
+- A new module can push its directory past 15 entries. Count first, and group
+  related modules in one subdirectory.
+- Tests that read source (`include_str!` plus a function name, or a body
+  split on `"\n}\n"`) follow a function by name. Moving or renaming one needs
+  `rg` over `tests/` for the file and the symbol, and the assertions must stay
+  as strict, not be rewritten to pass.
+- A moved or new file gets the 1500-line ceiling, not its old one. A test file
+  at its ceiling grows by an `include!` parts file, as `session_parts/` does,
+  never by raising the ceiling. `scripts/check-rust-style.py` reports it.
+- Splitting a long function so the leak leaves with it: keep the awaits and
+  their order, carry the locals in a struct, and let the existing tests prove
+  nothing moved.
+- Fix, then shrink the list with `--update-allow`. `--ratchet` also fails on an
+  entry that no longer matches, so a fix without the list edit fails too.
+- Break a cycle by moving the type to the layer that owns it or by inverting
+  the dependency behind a trait, not by a re-export alone. A moved module's
+  hard-coded test names (`livekit::startup::recovery::tests::…`) and
+  `include_str!` depths change with it.
+- The tool's own tests are under `tests/check-structure/`.

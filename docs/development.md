@@ -380,8 +380,9 @@ distribution or Nix toolchain) the version comparison decides.
 
 `tools/check-structure/` reads this tree and refuses structure that makes it
 harder to hold in mind: `module-cycle` (modules that use each other),
-`tangle` (things in a parent and its child that know each other without a
-module cycle), `field-leak` (a struct's fields worked on from other modules),
+`tangle` (things that know each other in a circle across modules, or more
+than seven in one module, without a module cycle), `field-leak` (a struct's
+guarded fields worked on from outside the struct),
 `shallow-module` (a module whose callers use most of what it exposes) and
 `wide-directory` (more than 15 files and directories in one). The idea is
 deep modules behind narrow interfaces. File length is not one of its lints:

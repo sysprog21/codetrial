@@ -94,7 +94,13 @@ list of findings. The language rules are in [rust.md](rust.md) and
 3. **Diagnose** with the checks that exist: clippy, `scripts/check-rust-style.py`,
    the ceilings, and `scripts/ceiling-hotspots.py` as one input to choosing which
    oversized file to split first. Step 6 of "First make it work" still applies: extend a
-   checker before writing one.
+   checker before writing one. For module structure (cycles, tangles, a public
+   field another module reads, a module that hides nothing, a directory too wide
+   to hold in mind) run `tools/check-structure` as in
+   [Structure lints](rust.md#structure-lints) and fix the structure, not the list.
+   Take its baseline before the first batch and run it again after each one: a
+   fix can create the next finding, and the tool accepts forwarders, so judge
+   each fix for honesty yourself.
 4. **Classify** each finding with one sentence of reason: mechanical (safe and
    local), structural (crosses a module or public boundary), blocked on missing
    tests (write them first), or a false positive. A false positive is kept and
@@ -121,7 +127,7 @@ golden under `tests/golden/` changes without the work explaining it; two batches
 in a row make no net progress on the selected findings (report what was tried);
 or the change needs a
 public contract to move: a wire topic (the `TOPIC_` constants in
-`src/runtime.rs` and `web/lib.js`), a stored key, or what
+`src/protocol.rs` and `web/lib.js`), a stored key, or what
 `docs/recording-contract.md`, `docs/interview-contract-versions.md` or
 `docs/avatar-contract.md` promise. A change meant to alter a contract is a
 feature, not this.
@@ -194,6 +200,7 @@ None of this is a gate; each piece names what it can and cannot see.
 | `scripts/test.sh` receipts | Records lane, verdict, skipped count and the fingerprint of the tree as the run started, under the git directory | Prove the run was complete, or stop an agent with a shell from writing one; CI recomputes the verdict |
 | `scripts/agent-closeout-check.py` (Stop) | Tells the user once per tree when it has changes the gate has not passed on in every lane (`all`, or rust, portable and browser) | Block, or see a gate run elsewhere |
 | `scripts/ceiling-hotspots.py` | Ranks the Rust files over the default size limit by commits in a window times lines | Say a file is worth splitting, or whether its tests cover it; it is one input |
+| `tools/check-structure` (daily `.github/workflows/structure.yml`, never a hook or gate lane) | Reports module cycles, tangles, field leaks, shallow modules and wide directories in the root Cargo workspace's Rust sources (test code does not count as a use), and fails on a finding `tools/check-structure/debt.allow` does not list or on a stale entry | Judge whether a listed finding is worth fixing, whether a fix is honest (it accepts some forwarders), or run in under a minute on a cold index |
 | pre-push note | Notes `src/` changes with no `tests/` change | Judge whether a test was needed |
 
 ## Local evidence at closeout

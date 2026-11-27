@@ -164,7 +164,8 @@ pub fn valid_github_login(value: &str) -> bool {
 }
 
 /// Provider ids are GitHub usernames, because a provider file normally belongs
-/// to its operator. The shape comes from `accounts` rather than being spelled
+/// to its operator. The shape comes from `valid_github_login` above rather than
+/// being spelled
 /// out again: two definitions of "GitHub username" in one crate is one that
 /// drifts.
 ///

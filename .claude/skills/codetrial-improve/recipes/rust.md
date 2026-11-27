@@ -33,6 +33,39 @@ take `&Option<String>` and call `.as_deref()` first. Taking `Option<&str>` moves
 that call to each of the four callers, which adds code at every site for no
 saving, and a closure is local to one function. Leave them.
 
+## Give a leaked field an owner method, not a getter
+
+`field-leak` on `RuntimeActivity::last_code_change` named four places that wrote
+it. Replace the write with a method on the owner that does the whole step:
+`stamp_packet_effects(&result, at)` stamps the three clocks a data packet's
+reduction says it moved, and `note_board_snapshot(recorded, now)` restarts the
+idle count and the clock together. A `last_code_change()` getter would have
+quieted the tool and left every caller knowing the field.
+
+- **Proof:** the tool's report loses the entry; clippy at `-D warnings` is
+  clean; the tests that reach the callers pass. Where only a one-field setter is
+  left (`live_exit`), keep the entry and say why.
+
+## Break a module cycle at the type, not the use
+
+Moving the tasks' `Hints` out of `record.rs` into `hints.rs` removed an
+`attempt` and `record` cycle; the first attempt had put it in the module that
+needed it. Likewise `Ingress` and `CandidateStreams` live in `livekit/streams.rs`
+because `media` already uses three items of `turn`, so `turn` could not name a
+`media` type. Decide the layer first, then move the type to the leaf both sides
+may depend on. Passing a value in (a deadline instead of importing its constant
+from `side_calls`) cuts an edge without a new module.
+
+- **Proof:** a second run of the tool shows no new `module-cycle`; a cycle that
+  moved elsewhere is not fixed.
+
+## Leave a forwarder the tool accepts
+
+`EvidenceLedger::entries.is_empty()` and `metrics.cost_line()` could be hidden
+behind `has_entries()` and `cost_line()`, and the tool stops reporting them.
+Neither hides a rule; each only passes the field through. Leave the entry and
+name it in the PR, so the next reader sees the list is honest.
+
 ## Recipes to add when a site is found
 
 Not written until the tree has a real site, so each one stays a true story:

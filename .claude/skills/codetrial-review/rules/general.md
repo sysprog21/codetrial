@@ -14,7 +14,8 @@ Applies to: `web/lib.js`, `src/protocol.rs`, `src/runtime.rs`, `src/agent.rs`,
 `scripts/browser-check.cjs`
 
 Data-channel payloads are produced once in `web/lib.js` and consumed against
-the `TOPIC_*` constants in `src/protocol.rs`. `tests/fixtures/README.md` lists
+the interview `TOPIC_*` constants in `src/protocol.rs` and the
+`TOPIC_TASK_*` ones in `src/runtime.rs`. `tests/fixtures/README.md` lists
 each producer and consumer, and `node scripts/gen-wire-fixtures.mjs`
 regenerates them. A payload built inline in `interview.js` and spelled as a
 byte literal in Rust tests crosses nothing. Flag new hand-kept copies: voice

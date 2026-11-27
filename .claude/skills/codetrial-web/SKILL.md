@@ -1,6 +1,6 @@
 ---
 name: codetrial-web
-description: The CodeTrial browser half and the boundary it talks across - why web/ has no build step, how a file reaches the browser embedded or from disk, the vendored checksum-pinned assets, the data-channel topics implemented once in web/lib.js and once against the TOPIC_ constants in src/runtime.rs, in both directions, and the wire fixtures that keep the two agreeing. Use when editing anything under web/, adding or changing a data-channel message, touching src/web/, reviewing UI accessibility or interaction states, choosing a browser API, CSS feature or fallback and judging its browser support (Baseline, Modern Web Guidance), designing a new page or an explicit redesign, or wondering why a browser change passed every Rust test and still broke the interview. The method of a multi-batch refactor is codetrial-improve.
+description: The CodeTrial browser half and the boundary it talks across - why web/ has no build step, how a file reaches the browser embedded or from disk, the vendored checksum-pinned assets, the data-channel topics implemented once in web/lib.js and once against the TOPIC_ constants in src/protocol.rs and src/runtime.rs, in both directions, and the wire fixtures that keep the two agreeing. Use when editing anything under web/, adding or changing a data-channel message, touching src/web/, reviewing UI accessibility or interaction states, choosing a browser API, CSS feature or fallback and judging its browser support (Baseline, Modern Web Guidance), designing a new page or an explicit redesign, or wondering why a browser change passed every Rust test and still broke the interview. The method of a multi-batch refactor is codetrial-improve.
 ---
 
 # The CodeTrial browser boundary
@@ -51,8 +51,9 @@ diverge and silently empty the evidence section of every camera interview while
 the gate stayed green.
 
 The direction decides what keeps the two sides honest. `web/lib.js` defines the
-topic set in `topics` and `src/protocol.rs` defines the matching `TOPIC_*`
-constants; that pair is the authority, and `grep -rn TOPIC_ src/` names every
+topic set in `topics` and the task room's in `TASK_TOPICS`, and `src/protocol.rs`
+(interview) and `src/runtime.rs` (`TOPIC_TASK_*`) define the matching `TOPIC_*`
+constants; those pairs are the authority, and `grep -rn TOPIC_ src/` names every
 Rust publisher and consumer, several of them outside `src/agent/`. A
 browser-to-agent topic has a generated producer fixture, and the `files` map in
 `scripts/gen-wire-fixtures.mjs` is the list of them, because that script builds
