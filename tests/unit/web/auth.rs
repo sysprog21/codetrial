@@ -264,3 +264,21 @@ async fn a_refused_code_names_githubs_reason() {
     assert!(!error.contains("secret"), "{error}");
     task.abort();
 }
+
+#[tokio::test]
+async fn oauth_callback_error_page_escapes_retry_href() {
+    // A task retry URL containing a quote, ampersand, and less-than sign.
+    let retry_href = r#"/api/login?returnTo=/t/classroom/3sum?site="quoted"&version=7<unsafe>"#;
+
+    let response =
+        oauth_callback_error_page(StatusCode::BAD_REQUEST, "Please try again.", retry_href);
+
+    let body = axum::body::to_bytes(response.into_body(), 64 * 1024)
+        .await
+        .unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+
+    let expected = "href=\"/api/login?returnTo=/t/classroom/3sum?site=&quot;quoted&quot;&amp;version=7&lt;unsafe>\"";
+
+    assert!(html.contains(expected), "HTML href was not escaped: {html}");
+}

@@ -62,11 +62,26 @@ async fn a_refused_code_exchange_names_the_token_leg_not_the_profile_leg() {
         clears_state_cookie(response.headers()),
         "a failed exchange still spends the state"
     );
-    let body = response.json::<Value>().await.unwrap();
-    assert_eq!(
-        body["error"], "GitHub token exchange failed.",
-        "a refused code fails the exchange, not the profile request"
+
+    assert!(
+        response.headers()["content-type"]
+            .to_str()
+            .unwrap()
+            .starts_with("text/html"),
+        "OAuth callback failures must return HTML"
     );
+    assert_eq!(response.headers()["cache-control"], "no-store");
+
+    let body = response.text().await.unwrap();
+    assert!(
+        body.contains("GitHub token exchange failed."),
+        "a refused code must fail the token exchange, not the profile request"
+    );
+    assert!(
+        !body.contains("GitHub profile request failed."),
+        "the error must not be mistaken for a profile request failure"
+    );
+    assert!(body.contains("href=\"/api/login\""));
 
     server.shutdown().await;
     github_server.shutdown().await;
@@ -142,18 +157,20 @@ async fn the_oauth_callback_requires_the_state_it_minted() {
         }
     };
 
+    let missing_or_expired_message = "Your GitHub sign-in expired, or it started at a different address of this site. Open the site at the address you started from and try again.";
+
     for (why, cookie, state, message) in [
         (
             "no state cookie at all",
             None,
             minted.clone(),
-            "Login state is missing or expired.",
+            missing_or_expired_message,
         ),
         (
             "a state cookie nobody signed",
             Some(format!("codetrial_oauth_state={minted}")),
             minted.clone(),
-            "Login state is missing or expired.",
+            missing_or_expired_message,
         ),
         (
             "a state cookie signed with another secret",
@@ -162,7 +179,7 @@ async fn the_oauth_callback_requires_the_state_it_minted() {
                 state_cookie(&minted, "another-session-secret")
             )),
             minted.clone(),
-            "Login state is missing or expired.",
+            missing_or_expired_message,
         ),
         (
             "a state signed longer ago than it lives",
@@ -171,7 +188,7 @@ async fn the_oauth_callback_requires_the_state_it_minted() {
                 state_cookie_aged(&minted, "session-secret", 10 * 60 + 1)
             )),
             minted.clone(),
-            "Login state is missing or expired.",
+            missing_or_expired_message,
         ),
         (
             "the minted state signed as a session cookie instead",
@@ -184,13 +201,13 @@ async fn the_oauth_callback_requires_the_state_it_minted() {
                 )
             )),
             minted.clone(),
-            "Login state is missing or expired.",
+            missing_or_expired_message,
         ),
         (
             "a state parameter this browser was never given",
             Some(minted_cookie.clone()),
             "state-from-somewhere-else".to_string(),
-            "Login state did not match.",
+            "The GitHub sign-in verification state did not match. Please try signing in again.",
         ),
     ] {
         let refused = callback(cookie, &state).await;
@@ -199,11 +216,20 @@ async fn the_oauth_callback_requires_the_state_it_minted() {
             clears_state_cookie(refused.headers()),
             "{why}: a refused callback tells the browser to drop the state"
         );
-        assert_eq!(
-            refused.json::<Value>().await.unwrap()["error"],
-            message,
+
+        assert!(
+            refused.headers()["content-type"]
+                .to_str()
+                .unwrap()
+                .starts_with("text/html"),
             "{why}"
         );
+
+        let body = refused.text().await.unwrap();
+
+        assert!(body.contains("GitHub sign-in failed"), "{why}");
+        assert!(body.contains("href=\"/api/login\""), "{why}");
+        assert!(body.contains(message), "{why}");
     }
 
     // A code with no state, and a state with no code, are the client's mistake
@@ -215,8 +241,28 @@ async fn the_oauth_callback_requires_the_state_it_minted() {
             .send()
             .await
             .unwrap();
+
         assert_eq!(incomplete.status(), 400, "{query:?}");
         assert!(clears_state_cookie(incomplete.headers()), "{query:?}");
+
+        assert!(
+            incomplete.headers()["content-type"]
+                .to_str()
+                .unwrap()
+                .starts_with("text/html"),
+            "{query:?}"
+        );
+
+        let body = incomplete.text().await.unwrap();
+
+        let expected_message = if query == "code=ok" {
+            "The GitHub sign-in verification state is missing. Please try again."
+        } else {
+            "GitHub did not return an authorization code."
+        };
+
+        assert!(body.contains(expected_message), "{query:?}");
+        assert!(body.contains("href=\"/api/login\""), "{query:?}");
     }
 
     // And the pair this server minted completes the sign-in, so the refusals

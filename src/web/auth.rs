@@ -10,13 +10,13 @@ use axum::body::Body;
 use axum::extract::{ConnectInfo, FromRequestParts, State};
 use axum::http::request::Parts;
 use axum::http::{HeaderValue, Request, StatusCode, header};
-use axum::response::{AppendHeaders, IntoResponse, Response};
+use axum::response::{AppendHeaders, Html, IntoResponse, Response};
 use serde_json::{Value, json};
 
 use crate::accounts::{
     Accounts, GitHubLoginConfig, GitHubOauth, GitHubProfile, SESSION_TTL_SECONDS, SignedInUser,
-    blocking, create_session, delete_session, normalized_github_login, random_token,
-    recorded_account_id, session_user, valid_github_login,
+    blocking, create_session, delete_session, normalized_github_login, recorded_account_id,
+    session_user, valid_github_login,
 };
 
 use super::token::read_body_or_refuse;
@@ -33,6 +33,7 @@ const OAUTH_STATE_COOKIE: &str = "codetrial_oauth_state";
 /// the polls that redeem it.
 const DEVICE_COOKIE: &str = "codetrial_device";
 const OAUTH_STATE_TTL_SECONDS: i64 = 60 * 10;
+const OAUTH_RETURN_TTL_SECONDS: i64 = 60 * 60;
 
 /// `read:user` alone returns whatever address the person made public, which is
 /// usually none. Delivery needs the primary verified one, and that is a
@@ -104,17 +105,19 @@ pub(crate) async fn login_handler(
     let Some(oauth) = &accounts.config().oauth else {
         return oauth_not_configured_response();
     };
-    let Ok(state_token) = random_token(24) else {
+    let issued = crate::current_epoch_seconds_i64();
+    let Ok(state_token) = crate::accounts::random_token(24) else {
         return json_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             json!({ "error": "Could not create login state." }),
         );
     };
+
     let cookie = set_cookie(
         OAUTH_STATE_COOKIE,
         &signed_cookie_value(
             OAUTH_STATE_COOKIE,
-            &format!("{}:{state_token}", crate::current_epoch_seconds_i64()),
+            &format!("{issued}:{state_token}"),
             &accounts.config().session_secret,
         ),
         OAUTH_STATE_TTL_SECONDS,
@@ -141,6 +144,20 @@ pub(crate) async fn login_handler(
             .and_then(|path| super::tasks::task_return_path(path))
             .unwrap_or_else(|| "/".to_owned())
     };
+    let mut return_cookie_value = signed_cookie_value(
+        OAUTH_RETURN_COOKIE,
+        &format!("{state_token}:{return_path}"),
+        &accounts.config().session_secret,
+    );
+
+    // Chromium limits the cookie name and value to 4096 bytes.
+    if OAUTH_RETURN_COOKIE.len() + return_cookie_value.len() > 4096 {
+        return_cookie_value = signed_cookie_value(
+            OAUTH_RETURN_COOKIE,
+            &format!("{state_token}:/"),
+            &accounts.config().session_secret,
+        );
+    }
     (
         StatusCode::FOUND,
         [(header::LOCATION, location)],
@@ -150,12 +167,8 @@ pub(crate) async fn login_handler(
                 header::SET_COOKIE,
                 set_cookie(
                     OAUTH_RETURN_COOKIE,
-                    &signed_cookie_value(
-                        OAUTH_RETURN_COOKIE,
-                        &format!("{state_token}:{return_path}"),
-                        &accounts.config().session_secret,
-                    ),
-                    OAUTH_STATE_TTL_SECONDS,
+                    &return_cookie_value,
+                    OAUTH_RETURN_TTL_SECONDS,
                     state.config.production,
                 ),
             ),
@@ -191,9 +204,11 @@ pub(crate) async fn record_login_handler(
         );
     }
     let client = client_ip(request.headers(), peer, state.config.trusted_proxy_hops);
+
     if !state.login_limit.allow(client, Instant::now()) {
         return rate_limited_response("Too many login attempts. Wait a minute and try again.");
     }
+
     let body = match read_body_or_refuse(request.into_body(), MAX_BODY_BYTES).await {
         Ok(body) => body,
         Err(refusal) => return refusal,
@@ -276,18 +291,97 @@ pub(crate) async fn callback_handler(
     // Each pass that reaches GitHub spends the OAuth app's quota with its
     // client secret, so it is charged to the login bucket before any call.
     let client = client_ip(request.headers(), peer, state.config.trusted_proxy_hops);
+    let retry_href = state
+        .accounts
+        .as_ref()
+        .map(|accounts| oauth_retry_href(request.headers(), &accounts.config().session_secret))
+        .unwrap_or_else(|| "/api/login".to_owned());
     if !state.login_limit.allow(client, Instant::now()) {
-        return rate_limited_response("Too many login attempts. Wait a minute and try again.");
+        let mut response = oauth_callback_error_page(
+            StatusCode::TOO_MANY_REQUESTS,
+            "Too many login attempts. Wait a minute and try again.",
+            retry_href,
+        );
+
+        response
+            .headers_mut()
+            .insert(header::RETRY_AFTER, HeaderValue::from_static("60"));
+
+        return response;
     }
     let production = state.config.production;
-    let mut response = callback_response(state, request).await;
+    let mut response = callback_response(state, request, retry_href).await;
     if let Ok(cookie) = HeaderValue::from_str(&clear_cookie(OAUTH_STATE_COOKIE, production)) {
         response.headers_mut().append(header::SET_COOKIE, cookie);
     }
     response
 }
 
-async fn callback_response(state: AppState, request: Request<Body>) -> Response {
+fn oauth_return_destination(payload: &str) -> Option<(&str, String)> {
+    let (state, path) = payload.split_once(':')?;
+
+    let path = if path == "/peer-lobby" {
+        path.to_owned()
+    } else {
+        super::tasks::task_return_path(path)?
+    };
+
+    Some((state, path))
+}
+
+fn oauth_retry_href(headers: &header::HeaderMap, secret: &str) -> String {
+    let Some(payload) = verified_cookie(headers, OAUTH_RETURN_COOKIE, secret) else {
+        return "/api/login".to_owned();
+    };
+
+    match oauth_return_destination(&payload) {
+        Some((_, path)) if path == "/peer-lobby" => "/api/login?next=peer-join".to_owned(),
+        Some((_, path)) => {
+            format!("/api/login?returnTo={}", percent_encode_component(&path))
+        }
+        None => "/api/login".to_owned(),
+    }
+}
+
+fn oauth_callback_error_page(
+    status: StatusCode,
+    message: &'static str,
+    retry_href: impl AsRef<str>,
+) -> Response {
+    let retry_href = retry_href
+        .as_ref()
+        .replace('&', "&amp;")
+        .replace('"', "&quot;")
+        .replace('<', "&lt;");
+    (
+        status,
+        [(axum::http::header::CACHE_CONTROL, "no-store")],
+        Html(format!(
+            r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>GitHub sign-in failed</title>
+</head>
+<body>
+    <main>
+        <h1>GitHub sign-in failed</h1>
+        <p>{message}</p>
+        <a href="{retry_href}">Try signing in again</a>
+    </main>
+</body>
+</html>"#
+        )),
+    )
+        .into_response()
+}
+
+async fn callback_response(
+    state: AppState,
+    request: Request<Body>,
+    retry_href: String,
+) -> Response {
     let Some(accounts) = state.accounts.clone() else {
         return state.accounts_error();
     };
@@ -296,64 +390,77 @@ async fn callback_response(state: AppState, request: Request<Body>) -> Response 
         return oauth_not_configured_response();
     };
     let query = query_pairs(request.uri().query().unwrap_or(""));
+
     let Some(code) = query.get("code").filter(|value| !value.is_empty()) else {
-        return json_response(
-            StatusCode::BAD_REQUEST,
-            json!({ "error": "Missing GitHub callback code." }),
-        );
+        let message = if query
+            .get("error")
+            .is_some_and(|error| error == "access_denied")
+        {
+            "GitHub sign-in was cancelled."
+        } else {
+            "GitHub did not return an authorization code."
+        };
+
+        return oauth_callback_error_page(StatusCode::BAD_REQUEST, message, retry_href);
     };
+
     let Some(state_token) = query.get("state").filter(|value| !value.is_empty()) else {
-        return json_response(
+        return oauth_callback_error_page(
             StatusCode::BAD_REQUEST,
-            json!({ "error": "Missing GitHub callback state." }),
+            "The GitHub sign-in verification state is missing. Please try again.",
+            retry_href,
         );
     };
+
     let Some(cookie_state) = verified_cookie(
         request.headers(),
         OAUTH_STATE_COOKIE,
         &accounts.config().session_secret,
     )
     .and_then(|payload| unexpired_state(&payload, crate::current_epoch_seconds_i64())) else {
-        return json_response(
+        return oauth_callback_error_page(
             StatusCode::UNAUTHORIZED,
-            json!({ "error": "Login state is missing or expired." }),
+            "Your GitHub sign-in expired, or it started at a different address of this site. Open the site at the address you started from and try again.",
+            retry_href,
         );
     };
+
     if cookie_state != *state_token {
-        return json_response(
+        return oauth_callback_error_page(
             StatusCode::UNAUTHORIZED,
-            json!({ "error": "Login state did not match." }),
+            "The GitHub sign-in verification state did not match. Please try signing in again.",
+            retry_href,
         );
     }
 
     let access_token = match github_access_token(accounts.config(), &oauth, code).await {
         Ok(access_token) => access_token,
-        Err(error) => return github_failure("GitHub token exchange failed", error),
+        Err(error) => {
+            eprintln!("GitHub token exchange failed: {error}");
+            return oauth_callback_error_page(
+                StatusCode::BAD_GATEWAY,
+                "GitHub token exchange failed. Please try again.",
+                retry_href,
+            );
+        }
     };
-    let return_path = cookie_value(request.headers(), OAUTH_RETURN_COOKIE)
-        .and_then(|value| {
-            verified_cookie_value(
-                OAUTH_RETURN_COOKIE,
-                &value,
-                &accounts.config().session_secret,
-            )
-        })
-        .and_then(|value| {
-            value
-                .strip_prefix(&format!("{state_token}:"))
-                .map(str::to_owned)
-        })
-        .and_then(|path| {
-            if path == "/peer-lobby" {
-                Some(path)
-            } else {
-                super::tasks::task_return_path(&path)
-            }
-        })
-        .unwrap_or_else(|| "/".to_owned());
+
+    let return_path = verified_cookie(
+        request.headers(),
+        OAUTH_RETURN_COOKIE,
+        &accounts.config().session_secret,
+    )
+    .and_then(|payload| {
+        let (return_state, path) = oauth_return_destination(&payload)?;
+        (return_state == state_token.as_str()).then_some(path)
+    })
+    .unwrap_or_else(|| "/".to_owned());
+
     let session = match sign_in(&state, accounts, &access_token).await {
         Ok(session) => session,
-        Err(refusal) => return refusal,
+        Err((refusal, message)) => {
+            return oauth_callback_error_page(refusal.status(), message, retry_href);
+        }
     };
 
     (
@@ -514,7 +621,7 @@ pub(crate) async fn device_poll_handler(
     };
     let session = match sign_in(&state, accounts, access_token).await {
         Ok(session) => session,
-        Err(refusal) => return refusal,
+        Err((refusal, _)) => return refusal,
     };
     (
         StatusCode::OK,
@@ -541,7 +648,7 @@ async fn sign_in(
     state: &AppState,
     accounts: Arc<Accounts>,
     access_token: &str,
-) -> Result<String, Response> {
+) -> Result<String, (Response, &'static str)> {
     let profile = match github_profile(
         accounts.config(),
         access_token,
@@ -550,13 +657,21 @@ async fn sign_in(
     .await
     {
         Ok(profile) => profile,
-        Err(error) => return Err(github_failure("GitHub profile request failed", error)),
+        Err(error) => {
+            return Err((
+                github_failure("GitHub profile request failed", error),
+                "GitHub profile request failed. Please try again.",
+            ));
+        }
     };
     let session_secret = accounts.config().session_secret.clone();
     let Ok(session_id) = blocking(move || create_session(&accounts, &profile)).await else {
-        return Err(json_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            json!({ "error": "Could not create account session." }),
+        return Err((
+            json_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                json!({ "error": "Could not create account session." }),
+            ),
+            "Could not create account session. Please try again.",
         ));
     };
     Ok(session_cookie(
