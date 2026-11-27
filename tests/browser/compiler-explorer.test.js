@@ -2729,6 +2729,241 @@ test("valid-sudoku cases reject a check that misses a rule or a unit", () => {
   );
 });
 
+test("mirrored tag cases reject each wrong scan by name", async (t) => {
+  // The brief says the scanner reads each tag forwards and backwards, so a
+  // candidate's first idea is the longest common substring of the read and
+  // its reversed copy, never checking that the match itself is mirrored.
+  // Two stretches can tie for longest, so both picks are run.
+  const commonSubstring = (keepLater) => (s) => {
+    const r = [...s].reverse().join("");
+    let best = 0;
+    let end = 0;
+    let prev = new Array(s.length + 1).fill(0);
+    for (let i = 1; i <= s.length; i += 1) {
+      const cur = new Array(s.length + 1).fill(0);
+      for (let j = 1; j <= s.length; j += 1) {
+        if (s[i - 1] === r[j - 1]) {
+          cur[j] = prev[j - 1] + 1;
+          if (keepLater ? cur[j] >= best : cur[j] > best) {
+            best = cur[j];
+            end = i;
+          }
+        }
+      }
+      prev = cur;
+    }
+    return s.slice(end - best, end);
+  };
+  // Centre expansion, written once: each wrong scan built on it below differs
+  // from it in one way, so it reads as the one mistake it makes.
+  const scan =
+    ({
+      visits = () => true,
+      same = (x, y) => x === y,
+      keep = (best, found) => found.length > best.length,
+      spans = [0, 1],
+    } = {}) =>
+    (s) => {
+      let best = s[0];
+      for (let centre = 0; centre < s.length; centre += 1) {
+        for (const span of spans) {
+          if (!visits(centre, span, s)) continue;
+          let a = centre;
+          let b = centre + span;
+          while (a >= 0 && b < s.length && same(s[a], s[b])) {
+            a -= 1;
+            b += 1;
+          }
+          const found = s.slice(a + 1, b);
+          if (keep(best, found)) best = found;
+        }
+      }
+      return best;
+    };
+  const expand = scan();
+  const spec = judges["longest-palindromic-substring"];
+  // The longest palindrome in this read is 3 characters, so every common
+  // substring of length 4 or more fails on length and palindromicity alike.
+  // The two picks part on this read, which is what shows `keepLater` decides
+  // anything, and each is 5 characters.
+  for (const [name, solve, copied] of [
+    ["the earlier stretch on a tie", commonSubstring(false), "abacd"],
+    ["the later stretch on a tie", commonSubstring(true), "dcaba"],
+  ]) {
+    await t.test(`the reversed-copy shortcut keeping ${name}`, () => {
+      const pinned = pinnedCase(
+        "longest-palindromic-substring",
+        'mirrored ends: s="abacdfgdcaba"',
+      );
+      const answer = solve(...structuredClone(pinned.input));
+      assert.equal(
+        answer,
+        copied,
+        `the shortcut keeping ${name} must copy "${copied}" from the read`,
+      );
+      assert.equal(
+        checkAnswer(spec, pinned, answer),
+        false,
+        `"${pinned.label}" must reject the reversed-copy shortcut keeping ${name}`,
+      );
+    });
+  }
+  // The patch a candidate skips: an adjacent equal pair looks finished as it
+  // stands, so even mirrors are never expanded while odd centres are. Only a
+  // read whose longest mirror is even and longer than two tells them apart.
+  const pairOnly = (s) => {
+    let best = "";
+    for (let centre = 0; centre < s.length; centre += 1) {
+      let a = centre;
+      let b = centre;
+      while (a >= 0 && b < s.length && s[a] === s[b]) {
+        a -= 1;
+        b += 1;
+      }
+      if (b - a - 1 > best.length) best = s.slice(a + 1, b);
+      if (
+        best.length < 2 &&
+        centre + 1 < s.length &&
+        s[centre] === s[centre + 1]
+      ) {
+        best = s.slice(centre, centre + 2);
+      }
+    }
+    return best;
+  };
+  // Each scan the table below runs is pinned to a read where its mistake
+  // loses the longest stretch; all but pairOnly are built on centre expansion.
+  const edgeSkipped = scan({
+    visits: (centre, _, s) => centre > 0 && centre < s.length - 1,
+  });
+  const lastPairSkipped = scan({
+    visits: (centre, span, s) => span === 0 || centre < s.length - 2,
+  });
+  // Choosing one kind of centre at each position from the characters beside
+  // it can lose a stretch whose centre sits inside a run of three or more
+  // equal characters, where those characters no longer tell the two apart.
+  const nextDecides = scan({
+    visits: (centre, span, s) => (s[centre] === s[centre + 1]) === (span === 1),
+  });
+  const neighboursDecide = scan({
+    visits: (centre, span, s) =>
+      (s[centre - 1] === s[centre + 1]) === (span === 0),
+  });
+  const caseFolded = scan({
+    same: (x, y) => x.toLowerCase() === y.toLowerCase(),
+  });
+  const lettersOnly = (s) => expand(s.replace(/[^A-Za-z]/g, ""));
+  const capitalsDropped = (s) => expand(s.replace(/[^a-z0-9]/g, ""));
+  const shortRead = (s) => (s.length <= 2 ? s[0] : expand(s));
+  const grown = (keepLast) =>
+    scan({
+      keep: (best, found) =>
+        found.length > 1 && (keepLast || best.length === 1),
+    });
+  // Odd and even centres compete only where both grow past one character,
+  // and a scan that settles one kind before trying the other can lose there.
+  const kindFirst = (first, then) => (s) => {
+    const found = scan({ spans: [first] })(s);
+    return found.length > 1 ? found : scan({ spans: [then] })(s);
+  };
+  for (const [name, solve, label, returned] of [
+    [
+      "a pair that was never expanded",
+      pairOnly,
+      'whole string even: s="abba"',
+      "bb",
+    ],
+    [
+      "centres that skip the ends",
+      edgeSkipped,
+      'matching prefix: s="aab"',
+      "a",
+    ],
+    [
+      "even centres that stop before the last pair",
+      lastPairSkipped,
+      'matching suffix: s="baa"',
+      "b",
+    ],
+    ["a case-folded comparison", caseFolded, 'mixed case: s="aA"', "aA"],
+    [
+      "a letters-only read",
+      lettersOnly,
+      'digit at the centre: s="ab1ba"',
+      "abba",
+    ],
+    [
+      "a read without capitals",
+      capitalsDropped,
+      'capital at the centre: s="abBba"',
+      "abba",
+    ],
+    [
+      "the first stretch past one character",
+      grown(false),
+      'middle mirror: s="abacdedcfgf"',
+      "aba",
+    ],
+    [
+      "the last stretch past one character",
+      grown(true),
+      'middle mirror: s="abacdedcfgf"',
+      "fgf",
+    ],
+    [
+      "odd centres settled first",
+      kindFirst(0, 1),
+      'even mirror beats odd mirror: s="abacca"',
+      "aba",
+    ],
+    [
+      "even centres settled first",
+      kindFirst(1, 0),
+      'odd mirror beats even mirror: s="aabcb"',
+      "aa",
+    ],
+    [
+      "one centre kind chosen from the next character",
+      nextDecides,
+      'run of three at the centre: s="baaab"',
+      "aa",
+    ],
+    [
+      "one centre kind chosen from the two neighbours",
+      neighboursDecide,
+      'run of four at the centre: s="baaaab"',
+      "aaa",
+    ],
+    [
+      "a read of two answered by its first character",
+      shortRead,
+      'two equal characters: s="aa"',
+      "a",
+    ],
+  ]) {
+    await t.test(`${name} on "${label}"`, () => {
+      const row = pinnedCase("longest-palindromic-substring", label);
+      const got = solve(...structuredClone(row.input));
+      assert.equal(
+        got,
+        returned,
+        `the scan with ${name} must return "${returned}" for "${row.input[0]}"`,
+      );
+      assert.equal(
+        checkAnswer(spec, row, got),
+        false,
+        `"${row.label}" must reject the scan with ${name}`,
+      );
+    });
+  }
+
+  assertSolves(
+    "longest-palindromic-substring",
+    expand,
+    (label) => `"${label}" must accept centre expansion`,
+  );
+});
+
 test("harness generator covers every function problem without network access", () => {
   for (const [id, spec] of Object.entries(judges)) {
     if (spec.kind !== "function") continue;

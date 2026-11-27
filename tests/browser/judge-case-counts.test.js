@@ -6,11 +6,35 @@ import { fileURLToPath } from "node:url";
 import vm from "node:vm";
 
 import counts from "../../scripts/judge-case-counts.cjs";
+import { checkAnswer } from "../../web/lib.js";
 
 test("every scenario resolves to a judge with cases", () => {
   const checked = counts.validateJudgeCaseCounts();
   assert.equal(checked, Object.keys(counts.problemPages).length);
   assert.ok(checked > 0);
+});
+
+test("every judge case expects an answer its own checker accepts", () => {
+  // The checkers that judge an answer against the input (palindrome,
+  // indexPair and friends) read little or none of `expected`, so a wrong
+  // expected value can sit in a judge unnoticed while the results panel
+  // shows it as the answer. Membership only: for the palindrome judge, the
+  // run of centre expansion over every case in compiler-explorer.test.js
+  // is what pins how long an answer must be.
+  for (const [problemId, { page }] of Object.entries(counts.problemPages)) {
+    const spec = JSON.parse(
+      fs.readFileSync(
+        new URL(`../../web/judges/${page}.json`, import.meta.url),
+        "utf8",
+      ),
+    );
+    for (const testCase of spec.cases) {
+      assert.ok(
+        checkAnswer(spec, testCase, structuredClone(testCase.expected)),
+        `"${problemId}" case "${testCase.label}" must expect an answer its checker accepts`,
+      );
+    }
+  }
 });
 
 function replaceJudge(t, fixture) {

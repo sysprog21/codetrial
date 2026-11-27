@@ -12885,6 +12885,97 @@
           "racecar"
         ],
         "expected": "racecar"
+      },
+      {
+        "label": "mirrored ends: s=\"abacdfgdcaba\"",
+        "input": [
+          "abacdfgdcaba"
+        ],
+        "expected": "aba"
+      },
+      {
+        "label": "whole string even: s=\"abba\"",
+        "input": [
+          "abba"
+        ],
+        "expected": "abba"
+      },
+      {
+        "label": "matching prefix: s=\"aab\"",
+        "input": [
+          "aab"
+        ],
+        "expected": "aa"
+      },
+      {
+        "label": "matching suffix: s=\"baa\"",
+        "input": [
+          "baa"
+        ],
+        "expected": "aa"
+      },
+      {
+        "label": "mixed case: s=\"aA\"",
+        "input": [
+          "aA"
+        ],
+        "expected": "a"
+      },
+      {
+        "label": "digit at the centre: s=\"ab1ba\"",
+        "input": [
+          "ab1ba"
+        ],
+        "expected": "ab1ba"
+      },
+      {
+        "label": "capital at the centre: s=\"abBba\"",
+        "input": [
+          "abBba"
+        ],
+        "expected": "abBba"
+      },
+      {
+        "label": "middle mirror: s=\"abacdedcfgf\"",
+        "input": [
+          "abacdedcfgf"
+        ],
+        "expected": "cdedc"
+      },
+      {
+        "label": "even mirror beats odd mirror: s=\"abacca\"",
+        "input": [
+          "abacca"
+        ],
+        "expected": "acca"
+      },
+      {
+        "label": "odd mirror beats even mirror: s=\"aabcb\"",
+        "input": [
+          "aabcb"
+        ],
+        "expected": "bcb"
+      },
+      {
+        "label": "run of three at the centre: s=\"baaab\"",
+        "input": [
+          "baaab"
+        ],
+        "expected": "baaab"
+      },
+      {
+        "label": "run of four at the centre: s=\"baaaab\"",
+        "input": [
+          "baaaab"
+        ],
+        "expected": "baaaab"
+      },
+      {
+        "label": "two equal characters: s=\"aa\"",
+        "input": [
+          "aa"
+        ],
+        "expected": "aa"
       }
     ],
     "paramNames": [
