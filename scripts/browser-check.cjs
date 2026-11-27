@@ -3481,7 +3481,7 @@ function startCompilerExplorerMock() {
         ].every((pattern) => source.includes(pattern))
       ) {
         stdout =
-          '{"results":[{"actual":[null,3,7,true,9,true,15,true,20,false],"timeMs":1},{"actual":[null,true,1,false],"timeMs":1},{"actual":[null,1,2,3,false],"timeMs":1},{"actual":[null],"timeMs":1},{"actual":[null,1,2,false],"timeMs":1}]}';
+          '{"results":[{"actual":[null,3,7,true,9,true,15,true,20,false],"timeMs":1},{"actual":[null,true,1,false],"timeMs":1},{"actual":[null,1,2,3,false],"timeMs":1},{"actual":[null,2,4,6,8,10,12,14,false],"timeMs":1},{"actual":[null,1,2,false],"timeMs":1}]}';
       } else {
         response.writeHead(400, headers);
         response.end(
