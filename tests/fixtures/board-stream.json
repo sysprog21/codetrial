@@ -37,6 +37,34 @@
           "strokes": "0"
         }
       }
+    },
+    {
+      "name": "an example checkpoint ahead of a held repeat",
+      "options": {
+        "topic": "board_image",
+        "name": "board-21.jpg",
+        "mimeType": "image/jpeg",
+        "totalSize": 30720,
+        "attributes": {
+          "strokes": "12",
+          "checkpoint": "example",
+          "taken": "2"
+        }
+      }
+    },
+    {
+      "name": "the held repeat checkpoint, sent last",
+      "options": {
+        "topic": "board_image",
+        "name": "board-22.jpg",
+        "mimeType": "image/jpeg",
+        "totalSize": 28672,
+        "attributes": {
+          "strokes": "9",
+          "checkpoint": "repeat",
+          "taken": "1"
+        }
+      }
     }
   ]
 }

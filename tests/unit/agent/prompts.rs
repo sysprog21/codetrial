@@ -672,6 +672,7 @@ fn candidate_code_cannot_close_its_block_in_a_side_call_or_the_report() {
     let judge = phase_judge_prompt(&PhaseJudgeInput {
         problem,
         open: &["coding"],
+        repeat: crate::agent::RepeatCue::None,
         transcript_window: "Candidate: I will use a map.",
         code: FENCE_ESCAPE,
         language: "python",

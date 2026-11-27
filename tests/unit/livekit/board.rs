@@ -134,6 +134,31 @@ fn refuses_a_header_larger_than_a_board() {
 /// the boards the candidate cleared.
 #[test]
 fn reads_the_attributes_the_browser_sent() {
+    let read = fixture_attributes()
+        .iter()
+        .map(|attributes| {
+            (
+                strokes_from_attributes(attributes),
+                checkpoint_from_attributes(attributes),
+                taken_from_attributes(attributes),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        read,
+        vec![
+            (3, None, None),
+            (214, Some("Approach checkpoint"), None),
+            (0, None, None),
+            (12, Some("Example checkpoint"), Some(2)),
+            (9, Some("Repeat checkpoint"), Some(1)),
+        ]
+    );
+}
+
+/// Each case of the board wire fixture, its attributes as the agent reads
+/// them off a stream header.
+fn fixture_attributes() -> Vec<HashMap<String, String>> {
     let fixture: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string("tests/fixtures/board-stream.json")
             .expect("the board wire fixture is generated into tests/fixtures"),
@@ -146,33 +171,60 @@ fn reads_the_attributes_the_browser_sent() {
     );
     let cases = fixture["cases"].as_array().expect("cases is an array");
 
-    // Asserted, because a fixture that lost its cases would otherwise pass this
+    // Asserted, because a fixture that lost its cases would otherwise pass a
     // test by having nothing to check.
-    assert_eq!(cases.len(), 3);
-    let read = cases
+    assert_eq!(cases.len(), 5);
+    cases
         .iter()
         .map(|case| {
-            let attributes = case["options"]["attributes"]
+            case["options"]["attributes"]
                 .as_object()
                 .expect("a stream header carries attributes")
                 .iter()
                 .map(|(key, value)| {
-                    (
-                        key.clone(),
-                        value.as_str().expect("attributes are strings").to_string(),
-                    )
+                    let value = value.as_str().expect("attributes are strings");
+                    (key.clone(), value.to_string())
                 })
-                .collect::<HashMap<_, _>>();
-            (
-                strokes_from_attributes(&attributes),
-                checkpoint_from_attributes(&attributes),
-            )
+                .collect()
         })
+        .collect()
+}
+
+/// Repeat's upload failed twice, so the page sent Example first and the held
+/// Repeat after it: the last two fixture cases, in that order, as the page's
+/// own uploads are checked to be in
+/// tests/browser/board-checkpoint-order.test.js.
+/// Read through the same parse the stream opener uses, the report still sees
+/// Repeat first, so writing it showed before the candidate moved on counts.
+#[test]
+fn a_repeat_checkpoint_sent_after_example_is_still_first() {
+    let mut board = Board::new();
+    let mut state = RuntimeState {
+        interview_mode: InterviewMode::Whiteboard,
+        ..RuntimeState::default()
+    };
+    for (byte, attributes) in fixture_attributes().iter().skip(3).enumerate() {
+        let snapshot = BoardSnapshot {
+            bytes: vec![0xff, 0xd8, u8::try_from(byte).unwrap()],
+            strokes: strokes_from_attributes(attributes),
+            checkpoint: checkpoint_from_attributes(attributes),
+            taken: taken_from_attributes(attributes),
+        };
+        record(&mut board, &mut state, snapshot);
+    }
+
+    // Arriving late, Repeat is not the board as it is now: the board after it
+    // is, so it is neither shown as the newest nor added as the final board,
+    // and the counts stay those of the board after it.
+    let labels = board
+        .report_boards()
+        .iter()
+        .map(|image| image.label)
         .collect::<Vec<_>>();
-    assert_eq!(
-        read,
-        vec![(3, None), (214, Some("Approach checkpoint")), (0, None)]
-    );
+    assert_eq!(labels, ["Repeat checkpoint", "Example checkpoint"]);
+    assert_eq!(board.latest.as_deref(), Some(&[0xff, 0xd8, 0][..]));
+    assert_eq!(state.board_strokes, 12);
+    assert_eq!(state.board_snapshots, 1);
 }
 
 #[test]
@@ -201,6 +253,20 @@ fn reads_only_known_checkpoint_phases() {
         )])),
         None
     );
+}
+
+/// The order a checkpoint was taken in counts from one; anything else is no
+/// order, and the checkpoint keeps its place of arrival.
+#[test]
+fn only_a_positive_whole_taken_orders_a_checkpoint() {
+    let taken = |value: &str| {
+        taken_from_attributes(&HashMap::from([("taken".to_string(), value.to_string())]))
+    };
+    assert_eq!(taken("3"), Some(3));
+    for value in ["0", "-1", "1.5", "first", ""] {
+        assert_eq!(taken(value), None, "{value:?}");
+    }
+    assert_eq!(taken_from_attributes(&HashMap::new()), None);
 }
 
 #[test]
@@ -249,6 +315,7 @@ fn snapshot(byte: u8) -> BoardSnapshot {
         bytes: vec![0xff, 0xd8, byte],
         strokes: u32::from(byte),
         checkpoint: None,
+        taken: None,
     }
 }
 
@@ -315,6 +382,18 @@ async fn drained(chunks: Vec<Result<Vec<u8>, &'static str>>) -> Option<BoardSnap
     let (tx, mut rx) = channel(BOARD_QUEUE);
     drain(futures_util::stream::iter(chunks), 5, None, tx).await;
     rx.try_recv().ok()
+}
+
+/// The checkpoint and the order it was taken in, read off the stream header,
+/// reach the room loop with the board.
+#[tokio::test]
+async fn a_drained_checkpoint_keeps_the_order_it_was_taken_in() {
+    let (tx, mut rx) = channel(BOARD_QUEUE);
+    let chunks = futures_util::stream::iter([Ok::<_, &str>(vec![0xff, 0xd8, 1])]);
+    drain(chunks, 5, Some(("Repeat checkpoint", Some(1))), tx).await;
+    let board = rx.try_recv().expect("the board arrives");
+    assert_eq!(board.checkpoint, Some("Repeat checkpoint"));
+    assert_eq!(board.taken, Some(1));
 }
 
 #[tokio::test]
@@ -432,6 +511,7 @@ async fn a_board_is_counted_kept_and_sent_once_per_interval() {
         bytes: vec![0xff, 0xd8, 0xff],
         strokes: 4,
         checkpoint: Some("Example checkpoint"),
+        taken: None,
     };
     let start = Instant::now();
     record(&mut board, &mut state, first);
@@ -452,6 +532,7 @@ async fn a_board_is_counted_kept_and_sent_once_per_interval() {
         bytes: vec![0xff, 0xd8, 0x00],
         strokes: 6,
         checkpoint: None,
+        taken: None,
     };
     record(&mut board, &mut state, second);
     let early = start + BOARD_SEND_INTERVAL - Duration::from_millis(1);
@@ -491,8 +572,9 @@ async fn a_board_is_counted_kept_and_sent_once_per_interval() {
 }
 
 /// Each phase keeps its own image: a second phase is added after the first
-/// rather than written over it, and the same phase again replaces its image in
-/// place rather than adding a second one under the same label.
+/// rather than written over it, and the same phase again keeps the image
+/// already held rather than replacing it or adding a second one under the same
+/// label.
 #[test]
 fn a_checkpoint_is_kept_per_phase() {
     let mut board = Board::new();
@@ -509,6 +591,7 @@ fn a_checkpoint_is_kept_per_phase() {
             bytes,
             strokes: 1,
             checkpoint: Some(checkpoint),
+            taken: None,
         };
         record(&mut board, &mut state, snapshot);
     }
@@ -516,15 +599,211 @@ fn a_checkpoint_is_kept_per_phase() {
     let labels = board
         .checkpoints
         .iter()
-        .map(|(label, bytes)| (*label, bytes.clone()))
+        .map(|(label, _, bytes)| (*label, bytes.clone()))
         .collect::<Vec<_>>();
     assert_eq!(
         labels,
         [
-            ("Example checkpoint", vec![0xff, 0xd8, 0x03]),
+            ("Example checkpoint", vec![0xff, 0xd8, 0x01]),
             ("Approach checkpoint", vec![0xff, 0xd8, 0x02]),
         ]
     );
+}
+
+/// A page sends a phase twice only to retry the capture it holds, so a second
+/// capture of a phase already kept is an older copy of that image, or one
+/// taken later than the step it is labeled with: it changes no image, no
+/// number and no order, and is not the newest board. Here the candidate went
+/// straight to an example and restated later, so Example was taken first and
+/// Repeat second; a second Repeat numbered 1 and a second Example numbered 2
+/// leave Repeat behind, its image the one taken when Repeat was recorded.
+#[test]
+fn a_second_capture_of_a_kept_phase_changes_nothing() {
+    let mut board = Board::new();
+    let mut state = RuntimeState {
+        interview_mode: InterviewMode::Whiteboard,
+        ..RuntimeState::default()
+    };
+    let mut arrive = |byte: u8, checkpoint: Option<&'static str>, taken: Option<u32>| {
+        let snapshot = BoardSnapshot {
+            bytes: vec![0xff, 0xd8, byte],
+            strokes: u32::from(byte),
+            checkpoint,
+            taken,
+        };
+        let changed = record(&mut board, &mut state, snapshot);
+        (
+            changed,
+            board.latest.clone(),
+            state.board_strokes,
+            state.board_snapshots,
+        )
+    };
+    arrive(1, Some("Example checkpoint"), Some(1));
+    arrive(2, Some("Repeat checkpoint"), Some(2));
+    let (_, latest, strokes, snapshots) = arrive(3, None, None);
+    let unchanged = (false, latest, strokes, snapshots);
+
+    assert_eq!(arrive(4, Some("Repeat checkpoint"), Some(1)), unchanged);
+    assert_eq!(arrive(5, Some("Example checkpoint"), Some(2)), unchanged);
+    assert_eq!(arrive(6, Some("Repeat checkpoint"), None), unchanged);
+
+    let kept = board
+        .checkpoints
+        .iter()
+        .map(|(label, taken, bytes)| (*label, *taken, bytes.clone()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        kept,
+        [
+            ("Example checkpoint", Some(1), vec![0xff, 0xd8, 1]),
+            ("Repeat checkpoint", Some(2), vec![0xff, 0xd8, 2]),
+        ]
+    );
+    let labels = board
+        .report_boards()
+        .iter()
+        .map(|image| image.label)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        labels,
+        ["Example checkpoint", "Repeat checkpoint", "Final board"]
+    );
+}
+
+/// Checkpoints that carry no order reach the report in the order they
+/// arrived, never sorted into REACTO order: the report credits writing on the
+/// board only when the Repeat checkpoint comes first, so a Repeat that came
+/// after an Example has to stay behind it.
+#[test]
+fn checkpoints_reach_the_report_in_the_order_they_arrived() {
+    let mut board = Board::new();
+    let mut state = RuntimeState {
+        interview_mode: InterviewMode::Whiteboard,
+        ..RuntimeState::default()
+    };
+    for checkpoint in ["Example checkpoint", "Repeat checkpoint"] {
+        let snapshot = BoardSnapshot {
+            bytes: vec![0xff, 0xd8, 0x01],
+            strokes: 1,
+            checkpoint: Some(checkpoint),
+            taken: None,
+        };
+        record(&mut board, &mut state, snapshot);
+    }
+    let labels = board
+        .report_boards()
+        .iter()
+        .map(|image| image.label)
+        .collect::<Vec<_>>();
+    assert_eq!(labels, ["Example checkpoint", "Repeat checkpoint"]);
+}
+
+/// Numbered checkpoints that arrive in the order they were taken are each the
+/// newest board, and one sent again under its own number is not, since the
+/// board already holds it; only one taken before a checkpoint already kept is
+/// late. A checkpoint with no number goes behind the numbered ones.
+#[test]
+fn only_a_checkpoint_taken_before_one_kept_is_late() {
+    let mut board = Board::new();
+    let mut state = RuntimeState {
+        interview_mode: InterviewMode::Whiteboard,
+        ..RuntimeState::default()
+    };
+    let mut arrive = |byte: u8, label: &'static str, taken: Option<u32>| {
+        let snapshot = BoardSnapshot {
+            bytes: vec![0xff, 0xd8, byte],
+            strokes: u32::from(byte),
+            checkpoint: Some(label),
+            taken,
+        };
+        record(&mut board, &mut state, snapshot);
+        (board.latest.clone(), state.board_strokes)
+    };
+    let newest = |byte: u8| (Some(vec![0xff, 0xd8, byte]), u32::from(byte));
+    assert_eq!(arrive(1, "Example checkpoint", Some(2)), newest(1));
+    assert_eq!(arrive(2, "Approach checkpoint", Some(3)), newest(2));
+    assert_eq!(arrive(3, "Approach checkpoint", Some(3)), newest(2));
+    assert_eq!(arrive(4, "Trace checkpoint", None), newest(4));
+    assert_eq!(arrive(5, "Repeat checkpoint", Some(1)), newest(4));
+
+    // Only a broken page numbers two checkpoints alike; neither was taken
+    // before the other, so neither is late.
+    assert_eq!(arrive(6, "Complexity checkpoint", Some(3)), newest(6));
+
+    let labels = board
+        .report_boards()
+        .iter()
+        .map(|image| image.label)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        labels,
+        [
+            "Repeat checkpoint",
+            "Example checkpoint",
+            "Approach checkpoint",
+            "Complexity checkpoint",
+            "Trace checkpoint",
+            "Final board"
+        ]
+    );
+}
+
+/// A candidate who goes straight to an example and restates later has Example
+/// taken first and Repeat second. When the Example image never reaches the
+/// agent, still held when the interview ends or ignored while both readers were
+/// busy, Repeat is the only checkpoint but was not taken first, so the report
+/// is not handed it as the Repeat checkpoint at all: writing on it was drawn
+/// after the candidate moved on.
+#[test]
+fn a_repeat_taken_after_a_missing_checkpoint_is_not_the_repeat_image() {
+    let mut board = Board::new();
+    let mut state = RuntimeState {
+        interview_mode: InterviewMode::Whiteboard,
+        ..RuntimeState::default()
+    };
+    let mut arrive = |byte: u8, checkpoint: Option<&'static str>, taken: Option<u32>| {
+        let snapshot = BoardSnapshot {
+            bytes: vec![0xff, 0xd8, byte],
+            strokes: 1,
+            checkpoint,
+            taken,
+        };
+        record(&mut board, &mut state, snapshot);
+        board
+            .report_boards()
+            .iter()
+            .map(|image| image.label)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        arrive(1, Some("Repeat checkpoint"), Some(2)),
+        [UNPLACED_REPEAT]
+    );
+    assert_eq!(
+        arrive(2, Some("Approach checkpoint"), Some(3)),
+        [UNPLACED_REPEAT, "Approach checkpoint"]
+    );
+    assert_eq!(
+        arrive(3, None, None),
+        [UNPLACED_REPEAT, "Approach checkpoint", "Final board"]
+    );
+
+    // An image from a page that numbers nothing cannot show it came first.
+    let mut unnumbered = Board::new();
+    let snapshot = BoardSnapshot {
+        bytes: vec![0xff, 0xd8, 1],
+        strokes: 1,
+        checkpoint: Some("Repeat checkpoint"),
+        taken: None,
+    };
+    record(&mut unnumbered, &mut state, snapshot);
+    let labels = unnumbered
+        .report_boards()
+        .iter()
+        .map(|image| image.label)
+        .collect::<Vec<_>>();
+    assert_eq!(labels, [UNPLACED_REPEAT]);
 }
 
 /// Clearing the board between steps does not take back the work drawn before
@@ -542,6 +821,7 @@ fn a_cleared_board_keeps_the_work_drawn_before_it() {
             bytes: vec![0xff, 0xd8],
             strokes,
             checkpoint: None,
+            taken: None,
         };
         record(&mut board, &mut state, snapshot);
         (state.board_strokes, crate::agent::written_work(&state))
@@ -571,6 +851,7 @@ fn completed_coding_idle_board_progress_uses_encoded_bytes_not_repeated_receipt(
         bytes,
         strokes,
         checkpoint: None,
+        taken: None,
     };
     assert!(record(&mut board, &mut state, snapshot(vec![1, 2, 3], 1)));
     assert!(!record(&mut board, &mut state, snapshot(vec![1, 2, 3], 2)));
