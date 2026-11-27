@@ -936,6 +936,55 @@ fn static_problem_bank_and_judges_cover_each_problem() {
             "word-pattern",
             "twelfth word is new where its letter repeats",
         ),
+        (
+            "longest-palindromic-substring",
+            "mirrored ends: s=\"abacdfgdcaba\"",
+        ),
+        (
+            "longest-palindromic-substring",
+            "whole string even: s=\"abba\"",
+        ),
+        (
+            "longest-palindromic-substring",
+            "matching prefix: s=\"aab\"",
+        ),
+        (
+            "longest-palindromic-substring",
+            "matching suffix: s=\"baa\"",
+        ),
+        ("longest-palindromic-substring", "mixed case: s=\"aA\""),
+        (
+            "longest-palindromic-substring",
+            "digit at the centre: s=\"ab1ba\"",
+        ),
+        (
+            "longest-palindromic-substring",
+            "capital at the centre: s=\"abBba\"",
+        ),
+        (
+            "longest-palindromic-substring",
+            "middle mirror: s=\"abacdedcfgf\"",
+        ),
+        (
+            "longest-palindromic-substring",
+            "even mirror beats odd mirror: s=\"abacca\"",
+        ),
+        (
+            "longest-palindromic-substring",
+            "odd mirror beats even mirror: s=\"aabcb\"",
+        ),
+        (
+            "longest-palindromic-substring",
+            "run of three at the centre: s=\"baaab\"",
+        ),
+        (
+            "longest-palindromic-substring",
+            "run of four at the centre: s=\"baaaab\"",
+        ),
+        (
+            "longest-palindromic-substring",
+            "two equal characters: s=\"aa\"",
+        ),
     ] {
         let labels = judges[id]["cases"]
             .as_array()
