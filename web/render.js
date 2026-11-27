@@ -1321,10 +1321,11 @@ function frameworkEvidenceMarkup(items, atBoard) {
 /// away from the end stops it, and scrolling back resumes it. A hidden panel
 /// has no range, so nothing done to it while the Problem tab is open changes
 /// the follow; `reveal` shows the end when the tab opens again, if following.
-export function createTranscriptView(document, panel) {
+export function createTranscriptView(document, panel, jumpToLatest = null) {
   const rows = [];
   const rowOf = new Map();
   let following = false;
+  let jumpFrame = null;
   // Where the panel was last seen resting, so a move since then that its
   // geometry cannot explain is the candidate's.
   let seenTop = 0;
@@ -1338,11 +1339,56 @@ export function createTranscriptView(document, panel) {
   }
   setFollowing(true);
 
+  function updateJump() {
+    if (!jumpToLatest) return;
+    const hidden = panel.hidden || !rows.length || atScrollEnd(panel);
+    // A keyboard activation hides its own control. Keep focus in the panel
+    // before hiding it, without scrolling the page to that focus target.
+    if (hidden && document.activeElement === jumpToLatest)
+      panel.focus({ preventScroll: true });
+    jumpToLatest.hidden = hidden;
+  }
+
   function trackCandidateScroll() {
-    if (scrolledByCandidate(panel, seenTop)) setFollowing(atScrollEnd(panel));
+    if (scrolledByCandidate(panel, seenTop)) {
+      stopJump();
+      setFollowing(atScrollEnd(panel));
+    }
     seenTop = panel.scrollTop;
+    updateJump();
   }
   panel.addEventListener("scroll", trackCandidateScroll);
+  if (jumpToLatest) {
+    jumpToLatest.addEventListener("click", () => {
+      stopJump();
+      setFollowing(true);
+      if (matchMedia("(prefers-reduced-motion: reduce)").matches) {
+        follow();
+        return;
+      }
+      const from = panel.scrollTop;
+      // A scroll queued before activation belongs to the previous position.
+      seenTop = from;
+      const started = performance.now();
+      // Bound the return regardless of transcript length. Programmatic steps
+      // record their own position, just as follow() does, so a real scroll
+      // can still interrupt the animation instead of being pulled back.
+      function step(now) {
+        const progress = Math.min((now - started) / 200, 1);
+        const bottom = panel.scrollHeight - panel.clientHeight;
+        panel.scrollTop = from + (bottom - from) * (1 - (1 - progress) ** 3);
+        seenTop = panel.scrollTop;
+        updateJump();
+        if (progress < 1) jumpFrame = requestAnimationFrame(step);
+        else {
+          jumpFrame = null;
+          follow();
+        }
+      }
+      jumpFrame = requestAnimationFrame(step);
+    });
+    updateJump();
+  }
   // A resize moves the end without a scroll event; Node has no observer.
   if (globalThis.ResizeObserver)
     new ResizeObserver(() => {
@@ -1353,10 +1399,16 @@ export function createTranscriptView(document, panel) {
   function follow() {
     // panel.scrollTop, not scrollIntoView: below the 1024px breakpoint the
     // page scrolls too, and the candidate's place in it is not ours to move.
-    if (following) panel.scrollTop = panel.scrollHeight;
+    if (following && jumpFrame === null) panel.scrollTop = panel.scrollHeight;
     // The follow and the clamp from new text both queue an event that is not
     // the candidate's.
     seenTop = panel.scrollTop;
+    updateJump();
+  }
+
+  function stopJump() {
+    if (jumpFrame !== null) cancelAnimationFrame(jumpFrame);
+    jumpFrame = null;
   }
 
   function render(row) {
@@ -1391,7 +1443,9 @@ export function createTranscriptView(document, panel) {
     /// panel at 0, and would take the place it reopens at for a scroll by
     /// the candidate. Before the first turn the empty state stays put.
     reveal() {
+      if (panel.hidden) stopJump();
       if (rows.length) follow();
+      else updateJump();
     },
     upsert(id, speaker, text, final, at = Date.now()) {
       let row = rowOf.get(id);

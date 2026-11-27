@@ -393,6 +393,19 @@ rows rewrap would otherwise read as the candidate's scroll; paused, that
 anchoring is what keeps the line being reread in place. A resize while it
 follows, which fires no scroll event, keeps the panel at its end.
 
+When the Transcript panel holds turns and the reader is away from its end, a
+"Jump to latest" button floats over the panel without a separate footer,
+background strip or reserved row. Showing or hiding it changes neither the
+panel's size nor its scroll range. The panel is reachable with Tab so a
+keyboard reader can scroll through earlier turns before reaching the button.
+The button uses the same end check and resumes the existing follow,
+scrolling only the panel over 200 ms with an ease-out. Reduced motion returns
+immediately, and a reader's scroll interrupts the animation. A scroll event
+queued before activation does not cancel the return. Returning to the end
+hides the button; if it held focus, focus moves to the panel without scrolling
+the page. The button stays hidden while the Problem tab is open, before the
+first turn, or at its end, including when its content does not overflow.
+
 An "Unclear" button beside the "Live CC:" label marks the Jim turn on screen,
 and pressing it again unmarks it. It shows only while a Jim turn is on screen,
 and once `MAX_UNCLEAR_LINES` (10) turns are marked it is disabled on any turn

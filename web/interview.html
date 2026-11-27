@@ -61,16 +61,33 @@
         </nav>
 
         <section id="problem-panel" class="side-panel"></section>
-        <section id="transcript-panel" class="side-panel" hidden>
-          <div class="empty-transcript">
-            <span aria-hidden="true">...</span>
-            <p>No conversation yet</p>
-            <p>
-              Everything you and Jim say appears here in real time, and is
-              included in your downloadable report.
-            </p>
-          </div>
-        </section>
+        <div class="transcript-view">
+          <section
+            id="transcript-panel"
+            class="side-panel"
+            tabindex="0"
+            aria-label="Interview transcript"
+            hidden
+          >
+            <div class="empty-transcript">
+              <span aria-hidden="true">...</span>
+              <p>No conversation yet</p>
+              <p>
+                Everything you and Jim say appears here in real time, and is
+                included in your downloadable report.
+              </p>
+            </div>
+          </section>
+          <button
+            id="transcript-latest"
+            class="pill-button transcript-jump"
+            type="button"
+            aria-controls="transcript-panel"
+            hidden
+          >
+            Jump to latest
+          </button>
+        </div>
         <!-- The controls a candidate reaches for while talking, docked under
              the problem rather than above it. Handing the turn over is the
              action used most, so it leads; ending the interview sits apart at

@@ -936,7 +936,11 @@ function holdWorkspaceBehindDialogs() {
 }
 
 async function init() {
-  state.transcript = createTranscriptView(document, nodes.transcriptPanel);
+  state.transcript = createTranscriptView(
+    document,
+    nodes.transcriptPanel,
+    document.querySelector("#transcript-latest"),
+  );
   renderRuntimeConfig();
   document.querySelector("#strict-note").hidden = !strict;
   nodes.hideExamples.checked = readStored(HIDE_EXAMPLES_KEY) === "1";
@@ -3412,7 +3416,7 @@ function selectTab(tab) {
   nodes.transcriptPanel.hidden = !transcript;
   nodes.problemTab.classList.toggle("selected", !transcript);
   nodes.transcriptTab.classList.toggle("selected", transcript);
-  if (transcript) state.transcript.reveal();
+  state.transcript.reveal();
 }
 
 /// The tab an interview opens on: the preferred language when this problem
