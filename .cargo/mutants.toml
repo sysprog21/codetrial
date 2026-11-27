@@ -51,7 +51,7 @@
 # reads the `Room` is the same case: it asks a joined room who is already
 # there. The half that waits, and ends early when the page releases the start,
 # is `arriving_candidate`, which takes a plain event channel and is tested in
-# tests/unit/dispatch.rs, so only the room lookup goes unjudged.
+# tests/unit/dispatch/mod.rs, so only the room lookup goes unjudged.
 #
 # `run_gemini_check` is the same shape one layer down: it opens a Gemini Live
 # session against Google and closes it. Replacing the body with `Ok(())` cannot
@@ -194,7 +194,7 @@
 # Splitting the arm bodies from the event match, as `recovery_event` was, would
 # bring them back under test.
 #
-# `handle_board_event` is the whiteboard's counterpart to `handle_media_event`:
+# `Board::handle_event` is the whiteboard's counterpart to `handle_media_event`:
 # it takes a `ByteStreamOpened` room event, and the reader that event carries
 # sits in a `TakeCell` whose constructor the SDK keeps private, so no test can
 # build the one event it acts on. What it decides is tested where it is
@@ -367,7 +367,7 @@
 # `capture_window`, `drain_tracks` and the rest).
 #
 # `is_candidate`, `is_duplicate_agent` and `candidate_pair` in
-# src/livekit/candidate.rs read a `RemoteParticipant` and hand three plain facts
+# src/livekit/room/candidate.rs read a `RemoteParticipant` and hand three plain facts
 # to the rule, and the wait in `arriving_candidate` guards its arm with
 # `is_candidate`; none can run without a participant the SDK will not let a test
 # build. The rules are tested apart as `candidate_parts` and
@@ -435,7 +435,7 @@ exclude_re = [
     "record_live_usage",
     "drain_live_usage",
     "handle_media_event",
-    "handle_board_event",
+    "Board::handle_event",
     "attach_audio",
     "next_audio_frame",
     "next_video_frame",
@@ -452,7 +452,7 @@ exclude_re = [
     "generate_phase_judgment_with_keys",
     "play_tool_ack",
     "replace tool_ack_clip ->",
-    "livekit/latency\\.rs:.*replace log with \\(\\)$",
+    "livekit/turn/latency\\.rs:.*replace log with \\(\\)$",
     "replace log_first_frame with \\(\\)$",
     "TaskRoom<'_>::on_data",
     "TaskRoom<'_>::on_room_event",
@@ -473,8 +473,8 @@ exclude_re = [
     "^src/livekit/tasks\\.rs:\\d+:\\d+: replace silence_output ",
     "LiveUsage::drain",
     "owner_only_dacl",
-    "^src/livekit/recovery\\.rs:\\d+:\\d+: .* in Driver<'r, 'c, 'i>::event$",
-    "^src/livekit/candidate\\.rs:\\d+:\\d+: replace (is_candidate|is_duplicate_agent) -> bool with (true|false)$",
-    "^src/livekit/candidate\\.rs:\\d+:\\d+: replace candidate_pair -> ",
-    "^src/livekit/candidate\\.rs:\\d+:\\d+: replace match guard is_candidate\\(&participant\\) with (true|false) in arriving_candidate$",
+    "^src/livekit/startup/recovery\\.rs:\\d+:\\d+: .* in Driver<'r, 'c, 'i>::event$",
+    "^src/livekit/room/candidate\\.rs:\\d+:\\d+: replace (is_candidate|is_duplicate_agent) -> bool with (true|false)$",
+    "^src/livekit/room/candidate\\.rs:\\d+:\\d+: replace candidate_pair -> ",
+    "^src/livekit/room/candidate\\.rs:\\d+:\\d+: replace match guard is_candidate\\(&participant\\) with (true|false) in arriving_candidate$",
 ]

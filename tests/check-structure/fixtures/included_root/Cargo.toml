@@ -1,0 +1,16 @@
+[package]
+name = "wt"
+version = "0.1.0"
+edition = "2024"
+
+# `git-wt` sorts first, and rust-analyzer gives `src/main.rs` the module its
+# `include!` is in.
+[[bin]]
+name = "wt"
+path = "src/main.rs"
+
+[[bin]]
+name = "git-wt"
+path = "src/git_wt.rs"
+
+[workspace]

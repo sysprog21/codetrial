@@ -43,7 +43,7 @@ pub const OUTPUT_WIDTH: u32 = 1280;
 pub const OUTPUT_HEIGHT: u32 = 720;
 pub const OUTPUT_FRAMERATE: u32 = 30;
 /// Kilobits per second, which is the unit `EncodingOptions` uses.
-pub const OUTPUT_VIDEO_BITRATE: u32 = 2000;
+pub const OUTPUT_VIDEO_BITRATE: u32 = crate::config::DEFAULT_RECORDING_BITRATE;
 pub const OUTPUT_AUDIO_BITRATE: u32 = 128;
 pub const OUTPUT_FILE_TYPE: &str = "MP4";
 pub const OUTPUT_VIDEO_CODEC: &str = "H264_MAIN";

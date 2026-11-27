@@ -25,8 +25,8 @@ fn timing(sent: bool) -> ToolTiming {
 #[test]
 fn only_declared_error_free_responses_are_accepted_but_send_status_stays_separate() {
     let state = RuntimeState::default();
-    let mut activity = RuntimeActivity::for_interview(Instant::now(), 0, 4);
-    activity.latency.bind("synthetic", 4, 1, 1500);
+    let mut probes = TurnProbes::default();
+    probes.latency.bind("synthetic", 4, 1, 1500);
     let answers = vec![
         (call(TOOL_READ_EDITOR, true), json!({"result":"synthetic"})),
         (call(TOOL_READ_BOARD, true), json!({"error":"disabled"})),
@@ -37,7 +37,7 @@ fn only_declared_error_free_responses_are_accepted_but_send_status_stays_separat
     ];
     for sent in [false, true] {
         let record = tool_timing(
-            &mut activity,
+            &mut probes,
             &state,
             &answers,
             HintCounters::capture(&state),
@@ -68,10 +68,10 @@ fn hint_context_distinguishes_released_volunteered_withheld_and_exhausted_calls(
         let before = HintCounters::capture(&state);
         let call = call(TOOL_LOG_HINT, requested);
         let response = execute_tool_call(&mut state, &call);
-        let mut activity = RuntimeActivity::for_interview(Instant::now(), 0, 4);
-        activity.latency.bind("synthetic", 4, 1, 1500);
+        let mut probes = TurnProbes::default();
+        probes.latency.bind("synthetic", 4, 1, 1500);
         let record = tool_timing(
-            &mut activity,
+            &mut probes,
             &state,
             &[(call, response)],
             before,
@@ -99,9 +99,9 @@ fn closing_context_observes_pending_and_completed_end_without_changing_either() 
             ended,
             ..RuntimeState::default()
         };
-        let mut activity = RuntimeActivity::for_interview(Instant::now(), 0, 4);
+        let mut probes = TurnProbes::default();
         let record = tool_timing(
-            &mut activity,
+            &mut probes,
             &state,
             &[(call(TOOL_READ_EDITOR, true), json!({"result":"synthetic"}))],
             HintCounters::capture(&state),
@@ -137,12 +137,12 @@ fn accepted_close_request_is_observed_before_tool_batch_response_timing() {
         };
         let mut state = fresh_state();
         let start = Instant::now();
-        let mut activity = RuntimeActivity::for_interview(start, 0, 7);
-        activity.latency.bind("closing-test", 7, 1, 1500);
-        activity.latency.anchor(start);
+        let mut probes = TurnProbes::default();
+        probes.latency.bind("closing-test", 7, 1, 1500);
+        probes.latency.anchor(start);
         let answers = execute_timed_tool_batch(
             &mut state,
-            &mut activity,
+            &mut probes,
             vec![
                 call(TOOL_END_INTERVIEW, true),
                 call(TOOL_END_INTERVIEW, true),
@@ -245,10 +245,10 @@ fn executed_tool_capture_precedes_send_and_telemetry_gates() {
     state.evidence_ledger.code.parser_observation = Some(crate::agent::CodeObservation::Parsed);
     state.evidence_ledger.code.substantive_revision = 1;
     let now = Instant::now();
-    let mut activity = RuntimeActivity::for_interview(now, 0, 7);
-    activity.latency.bind("acquisition-fixture", 7, 1, 1500);
-    activity.latency.anchor(now);
-    activity.latency.prompt(now);
+    let mut probes = TurnProbes::default();
+    probes.latency.bind("acquisition-fixture", 7, 1, 1500);
+    probes.latency.anchor(now);
+    probes.latency.prompt(now);
     let call = |id: &str| GeminiFunctionCall {
         id: id.into(),
         name: TOOL_READ_EDITOR.into(),
@@ -256,7 +256,7 @@ fn executed_tool_capture_precedes_send_and_telemetry_gates() {
     };
     let answers = execute_timed_tool_batch(
         &mut state,
-        &mut activity,
+        &mut probes,
         vec![call("actual-received-call-id"), call("second-id")],
         0,
         false,
@@ -287,7 +287,7 @@ fn executed_tool_capture_precedes_send_and_telemetry_gates() {
     assert_eq!(batch.identity.socket, 1);
     assert!(batch.identity.trace_turn.is_some());
     let record = tool_timing(
-        &mut activity,
+        &mut probes,
         &state,
         &answers,
         HintCounters::capture(&state),
@@ -295,20 +295,20 @@ fn executed_tool_capture_precedes_send_and_telemetry_gates() {
     );
     assert!(!record.to_string().contains("actual-received-call-id"));
     assert!(!record.to_string().contains("authored-result-sentinel"));
-    activity.latency.set_socket(2);
+    probes.latency.set_socket(2);
     execute_timed_tool_batch(
         &mut state,
-        &mut activity,
+        &mut probes,
         vec![call("replacement-id")],
         1,
         false,
         &mut None,
     );
     assert_eq!(capture.snapshot().batches[1].identity.socket, 2);
-    activity.latency.bind("foreign-room", 8, 3, 1500);
+    probes.latency.bind("foreign-room", 8, 3, 1500);
     execute_timed_tool_batch(
         &mut state,
-        &mut activity,
+        &mut probes,
         vec![call("foreign-id")],
         1,
         false,
@@ -319,7 +319,7 @@ fn executed_tool_capture_precedes_send_and_telemetry_gates() {
     drop(installed);
     execute_timed_tool_batch(
         &mut state,
-        &mut activity,
+        &mut probes,
         vec![call("uninstalled-id")],
         1,
         false,

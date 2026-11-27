@@ -1,0 +1,1366 @@
+//! Per-reply server latency: one trace per reply, from the input that asked for
+//! it to the first native audio capture, logged as `codetrial latency {JSON}`.
+//!
+//! Offsets are monotonic milestones from one origin rather than a sum of
+//! provider stages, because Gemini Live's stages overlap and are not exposed.
+//! Input that arrives while a reply is already under way belongs to the next
+//! reply, so it waits in `pending` until the current one reaches a boundary
+//! instead of moving the current origin or being lost with it.
+
+use std::time::{Duration, Instant};
+
+use serde_json::{Value, json};
+
+/// Episodes remembered on one obligation. A reply that outlives more
+/// replacements than this still reports the true count in
+/// `obligation_episode_count`.
+const EPISODES_KEPT: usize = 8;
+
+/// Spacing of `interview clock:` samples on the assessment clock.
+const CLOCK_SAMPLE_MS: u64 = 60_000;
+
+/// Spacing of `runtime tasks:` samples on the assessment clock, the same
+/// cadence as the harness's process resource samples.
+const TASK_SAMPLE_MS: u64 = 30_000;
+
+/// The microphone dequeue gaps counted as stalls, in `mic_gap_over_*`. A gap
+/// is counted when it is strictly longer than the threshold.
+const MIC_GAP_OVER_1S: Duration = Duration::from_secs(1);
+const MIC_GAP_OVER_10S: Duration = Duration::from_secs(10);
+const MIC_GAP_OVER_30S: Duration = Duration::from_secs(30);
+
+/// Version 1 never shipped; 2 keys turns by process and interview session, not
+/// by socket, so a reply that survives a socket replacement stays one turn.
+const SCHEMA_VERSION: u64 = 2;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::livekit) enum Origin {
+    /// The latest voiced input frame the room loop consumed.
+    Voice,
+    /// A platform prompt sent to the model.
+    Prompt,
+    /// A candidate transcript with no voiced frame before it.
+    Transcript,
+    /// Gemini's end of speech with no voiced frame before it.
+    VoiceEnd,
+    /// Output nothing local asked for; its offsets read near zero by
+    /// construction and must not be pooled with the others.
+    ProviderEvent,
+}
+
+impl Origin {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Voice => "last_voiced_pcm",
+            Self::Prompt => "prompt",
+            Self::Transcript => "transcript",
+            Self::VoiceEnd => "provider_voice_end",
+            Self::ProviderEvent => "provider_event",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::livekit) enum Boundary {
+    TurnComplete,
+    Interrupted,
+    /// A thinking hold cut the turn locally.
+    Held,
+    /// The socket was replaced; a reply not yet started keeps waiting.
+    SocketReplaced,
+}
+
+impl Boundary {
+    fn label(self) -> &'static str {
+        match self {
+            Self::TurnComplete => "turn_complete",
+            Self::Interrupted => "interrupted",
+            Self::Held => "held",
+            Self::SocketReplaced => "socket_replaced",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Milestones {
+    voice_end: Option<Instant>,
+    first_transcript: Option<Instant>,
+    transcript: Option<Instant>,
+    yielded: Option<Instant>,
+    transcripts_allowed: bool,
+}
+
+struct Trace {
+    turn: u64,
+    origin: Origin,
+    start: Instant,
+    origin_socket: u64,
+
+    // Until output starts, receipt timestamps can precede the last consumed
+    // microphone frame. Keep earlier inputs to recover the matching origin.
+    inputs: Vec<(Origin, Instant, u64)>,
+    saved: Vec<(Instant, Milestones)>,
+    voice_end: Option<Instant>,
+    /// The first input transcript fragment, which shows whether the words
+    /// arrive early enough to judge a finished sentence before END.
+    first_transcript: Option<Instant>,
+    transcript: Option<Instant>,
+    /// The candidate's explicit "my turn is done", which ends the wait for
+    /// the silence window.
+    yielded: Option<Instant>,
+    first_output: Option<Instant>,
+    first_tool_call: Option<Instant>,
+    /// A local acknowledgement queued while a tool round held the reply.
+    tool_ack: Option<Instant>,
+    last_tool_response: Option<Instant>,
+    tool_batches: u64,
+    tool_handler_ms: u64,
+    audio_accepted: bool,
+    /// The first audio the handler queued for native capture, and the socket
+    /// that produced it.
+    first_accept: Option<(Instant, u64)>,
+    /// Replacement episodes that began while this reply was owed, oldest first
+    /// and bounded; `episode_count` keeps the true number.
+    episodes: Vec<u64>,
+    episode_count: u64,
+}
+
+/// How an owed reply ended. `Open` is every record before its terminal one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Outcome {
+    Open,
+    /// Native capture accepted audio for it and its turn then ended.
+    Answered,
+    /// Something local cut it off, or a barge-in ended its generation, before
+    /// any audio was captured.
+    Superseded,
+    /// Its turn completed with no captured audio.
+    Ended,
+}
+
+impl Outcome {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::Answered => "answered",
+            Self::Superseded => "superseded",
+            Self::Ended => "ended",
+        }
+    }
+}
+
+/// Input for the next reply, held while the current one is still under way.
+#[derive(Clone)]
+struct Pending {
+    first_transcript: Option<Instant>,
+    transcript: Option<Instant>,
+    transcripts_allowed: bool,
+    inputs: Vec<(Origin, Instant, u64)>,
+    saved: Vec<(Instant, Milestones)>,
+    socket: u64,
+    origin: Origin,
+    at: Instant,
+    voice_end: Option<Instant>,
+    yielded: Option<Instant>,
+}
+
+/// The gap between consecutive microphone-frame dequeues in one interview: the
+/// longest, and how many exceeded 1, 10 and 30 seconds. Counters only: no
+/// frame, time series or content is kept.
+///
+/// A gap is measured between two frames dequeued from one subscribed audio
+/// stream, on the monotonic clock. The SDK keeps delivering (silence) frames
+/// while a track is published, so a long gap there means the consumer, not the
+/// candidate, was not dequeuing. The span between two streams (a track that
+/// was unsubscribed and a later one) and the span after a stream ended are not
+/// dequeue stalls and are never counted: [`Self::stream_broken`] forgets the
+/// last dequeue. It belongs to the interview, so a socket replacement does not
+/// reset it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(in crate::livekit) struct MicGaps {
+    last: Option<Instant>,
+    /// Whether any gap has been measured; before that nothing is known.
+    measured: bool,
+    max: Duration,
+    over_1s: u64,
+    over_10s: u64,
+    over_30s: u64,
+}
+
+impl MicGaps {
+    pub(in crate::livekit) fn dequeued(&mut self, now: Instant) {
+        if let Some(previous) = self.last.replace(now) {
+            let gap = now.saturating_duration_since(previous);
+            self.measured = true;
+            self.max = self.max.max(gap);
+            self.over_1s += u64::from(gap > MIC_GAP_OVER_1S);
+            self.over_10s += u64::from(gap > MIC_GAP_OVER_10S);
+            self.over_30s += u64::from(gap > MIC_GAP_OVER_30S);
+        }
+    }
+
+    pub(in crate::livekit) fn stream_broken(&mut self) {
+        self.last = None;
+    }
+
+    /// The four fields, `none` before any gap was measured (unknown, never
+    /// zero).
+    pub(in crate::livekit) fn fields(&self) -> String {
+        if !self.measured {
+            return "mic_gap_max_ms=none mic_gap_over_1s=none mic_gap_over_10s=none mic_gap_over_30s=none".to_string();
+        }
+        format!(
+            "mic_gap_max_ms={} mic_gap_over_1s={} mic_gap_over_10s={} mic_gap_over_30s={}",
+            crate::agent::saturating_ms(self.max),
+            self.over_1s,
+            self.over_10s,
+            self.over_30s
+        )
+    }
+}
+
+#[derive(Default)]
+pub(in crate::livekit) struct ReplyLatency {
+    /// The microphone dequeue gaps of this interview.
+    mic: MicGaps,
+    room: String,
+    session: u64,
+    socket: u64,
+    /// The provider's configured end-of-speech silence, which the analyzer
+    /// separates from the rest of the wait before END.
+    silence_window_ms: u32,
+    sequence: u64,
+    /// Replacement episodes begun in this interview session, one per attempt to
+    /// bring up a new socket whatever its result.
+    episodes: u64,
+    /// Sockets installed by a replacement.
+    replacements: u64,
+    /// `GoAway` advisories received since a replacement last took the count.
+    advisories: u32,
+    /// The interview's start, the one clock every numeric `interview_ms` reads.
+    anchor: Option<Instant>,
+    /// Wall-clock milliseconds at the anchor, `None` if the system clock reads
+    /// before the epoch.
+    start_unix_ms: Option<u64>,
+    anchor_uncertainty_ms: u64,
+    /// The last whole minute a clock sample was logged for.
+    sampled: u64,
+    /// The last whole 30 second period a task sample was logged for.
+    task_sampled: u64,
+    clock: Option<Instant>,
+    voice_ended: bool,
+    voice_started: bool,
+    trace: Option<Trace>,
+    pending: Option<Pending>,
+    /// The prompt size of the last single-generation turn: the context a reply
+    /// starts from, to see whether replies slow as a session grows.
+    context_tokens: Option<u64>,
+}
+
+/// Signed, so a milestone observed before a later-moved origin reads as
+/// negative rather than as missing.
+fn offset_ms(at: Instant, start: Instant) -> i64 {
+    match at.checked_duration_since(start) {
+        Some(after) => i64::try_from(crate::agent::saturating_ms(after)).unwrap_or(i64::MAX),
+        None => -i64::try_from(start.duration_since(at).as_millis()).unwrap_or(i64::MAX),
+    }
+}
+
+/// Whether an input or milestone at `at` was received by `now`. Output splits
+/// the trace at its receipt with this one rule for its inputs and on both sides
+/// of its milestones, so one exactly at the split stays with the reply that
+/// output began and the next reply gets only what came after: none is kept
+/// twice and none is dropped.
+fn received_by(at: Instant, now: Instant) -> bool {
+    at <= now
+}
+
+/// How long a voiced frame stays a possible origin. A provider event is
+/// received at most this far behind the microphone frames already consumed,
+/// and past it a long utterance would hold one entry per frame.
+const INPUT_HORIZON: Duration = Duration::from_secs(10);
+
+/// Entries held before older voiced frames are pruned, so pruning runs once
+/// per this many frames rather than on every one.
+const INPUT_PRUNE_AT: usize = 2048;
+
+/// Records an input, dropping voiced frames older than `INPUT_HORIZON` but the
+/// newest of them, which still answers an event older than every kept frame.
+fn push_input(inputs: &mut Vec<(Origin, Instant, u64)>, input: (Origin, Instant, u64)) {
+    if inputs.len() >= INPUT_PRUNE_AT
+        && let Some(cut) = input.1.checked_sub(INPUT_HORIZON)
+    {
+        let stale =
+            |(origin, at, _): &(Origin, Instant, u64)| *origin == Origin::Voice && *at < cut;
+        if let Some(keep) = inputs.iter().rposition(stale) {
+            let mut index = 0;
+            inputs.retain(|entry| {
+                index += 1;
+                index - 1 == keep || !stale(entry)
+            });
+        }
+    }
+    inputs.push(input);
+}
+
+/// The snapshot saved for an input at `at`: the earliest taken at or after
+/// it, the latest pushed among equals.
+fn nearest_saved(saved: &[(Instant, Milestones)], at: Instant) -> Option<usize> {
+    saved
+        .iter()
+        .enumerate()
+        .rev()
+        .filter(|(_, (saved_at, _))| *saved_at >= at)
+        .min_by_key(|(_, (saved_at, _))| *saved_at)
+        .map(|(index, _)| index)
+}
+
+fn historical_milestones<'a>(
+    inputs: &[(Origin, Instant, u64)],
+    saved: &'a mut [(Instant, Milestones)],
+    now: Instant,
+) -> Option<&'a mut Milestones> {
+    let (_, input_at, _) = inputs.iter().rev().find(|(_, at, _)| *at <= now)?;
+    let index = nearest_saved(saved, *input_at)?;
+    Some(&mut saved[index].1)
+}
+
+impl Trace {
+    /// Takes back the milestones saved for the input it now starts from.
+    fn restore_saved(&mut self) {
+        if let Some(index) = nearest_saved(&self.saved, self.start) {
+            let saved = self.saved[index].1;
+            self.voice_end = saved.voice_end;
+            self.first_transcript = saved.first_transcript;
+            self.transcript = saved.transcript;
+            self.yielded = saved.yielded;
+        }
+    }
+}
+
+pub(in crate::livekit) fn log(record: &Value) {
+    eprintln!("codetrial latency {record}");
+}
+
+impl ReplyLatency {
+    pub(in crate::livekit) fn bind(
+        &mut self,
+        room: &str,
+        session: u64,
+        socket: u64,
+        silence_window_ms: u32,
+    ) {
+        self.room = room.to_string();
+        self.session = session;
+        self.socket = socket;
+        self.silence_window_ms = silence_window_ms;
+        #[cfg(test)]
+        crate::livekit::probe::acquisition::bound(room, session);
+    }
+
+    /// A microphone frame was dequeued at `now`.
+    pub(in crate::livekit) fn mic_dequeued(&mut self, now: Instant) {
+        self.mic.dequeued(now);
+    }
+
+    /// The microphone stream ended or a new one began: no gap spans it.
+    pub(in crate::livekit) fn mic_stream_broken(&mut self) {
+        self.mic.stream_broken();
+    }
+
+    #[cfg(test)]
+    pub(in crate::livekit) fn mic_gaps(&self) -> MicGaps {
+        self.mic
+    }
+
+    /// The once-per-interview `mic gaps:` line, written as the interview ends
+    /// with the same fields the clock samples carry.
+    pub(in crate::livekit) fn mic_summary(&self, now: Instant) -> Option<String> {
+        let elapsed = u64::try_from(self.interview_ms(now)?).ok()?;
+        Some(format!(
+            "mic gaps: pid={} session={} elapsed_ms={elapsed} {} room={}",
+            std::process::id(),
+            self.session,
+            self.mic.fields(),
+            self.room
+        ))
+    }
+
+    pub(in crate::livekit) fn set_socket(&mut self, socket: u64) {
+        self.socket = socket;
+    }
+
+    /// Ends the trace under the socket it was on and continues on `socket`:
+    /// the reply it owes, if any, goes on over the new one.
+    pub(in crate::livekit) fn replace_socket(&mut self, now: Instant, socket: u64) {
+        self.close(Boundary::SocketReplaced, now);
+        self.set_socket(socket);
+    }
+
+    /// Starts a socket replacement's episode: its number, the reply it
+    /// carries over, and the `GoAway` advisories it takes the count of.
+    pub(in crate::livekit) fn begin_replacement(&mut self) -> (u64, Option<u64>, u32) {
+        let (episode, obligation) = self.begin_episode();
+        (episode, obligation, self.take_advisories())
+    }
+
+    /// Milliseconds on the assessment clock, `None` before it is anchored.
+    pub(in crate::livekit) fn interview_ms(&self, now: Instant) -> Option<i64> {
+        self.anchor.map(|anchor| offset_ms(now, anchor))
+    }
+
+    #[cfg(test)]
+    pub(in crate::livekit) fn acquisition_identity(
+        &self,
+    ) -> crate::livekit::probe::acquisition::IdentityView<'_> {
+        crate::livekit::probe::acquisition::IdentityView {
+            room: &self.room,
+            session: self.session,
+            socket: self.socket,
+            trace_turn: self.trace.as_ref().map(|trace| trace.turn),
+            clock: self.observation_clock(),
+        }
+    }
+
+    /// A fresh wall/monotonic pair for joining local harness observations.
+    /// Sampling delay and whole-millisecond rounding are uncertainty, not
+    /// drift.
+    pub(in crate::livekit) fn observation_clock(&self) -> Value {
+        let before = Instant::now();
+        let unix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .map(crate::agent::saturating_ms);
+        self.observation_clock_at(before, unix, Instant::now())
+    }
+
+    fn observation_clock_at(&self, before: Instant, unix: Option<u64>, after: Instant) -> Value {
+        let sampling = after.checked_duration_since(before);
+        let uncertainty = self.start_unix_ms.zip(unix).and(sampling).map(|duration| {
+            self.anchor_uncertainty_ms
+                .saturating_add(crate::agent::saturating_ms(duration))
+                .saturating_add(2)
+        });
+        json!({
+            "start_unix_ms": self.start_unix_ms,
+            "emitted_unix_ms": unix,
+            "emitted_ms": self.interview_ms(before),
+            "clock_uncertainty_ms": uncertainty,
+        })
+    }
+
+    /// Starts a replacement episode and ties it to the reply still owed, which
+    /// keeps its origin, start and number across the swap. Returns the episode
+    /// number and that reply's obligation, if any.
+    fn begin_episode(&mut self) -> (u64, Option<u64>) {
+        self.episodes += 1;
+        let episode = self.episodes;
+        let obligation = self.trace.as_mut().and_then(|trace| {
+            // Audio already accepted means the debt is paid: the swap that
+            // follows ends an answered reply and owes it nothing.
+            if trace.origin == Origin::ProviderEvent || trace.audio_accepted {
+                return None;
+            }
+            trace.episode_count += 1;
+            if trace.episodes.len() == EPISODES_KEPT {
+                trace.episodes.remove(0);
+            }
+            trace.episodes.push(episode);
+            Some(trace.turn)
+        });
+        (episode, obligation)
+    }
+
+    /// Anchors the clock and returns the line that says where it started.
+    ///
+    /// `start_unix_ms` is the wall clock at the interview's start, repeated on
+    /// every sample so a log cut short or joined from two files still knows it.
+    pub(in crate::livekit) fn anchor(&mut self, started: Instant) -> String {
+        self.anchor = Some(started);
+        let sampling = Instant::now();
+        self.start_unix_ms = std::time::SystemTime::now()
+            .checked_sub(started.elapsed())
+            .and_then(|at| at.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(crate::agent::saturating_ms);
+        self.anchor_uncertainty_ms =
+            crate::agent::saturating_ms(sampling.elapsed()).saturating_add(2);
+        self.sampled = 0;
+        self.task_sampled = 0;
+        self.clock_line(0, 0)
+    }
+
+    /// One bounded elapsed sample per whole minute of the assessment clock, at
+    /// most. A tick late by several minutes yields one sample, not a burst.
+    pub(in crate::livekit) fn clock_sample(&mut self, now: Instant) -> Option<String> {
+        let elapsed = u64::try_from(self.interview_ms(now)?).ok()?;
+        let minute = elapsed / CLOCK_SAMPLE_MS;
+        if minute <= self.sampled {
+            return None;
+        }
+        self.sampled = minute;
+        Some(self.clock_line(elapsed, minute))
+    }
+
+    /// One `runtime tasks:` sample per whole 30 seconds of the assessment
+    /// clock, at most. `alive` is the runtime's own count of tasks spawned and
+    /// not yet finished, or `None` where no runtime answers; that is logged as
+    /// `none`, never as zero. On a multithreaded runtime the count is
+    /// approximate, and it does not replace joining a reader task.
+    pub(in crate::livekit) fn task_sample(
+        &mut self,
+        now: Instant,
+        alive: Option<usize>,
+    ) -> Option<String> {
+        let elapsed = u64::try_from(self.interview_ms(now)?).ok()?;
+        let period = elapsed / TASK_SAMPLE_MS;
+        if period <= self.task_sampled {
+            return None;
+        }
+        self.task_sampled = period;
+        Some(format!(
+            "runtime tasks: pid={} session={} elapsed_ms={elapsed} sample={period} alive_tasks={} room={}",
+            std::process::id(),
+            self.session,
+            opt(alive),
+            self.room
+        ))
+    }
+
+    fn clock_line(&self, elapsed_ms: u64, sample: u64) -> String {
+        format!(
+            "interview clock: pid={} session={} start_unix_ms={} elapsed_ms={elapsed_ms} sample={sample} {} room={}",
+            std::process::id(),
+            self.session,
+            opt(self.start_unix_ms),
+            self.mic.fields(),
+            self.room
+        )
+    }
+
+    /// Counts a `GoAway` advisory and says whether to print it. `held` is
+    /// whether an earlier advisory is still waiting on this socket: only then
+    /// does this one repeat it. The first of a run prints and then each
+    /// doubling, so a server repeating itself cannot flood the log; the raw
+    /// count is kept for [`Self::take_advisories`].
+    pub(in crate::livekit) fn note_advisory(&mut self, held: bool) -> Option<u32> {
+        if !held {
+            self.advisories = 0;
+        }
+        self.advisories = self.advisories.saturating_add(1);
+        self.advisories.is_power_of_two().then_some(self.advisories)
+    }
+
+    /// The raw advisory count the replacement that starts now is spending.
+    fn take_advisories(&mut self) -> u32 {
+        std::mem::take(&mut self.advisories)
+    }
+
+    /// Numbers a socket a replacement installed.
+    pub(in crate::livekit) fn installed_replacement(&mut self) -> u64 {
+        self.replacements += 1;
+        self.replacements
+    }
+
+    /// The origin of the reply owed now, for the line that starts an episode.
+    pub(in crate::livekit) fn owed_origin(&self) -> Option<&'static str> {
+        self.trace
+            .as_ref()
+            .filter(|trace| trace.origin != Origin::ProviderEvent && !trace.audio_accepted)
+            .map(|trace| trace.origin.label())
+    }
+
+    /// A usage report. One that includes tool rounds sums several
+    /// invocations, so it says what was spent, not how large the context is.
+    pub(in crate::livekit) fn observe_usage(&mut self, prompt: u64, tool_use_prompt: u64) {
+        if prompt > 0 && tool_use_prompt == 0 {
+            self.context_tokens = Some(prompt);
+        }
+    }
+
+    /// A cold socket starts from the system instruction alone, so the last
+    /// socket's size says nothing about it until its own first report.
+    pub(in crate::livekit) fn forget_context(&mut self) {
+        self.context_tokens = None;
+    }
+
+    fn open(&mut self, origin: Origin, start: Instant) -> &mut Trace {
+        self.clock.get_or_insert(start);
+        self.sequence += 1;
+        self.trace.insert(Trace {
+            turn: self.sequence,
+            origin,
+            start,
+            origin_socket: self.socket,
+            inputs: vec![(origin, start, self.socket)],
+            saved: Vec::new(),
+            voice_end: None,
+            first_transcript: None,
+            transcript: None,
+            yielded: None,
+            first_output: None,
+            first_tool_call: None,
+            tool_ack: None,
+            last_tool_response: None,
+            tool_batches: 0,
+            tool_handler_ms: 0,
+            audio_accepted: false,
+            first_accept: None,
+            episodes: Vec::new(),
+            episode_count: 0,
+        })
+    }
+
+    fn trace_or_open(&mut self, origin: Origin, now: Instant) -> &mut Trace {
+        if self.trace.is_none() {
+            return self.open(origin, now);
+        }
+        self.trace.as_mut().expect("checked above")
+    }
+
+    /// Input that asks for a reply. Until the reply starts, the latest input is
+    /// what it answers; after, the input belongs to the next reply.
+    fn input(&mut self, origin: Origin, now: Instant) {
+        match self.trace.as_mut() {
+            None => {
+                self.open(origin, now);
+            }
+            Some(trace) if trace.first_output.is_some() => {
+                let mut previous = self.pending.take();
+                let same_voice = origin == Origin::Voice
+                    && previous.as_ref().is_some_and(|p| p.origin == Origin::Voice);
+                let transcripts_allowed = if same_voice {
+                    previous.as_ref().is_some_and(|p| p.transcripts_allowed)
+                } else {
+                    self.voice_started && origin == Origin::Voice
+                };
+                let mut saved = previous
+                    .as_mut()
+                    .map(|p| std::mem::take(&mut p.saved))
+                    .unwrap_or_default();
+                if let Some(p) = previous.as_ref()
+                    && !same_voice
+                {
+                    saved.push((
+                        p.at,
+                        Milestones {
+                            voice_end: p.voice_end,
+                            first_transcript: p.first_transcript,
+                            transcript: p.transcript,
+                            yielded: p.yielded,
+                            transcripts_allowed: p.transcripts_allowed,
+                        },
+                    ));
+                }
+                let yielded = previous
+                    .as_ref()
+                    .filter(|_| same_voice)
+                    .and_then(|p| p.yielded);
+                let first_transcript = previous
+                    .as_ref()
+                    .filter(|_| same_voice)
+                    .and_then(|p| p.first_transcript);
+                let transcript = previous
+                    .as_ref()
+                    .filter(|_| same_voice)
+                    .and_then(|p| p.transcript);
+                let mut inputs = previous.map(|p| p.inputs).unwrap_or_default();
+                push_input(&mut inputs, (origin, now, self.socket));
+                self.pending = Some(Pending {
+                    first_transcript,
+                    transcript,
+                    transcripts_allowed,
+                    saved,
+                    inputs,
+                    socket: self.socket,
+                    origin,
+                    at: now,
+                    voice_end: None,
+                    yielded,
+                });
+            }
+
+            Some(trace) => {
+                if origin == Origin::Prompt || origin != trace.origin {
+                    trace.saved.push((
+                        trace.start,
+                        Milestones {
+                            voice_end: trace.voice_end,
+                            first_transcript: trace.first_transcript,
+                            transcript: trace.transcript,
+                            yielded: trace.yielded,
+                            transcripts_allowed: self.voice_started,
+                        },
+                    ));
+                }
+                push_input(&mut trace.inputs, (origin, now, self.socket));
+                trace.origin = origin;
+                trace.start = now;
+                trace.origin_socket = self.socket;
+                if origin == Origin::Prompt {
+                    trace.voice_end = None;
+                    trace.first_transcript = None;
+                    trace.transcript = None;
+                    trace.yielded = None;
+                }
+            }
+        }
+    }
+
+    pub(in crate::livekit) fn voice(&mut self, now: Instant) {
+        // A queued platform prompt changes attribution, not the provider's
+        // judgement that trailing microphone frames are no longer speech.
+        if !self.voice_ended {
+            self.input(Origin::Voice, now);
+        }
+    }
+
+    pub(in crate::livekit) fn prompt(&mut self, now: Instant) {
+        self.input(Origin::Prompt, now);
+    }
+
+    /// A replacement briefing carries an existing reply debt, rather than
+    /// asking a new question and restarting the candidate's wait.
+    pub(in crate::livekit) fn recovery_prompt(&mut self, now: Instant) {
+        if self.trace.is_none() {
+            self.prompt(now);
+        }
+    }
+
+    pub(in crate::livekit) fn voice_start(&mut self) {
+        self.voice_ended = false;
+        self.voice_started = true;
+        match self.trace.as_mut() {
+            // Words from before this utterance say nothing about how early its
+            // own words arrive. A yield from before this utterance did not end
+            // it.
+            Some(trace) if trace.first_output.is_none() => {
+                trace.saved.push((
+                    trace.start,
+                    Milestones {
+                        voice_end: trace.voice_end,
+                        first_transcript: trace.first_transcript,
+                        transcript: trace.transcript,
+                        yielded: trace.yielded,
+                        transcripts_allowed: true,
+                    },
+                ));
+                trace.voice_end = None;
+                trace.first_transcript = None;
+                trace.transcript = None;
+                trace.yielded = None;
+            }
+            _ => {
+                if let Some(pending) = self.pending.as_mut() {
+                    pending.saved.push((
+                        pending.at,
+                        Milestones {
+                            voice_end: pending.voice_end,
+                            first_transcript: pending.first_transcript,
+                            transcript: pending.transcript,
+                            yielded: pending.yielded,
+                            transcripts_allowed: pending.transcripts_allowed,
+                        },
+                    ));
+                    pending.voice_end = None;
+                    pending.yielded = None;
+                    pending.first_transcript = None;
+                    pending.transcript = None;
+                    pending.transcripts_allowed = pending.origin == Origin::Voice;
+                }
+            }
+        }
+    }
+
+    fn align_input(&mut self, now: Instant, output: bool) {
+        let Some(trace) = self.trace.as_mut() else {
+            return;
+        };
+        if trace.first_output.is_some() || trace.start <= now {
+            return;
+        }
+        let index = trace
+            .inputs
+            .iter()
+            .rposition(|(_, at, _)| received_by(*at, now));
+        if !output {
+            trace
+                .inputs
+                .retain(|(origin, at, _)| *at <= now || *origin == Origin::Prompt);
+            if let Some(&(origin, at, socket)) = trace.inputs.last() {
+                trace.origin = origin;
+                trace.start = at;
+                trace.origin_socket = socket;
+                trace.restore_saved();
+            } else {
+                self.open(Origin::VoiceEnd, now);
+            }
+            return;
+        }
+        let later = trace.inputs.split_off(index.map_or(0, |i| i + 1));
+        if let Some(&(origin, at, socket)) = later.last() {
+            self.pending = Some(Pending {
+                saved: trace.saved.clone(),
+                inputs: later,
+                origin,
+                at,
+                socket,
+                voice_end: trace.voice_end.filter(|at| !received_by(*at, now)),
+                yielded: trace.yielded.filter(|at| !received_by(*at, now)),
+                first_transcript: trace.first_transcript.filter(|at| !received_by(*at, now)),
+                transcript: trace.transcript.filter(|at| !received_by(*at, now)),
+                transcripts_allowed: self.voice_started && origin == Origin::Voice,
+            });
+        }
+        if let Some(index) = index {
+            let (origin, at, socket) = trace.inputs[index];
+            trace.origin = origin;
+            trace.start = at;
+            trace.origin_socket = socket;
+            trace.restore_saved();
+            trace.voice_end = trace.voice_end.filter(|at| received_by(*at, now));
+            trace.yielded = trace.yielded.filter(|at| received_by(*at, now));
+            trace.first_transcript = trace.first_transcript.filter(|at| received_by(*at, now));
+            trace.transcript = trace.transcript.filter(|at| received_by(*at, now));
+        } else {
+            self.open(Origin::ProviderEvent, now);
+        }
+    }
+
+    pub(in crate::livekit) fn voice_end(&mut self, now: Instant) {
+        if let Some(trace) = self.trace.as_mut()
+            && trace.first_output.is_none()
+            && now < trace.start
+            && let Some(saved) = historical_milestones(&trace.inputs, &mut trace.saved, now)
+        {
+            saved.voice_end = Some(now);
+        }
+        if let Some(pending) = self.pending.as_mut()
+            && now < pending.at
+            && let Some(saved) = historical_milestones(&pending.inputs, &mut pending.saved, now)
+        {
+            saved.voice_end = Some(now);
+        }
+        self.align_input(now, false);
+        self.voice_ended = true;
+        if let Some(pending) = self.pending.as_mut()
+            && pending.at > now
+        {
+            pending
+                .inputs
+                .retain(|(origin, at, _)| *at <= now || *origin == Origin::Prompt);
+            if let Some(&(origin, at, socket)) = pending.inputs.last() {
+                pending.origin = origin;
+                pending.at = at;
+                pending.socket = socket;
+                if let Some(index) = nearest_saved(&pending.saved, at) {
+                    let saved = pending.saved[index].1;
+                    pending.voice_end = saved.voice_end;
+                    pending.first_transcript = saved.first_transcript;
+                    pending.transcript = saved.transcript;
+                    pending.yielded = saved.yielded;
+                    pending.transcripts_allowed = saved.transcripts_allowed;
+                }
+                if origin == Origin::Prompt {
+                    pending.yielded = None;
+                    pending.first_transcript = None;
+                    pending.transcript = None;
+                }
+            }
+        }
+        if self
+            .pending
+            .as_ref()
+            .is_some_and(|pending| pending.inputs.is_empty())
+        {
+            self.pending = None;
+        }
+        match self.trace.as_mut() {
+            Some(trace) if trace.first_output.is_some() => {
+                if let Some(pending) = self.pending.as_mut()
+                    && pending.origin == Origin::Voice
+                    && pending.at <= now
+                {
+                    pending.voice_end = Some(now);
+                } else {
+                    trace.voice_end.get_or_insert(now);
+                }
+            }
+            Some(trace) if trace.start <= now => trace.voice_end = Some(now),
+            Some(_) => {}
+            None => self.open(Origin::VoiceEnd, now).voice_end = Some(now),
+        }
+    }
+
+    pub(in crate::livekit) fn transcript(&mut self, now: Instant) {
+        if let Some(trace) = self.trace.as_mut()
+            && trace.first_output.is_none()
+            && now < trace.start
+            && let Some(saved) = historical_milestones(&trace.inputs, &mut trace.saved, now)
+        {
+            saved.first_transcript.get_or_insert(now);
+            saved.transcript = Some(now);
+            return;
+        }
+        if let Some(pending) = self.pending.as_mut()
+            && now < pending.at
+            && let Some(saved) = historical_milestones(&pending.inputs, &mut pending.saved, now)
+            && saved.transcripts_allowed
+        {
+            saved.first_transcript.get_or_insert(now);
+            saved.transcript = Some(now);
+            return;
+        }
+        match self.trace.as_mut() {
+            // Transcription can trail output for the same utterance. It is not
+            // evidence of another reply without new input already queued.
+            Some(trace) if trace.first_output.is_some() => {
+                if let Some(pending) = self.pending.as_mut()
+                    && pending.origin == Origin::Voice
+                    && pending.transcripts_allowed
+                {
+                    pending.first_transcript.get_or_insert(now);
+                    pending.transcript = Some(now);
+                }
+            }
+            Some(trace) => {
+                trace.first_transcript.get_or_insert(now);
+                trace.transcript = Some(now);
+            }
+            None => {
+                let trace = self.open(Origin::Transcript, now);
+                trace.first_transcript = Some(now);
+                trace.transcript = Some(now);
+            }
+        }
+    }
+
+    /// A yield ends the wait for the candidate input, including input queued
+    /// behind a reply already under way.
+    pub(in crate::livekit) fn yielded(&mut self, now: Instant) {
+        self.voice_ended = true;
+        if let Some(trace) = self.trace.as_mut()
+            && trace.first_output.is_none()
+        {
+            trace.yielded = Some(now);
+        } else if let Some(pending) = self.pending.as_mut()
+            && pending.origin == Origin::Voice
+        {
+            pending.yielded = Some(now);
+        }
+    }
+
+    /// The first substantive output of a generation: a tool call, an output
+    /// transcript or audio.
+    pub(in crate::livekit) fn output(&mut self, now: Instant, tool_call: bool) {
+        self.align_input(now, true);
+        if self
+            .trace
+            .as_ref()
+            .is_none_or(|trace| trace.first_output.is_none())
+        {
+            self.voice_started = false;
+        }
+        let trace = self.trace_or_open(Origin::ProviderEvent, now);
+        trace.inputs.clear();
+        trace.first_output.get_or_insert(now);
+        if tool_call {
+            trace.first_tool_call.get_or_insert(now);
+        }
+    }
+
+    /// The candidate hears something before the reply itself: the first
+    /// sound, which the reply's own audio record still measures past.
+    pub(in crate::livekit) fn tool_ack(&mut self, now: Instant) {
+        if let Some(trace) = self.trace.as_mut()
+            && !trace.audio_accepted
+        {
+            trace.tool_ack.get_or_insert(now);
+        }
+    }
+
+    /// A batch that failed to send is recorded but does not move the
+    /// continuation's start: nothing reached the model for it to resume on.
+    pub(in crate::livekit) fn tool_response(
+        &mut self,
+        now: Instant,
+        handler_ms: u64,
+        sent: bool,
+    ) -> Value {
+        let trace = self.trace_or_open(Origin::ProviderEvent, now);
+        if sent {
+            trace.last_tool_response = Some(now);
+            trace.tool_batches += 1;
+            trace.tool_handler_ms = trace.tool_handler_ms.saturating_add(handler_ms);
+        }
+        self.record("tool_response", now, Outcome::Open)
+    }
+
+    /// The first accepted audio chunk of this reply, or `None` after it.
+    pub(in crate::livekit) fn audio(&mut self, now: Instant) -> Option<Value> {
+        if self
+            .trace
+            .as_ref()
+            .is_some_and(|trace| trace.audio_accepted)
+        {
+            return None;
+        }
+        self.output(now, false);
+        let trace = self.trace.as_mut()?;
+        if std::mem::replace(&mut trace.audio_accepted, true) {
+            return None;
+        }
+        trace.first_accept = Some((now, self.socket));
+        Some(self.record("audio_accepted", now, Outcome::Open))
+    }
+
+    /// Unlike a reply trace, gate invalidation exists even with no output.
+    fn gate_observation(&self, stage: &str, started: Instant, finished: Instant) -> Value {
+        json!({
+            "event": "gate_boundary", "version": 1,
+            "pid": std::process::id(), "room": self.room,
+            "session": self.session, "socket": self.socket,
+            "turn": self.trace.as_ref().map(|trace| trace.turn),
+            "stage": stage, "interview_ms": self.interview_ms(started),
+            "event_end_ms": self.interview_ms(finished),
+            "clock": self.observation_clock(),
+        })
+    }
+
+    /// Observations do not settle or replace the reply latency trace.
+    pub(in crate::livekit) fn closing(&self, started: Instant, finished: Instant) {
+        self.gate_observation_to("closing", started, finished, &mut std::io::stderr().lock());
+    }
+
+    pub(in crate::livekit) fn closing_requested(&self, started: Instant, finished: Instant) {
+        self.gate_observation_to(
+            "close_requested",
+            started,
+            finished,
+            &mut std::io::stderr().lock(),
+        );
+    }
+
+    fn gate_observation_to(
+        &self,
+        stage: &str,
+        started: Instant,
+        finished: Instant,
+        output: &mut impl std::io::Write,
+    ) {
+        let line = format!(
+            "codetrial replay_gate {}\n",
+            self.gate_observation(stage, started, finished)
+        );
+        output
+            .write_all(line.as_bytes())
+            .expect("failed to write replay gate observation");
+    }
+
+    pub(in crate::livekit) fn boundary(
+        &mut self,
+        boundary: Boundary,
+        now: Instant,
+    ) -> Option<Value> {
+        self.boundary_to(boundary, now, &mut std::io::stderr().lock())
+    }
+
+    fn boundary_to(
+        &mut self,
+        boundary: Boundary,
+        now: Instant,
+        output: &mut impl std::io::Write,
+    ) -> Option<Value> {
+        // `now` is when the provider event arrived. A queued boundary can be
+        // handled after a later tool acknowledgement, so the observation also
+        // spans the time it took effect.
+        self.gate_observation_to(boundary.label(), now, Instant::now().max(now), output);
+        if matches!(boundary, Boundary::Held) {
+            self.voice_ended = false;
+            self.voice_started = false;
+        }
+        let trace = self.trace.as_ref()?;
+        let started = trace.first_output.is_some();
+        let accepted = trace.audio_accepted;
+        if !started
+            && now < trace.start
+            && matches!(boundary, Boundary::TurnComplete | Boundary::Interrupted)
+        {
+            return None;
+        }
+        match boundary {
+            // A barge-in can reach the microphone before the old generation's
+            // `Interrupted`; the input it started keeps its clock.
+            Boundary::Interrupted if !started => return None,
+
+            // The reply this input is owed now comes from the new socket, and
+            // the stall belongs in its total.
+            Boundary::SocketReplaced if !accepted => {
+                let mut record = self.record(boundary.label(), now, Outcome::Open);
+                record["continuing"] = true.into();
+                return Some(record);
+            }
+            _ => {}
+        }
+        let outcome = match boundary {
+            _ if accepted => Outcome::Answered,
+            Boundary::TurnComplete => Outcome::Ended,
+            _ => Outcome::Superseded,
+        };
+        let mut record = self.record(boundary.label(), now, outcome);
+        if boundary == Boundary::SocketReplaced {
+            record["continuing"] = false.into();
+        }
+        self.trace = None;
+        let pending = self.pending.take();
+        if matches!(boundary, Boundary::Held) {
+            return Some(record);
+        }
+        if pending.is_none() {
+            self.voice_ended = false;
+        }
+        if let Some(pending) = pending {
+            let trace = self.open(pending.origin, pending.at);
+            trace.voice_end = pending.voice_end;
+            trace.yielded = pending.yielded;
+            trace.first_transcript = pending.first_transcript;
+            trace.transcript = pending.transcript;
+            trace.origin_socket = pending.socket;
+            trace.inputs = pending.inputs;
+            trace.saved = pending.saved;
+        }
+        Some(record)
+    }
+
+    /// Whether a reply is being traced, so padding that only finishes an
+    /// earlier reply's audio can stay out of a trace it would otherwise open.
+    pub(in crate::livekit) fn is_open(&self) -> bool {
+        self.trace.is_some()
+    }
+
+    /// Ends the trace at a boundary nothing else needs the record of, logging
+    /// it.
+    pub(in crate::livekit) fn close(&mut self, boundary: Boundary, now: Instant) {
+        if let Some(record) = self.boundary(boundary, now) {
+            log(&record);
+        }
+    }
+
+    /// Every caller has just made sure a trace exists.
+    fn record(&self, stage: &str, now: Instant, outcome: Outcome) -> Value {
+        let trace = self.trace.as_ref().expect("a trace to record");
+        let at = |milestone: Option<Instant>| milestone.map(|at| offset_ms(at, trace.start));
+        let owed = trace.origin != Origin::ProviderEvent;
+        json!({
+            "event": "reply_latency", "version": SCHEMA_VERSION,
+            "pid": std::process::id(), "room": self.room,
+            "session": self.session, "socket": self.socket,
+            "origin_socket": trace.origin_socket, "turn": trace.turn,
+            "stage": stage, "origin": trace.origin.label(),
+            "silence_window_ms": self.silence_window_ms,
+            "elapsed_ms": offset_ms(now, trace.start),
+            "observed_ms": offset_ms(now, self.clock.expect("clock opened with trace")),
+            "provider_voice_end_ms": at(trace.voice_end),
+            "first_transcript_ms": at(trace.first_transcript),
+            "latest_transcript_ms": at(trace.transcript),
+            "candidate_yield_ms": at(trace.yielded),
+            "first_provider_output_ms": at(trace.first_output),
+            "first_tool_call_ms": at(trace.first_tool_call),
+            "tool_ack_ms": at(trace.tool_ack),
+            "last_tool_response_ms": at(trace.last_tool_response),
+            "tool_batches": trace.tool_batches,
+            "tool_handler_ms": trace.tool_handler_ms,
+            "context_tokens": self.context_tokens,
+            "interview_ms": self.interview_ms(now),
+            "clock": self.observation_clock(),
+            "obligation": owed.then_some(trace.turn),
+            "obligation_outcome": owed.then(|| outcome.label()),
+            "owed_start_interview_ms": self.interview_ms(trace.start).filter(|_| owed),
+            "obligation_episodes": if owed { trace.episodes.clone() } else { Vec::new() },
+            "obligation_episode_count": if owed { trace.episode_count } else { 0 },
+            "first_accept_ms": trace.first_accept.map(|(at, _)| offset_ms(at, trace.start)),
+            "first_accept_socket": trace.first_accept.map(|(_, socket)| socket),
+        })
+    }
+}
+
+/// What identifies one replacement episode on its lines. Episodes are numbered
+/// from 1 in order within one `(pid, room, session)`; two lines of one episode
+/// carry the same `episode`, and the same number from another scope is another
+/// episode.
+pub(in crate::livekit) struct EpisodeStart<'a> {
+    pub(in crate::livekit) room: &'a str,
+    pub(in crate::livekit) session: u64,
+    pub(in crate::livekit) episode: u64,
+    pub(in crate::livekit) trigger: &'a str,
+    pub(in crate::livekit) old_socket: u64,
+    /// The reply owed when the episode began, kept across the swap.
+    pub(in crate::livekit) obligation: Option<u64>,
+    pub(in crate::livekit) obligation_origin: Option<&'a str>,
+    /// Advisories received on the replaced socket, before coalescing.
+    pub(in crate::livekit) advisories: u32,
+    pub(in crate::livekit) interview_ms: Option<i64>,
+}
+
+pub(in crate::livekit) fn opt<T: std::fmt::Display>(value: Option<T>) -> String {
+    value.map_or_else(|| "none".to_string(), |value| value.to_string())
+}
+
+/// `replacement start:` -- logged once as an episode begins, so a log cut
+/// short before its `replacement end:` shows an unresolved episode and not
+/// nothing.
+pub(in crate::livekit) fn episode_start_line(start: &EpisodeStart<'_>) -> String {
+    format!(
+        "replacement start: pid={} session={} episode={} trigger={} old_socket={} obligation={} obligation_origin={} advisories={} interview_ms={} room={}",
+        std::process::id(),
+        start.session,
+        start.episode,
+        start.trigger,
+        start.old_socket,
+        opt(start.obligation),
+        start.obligation_origin.unwrap_or("none"),
+        start.advisories,
+        opt(start.interview_ms),
+        start.room
+    )
+}
+
+/// How an episode ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::livekit) enum EpisodeResult {
+    /// The new socket was installed.
+    Installed,
+    /// Setup was tried and no socket was installed.
+    Failed,
+    /// No setup was tried: the restart budget or billing refused first.
+    NoSetup,
+    /// A terminal intent (end, deadline, absence, room closed) took over.
+    Cancelled,
+}
+
+impl EpisodeResult {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Installed => "installed",
+            Self::Failed => "failed",
+            Self::NoSetup => "no_setup",
+            Self::Cancelled => "cancelled",
+        }
+    }
+}
+
+/// Milestones of one episode, each in milliseconds from the moment the close
+/// was handled (the same start as `rotation_gap_ms`). They are separate on
+/// purpose: `connected_ms` ends when the provider finished setup, and the
+/// reconnect notice before it, the opener after it and the installation each
+/// have their own, so notice delay is not read as provider setup.
+#[derive(Default, Clone, Copy)]
+pub(in crate::livekit) struct EpisodeMilestones {
+    /// The "reconnecting" notice returned.
+    pub(in crate::livekit) notice_ms: Option<u64>,
+    /// Physical setup took this long: from opening the replacement connection
+    /// to its setup completing. The notice and the old socket's close are
+    /// outside it.
+    pub(in crate::livekit) setup_ms: Option<u64>,
+    /// Setup completed and was counted; equal to `rotation_gap_ms`.
+    pub(in crate::livekit) connected_ms: Option<u64>,
+    /// The briefing, board resend and queued work were written and the opener
+    /// returned.
+    pub(in crate::livekit) opener_ms: Option<u64>,
+    /// The new socket was installed.
+    pub(in crate::livekit) install_ms: Option<u64>,
+}
+
+pub(in crate::livekit) struct EpisodeEnd<'a> {
+    pub(in crate::livekit) start: EpisodeStart<'a>,
+    pub(in crate::livekit) result: EpisodeResult,
+    /// The socket number the installed replacement has.
+    pub(in crate::livekit) new_socket: Option<u64>,
+    pub(in crate::livekit) replacement: Option<u64>,
+    /// The consecutive restart attempt the episode reached.
+    pub(in crate::livekit) attempt: usize,
+    pub(in crate::livekit) resume_tried: bool,
+    pub(in crate::livekit) milestones: EpisodeMilestones,
+    /// The assessment clock when the episode ended.
+    pub(in crate::livekit) interview_ms: Option<i64>,
+}
+
+/// `replacement end:` -- the one terminal line of an episode.
+pub(in crate::livekit) fn episode_end_line(end: &EpisodeEnd<'_>) -> String {
+    let m = &end.milestones;
+    format!(
+        "replacement end: pid={} session={} episode={} result={} trigger={} old_socket={} new_socket={} replacement={} attempt={} resume_tried={} obligation={} notice_ms={} setup_ms={} connected_ms={} opener_ms={} install_ms={} interview_ms={} room={}",
+        std::process::id(),
+        end.start.session,
+        end.start.episode,
+        end.result.label(),
+        end.start.trigger,
+        end.start.old_socket,
+        opt(end.new_socket),
+        opt(end.replacement),
+        end.attempt,
+        end.resume_tried,
+        opt(end.start.obligation),
+        opt(m.notice_ms),
+        opt(m.setup_ms),
+        opt(m.connected_ms),
+        opt(m.opener_ms),
+        opt(m.install_ms),
+        opt(end.interview_ms),
+        end.start.room
+    )
+}
+
+/// Why a socket's pressure summary was written.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::livekit) enum PressureEnd {
+    /// The socket was replaced by a new one.
+    Replacement,
+    /// The interview ended with this socket installed.
+    Terminal,
+    /// A socket set up for a replacement was dropped before it was installed.
+    Discarded,
+}
+
+impl PressureEnd {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Replacement => "replacement",
+            Self::Terminal => "terminal",
+            Self::Discarded => "discarded",
+        }
+    }
+}
+
+/// `socket_pressure` -- the one summary of how full a socket's event channel
+/// got and how long its reader waited for a slot. Written when the socket is
+/// let go, never per frame, and made only of counts and durations. The wait is
+/// time blocked on the channel; a reader that ended on the 45 second read
+/// limit says so in `reader_end` and has no blocked time for it.
+pub(in crate::livekit) fn pressure_record(
+    room: &str,
+    session: u64,
+    socket: u64,
+    end: PressureEnd,
+    interview_ms: Option<i64>,
+    pressure: &crate::gemini::SocketPressure,
+) -> Value {
+    let ms = crate::agent::saturating_ms;
+    json!({
+        "event": "socket_pressure", "version": SCHEMA_VERSION,
+        "pid": std::process::id(), "room": room,
+        "session": session, "socket": socket,
+        "end": end.label(), "reader_end": pressure.end.label(),
+        "interview_ms": interview_ms,
+        "capacity": pressure.capacity,
+        "occupancy_high_water": pressure.high_water,
+        "blocked_sends": pressure.blocked_sends,
+        "blocked_ms_total": ms(pressure.blocked_total),
+        "blocked_ms_max": ms(pressure.blocked_max),
+        "received": pressure.received,
+        "consumed": pressure.consumed,
+    })
+}
+
+#[cfg(test)]
+#[path = "../../../tests/unit/livekit/turn/latency.rs"]
+mod tests;

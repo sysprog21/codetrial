@@ -196,6 +196,16 @@ async fn next_frame(
         .unwrap()
 }
 
+fn task_config() -> crate::config::AgentConfig {
+    crate::config::load_from_pairs([
+        ("LIVEKIT_URL", "wss://example.livekit.cloud"),
+        ("LIVEKIT_API_KEY", "devkey"),
+        ("LIVEKIT_API_SECRET", "devsecret"),
+        ("GOOGLE_API_KEY", "task-test-key"),
+    ])
+    .unwrap()
+}
+
 /// A Gemini Live socket on a local port: completes setup, then hands every
 /// later frame to the test through the returned channel, a close included.
 async fn live_fixture(
@@ -206,13 +216,7 @@ async fn live_fixture(
 ) {
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::tungstenite::Message;
-    let config = crate::config::load_from_pairs([
-        ("LIVEKIT_URL", "wss://example.livekit.cloud"),
-        ("LIVEKIT_API_KEY", "devkey"),
-        ("LIVEKIT_API_SECRET", "devsecret"),
-        ("GOOGLE_API_KEY", "task-test-key"),
-    ])
-    .unwrap();
+    let config = task_config();
     let keys = GeminiKeys::from_config(&config);
     let boot = TaskLive::new(&config, task);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -687,13 +691,7 @@ async fn a_defense_room_offers_its_hint_tool_and_drives_the_panel() {
     use crate::tasks::access::{Admission, Preparation, TaskService};
     use crate::tasks::test_support::{SITE, assignment, preparation};
 
-    let config = crate::config::load_from_pairs([
-        ("LIVEKIT_URL", "wss://example.livekit.cloud"),
-        ("LIVEKIT_API_KEY", "devkey"),
-        ("LIVEKIT_API_SECRET", "devsecret"),
-        ("GOOGLE_API_KEY", "task-test-key"),
-    ])
-    .unwrap();
+    let config = task_config();
     let tools = |task: &PinnedTask| {
         let live = TaskLive::new(&config, task);
         crate::gemini::LiveSession::live_settings(&live).tools
@@ -802,4 +800,21 @@ fn a_transcript_line_has_the_fixtures_shape_and_is_bounded() {
         long["text"].as_str().unwrap().chars().count(),
         MAX_TRANSCRIPT_CHARS
     );
+}
+
+/// A task room names the models it speaks and reviews with, and a replacement
+/// socket is opened on the instructions for where the task stands now.
+#[tokio::test]
+async fn a_task_room_names_its_models_and_refreshes_its_instructions() {
+    let config = task_config();
+    let task = admitted().await;
+    let mut live = TaskLive::new(&config, &task);
+    assert_eq!(live.report_model(), config.gemini_report_model);
+    assert_eq!(live.live_model(), config.gemini_live_model);
+    let mut session = TaskSession::new(task, 100);
+    session.start(100);
+    let opening = live.instructions.clone();
+    live.refresh_instructions(&session);
+    assert_eq!(live.instructions, session.recovery_instructions());
+    assert_ne!(live.instructions, opening, "the prompt follows the phase");
 }

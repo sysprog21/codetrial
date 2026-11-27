@@ -488,7 +488,7 @@ impl RoomDispatcher for Unknown {
 
 /// A save waits until no interview is running, and a dispatcher that cannot
 /// tell is taken to have one. `LocalDispatcher` can, and how it counts its
-/// rooms is tested in `tests/unit/dispatch.rs`.
+/// rooms is tested in `tests/unit/dispatch/mod.rs`.
 #[tokio::test]
 async fn a_dispatcher_that_cannot_rule_out_an_interview_refuses_the_save() {
     let (livekit, _livekit) = livekit().await;

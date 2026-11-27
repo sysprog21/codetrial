@@ -91,7 +91,12 @@ fn a_hold_ends_the_wait_for_the_handoff_reply() {
     let (mut audio, _frames) = test_output_audio();
     let mut activity = RuntimeActivity::new(start);
     activity.arm_handoff_reply(start);
-    session::cut_off_for_hold(&mut RuntimeState::default(), &mut activity, &mut audio);
+    session::cut_off_for_hold(
+        &mut RuntimeState::default(),
+        &mut activity,
+        &mut TurnProbes::default(),
+        &mut audio,
+    );
     assert!(!activity.handoff_reply_due(
         start + Duration::from_secs(60),
         Duration::from_millis(1_500),
@@ -133,7 +138,12 @@ fn a_hold_disarms_the_replacement_watch() {
             candidate_spoke_at: None,
         },
     );
-    session::cut_off_for_hold(&mut RuntimeState::default(), &mut activity, &mut audio);
+    session::cut_off_for_hold(
+        &mut RuntimeState::default(),
+        &mut activity,
+        &mut TurnProbes::default(),
+        &mut audio,
+    );
     assert!(activity.take_rotation_watch().is_none());
 }
 
@@ -143,15 +153,15 @@ fn a_hold_discard_lasts_until_the_old_generation_ends() {
     let (mut audio, _frames) = test_output_audio();
     let mut activity = RuntimeActivity::new(start);
     activity.note_output(start);
-    session::cut_off_for_hold(&mut RuntimeState::default(), &mut activity, &mut audio);
+    session::cut_off_for_hold(
+        &mut RuntimeState::default(),
+        &mut activity,
+        &mut TurnProbes::default(),
+        &mut audio,
+    );
     assert!(activity.socket.discarding_output);
     activity.mark_prompted(start, Some("resume"), false);
-    assert!(!accept_gemini_event(
-        &GeminiEvent::TurnComplete,
-        &mut activity,
-        false,
-        start
-    ));
+    assert!(!activity.accept_event(&GeminiEvent::TurnComplete, false, start));
     assert!(activity.owes_prompt());
 }
 
@@ -160,12 +170,11 @@ async fn a_button_hold_closes_latency_while_waiting_or_in_a_tool_only_reply() {
     for tool_only in [false, true] {
         let start = Instant::now();
         let mut activity = RuntimeActivity::new(start);
-        activity.latency.voice(start);
-        activity
-            .latency
-            .voice_end(start + Duration::from_millis(100));
+        let mut probes = TurnProbes::default();
+        probes.latency.voice(start);
+        probes.latency.voice_end(start + Duration::from_millis(100));
         if tool_only {
-            activity
+            probes
                 .latency
                 .output(start + Duration::from_millis(150), true);
         }
@@ -175,6 +184,7 @@ async fn a_button_hold_closes_latency_while_waiting_or_in_a_tool_only_reply() {
             &mut gemini,
             &mut CandidateMedia::new(),
             &mut activity,
+            &mut probes,
             start + Duration::from_millis(200),
             THINKING_TRANSCRIPT_GRACE,
         )
@@ -185,7 +195,7 @@ async fn a_button_hold_closes_latency_while_waiting_or_in_a_tool_only_reply() {
             crate::gemini::realtime_audio_end_message()
         );
         assert!(
-            activity
+            probes
                 .latency
                 .boundary(
                     latency::Boundary::TurnComplete,
@@ -193,8 +203,8 @@ async fn a_button_hold_closes_latency_while_waiting_or_in_a_tool_only_reply() {
                 )
                 .is_none()
         );
-        activity.latency.voice(start + Duration::from_secs(120));
-        let record = activity
+        probes.latency.voice(start + Duration::from_secs(120));
+        let record = probes
             .latency
             .audio(start + Duration::from_millis(120_500))
             .unwrap();
@@ -208,8 +218,8 @@ async fn a_button_hold_closes_latency_while_waiting_or_in_a_tool_only_reply() {
 async fn a_listening_floor_hold_discards_the_tool_generation_before_a_release_reply() {
     let start = Instant::now() - Duration::from_secs(1);
     let mut turn = hold_turn(RuntimeState::default());
-    turn.activity.latency.voice(start);
-    turn.activity
+    turn.probes.latency.voice(start);
+    turn.probes
         .latency
         .output(start + Duration::from_millis(100), true);
     turn.activity.note_output(Instant::now());
@@ -234,22 +244,25 @@ async fn a_listening_floor_hold_discards_the_tool_generation_before_a_release_re
         crate::gemini::realtime_audio_end_message()
     );
     let released = Instant::now();
-    turn.activity
-        .mark_prompted(released, Some("release"), false);
-    assert!(!session::accept_gemini_event(
-        &GeminiEvent::Text("old continuation".into()),
+    session::mark_prompted(
         &mut turn.activity,
+        &mut turn.probes,
+        released,
+        Some("release"),
+        false,
+    );
+    assert!(!turn.activity.accept_event(
+        &GeminiEvent::Text("old continuation".into()),
         false,
         released + Duration::from_millis(100)
     ));
-    assert!(!session::accept_gemini_event(
+    assert!(!turn.activity.accept_event(
         &GeminiEvent::TurnComplete,
-        &mut turn.activity,
         false,
         released + Duration::from_millis(200)
     ));
     let record = turn
-        .activity
+        .probes
         .latency
         .audio(released + Duration::from_millis(500))
         .unwrap();
@@ -390,7 +403,7 @@ fn a_replacement_drops_every_wait_the_old_socket_owed() {
         stale_turn_pending: true,
         tool_response_outstanding: true,
     };
-    clear_abandoned_socket_work(&mut state, &mut activity);
+    clear_abandoned_socket_work(&mut state, &mut activity, &mut TurnProbes::default());
     assert_eq!(activity.socket, turn::SocketWork::default());
     assert!(!state.end_requested);
     assert!(state.thinking_hold.is_declared());
@@ -762,9 +775,19 @@ fn delivery_uncertainty_is_shared_by_hold_and_socket_handoff() {
         state.interviewer_delivery.transcript(0);
         state.interviewer_delivery.audio(output.playout_deadline);
         match cut {
-            "hold" => session::cut_off_for_hold(&mut state, &mut activity, &mut output),
+            "hold" => session::cut_off_for_hold(
+                &mut state,
+                &mut activity,
+                &mut TurnProbes::default(),
+                &mut output,
+            ),
             "handoff" => {
-                hand_over(&mut state, &mut activity, &mut output);
+                hand_over(
+                    &mut state,
+                    &mut activity,
+                    &mut TurnProbes::default(),
+                    &mut output,
+                );
             }
             _ => unreachable!(),
         }
@@ -801,9 +824,19 @@ fn delivery_uncertainty_marks_an_open_line_only_when_its_cut_stops_audio() {
         }
         assert_eq!(output.is_playing(), playing);
         match cut {
-            "hold" => session::cut_off_for_hold(&mut state, &mut activity, &mut output),
+            "hold" => session::cut_off_for_hold(
+                &mut state,
+                &mut activity,
+                &mut TurnProbes::default(),
+                &mut output,
+            ),
             "handoff" => {
-                hand_over(&mut state, &mut activity, &mut output);
+                hand_over(
+                    &mut state,
+                    &mut activity,
+                    &mut TurnProbes::default(),
+                    &mut output,
+                );
             }
             _ => unreachable!(),
         }
@@ -841,7 +874,12 @@ fn delivery_uncertainty_seals_the_line_a_hold_cut() {
     activity.generating = true;
     let (mut output, _) = test_output_audio();
     state.interviewer_delivery.transcript(0);
-    session::cut_off_for_hold(&mut state, &mut activity, &mut output);
+    session::cut_off_for_hold(
+        &mut state,
+        &mut activity,
+        &mut TurnProbes::default(),
+        &mut output,
+    );
     assert!(state.interviewer_delivery.uncertain.contains(&0));
     assert!(!state.interviewer_delivery.accepts(0));
     state.interviewer_delivery.complete();
@@ -865,7 +903,12 @@ fn delivery_uncertainty_after_a_stalled_hold_ends_at_the_next_audio() {
     assert!(activity.generation_stalled(now));
     let (mut output, _) = test_output_audio();
     state.interviewer_delivery.transcript(0);
-    session::cut_off_for_hold(&mut state, &mut activity, &mut output);
+    session::cut_off_for_hold(
+        &mut state,
+        &mut activity,
+        &mut TurnProbes::default(),
+        &mut output,
+    );
     assert!(state.interviewer_delivery.uncertain.contains(&0));
     state.interviewer_delivery.audio(Instant::now());
     state.interviewer_delivery.transcript(1);
@@ -1176,21 +1219,21 @@ fn another_agent_is_a_duplicate_and_this_agent_is_not() {
 fn a_reply_owed_during_a_hold_is_kept_and_a_known_event_is_not_replaced() {
     let owed = |state: &RuntimeState| state.owed_reply_on_resume.clone();
     let mut state = RuntimeState::default();
-    hold_owed_reply(&mut state, None);
+    state.hold_owed_reply(None);
     assert_eq!(
         owed(&state),
         Some(None),
         "a hold with no event still owes a reply"
     );
-    hold_owed_reply(&mut state, Some("first"));
+    state.hold_owed_reply(Some("first"));
     assert_eq!(owed(&state), Some(Some("first".into())), "an event arrives");
-    hold_owed_reply(&mut state, None);
+    state.hold_owed_reply(None);
     assert_eq!(
         owed(&state),
         Some(Some("first".into())),
         "an unknown event never replaces a known one"
     );
-    hold_owed_reply(&mut state, Some("second"));
+    state.hold_owed_reply(Some("second"));
     assert_eq!(
         owed(&state),
         Some(Some("second".into())),

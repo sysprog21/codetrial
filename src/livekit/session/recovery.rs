@@ -6,8 +6,8 @@
 /// cannot lose it and a pending write need not borrow authoritative state.
 use super::{
     ContinuityScope, GeminiEventContext, GeminiLiveSession, Instant, Interruptible, ModelInputKind,
-    PreparedInput, RoomLink, RuntimeState, SpeechHandoff, Transport, TurnCause,
-    continuity_input_for, latency, ordered_private_clock, prepare_input_transcript,
+    PreparedInput, RoomLink, RuntimeActivity, RuntimeState, SpeechHandoff, Transport, TurnCause,
+    TurnProbes, continuity_input_for, latency, ordered_private_clock, prepare_input_transcript,
     record_live_usage,
 };
 
@@ -101,7 +101,7 @@ pub(in crate::livekit) fn prepare_listening_handoff(
     );
     let body = format!(
         "{body}{}",
-        crate::livekit::earlier_references(&state.earlier_steps_pending)
+        crate::agent::earlier_references(&state.earlier_steps_pending)
     );
     Ok((prepare_plain_context(state, &body), briefed))
 }
@@ -138,7 +138,7 @@ pub(super) fn log_socket_pressure(
             context.activity.live_session_id,
             socket,
             end,
-            context.activity.latency.interview_ms(Instant::now()),
+            context.probes.latency.interview_ms(Instant::now()),
             &pressure,
         ));
     }
@@ -162,11 +162,21 @@ pub(in crate::livekit) fn apply_recovery_transcript(
     };
     let released = prepared.release.is_some();
     if !was_held && context.state.interviewer_silenced() && owed {
-        crate::livekit::hold_owed_reply(context.state, prompt.as_deref());
+        context.state.hold_owed_reply(prompt.as_deref());
     }
     if released && let Some(owed) = context.state.owed_reply_on_resume.clone() {
         context.activity.owe_prompt(Instant::now(), owed);
     }
     context.transcripts.publish(room, prepared.segment);
     released || was_held != context.state.interviewer_silenced()
+}
+
+/// The reply a handoff socket owed is now asked for directly.
+pub(in crate::livekit) fn renew_handoff_prompt(
+    activity: &mut RuntimeActivity,
+    probes: &mut TurnProbes,
+    now: Instant,
+) {
+    probes.latency.recovery_prompt(now);
+    activity.renew_handoff_prompt(now);
 }

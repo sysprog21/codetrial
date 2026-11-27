@@ -1,0 +1,28 @@
+# Existing architectural debt suppressed by `check-structure --allow`.
+# A finding not listed here fails. Fixing a listed one is never an error
+# by itself, but under `--ratchet` it must leave this list in the same
+# change: run `check-structure --update-allow` on this file.
+field-leak codetrial::accounts::Accounts::config
+field-leak codetrial::agent::evidence::EvidenceLedger::entries
+field-leak codetrial::agent::evidence::EvidenceLedger::metrics
+field-leak codetrial::livekit::media::OutputAudio::tool_ack
+field-leak codetrial::livekit::media::OutputAudio::tool_ack_task
+field-leak codetrial::livekit::room::room_events::RoomEventReader::startup_sync_pending
+field-leak codetrial::livekit::room::room_link::Recorder::eviction_seed
+field-leak codetrial::livekit::turn::RuntimeActivity::floor_tracker
+field-leak codetrial::livekit::turn::RuntimeActivity::live_exit
+field-leak codetrial::livekit::turn::RuntimeActivity::live_socket
+field-leak codetrial::livekit::turn::RuntimeActivity::phase_judge
+field-leak codetrial::livekit::turn::RuntimeActivity::prompt_text
+field-leak codetrial::livekit::turn::RuntimeActivity::socket
+field-leak codetrial::tasks::access::State::result
+shallow-module codetrial::accounts
+shallow-module codetrial::accounts::peer
+shallow-module codetrial::config
+shallow-module codetrial::livekit::turn
+shallow-module codetrial::peer_audio
+shallow-module codetrial::tasks::session
+wide-directory src/
+wide-directory src/agent/
+wide-directory src/web/
+wide-directory tests/

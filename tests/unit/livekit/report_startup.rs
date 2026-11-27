@@ -6,9 +6,9 @@ use super::*;
 
 use super::tests::{ReceiptTestEvent, delivery_test_packet, receipt_bytes, report_test_config};
 use crate::livekit::readiness::{
-    RoomEventReader, StartupContext, probe_live_output, ready_runtime_activity,
-    startup_ready_notice,
+    StartupContext, probe_live_output, ready_runtime_activity, startup_ready_notice,
 };
+use crate::livekit::room_events::RoomEventReader;
 use crate::runtime::bootstrap;
 
 #[tokio::test]
@@ -110,6 +110,7 @@ async fn startup_speech_is_frozen_when_end_wins_before_replay() {
             .unwrap();
         let mut turn = tests::hold_turn(initial_runtime_state(&boot, Instant::now()));
         let mut media = CandidateMedia::new();
+        let mut streams = CandidateStreams::default();
         media.identity = Some("candidate".into());
         let greeting = with_timer(&turn.state, boot.greeting.clone());
         let requested_at = Instant::now();
@@ -121,6 +122,7 @@ async fn startup_speech_is_frozen_when_end_wins_before_replay() {
             Duration::from_secs(5),
             &mut StartupContext {
                 media: &mut media,
+                streams: &mut streams,
                 candidate_identity: "candidate",
                 candidate_video: false,
                 deferred_events: &mut Vec::new(),
@@ -131,7 +133,7 @@ async fn startup_speech_is_frozen_when_end_wins_before_replay() {
         .await
         .unwrap();
         turn.state.started_at = started_at;
-        turn.activity = ready_runtime_activity(
+        (turn.activity, turn.probes) = ready_runtime_activity(
             &config,
             boot.room_name,
             started_at,
@@ -195,6 +197,7 @@ async fn startup_speech_is_frozen_when_end_wins_before_replay() {
             let ended = packets::reduce_data_packet(
                 context.state,
                 context.activity,
+                context.probes,
                 crate::runtime::TOPIC_CONTROL,
                 &serde_json::json!({"type":"end_interview", "reason":"candidate_ended"}),
                 true,

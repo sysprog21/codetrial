@@ -39,5 +39,5 @@ fn splits_or_reorders(character: char) -> bool {
 }
 
 #[cfg(test)]
-#[path = "../tests/unit/quote.rs"]
+#[path = "../tests/unit/root/quote.rs"]
 mod tests;

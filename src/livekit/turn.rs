@@ -14,15 +14,118 @@ use std::time::{Duration, Instant};
 
 #[cfg(test)]
 use crate::config::DEFAULT_MAX_INTERIM_REVIEWS;
+use crate::livekit::timing::CHECKPOINT_VOICE_QUIET;
 
 use crate::agent::{
-    PhaseJudgeDue, RuntimeState, SpeakerTurn, TEST_REACTION_COOLDOWN_S, TimingInput, ViewFor,
+    PhaseJudgeDue, RuntimeState, TEST_REACTION_COOLDOWN_S, TimingInput, ViewFor,
     behavioral_silence_nudge, board_silence_nudge, candidate_lines, changed_excerpt,
     proactive_review, silence_nudge, timing_decision, unreviewed_from, with_timer,
 };
 
+mod activity;
+pub(in crate::livekit) use activity::{
+    OutputDisposition, TurnBoundary, answers_prompt, ends_turn, is_output, output_disposition,
+    turn_boundary,
+};
+pub(in crate::livekit) mod agent_state;
+pub(in crate::livekit) mod board;
+pub(in crate::livekit) mod floor;
+pub(in crate::livekit) mod latency;
+mod probes;
+mod prompt_tokens;
+pub(in crate::livekit) mod speakers;
+pub(in crate::livekit) mod timing;
+
+pub(super) use speakers::SpeakerTurns;
 mod trailing;
+pub(in crate::livekit) mod transcripts;
 mod voice;
+
+pub(super) use probes::TurnProbes;
+pub(super) use prompt_tokens::PromptTokenWatch;
+
+/// How an interview's Live session ended, as its summary line spells it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum LiveOutcome {
+    Ok,
+    Error,
+    GeminiUnreachable,
+    Billing,
+}
+
+impl LiveOutcome {
+    /// A project out of credit is named wherever the failure surfaced, since
+    /// it is the one an operator fixes by paying rather than by waiting, and
+    /// the one that looks like any other silence from the candidate's side.
+    pub(super) fn from_error(error: &(dyn std::error::Error + 'static), otherwise: Self) -> Self {
+        if crate::gemini::is_billing_failure(error) {
+            Self::Billing
+        } else {
+            otherwise
+        }
+    }
+
+    pub(super) fn as_str(self) -> &'static str {
+        match self {
+            Self::Ok => "ok",
+            Self::Error => "error",
+            Self::GeminiUnreachable => "gemini_unreachable",
+            Self::Billing => "billing",
+        }
+    }
+}
+
+/// The one side call of a kind that may be in flight, an interim review or a
+/// phase judgment, owned rather than let loose.
+///
+/// Two things a bare `tokio::spawn` got wrong. A task that panics sends no
+/// result, so a loop tracking "a review is running" in a bool would believe one
+/// forever and spend a single panic to disable every remaining pause in the
+/// interview; asking the handle is the same question with no second copy of the
+/// answer. And `JoinHandle` detaches on drop, so an interview that ended under
+/// a review left a task holding a cloned API key and writing to a log nobody
+/// was reading any more. `run_room` has several exits and none of them should
+/// have to remember this, so the abort is the drop.
+#[derive(Default)]
+pub(super) struct SideCall(Option<tokio::task::JoinHandle<String>>);
+
+impl SideCall {
+    pub(super) fn is_running(&self) -> bool {
+        self.0.is_some()
+    }
+
+    /// The handle once it has finished, leaving the slot empty.
+    ///
+    /// `is_finished` is true for a task that panicked as well as one that
+    /// returned, and awaiting a handle that has finished does not block, so
+    /// this is the one place a review leaves the slot, however it ended.
+    pub(super) fn finished(&mut self) -> Option<tokio::task::JoinHandle<String>> {
+        if self.0.as_ref()?.is_finished() {
+            self.0.take()
+        } else {
+            None
+        }
+    }
+
+    /// The handle, finished or not, leaving the slot empty.
+    pub(super) fn take(&mut self) -> Option<tokio::task::JoinHandle<String>> {
+        self.0.take()
+    }
+
+    pub(super) fn start(&mut self, handle: tokio::task::JoinHandle<String>) {
+        if let Some(replaced) = self.0.replace(handle) {
+            replaced.abort();
+        }
+    }
+}
+
+impl Drop for SideCall {
+    fn drop(&mut self) {
+        if let Some(handle) = self.0.take() {
+            handle.abort();
+        }
+    }
+}
 
 /// How long the room has to be quiet before a pause is worth reading into.
 ///
@@ -279,170 +382,8 @@ impl RotationWatch {
     }
 }
 
-/// The prompt-token counts a context cut is judged from. Only a heuristic:
-/// the provider reports no compression event, so a cut is read off a drop in
-/// the prompt count between completed turns, with tool turns, whose totals sum
-/// several invocations, kept as spend and upper bounds rather than readings.
-#[derive(Debug, Default)]
-pub(super) struct PromptTokenWatch {
-    /// The latest prompt count observed since the last completed turn, and the
-    /// largest since then, the completed turn's own count included. A turn's
-    /// usage may arrive on frames other than the one completing it, so the
-    /// drop is judged at completion.
-    pub(super) latest_prompt_tokens: Option<u64>,
-    pub(super) peak_prompt_tokens: u64,
-    /// The last completed single-generation count, without observations from
-    /// a turn later found to have used tools.
-    comparable_prompt_tokens: u64,
-    /// A tool turn's largest observed total bounds each invocation's context.
-    /// It can prove a decrease but must never seed the comparable peak.
-    tool_prompt_tokens: u64,
-    /// The last tool turn's total, kept only to judge whether a cut is
-    /// plausible: the context grows through tool turns too, and the frozen
-    /// comparable count alone would read it as still near the target. Cleared
-    /// by the next comparable count.
-    tool_prompt_bound: u64,
-    pub(super) context_refresh_pending: bool,
-    /// A tool-assisted usage sample can sum several model invocations. Its
-    /// prompt total is spend, not a context-size reading comparable with a
-    /// single-generation turn. Only a total below a prior comparable count
-    /// can prove a cut; it never becomes the next comparison's baseline.
-    tool_usage_this_turn: bool,
-}
-
-impl PromptTokenWatch {
-    /// Comparable observations, periodic or not; a zero says nothing about
-    /// context. Tool-turn totals remain spend counters and upper bounds only.
-    pub(super) fn observe_prompt_tokens(
-        &mut self,
-        compression: Option<crate::config::GeminiContextCompression>,
-        prompt: u64,
-    ) {
-        if compression.is_none() || prompt == 0 {
-            return;
-        }
-        if self.tool_usage_this_turn {
-            self.tool_prompt_tokens = self.tool_prompt_tokens.max(prompt);
-            return;
-        }
-        self.latest_prompt_tokens = Some(prompt);
-        self.peak_prompt_tokens = self.peak_prompt_tokens.max(prompt);
-    }
-
-    /// Schedules a checkpoint when the turn just completed ran on a context the
-    /// provider had cut. The reference is the larger of the last completed
-    /// count and any observation since, so usage reported on a frame of its
-    /// own still counts. A drop of the threshold is a cut, and so is any drop
-    /// from a context that had reached the trigger: new input in the same turn
-    /// can make up most of what was cut, but a context only shrinks when the
-    /// provider cuts it. For a tool turn, only a total below the previous
-    /// completed single-generation count can prove that decrease. A heuristic,
-    /// not an API compression event.
-    pub(super) fn observe_turn_complete(
-        &mut self,
-        compression: Option<crate::config::GeminiContextCompression>,
-    ) {
-        let tool_turn = std::mem::take(&mut self.tool_usage_this_turn);
-        let tool_prompt = std::mem::take(&mut self.tool_prompt_tokens);
-        if tool_turn {
-            self.latest_prompt_tokens = None;
-        }
-        let Some(compression) = compression else {
-            return;
-        };
-        let (reference, latest) = if tool_turn {
-            if tool_prompt == 0 {
-                return;
-            }
-            (self.comparable_prompt_tokens, tool_prompt)
-        } else {
-            let Some(latest) = self.latest_prompt_tokens.take() else {
-                return;
-            };
-            (self.peak_prompt_tokens, latest)
-        };
-        let threshold = u64::from(
-            compression
-                .trigger_tokens
-                .saturating_sub(compression.target_tokens),
-        )
-        .saturating_div(2)
-        .clamp(1, 2048);
-        let cut_at_trigger =
-            reference >= u64::from(compression.trigger_tokens) && latest < reference;
-        if reference.saturating_sub(latest) >= threshold || cut_at_trigger {
-            self.context_refresh_pending = true;
-            if tool_turn {
-                // The aggregate proved a drop but supplies no new comparable
-                // baseline. Using it would count the following ordinary
-                // response's smaller single invocation as another cut.
-                self.comparable_prompt_tokens = 0;
-                self.peak_prompt_tokens = 0;
-            }
-        }
-        if tool_turn {
-            self.tool_prompt_bound = latest;
-        } else {
-            self.comparable_prompt_tokens = latest;
-            self.peak_prompt_tokens = latest;
-            self.tool_prompt_bound = 0;
-        }
-    }
-
-    /// Whether the context could reach the trigger on the next input: nothing
-    /// measured yet, a cut already detected, or the last comparable count in
-    /// the upper half of the band a cut drops it through. Just after a cut the
-    /// context sits near the target, so the continuity a cut needs is not
-    /// carried again until it has grown back toward the trigger. A tool turn's
-    /// total counts as an upper bound here, so growth through tool turns is not
-    /// missed; erring high costs continuity text, erring low costs the cut.
-    pub(super) fn context_cut_plausible(
-        &self,
-        compression: Option<crate::config::GeminiContextCompression>,
-    ) -> bool {
-        let Some(compression) = compression else {
-            return false;
-        };
-        let measured = self.peak_prompt_tokens;
-        let bound = measured.max(self.tool_prompt_bound);
-        let trigger = u64::from(compression.trigger_tokens);
-        let band = trigger.saturating_sub(u64::from(compression.target_tokens));
-        self.context_refresh_pending || measured == 0 || bound >= trigger - band / 2
-    }
-
-    pub(super) fn mark_tool_usage(&mut self) {
-        if !self.tool_usage_this_turn {
-            self.tool_prompt_tokens = self.latest_prompt_tokens.take().unwrap_or(0);
-
-            // Usage can precede the tool-call frame. Retract that provisional
-            // peak when the turn proves to contain multiple invocations.
-            self.peak_prompt_tokens = self.comparable_prompt_tokens;
-        }
-        self.tool_usage_this_turn = true;
-        self.latest_prompt_tokens = None;
-    }
-
-    /// What a replacement keeps: only a resumed socket's baseline, for the
-    /// reason `RuntimeActivity::reset_context_observations` gives.
-    pub(super) fn reset(&mut self, resumed: bool) {
-        let kept = resumed.then_some((
-            self.peak_prompt_tokens,
-            self.comparable_prompt_tokens,
-            self.tool_prompt_bound,
-        ));
-        *self = Self::default();
-        if let Some((peak, comparable, bound)) = kept {
-            self.peak_prompt_tokens = peak;
-            self.comparable_prompt_tokens = comparable;
-            self.tool_prompt_bound = bound;
-        }
-    }
-}
-
 pub(super) struct RuntimeActivity {
     pub(super) floor_tracker: super::floor::FloorTracker,
-    pub(super) turn_timing: super::timing::TurnTiming,
-    pub(super) latency: super::latency::ReplyLatency,
     pub(super) last_code_change: Instant,
     /// The substantive revision and language last delivered silently or in a
     /// briefing; the code itself is `RuntimeState::code_shown`.
@@ -590,11 +531,6 @@ pub(super) struct RuntimeActivity {
     incoming_speech_owed: bool,
 }
 
-/// How long the microphone has to stay quiet before a checkpoint may go out:
-/// above the default one-second end-of-speech silence, so a pause between two
-/// sentences is not taken for the end of the turn.
-pub(super) const CHECKPOINT_VOICE_QUIET: Duration = Duration::from_secs(2);
-
 /// How long a provider speech-start may stand with no fresh evidence, from the
 /// microphone or the provider, before its missing end is assumed. Voiced
 /// frames renew it, so it never ends real speech; it bounds how long one lost
@@ -622,31 +558,6 @@ pub(super) struct Stalls {
     pub(super) spend_restart: bool,
 }
 
-/// Whether a hold landing now leaves output still on its way.
-///
-/// Only a turn still being produced can deliver more events. Once it is
-/// complete and merely draining, its `TurnComplete` has already been and gone,
-/// so arming the discard on that state leaves it armed: nothing arrives to
-/// disarm it, and the first reply after the release is swallowed whole.
-///
-/// A generation or tool continuation that has produced nothing for
-/// `PROMPT_STALL` is not on its way either, the way `settle_stalls` stops
-/// counting a prompt then. A live one ends when the release prompt reaches
-/// Gemini, which interrupts it and so ends the discard; a dead one never ends,
-/// and a discard armed on it dropped the answer to the release prompt until the
-/// watchdog asked again. That covers the floor too: audio a stalled generation
-/// already delivered took `Floor::Speaking`, and only its `TurnComplete` would
-/// have handed the floor back.
-pub(super) fn hold_leaves_output_in_flight(activity: &RuntimeActivity, now: Instant) -> bool {
-    let continuation_live = activity.socket.tool_response_outstanding
-        && activity
-            .tool_response_at
-            .is_some_and(|at| now.saturating_duration_since(at) < PROMPT_STALL);
-    ((activity.floor == Floor::Speaking || activity.generating)
-        && !activity.generation_stalled(now))
-        || continuation_live
-}
-
 /// Who holds the conversation. `agent_busy` + `agent_turn_complete` encoded
 /// this as two bools, but only three of the four combinations were reachable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -657,6 +568,17 @@ pub(super) enum Floor {
     Speaking,
     /// The turn is complete but queued audio is still draining.
     AwaitingPlayout,
+}
+
+/// The agent's output has settled: nothing generating, and nothing left in the
+/// LiveKit playout queue. The floor alone is not enough, because it is stamped
+/// once when a turn completes and the queue drains on its own afterwards.
+///
+/// Two things wait on this. The goodbye is over when it is true, and a `GoAway`
+/// may replace the transport when it is true: replacing Gemini interrupts its
+/// output queue, so anything still in flight would be cut.
+pub(super) fn output_settled(floor: Floor, audio_playing: bool) -> bool {
+    floor != Floor::Speaking && !audio_playing
 }
 
 impl RuntimeActivity {
@@ -682,7 +604,7 @@ impl RuntimeActivity {
         candidate_open: bool,
         now: Instant,
     ) -> bool {
-        self.tokens.context_refresh_pending
+        self.tokens.context_refresh_needed()
             && !candidate_open
             && !self.candidate_voice_active
             && self
@@ -735,15 +657,7 @@ impl RuntimeActivity {
     /// provider's context and so its baseline, or a cut in its first turn
     /// would have nothing to be measured against; a cold one starts over.
     pub(super) fn reset_context_observations(&mut self, resumed: bool) {
-        // Logged under the socket it ended on; the reply it owes, if any,
-        // continues on the new one.
-        self.latency
-            .close(super::latency::Boundary::SocketReplaced, Instant::now());
-        self.latency.set_socket(self.live_socket);
         self.tokens.reset(resumed);
-        if !resumed {
-            self.latency.forget_context();
-        }
         self.transcribed_on_socket = false;
 
         // A watch left by the previous replacement belongs to a socket that is
@@ -771,7 +685,6 @@ impl RuntimeActivity {
     pub(super) fn with_interim_review_cap(now: Instant, max_interim_reviews: usize) -> Self {
         Self {
             floor_tracker: super::floor::FloorTracker::default(),
-            turn_timing: super::timing::TurnTiming::default(),
             last_code_change: now,
             silent_editor_delivery: None,
             last_user_speech: now,
@@ -813,7 +726,6 @@ impl RuntimeActivity {
             rotation: None,
             handoff_listening_since: None,
             live_session_id: 0,
-            latency: super::latency::ReplyLatency::default(),
             live_exit: super::LiveOutcome::Ok,
             candidate_voice_at: None,
             transcribed_on_socket: false,
@@ -870,12 +782,10 @@ impl RuntimeActivity {
         // among them, is what the next audio answers.
         self.drop_rotation_watch();
         self.drop_handoff_reply();
-        self.latency.prompt(now);
         self.mark_prompted_state(now, text, allows_silence, false);
     }
 
     pub(super) fn mark_recovery_prompted(&mut self, now: Instant, text: Option<&str>) {
-        self.latency.recovery_prompt(now);
         self.mark_prompted_state(now, text, false, true);
     }
 
@@ -1386,12 +1296,6 @@ impl RuntimeActivity {
         self.rotation = None;
     }
 
-    /// The watch of the replacement whose first reply audio was just queued,
-    /// once.
-    pub(super) fn take_rotation_watch(&mut self) -> Option<RotationWatch> {
-        self.rotation.take()
-    }
-
     /// Gemini finished the turn, so whatever a tool response was owed has
     /// arrived; the floor waits on the queue, or is the candidate's already
     /// when nothing is left to play.
@@ -1414,12 +1318,6 @@ impl RuntimeActivity {
     pub(super) fn mark_listening(&mut self) {
         self.floor = Floor::Listening;
         self.last_agent_speech = Instant::now();
-    }
-
-    pub(super) fn note_latency_transcript(&mut self, now: Instant) {
-        if !self.is_late_transcript(now) {
-            self.latency.transcript(now);
-        }
     }
 
     /// Gemini has transcribed something the candidate said, so they have
@@ -1449,7 +1347,10 @@ impl RuntimeActivity {
     /// within `LATE_TRANSCRIPT_GRACE` of a completed turn is not armed either.
     /// The drop of stale playout ahead of this call already handed the floor
     /// back, so this is the only place that can tell it from a new answer.
-    pub(super) fn note_candidate_finished(&mut self, now: Instant, audio_playing: bool) {
+    ///
+    /// Whether this started a wait, which the turn timing records as the
+    /// transcript that closed the candidate's turn.
+    pub(super) fn note_candidate_finished(&mut self, now: Instant, audio_playing: bool) -> bool {
         self.reset_completed_coding_idle();
         self.last_user_speech = now;
         self.transcribed_on_socket = true;
@@ -1467,13 +1368,14 @@ impl RuntimeActivity {
         {
             self.awaiting_reply_since = Some(now);
             self.tool_ack_owed = true;
-            self.turn_timing.note_transcript(now);
 
             // The candidate has moved on past a prompt that went unanswered, so
             // their turn is what is owed now. Left set, a replacement minutes
             // later is told to answer a prompt nobody is waiting on.
             self.clear_prompt_wait();
+            return true;
         }
+        false
     }
 
     /// One fragment of the candidate's current utterance, against the hold.
@@ -1535,37 +1437,41 @@ impl RuntimeActivity {
 
     /// The utterance behind a provisional request has ended, so the request
     /// stands: declare it.
+    ///
+    /// Whether it was declared, which closes the held reply's latency trace.
     pub(super) fn confirm_thinking_request(
         &mut self,
         state: &mut RuntimeState,
         now: Instant,
         receipt: u64,
-    ) {
+    ) -> bool {
         if !state.thinking_hold.is_requested() || state.ended {
-            return;
+            return false;
         }
         self.declared_request(state, now, receipt);
+        true
     }
 
     /// `settle_stale_request`, for the watch tick: a request its turn's end
-    /// never confirmed is confirmed here instead.
+    /// never confirmed is confirmed here instead. Whether one was, which closes
+    /// the held reply's latency trace.
     pub(super) fn settle_stale_request(
         &mut self,
         state: &mut RuntimeState,
         now: Instant,
         receipt: u64,
-    ) {
-        if state.settle_stale_request(now, receipt) {
+    ) -> bool {
+        let settled = state.settle_stale_request(now, receipt);
+        if settled {
             self.socket.reply_after_thinking_discard = false;
-            self.latency.close(super::latency::Boundary::Held, now);
         }
+        settled
     }
 
     /// A confirmed request replaces debt caused only by a tentative hold.
     fn declared_request(&mut self, state: &mut RuntimeState, now: Instant, receipt: u64) {
         self.socket.reply_after_thinking_discard = false;
         state.declare_thinking(now, receipt);
-        self.latency.close(super::latency::Boundary::Held, now);
     }
 
     /// What a control packet did to a provisional request, read off the
@@ -1807,7 +1713,7 @@ impl RuntimeActivity {
         state: &RuntimeState,
         now: Instant,
     ) -> Option<String> {
-        if !super::session::editor_review_allowed(state)
+        if !crate::agent::editor_review_allowed(state)
             || !self.incoming_speech_active(now)
             || now.saturating_duration_since(self.last_code_change) < CODE_SETTLE
             || state.evidence_ledger.code.substantive_revision == 0
@@ -1859,6 +1765,9 @@ impl RuntimeActivity {
     }
 
     pub(super) fn commit_watch_prompt(&mut self, prompt: &WatchPrompt, now: Instant) {
+        if prompt.behavioral_nudge {
+            self.behavioral_nudged = true;
+        }
         if prompt.completed_coding_nudge {
             self.completed_coding_nudges = self.completed_coding_nudges.saturating_add(1);
             self.last_successful_completed_nudge = Some(now);
@@ -2088,8 +1997,10 @@ pub(super) struct UnsentWatch {
 /// the macro outright.
 pub(super) struct TurnState {
     pub(super) state: RuntimeState,
-    pub(super) agent_state: super::session::AgentState,
+    pub(super) agent_state: super::AgentState,
     pub(super) activity: RuntimeActivity,
+    pub(super) probes: TurnProbes,
+    pub(super) streams: super::streams::CandidateStreams,
     pub(super) turns: SpeakerTurns,
     pub(super) transcripts: super::transcripts::TranscriptWriter,
 }
@@ -2108,104 +2019,6 @@ pub(super) enum Interruptible {
     /// and the wrap-up wait reads the emptied queue as the turn being over, so
     /// a "thanks" mid sentence ended the interview there.
     No,
-}
-
-/// One open turn per speaker. Gemini interleaves input and output
-/// transcription, so they cannot share a single accumulator.
-#[derive(Debug, Default)]
-pub(super) struct SpeakerTurns {
-    pub(super) interviewer: SpeakerTurn,
-    pub(super) candidate: SpeakerTurn,
-    /// The cut waiting for the words behind it; see [`SpeakerTurns::note_cut`].
-    cut: Option<WaitingCut>,
-}
-
-/// How much of what the candidate said over a cut the line quotes.
-const CUT_QUOTE_CHARS: usize = 80;
-
-/// What the line for a cut needs from the moment of the cut, and the words
-/// that closes while the candidate was speaking cleared from the turn since.
-#[derive(Debug)]
-struct WaitingCut {
-    at: String,
-    since: Instant,
-    heard: String,
-}
-
-/// The start of two stretches of speech, one after the other.
-fn joined_head(earlier: &str, later: &str) -> String {
-    let mut words = String::from(earlier);
-    if !earlier.is_empty() && !later.is_empty() {
-        words.push(' ');
-    }
-    words.push_str(later);
-    words.chars().take(CUT_QUOTE_CHARS).collect()
-}
-
-impl SpeakerTurns {
-    /// Gemini cut the interviewer's turn, and the line naming the cut is
-    /// already out. `Interrupted` arrives with the start of the candidate's
-    /// activity, before the transcription of whatever caused it, so the line
-    /// quoting the cause waits for the words. Noted after the turn being
-    /// replied to has been closed, or that answer is what the line quotes. A
-    /// cut still waiting is replaced, so settle it first.
-    pub(super) fn note_cut(&mut self, at: String, since: Instant) {
-        self.cut = Some(WaitingCut {
-            at,
-            since,
-            heard: String::new(),
-        });
-    }
-
-    /// The line for the waiting cut, once, quoting the start of what the
-    /// candidate said over it and saying how long after the cut that is. Read
-    /// before the candidate turn closes, which clears it.
-    ///
-    /// Not while the candidate is still speaking: a close that lands
-    /// mid-utterance, such as the late end of the cut generation, would read
-    /// speech as wordless. The cut keeps waiting, and keeps the words the turn
-    /// holds, since that close is about to clear them.
-    pub(super) fn take_cut_line(&mut self, now: Instant, speaking: bool) -> Option<String> {
-        let cut = self.cut.as_mut()?;
-        let heard = joined_head(&cut.heard, &self.candidate.head(CUT_QUOTE_CHARS));
-        if speaking {
-            cut.heard = heard;
-            return None;
-        }
-        let cut = self.cut.take()?;
-        Some(format!(
-            "timing: candidate audio since the cut at={}, settled {:.1}s later: {}",
-            cut.at,
-            now.saturating_duration_since(cut.since).as_secs_f64(),
-            if heard.is_empty() {
-                "(nothing transcribed; check speaker echo or background noise)"
-            } else {
-                &heard
-            }
-        ))
-    }
-}
-
-/// The two speakers in the order their turns opened.
-///
-/// Both can be open at once, and whichever is written to the ledger first is a
-/// claim about who spoke first. Closing them in a fixed speaker order made that
-/// claim out of the source: a candidate answer that finished while a late
-/// interviewer fragment was still arriving was recorded after the question it
-/// had already answered, and a reader of the ledger saw an answer that preceded
-/// nothing. A turn's transcript line is where it opened, so the lower line
-/// spoke first. A speaker with no line has nothing to record and sorts last.
-pub(super) fn closing_order(
-    interviewer_line: Option<usize>,
-    candidate_line: Option<usize>,
-) -> [&'static str; 2] {
-    match (interviewer_line, candidate_line) {
-        (Some(interviewer), Some(candidate)) if candidate < interviewer => {
-            ["candidate", "interviewer"]
-        }
-        (None, Some(_)) => ["candidate", "interviewer"],
-        _ => ["interviewer", "candidate"],
-    }
 }
 
 /// Why the room loop ended an interview it could no longer keep on a Gemini

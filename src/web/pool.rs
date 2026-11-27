@@ -23,8 +23,7 @@ use futures_util::future::join_all;
 use crate::config::{Provider, ProviderPool};
 use crate::token::{LivekitTokenInput, livekit_token};
 
-use super::token::suffix;
-use super::{AppState, BackgroundTasks, WebServerConfig};
+use super::{AppState, BackgroundTasks, WebServerConfig, suffix};
 
 /// How long a project's quota verdict is trusted.
 ///

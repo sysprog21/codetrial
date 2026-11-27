@@ -4,7 +4,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::session::Phase;
+use super::Phase;
 use super::{
     EXPLAINERS, TaskError, bounded_text, default_number, default_value, identifier, invalid,
 };
@@ -347,7 +347,7 @@ impl TaskRecord {
         if sidecar
             .languages
             .iter()
-            .any(|language| starters[language].len() > super::session::MAX_CODE_BYTES)
+            .any(|language| starters[language].len() > super::MAX_CODE_BYTES)
         {
             return Err(invalid("starter exceeds the code byte limit"));
         }

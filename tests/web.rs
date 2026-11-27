@@ -1418,9 +1418,9 @@ mod pool;
 #[path = "web/recording.rs"]
 mod recording;
 
-#[path = "web/peer.rs"]
+#[path = "web/peer/mod.rs"]
 mod peer;
-#[path = "web/peer_auth.rs"]
+#[path = "web/peer/auth.rs"]
 mod peer_auth;
 
 #[path = "web/accounts.rs"]

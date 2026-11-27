@@ -93,7 +93,7 @@ pub(in crate::livekit) async fn before(stage: Stage, context: &mut GeminiEventCo
         .map(Arc::clone);
     let Some(gate) = gate else { return };
     let matches = {
-        let identity = context.activity.latency.acquisition_identity();
+        let identity = context.probes.latency.acquisition_identity();
         gate.stage == stage
             && gate.scope.room == identity.room
             && gate.scope.session == identity.session

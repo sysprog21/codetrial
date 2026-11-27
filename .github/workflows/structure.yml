@@ -1,0 +1,83 @@
+name: structure
+
+# The architecture lints of tools/check-structure/, once a day on main. They
+# index the whole tree through rust-analyzer, which takes minutes cold, so
+# neither the pre-commit hook nor the gate lanes in check.yml run them. A
+# failure here means a structure finding that tools/check-structure/debt.allow
+# does not list, or a listed one that has been fixed and must leave the list.
+on:
+  schedule:
+    - cron: '31 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: structure
+
+jobs:
+  structure:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Install WebRTC C++ compiler
+        uses: ./.github/actions/webrtc-clang
+      - name: Install Rust
+        run: |
+          rustup toolchain install
+          rustup component add rust-analyzer
+      # What rust-analyzer builds before it indexes: the build scripts and proc
+      # macros of the dependency graph, which it writes under target/debug
+      # (it is not given a target directory of its own). That is the cold
+      # run's cost, so it is cached under the lockfile. The index itself is
+      # not: a day's commits always change a source file, so a restored index
+      # would only be rebuilt.
+      #
+      # Restore and save are separate steps so that a run that found something
+      # to report still saves: `actions/cache` saves only from a successful job,
+      # and a red run is the one that repeats until someone fixes the list.
+      - name: Restore build cache
+        id: build-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target/debug/build
+            target/debug/deps
+            target/debug/.fingerprint
+            target/structure-tool
+          key: structure-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'tools/check-structure/Cargo.lock') }}
+          restore-keys: structure-${{ runner.os }}-
+      - name: The tool's own tests
+        run: >-
+          cargo test --locked
+          --manifest-path tools/check-structure/Cargo.toml
+          --target-dir target/structure-tool
+      - name: Structure lints against the debt list
+        run: >-
+          cargo run --release --locked --quiet
+          --manifest-path tools/check-structure/Cargo.toml
+          --target-dir target/structure-tool --
+          --timings --allow tools/check-structure/debt.allow --ratchet
+      - name: Save build cache
+        if: ${{ !cancelled() && steps.build-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target/debug/build
+            target/debug/deps
+            target/debug/.fingerprint
+            target/structure-tool
+          key: ${{ steps.build-cache.outputs.cache-primary-key }}

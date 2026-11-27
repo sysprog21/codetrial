@@ -7,26 +7,27 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use axum::body::Body;
-use axum::extract::{ConnectInfo, FromRequestParts, State};
-use axum::http::request::Parts;
+use axum::extract::{ConnectInfo, State};
 use axum::http::{HeaderValue, Request, StatusCode, header};
 use axum::response::{AppendHeaders, IntoResponse, Response};
 use serde_json::{Value, json};
 
 use crate::accounts::{
-    Accounts, GitHubLoginConfig, GitHubOauth, GitHubProfile, SESSION_TTL_SECONDS, SignedInUser,
-    blocking, create_session, delete_session, normalized_github_login, random_token,
-    recorded_account_id, session_user, valid_github_login,
+    Accounts, GitHubLoginConfig, GitHubOauth, GitHubProfile, SESSION_TTL_SECONDS, blocking,
+    create_session, delete_session, normalized_github_login, random_token, recorded_account_id,
+    valid_github_login,
 };
 
-use super::token::read_body_or_refuse;
+use super::limits::{default_duration, duration_ceiling, read_body_or_refuse};
+use super::owner::{
+    SESSION_COOKIE, cookie_value, current_user, verified_cookie, verified_cookie_value,
+};
 use super::{
     AppState, MAX_BODY_BYTES, WebServerConfig, client_ip, json_response,
-    oauth_not_configured_response, query_pairs, rate_limited_response, unauthorized_response,
+    oauth_not_configured_response, query_pairs, rate_limited_response,
 };
 use crate::percent_encode_component;
 
-pub(crate) const SESSION_COOKIE: &str = "codetrial_session";
 const OAUTH_RETURN_COOKIE: &str = "codetrial_oauth_return";
 const OAUTH_STATE_COOKIE: &str = "codetrial_oauth_state";
 /// The pending device authorization's code, signed, between the start and
@@ -579,9 +580,9 @@ pub(crate) async fn session_handler(
     // only the server knows the recording cap. Answered on both branches
     // because the duration row is live before anyone signs in.
     let recording_max_minutes = state.config.recording.as_ref().map(|it| it.max_minutes);
-    let max_duration_min = super::token::duration_ceiling(recording_max_minutes);
+    let max_duration_min = duration_ceiling(recording_max_minutes);
     let default_duration_min =
-        super::token::default_duration(state.config.default_duration_min, recording_max_minutes);
+        default_duration(state.config.default_duration_min, recording_max_minutes);
 
     // Null on the web half of a split deployment, where the lobby keeps its
     // billing notice hidden rather than describe an agent it cannot see.
@@ -670,42 +671,6 @@ pub(crate) async fn logout_handler(
         json!({ "ok": true }).to_string(),
     )
         .into_response()
-}
-
-/// The signed-in owner of whatever the route addresses.
-///
-/// Twelve handlers opened with the same four lines resolving this and
-/// returning early. As a parameter the check is part of the signature, so a
-/// handler either asks for an owner and runs after one was established, or it
-/// has no account to act on. Rejections are the responses those twelve copies
-/// already returned.
-pub(crate) struct Owner {
-    pub(crate) accounts: Arc<Accounts>,
-    pub(crate) user: SignedInUser,
-}
-
-impl FromRequestParts<AppState> for Owner {
-    type Rejection = Response;
-
-    async fn from_request_parts(
-        parts: &mut Parts,
-        state: &AppState,
-    ) -> Result<Self, Self::Rejection> {
-        let user = match current_user(state.accounts.as_ref(), &parts.headers).await {
-            Ok(Some(user)) => user,
-            Ok(None) => return Err(unauthorized_response()),
-            Err(_) => {
-                return Err(json_response(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    json!({ "error": "Could not read account session." }),
-                ));
-            }
-        };
-        match state.accounts.clone() {
-            Some(accounts) => Ok(Self { accounts, user }),
-            None => Err(state.accounts_error()),
-        }
-    }
 }
 
 async fn github_oauth_post(
@@ -896,27 +861,6 @@ pub(crate) async fn primary_verified_email(
         .map(str::to_string))
 }
 
-pub(crate) async fn current_user(
-    accounts: Option<&Arc<Accounts>>,
-    headers: &header::HeaderMap,
-) -> rusqlite::Result<Option<SignedInUser>> {
-    let Some(accounts) = accounts.cloned() else {
-        return Ok(None);
-    };
-    let Some(session_id) =
-        verified_cookie(headers, SESSION_COOKIE, &accounts.config().session_secret)
-    else {
-        return Ok(None);
-    };
-
-    // Every caller turns this into a bare 500, so the cause is only recorded
-    // here: a locked or corrupt database otherwise fails all signed-in traffic
-    // with nothing for the operator to read.
-    blocking(move || session_user(&accounts, &session_id))
-        .await
-        .inspect_err(|error| eprintln!("account session lookup failed: {error}"))
-}
-
 /// Signs `name=value`, not the value alone. Both cookies share one secret and
 /// one `payload.signature` shape, so without the name a signed state would
 /// verify as a session cookie, and only the missing session row would turn it
@@ -928,12 +872,6 @@ fn signed_cookie_value(name: &str, value: &str, secret: &str) -> String {
     )
 }
 
-fn verified_cookie_value(name: &str, value: &str, secret: &str) -> Option<String> {
-    let (payload, signature) = value.rsplit_once('.')?;
-    crate::token::verify_hs256(secret, &format!("{name}={payload}"), signature)
-        .then(|| payload.to_string())
-}
-
 /// The token out of a verified `issued:token` state payload, if it was issued
 /// within the TTL. `Max-Age` asks the browser to drop the cookie; this is what
 /// holds when a copy of it is kept and sent anyway.
@@ -943,22 +881,6 @@ fn unexpired_state(payload: &str, now: i64) -> Option<String> {
     (0..=OAUTH_STATE_TTL_SECONDS)
         .contains(&age)
         .then(|| token.to_string())
-}
-
-/// The payload of cookie `name`, if it is present and signed for that name.
-fn verified_cookie(headers: &header::HeaderMap, name: &str, secret: &str) -> Option<String> {
-    verified_cookie_value(name, &cookie_value(headers, name)?, secret)
-}
-
-fn cookie_value(headers: &header::HeaderMap, name: &str) -> Option<String> {
-    let prefix = format!("{name}=");
-    headers
-        .get(header::COOKIE)?
-        .to_str()
-        .ok()?
-        .split(';')
-        .map(str::trim)
-        .find_map(|part| part.strip_prefix(&prefix).map(str::to_string))
 }
 
 pub(crate) fn set_cookie(name: &str, value: &str, max_age: i64, secure: bool) -> String {

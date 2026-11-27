@@ -12,51 +12,6 @@
     )
 )]
 use super::*;
-use crate::livekit::turn::SocketWork;
-
-pub(super) enum TurnBoundary {
-    Current,
-    Stale,
-    InterruptedTail,
-}
-
-/// The old turn was already cut off by a hold. Its delayed ending must not
-/// settle or cancel a prompt, candidate turn, or tool continuation sent since.
-///
-/// A `TurnComplete` the interruption guard swallows ends the discard too. With
-/// both armed they wait on the same old turn, which sends one ending, and a
-/// discard left behind it eats the next reply.
-pub(super) fn turn_boundary(
-    event: &GeminiEvent,
-    socket: &mut SocketWork,
-    held: bool,
-) -> TurnBoundary {
-    if socket.stale_turn_pending && ends_turn(event) {
-        // An `Interrupted` is followed by the same turn's `TurnComplete`, which
-        // ends the wait.
-        socket.stale_turn_pending = matches!(event, GeminiEvent::Interrupted);
-        return TurnBoundary::Stale;
-    }
-    if matches!(event, GeminiEvent::Interrupted) {
-        socket.interrupted_turn_pending = true;
-    } else if answers_prompt(event) && !socket.discarding_output && !held {
-        // Not under a hold, even for a tool call, which is still delivered then
-        // and counted as output below. The generation a hold cut off can keep
-        // calling tools, and those calls are no sign that a newer turn began;
-        // disarming on them handed its late ending the resume prompt. The cost
-        // falls on a newer turn under a hold that only calls tools: its ending
-        // is swallowed, and `generating` stays set until the stall check clears
-        // it.
-        socket.interrupted_turn_pending = false;
-        socket.stale_turn_pending = false;
-    }
-    if matches!(event, GeminiEvent::TurnComplete)
-        && std::mem::take(&mut socket.interrupted_turn_pending)
-    {
-        return TurnBoundary::InterruptedTail;
-    }
-    TurnBoundary::Current
-}
 
 /// Only evidence is owed before freezing an End that overtook startup replay.
 /// Do not play queued output, execute tools, request a reply or wait for more

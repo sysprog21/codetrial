@@ -12,8 +12,9 @@ fn fields(line: &str) -> HashMap<&str, &str> {
 fn emitted_floor_retains_precise_times_of_a_pause_resolved_before_teardown() {
     let start = Instant::now() - Duration::from_secs(1);
     let mut activity = RuntimeActivity::for_interview(start, 0, 123);
-    activity.latency.bind("synthetic", 123, 1, 1500);
-    activity.latency.anchor(start);
+    let mut probes = TurnProbes::default();
+    probes.latency.bind("synthetic", 123, 1, 1500);
+    probes.latency.anchor(start);
     activity
         .floor_tracker
         .observe(Event::End, start + Duration::from_millis(100), &mut |_| {
@@ -28,6 +29,7 @@ fn emitted_floor_retains_precise_times_of_a_pause_resolved_before_teardown() {
     write_floor(
         "synthetic",
         &mut activity,
+        &probes,
         || "coarse-clock".into(),
         Event::Reset,
         &mut output,
@@ -49,10 +51,12 @@ fn emitted_floor_retains_precise_times_of_a_pause_resolved_before_teardown() {
 fn missing_anchor_does_not_fabricate_a_clock_from_runtime_state() {
     let start = Instant::now();
     let mut activity = RuntimeActivity::for_interview(start, 0, 123);
+    let probes = TurnProbes::default();
     let mut output = Vec::new();
     write_floor(
         "synthetic",
         &mut activity,
+        &probes,
         || "0:00".into(),
         Event::End,
         &mut output,
@@ -60,6 +64,7 @@ fn missing_anchor_does_not_fabricate_a_clock_from_runtime_state() {
     write_floor(
         "synthetic",
         &mut activity,
+        &probes,
         || "0:00".into(),
         Event::Output { audio: false },
         &mut output,
@@ -67,6 +72,7 @@ fn missing_anchor_does_not_fabricate_a_clock_from_runtime_state() {
     write_floor(
         "synthetic",
         &mut activity,
+        &probes,
         || "0:00".into(),
         Event::Reset,
         &mut output,

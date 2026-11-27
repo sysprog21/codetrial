@@ -1447,5 +1447,5 @@ pub fn final_report(
 }
 
 #[cfg(test)]
-#[path = "../../tests/unit/report_rounds.rs"]
+#[path = "../../tests/unit/report/rounds.rs"]
 mod rounds_tests;

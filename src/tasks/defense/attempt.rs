@@ -13,6 +13,8 @@ use super::obs::{Table, ended_by_itself, first_divergence_in, read, retire_diges
 use super::runner::{Ended, run};
 use super::{Config, CourseTask, LineItem, Plan, edit_matches};
 
+mod views;
+
 /// The widest window of cycles a simulation run shows.
 pub const MAX_WINDOW: u64 = 256;
 /// How far a claimed cycle may be from the first divergence and still count.
@@ -253,9 +255,7 @@ impl Attempt {
             })
             .collect();
         let arch = config
-            .tasks
-            .iter()
-            .find(|task| task.dir == plan.bug.task)
+            .course_task(&plan.bug.task)
             .map(|task| task.arch.clone());
         let built = arch
             .as_deref()
@@ -361,9 +361,7 @@ impl Attempt {
 
     fn bug_task(&self) -> Result<&CourseTask, Refusal> {
         self.config
-            .tasks
-            .iter()
-            .find(|t| t.dir == self.plan.bug.task)
+            .course_task(&self.plan.bug.task)
             .ok_or("package_invalid")
     }
 
@@ -557,7 +555,7 @@ impl Attempt {
                 return Err("model_build_failed");
             }
         };
-        let mutants: Vec<String> = self.config.bugs.iter().map(|b| b.mutant.clone()).collect();
+        let mutants = self.config.bug_mutants();
         for name in MODELS {
             let mutant = (name == Model::Bug).then_some(bug.mutant.as_str());
             if self.models.contains_key(&name) {

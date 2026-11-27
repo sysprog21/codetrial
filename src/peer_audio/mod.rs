@@ -4,7 +4,9 @@ use crate::accounts::Accounts;
 use rusqlite::{OptionalExtension, params};
 use std::path::Path;
 mod wav;
-pub(crate) use wav::{PeerAudioArtifact, PeerAudioWriter, audio_path, ensure_private_directory};
+#[cfg(test)]
+pub(crate) use crate::config::ensure_private_directory;
+pub(crate) use wav::{PeerAudioArtifact, PeerAudioWriter, audio_path};
 pub(crate) const RETENTION_SECONDS: i64 = 24 * 60 * 60;
 
 /// Records that a capture began. A row that failed is a capture the member is

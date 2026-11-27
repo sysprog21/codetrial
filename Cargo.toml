@@ -147,10 +147,12 @@ ephyra = "=0.0.1"
 # effect; its build.rs says why it is a member of its own. `vendor/` holds path
 # dependencies, not members, and `desktop/` is a crate of its own with its own
 # lockfile that the root's builds must not need WebKitGTK to compile.
+# `tools/check-structure/` is the architecture linter, also a crate of its own: it
+# reads this crate and does not belong to its build.
 [workspace]
 members = ["scripts/hook-check"]
 default-members = [".", "scripts/hook-check"]
-exclude = ["vendor", "desktop"]
+exclude = ["vendor", "desktop", "tools/check-structure"]
 
 # Release archives distribute the executable, not a debugging target. Cargo
 # already omits debug information in this profile; omit linker symbols too.

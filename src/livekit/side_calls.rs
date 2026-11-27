@@ -209,58 +209,6 @@ pub(super) fn defers_round_transition(
         && (judge_running || crate::agent::phase_judge_due(state))
 }
 
-/// The one side call of a kind that may be in flight, an interim review or a
-/// phase judgment, owned rather than let loose.
-///
-/// Two things a bare `tokio::spawn` got wrong. A task that panics sends no
-/// result, so a loop tracking "a review is running" in a bool would believe one
-/// forever and spend a single panic to disable every remaining pause in the
-/// interview; asking the handle is the same question with no second copy of the
-/// answer. And `JoinHandle` detaches on drop, so an interview that ended under
-/// a review left a task holding a cloned API key and writing to a log nobody
-/// was reading any more. `run_room` has several exits and none of them should
-/// have to remember this, so the abort is the drop.
-#[derive(Default)]
-pub(super) struct SideCall(Option<tokio::task::JoinHandle<String>>);
-
-impl SideCall {
-    pub(super) fn is_running(&self) -> bool {
-        self.0.is_some()
-    }
-
-    /// The handle once it has finished, leaving the slot empty.
-    ///
-    /// `is_finished` is true for a task that panicked as well as one that
-    /// returned, and awaiting a handle that has finished does not block, so
-    /// this is the one place a review leaves the slot, however it ended.
-    pub(super) fn finished(&mut self) -> Option<tokio::task::JoinHandle<String>> {
-        if self.0.as_ref()?.is_finished() {
-            self.0.take()
-        } else {
-            None
-        }
-    }
-
-    /// The handle, finished or not, leaving the slot empty.
-    pub(super) fn take(&mut self) -> Option<tokio::task::JoinHandle<String>> {
-        self.0.take()
-    }
-
-    pub(super) fn start(&mut self, handle: tokio::task::JoinHandle<String>) {
-        if let Some(replaced) = self.0.replace(handle) {
-            replaced.abort();
-        }
-    }
-}
-
-impl Drop for SideCall {
-    fn drop(&mut self) {
-        if let Some(handle) = self.0.take() {
-            handle.abort();
-        }
-    }
-}
-
 /// The stretch to review, with the cursor moved past it.
 ///
 /// Split from the spawn above so the part that can be wrong is reachable from a

@@ -49,12 +49,14 @@ except ImportError:  # Python before 3.11; only the evidence check needs it
 WEB_IN_RUST_SCOPE = False
 
 # vendor/ holds the path dependencies the root manifest excludes from its
-# workspace, and problem-bank/ is read by include_str! at compile time; the
+# workspace, tools/ holds the crates the gate formats and the daily lints run
+# (check-structure), and problem-bank/ is read by include_str! at compile time; the
 # three .toml files configure the lint and license gates of the Rust lane.
 RUST_PREFIXES = (
     "src/",
     "desktop/",
     "scripts/hook-check/",
+    "tools/",
     ".cargo/",
     "vendor/",
     "problem-bank/",

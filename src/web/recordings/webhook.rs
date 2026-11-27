@@ -20,7 +20,7 @@ use serde_json::{Value, json};
 
 use crate::accounts::{Accounts, blocking};
 
-use super::super::token::read_body_or_refuse;
+use super::super::limits::read_body_or_refuse;
 use super::super::{AppState, MAX_WEBHOOK_BODY_BYTES, json_response};
 use super::finish_recording;
 

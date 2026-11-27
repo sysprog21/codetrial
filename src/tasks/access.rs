@@ -15,7 +15,8 @@ use super::TaskError;
 use super::default_number;
 use super::exercise::{Exercise, TaskRecord};
 use super::package::{
-    Download, LoadedSet, OpenError, SetConfig, download, open_package, site_base,
+    Assignment, BUILT_IN_SET, BUILT_IN_SITE, BUILT_IN_VERSION, Download, LoadedSet, OpenError,
+    SetConfig, download, open_package, site_base,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,23 +42,6 @@ const MAX_ADMISSIONS: usize = 256;
 /// Bytes of a client's admission request key.
 const MAX_REQUEST_KEY_BYTES: usize = 128;
 
-/// The default task, which needs no sign-in, no PIN and no download. A link
-/// naming this site, set and version is the one assignment every learner may
-/// open: `.invalid` is reserved and never resolves, so no instructor's site can
-/// be mistaken for it.
-pub const BUILT_IN_SITE: &str = "https://built-in.invalid/";
-pub const BUILT_IN_SET: &str = "default";
-pub const BUILT_IN_TASK: &str = "rubik";
-pub const BUILT_IN_VERSION: u32 = 1;
-
-/// One assignment link: the instructor's site and the set version it names.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct Assignment {
-    pub site: reqwest::Url,
-    pub set_id: String,
-    pub version: u32,
-}
-
 impl Assignment {
     /// Checks a link's parts. A set or version no package can carry is the
     /// link's fault, not the site's, and no download would change it.
@@ -76,30 +60,6 @@ impl Assignment {
             set_id: set_id.to_owned(),
             version,
         })
-    }
-}
-
-impl Assignment {
-    /// The default task's assignment.
-    pub fn built_in() -> Self {
-        Self {
-            site: reqwest::Url::parse(BUILT_IN_SITE).expect("the built-in site is a URL"),
-            set_id: BUILT_IN_SET.to_owned(),
-            version: BUILT_IN_VERSION,
-        }
-    }
-
-    /// Whether this is the default task's assignment, which anyone may open.
-    pub fn is_built_in(&self) -> bool {
-        *self == Self::built_in()
-    }
-
-    /// The page address that opens the default task.
-    pub fn built_in_path() -> String {
-        format!(
-            "/t/{BUILT_IN_SET}/{BUILT_IN_TASK}?site={}&version={BUILT_IN_VERSION}",
-            crate::percent_encode_component(BUILT_IN_SITE)
-        )
     }
 }
 
@@ -221,6 +181,171 @@ impl State {
         }
     }
 
+    /// The set `owner_id` has unlocked under `assignment`, shared.
+    fn unlocked_set(
+        &self,
+        owner_id: i64,
+        assignment: &Assignment,
+    ) -> Result<Arc<LoadedSet>, AccessError> {
+        self.unlocked
+            .get(&(owner_id, assignment.clone()))
+            .map(|unlocked| Arc::clone(&unlocked.set))
+            .ok_or_else(|| AccessError::new("unlock_required"))
+    }
+
+    /// The same, refused once the site's clock says its time is up.
+    fn open_set(
+        &self,
+        owner_id: i64,
+        assignment: &Assignment,
+        now: u64,
+    ) -> Result<Arc<LoadedSet>, AccessError> {
+        let unlocked = self
+            .unlocked
+            .get(&(owner_id, assignment.clone()))
+            .ok_or_else(|| AccessError::new("unlock_required"))?;
+        if unlocked.set.config.closed(unlocked.now(now)) {
+            return Err(AccessError::new("set_closed"));
+        }
+        Ok(Arc::clone(&unlocked.set))
+    }
+
+    fn defense_config(
+        &self,
+        owner_id: i64,
+        assignment: &Assignment,
+    ) -> Option<Arc<super::defense::Config>> {
+        self.unlocked
+            .get(&(owner_id, assignment.clone()))
+            .and_then(|unlocked| unlocked.set.defense.clone())
+    }
+
+    fn active_defense(&self, owner_id: i64) -> Option<super::defense::Slot> {
+        self.active
+            .as_ref()
+            .filter(|active| active.owner_id == owner_id)
+            .and_then(|active| active.defense.clone())
+    }
+
+    fn is_attempting(&self) -> bool {
+        self.active.is_some()
+    }
+
+    /// Takes the one attempt slot and a session ordinal for `key`, and keeps
+    /// the admission so a retried request key finds it. Returns the claim and
+    /// the ordinal.
+    fn admit(
+        &mut self,
+        owner_id: i64,
+        key: (i64, String),
+        named: (Assignment, String),
+        language: &str,
+        defense: Option<super::defense::Slot>,
+        now: u64,
+    ) -> (u64, u64) {
+        let claim_id = self.next_claim_id + 1;
+        self.next_claim_id = claim_id;
+        let ordinal = self
+            .ordinals
+            .entry((owner_id, named.0.set_id.clone()))
+            .or_default();
+        *ordinal += 1;
+        let session_ordinal = *ordinal;
+        self.active = Some(ActiveAttempt {
+            owner_id,
+            claim_id,
+            room: None,
+            defense,
+        });
+        self.admissions.insert(
+            key.clone(),
+            PendingAdmission {
+                claim_id,
+                assignment: named,
+                language: language.to_owned(),
+                ordinal: session_ordinal,
+                expires_at: now.saturating_add(default_number("pendingAdmissionSeconds")),
+                response: None,
+            },
+        );
+        self.admission_order.push_back(key);
+        // One is added at a time, so one is all that can be over.
+        if self.admission_order.len() > MAX_ADMISSIONS
+            && let Some(oldest) = self.admission_order.pop_front()
+        {
+            self.admissions.remove(&oldest);
+        }
+        (claim_id, session_ordinal)
+    }
+
+    /// Gives up the attempt slot if `claim_id` holds it, handing the attempt
+    /// back so the caller can drop it outside the lock.
+    fn release(&mut self, claim_id: u64) -> Option<ActiveAttempt> {
+        self.active.take_if(|active| active.claim_id == claim_id)
+    }
+
+    /// Records the answer of the admission `claim_id` made under `key`, or
+    /// forgets the admission when there is none.
+    fn answer_admission(&mut self, key: &(i64, String), claim_id: u64, response: Option<Value>) {
+        if self
+            .admissions
+            .get(key)
+            .is_none_or(|admission| admission.claim_id != claim_id)
+        {
+            return;
+        }
+        match response {
+            Some(response) => {
+                if let Some(active) = self
+                    .active
+                    .as_mut()
+                    .filter(|active| active.claim_id == claim_id)
+                {
+                    active.room = response["roomName"].as_str().map(str::to_owned);
+                }
+                if let Some(admission) = self.admissions.get_mut(key) {
+                    admission.response = Some(response);
+                }
+            }
+            None => self.forget_unanswered(claim_id),
+        }
+    }
+
+    fn keep_result(&mut self, result: StoredResult) {
+        self.result = Some(result);
+    }
+
+    /// Drops the kept result if it is the one for `room` that expires at
+    /// `expires_at`: a newer result has an expiry of its own.
+    fn expire_result(&mut self, room: &str, expires_at: u64) {
+        if self
+            .result
+            .as_ref()
+            .is_some_and(|kept| kept.room == room && kept.expires_at == expires_at)
+        {
+            self.result = None;
+        }
+    }
+
+    fn lookup_result(&mut self, owner_id: i64, room: &str, now: u64) -> ResultLookup {
+        self.purge(now);
+        match &self.result {
+            Some(result) if result.owner_id == owner_id && result.room == room => {
+                ResultLookup::Ready(result.value.clone())
+            }
+
+            // Pending only for the attempt still running in that very room: a
+            // stale or wrong room id gets no result now or later.
+            _ if self.active.as_ref().is_some_and(|active| {
+                active.owner_id == owner_id && active.room.as_deref() == Some(room)
+            }) =>
+            {
+                ResultLookup::Pending
+            }
+            _ => ResultLookup::Unavailable,
+        }
+    }
+
     /// Drops a kept result once its time is up, at whatever request comes
     /// next, so an expired review and its code are not held for the life of
     /// the process.
@@ -288,6 +413,11 @@ pub struct PinnedTask {
     admission_lease: Arc<AdmissionLease>,
 }
 
+/// Whether `result` is small enough to be kept as it is.
+pub fn result_fits(result: &Value) -> bool {
+    result.to_string().len() <= default_number("reviewBytes") as usize
+}
+
 impl PinnedTask {
     /// The language the attempt is worked in.
     pub fn language(&self) -> &str {
@@ -297,7 +427,7 @@ impl PinnedTask {
     /// The instructor's prompt for this attempt's language and hint limit.
     pub fn prompt(
         &self,
-        phase: super::session::Phase,
+        phase: super::Phase,
         target: Option<&str>,
         code: &str,
     ) -> Result<String, TaskError> {
@@ -315,24 +445,24 @@ impl PinnedTask {
 
     /// Keeps the attempt's result, final code included, for the learner's
     /// page to collect after it lost its room or was reloaded. Only the latest
-    /// result is kept.
-    pub fn retain_result(&self, room: &str, result: Value, now: u64) {
+    /// result is kept. A result that is not [`result_fits`] is the caller's to
+    /// replace first: `report::retain` does.
+    pub fn retain_result(&self, room: &str, value: Value, now: u64) {
         let Some(inner) = self.admission_lease.inner.upgrade() else {
             return;
         };
-        let value = if result.to_string().len() <= default_number("reviewBytes") as usize {
-            result
-        } else {
-            super::report::unavailable_for_task(self, room, &result)
-        };
         let retention = default_number("reviewRetentionSeconds");
         let expires_at = now.saturating_add(retention);
-        inner.state.lock().unwrap_or_else(|e| e.into_inner()).result = Some(StoredResult {
-            owner_id: self.owner_id,
-            room: room.to_owned(),
-            expires_at,
-            value,
-        });
+        inner
+            .state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .keep_result(StoredResult {
+                owner_id: self.owner_id,
+                room: room.to_owned(),
+                expires_at,
+                value,
+            });
 
         // Requests purge an expired result too, but an idle CodeTrial gets
         // none, and the result holds the learner's code. A newer result has its
@@ -346,13 +476,7 @@ impl PinnedTask {
             tokio::time::sleep(std::time::Duration::from_secs(retention)).await;
             if let Some(inner) = inner.upgrade() {
                 let mut state = inner.state.lock().unwrap_or_else(|e| e.into_inner());
-                if state
-                    .result
-                    .as_ref()
-                    .is_some_and(|kept| kept.room == room && kept.expires_at == expires_at)
-                {
-                    state.result = None;
-                }
+                state.expire_result(&room, expires_at);
             }
         });
     }
@@ -378,9 +502,7 @@ impl Drop for AdmissionLease {
     fn drop(&mut self) {
         if let Some(inner) = self.inner.upgrade() {
             let mut state = inner.state.lock().unwrap_or_else(|e| e.into_inner());
-            let released = state
-                .active
-                .take_if(|active| active.claim_id == self.claim_id);
+            let released = state.release(self.claim_id);
 
             // A defense attempt removes its worktree when it goes, which can
             // take seconds; every task route waits on this lock meanwhile.
@@ -539,17 +661,11 @@ impl TaskService {
         let set = if assignment.is_built_in() {
             super::package::built_in_set()
         } else {
-            Arc::clone(
-                &self
-                    .0
-                    .state
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .unlocked
-                    .get(&(owner_id, assignment.clone()))
-                    .ok_or_else(|| AccessError::new("unlock_required"))?
-                    .set,
-            )
+            self.0
+                .state
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .unlocked_set(owner_id, assignment)?
         };
         let record = set
             .records
@@ -593,20 +709,13 @@ impl TaskService {
             return None;
         }
         let state = self.0.state.lock().unwrap_or_else(|e| e.into_inner());
-        state
-            .unlocked
-            .get(&(owner_id, assignment.clone()))
-            .and_then(|unlocked| unlocked.set.defense.clone())
+        state.defense_config(owner_id, assignment)
     }
 
     /// The defense attempt `owner_id` is taking, if any.
     pub fn active_defense(&self, owner_id: i64) -> Option<super::defense::Slot> {
         let state = self.0.state.lock().unwrap_or_else(|e| e.into_inner());
-        state
-            .active
-            .as_ref()
-            .filter(|active| active.owner_id == owner_id)
-            .and_then(|active| active.defense.clone())
+        state.active_defense(owner_id)
     }
 
     /// Looks up a retry before checkout preparation, which may no longer
@@ -658,20 +767,13 @@ impl TaskService {
         if let Some(response) = state.replay_admission(&key, &named, &preparation.language, now)? {
             return Ok(Admission::Replayed(response));
         }
-        if state.active.is_some() {
+        if state.is_attempting() {
             return Err(AccessError::new("active_task_session"));
         }
         let set = if assignment.is_built_in() {
             super::package::built_in_set()
         } else {
-            let unlocked = state
-                .unlocked
-                .get(&(owner_id, assignment.clone()))
-                .ok_or_else(|| AccessError::new("unlock_required"))?;
-            if unlocked.set.config.closed(unlocked.now(now)) {
-                return Err(AccessError::new("set_closed"));
-            }
-            Arc::clone(&unlocked.set)
+            state.open_set(owner_id, assignment, now)?
         };
         let record = Arc::clone(
             set.records
@@ -687,38 +789,14 @@ impl TaskService {
         if !super::runnable(&preparation.language, preparation.compiler_explorer) {
             return Err(AccessError::new("language_unavailable"));
         }
-        let claim_id = state.next_claim_id + 1;
-        state.next_claim_id = claim_id;
-        let ordinal = state
-            .ordinals
-            .entry((owner_id, assignment.set_id.clone()))
-            .or_default();
-        *ordinal += 1;
-        let session_ordinal = *ordinal;
-        state.active = Some(ActiveAttempt {
+        let (claim_id, session_ordinal) = state.admit(
             owner_id,
-            claim_id,
-            room: None,
-            defense: preparation.defense.clone(),
-        });
-        state.admissions.insert(
-            key.clone(),
-            PendingAdmission {
-                claim_id,
-                assignment: named,
-                language: preparation.language.clone(),
-                ordinal: session_ordinal,
-                expires_at: now.saturating_add(default_number("pendingAdmissionSeconds")),
-                response: None,
-            },
+            key,
+            named,
+            &preparation.language,
+            preparation.defense.clone(),
+            now,
         );
-        state.admission_order.push_back(key);
-        // One is added at a time, so one is all that can be over.
-        if state.admission_order.len() > MAX_ADMISSIONS
-            && let Some(oldest) = state.admission_order.pop_front()
-        {
-            state.admissions.remove(&oldest);
-        }
         Ok(Admission::New(PinnedTask {
             hint_limit: hint_limit(&set, &record),
             exercise: Exercise(record),
@@ -763,50 +841,13 @@ impl TaskService {
         response: Option<Value>,
     ) {
         let mut state = self.0.state.lock().unwrap_or_else(|e| e.into_inner());
-        let key = (owner_id, request_key.to_owned());
-        if state
-            .admissions
-            .get(&key)
-            .is_none_or(|admission| admission.claim_id != claim_id)
-        {
-            return;
-        }
-        match response {
-            Some(response) => {
-                if let Some(active) = state
-                    .active
-                    .as_mut()
-                    .filter(|active| active.claim_id == claim_id)
-                {
-                    active.room = response["roomName"].as_str().map(str::to_owned);
-                }
-                if let Some(admission) = state.admissions.get_mut(&key) {
-                    admission.response = Some(response);
-                }
-            }
-            None => state.forget_unanswered(claim_id),
-        }
+        state.answer_admission(&(owner_id, request_key.to_owned()), claim_id, response);
     }
 
     /// The result of the account's attempt in `room`.
     pub fn result(&self, owner_id: i64, room: &str, now: u64) -> ResultLookup {
         let mut state = self.0.state.lock().unwrap_or_else(|e| e.into_inner());
-        state.purge(now);
-        match &state.result {
-            Some(result) if result.owner_id == owner_id && result.room == room => {
-                ResultLookup::Ready(result.value.clone())
-            }
-
-            // Pending only for the attempt still running in that very room: a
-            // stale or wrong room id gets no result now or later.
-            _ if state.active.as_ref().is_some_and(|active| {
-                active.owner_id == owner_id && active.room.as_deref() == Some(room)
-            }) =>
-            {
-                ResultLookup::Pending
-            }
-            _ => ResultLookup::Unavailable,
-        }
+        state.lookup_result(owner_id, room, now)
     }
 }
 

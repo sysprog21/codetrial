@@ -8,12 +8,11 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::net::SocketAddr;
 
-use crate::tasks::access::{
-    AccessError, Admission, Assignment, Preparation, ResultLookup, TaskService,
-};
+use crate::tasks::access::{AccessError, Admission, Preparation, ResultLookup, TaskService};
+use crate::tasks::package::Assignment;
 
-use super::auth::Owner;
-use super::token::read_body_with;
+use super::limits::read_body_with;
+use super::owner::Owner;
 use super::{AppState, MAX_BODY_BYTES, json_response};
 
 pub(crate) fn task_error(error: AccessError) -> Response {
@@ -110,7 +109,7 @@ pub(crate) fn task_error(error: AccessError) -> Response {
             false,
             "No result is held for that attempt.",
         ),
-        code => super::defense::refusal(code).unwrap_or((
+        code => defense_refusal(code).unwrap_or((
             StatusCode::SERVICE_UNAVAILABLE,
             true,
             "The task could not connect.",
@@ -127,6 +126,105 @@ pub(crate) fn task_error(error: AccessError) -> Response {
             .insert(header::RETRY_AFTER, header::HeaderValue::from(seconds));
     }
     response
+}
+
+/// The status, whether a retry may help, and what the page says, for each
+/// refusal a defense adds; `None` for a code that is not the defense's.
+fn defense_refusal(code: &str) -> Option<(StatusCode, bool, &'static str)> {
+    let conflict = StatusCode::CONFLICT;
+    let bad = StatusCode::BAD_REQUEST;
+    Some(match code {
+        "workspace_required" => (
+            StatusCode::PRECONDITION_FAILED,
+            false,
+            "A defense needs your ca2026-mycpu checkout: restart CodeTrial with --task-mode --workspace <checkout>.",
+        ),
+        "workspace_not_git" => (
+            StatusCode::PRECONDITION_FAILED,
+            false,
+            "The --workspace path is not the top of a git checkout.",
+        ),
+        "workspace_upstream" => (
+            StatusCode::PRECONDITION_FAILED,
+            false,
+            "Your checkout has not fetched the course's upstream main: run `make review` once, or git fetch https://github.com/sysprog21/ca2026-mycpu.git main:refs/mycpu-review/upstream.",
+        ),
+        "workspace_student_id" => (
+            StatusCode::PRECONDITION_FAILED,
+            false,
+            "Commit a valid STUDENT_ID (scripts/student-id.py check) before the defense.",
+        ),
+        "workspace_dirty" => (
+            conflict,
+            false,
+            "A graded file differs from HEAD: commit your work, then Start again.",
+        ),
+        "workspace_no_lines" => (
+            StatusCode::PRECONDITION_FAILED,
+            false,
+            "Your commits add no line the defense can ask about yet.",
+        ),
+        "defense_none" => (
+            StatusCode::NOT_FOUND,
+            false,
+            "No defense attempt is running.",
+        ),
+        "defense_busy" => (
+            conflict,
+            true,
+            "A run is still going: wait for it to finish.",
+        ),
+        "defense_closed" => (
+            conflict,
+            false,
+            "The defense panel acts only while the attempt is under way.",
+        ),
+        "item_unknown" => (bad, false, "No such defense item."),
+        "items_over" => (
+            conflict,
+            false,
+            "The items are over: answer Jim's wrap-up questions.",
+        ),
+        "item_not_begun" => (
+            conflict,
+            false,
+            "Read the item's overview and press Begin first.",
+        ),
+        "spec_unknown" => (bad, false, "Choose specs of the item's task."),
+        "prediction_invalid" => (bad, false, "Say in a sentence how the change fails."),
+        "prediction_unrun" => (bad, false, "Run every spec your prediction names."),
+        "claim_final" => (conflict, false, "The bug has been stated already."),
+        "claim_unrun" => (
+            conflict,
+            false,
+            "Run the program on both models before stating the bug.",
+        ),
+        "run_limit" => (
+            conflict,
+            false,
+            "This item has had all the runs it may have.",
+        ),
+        "prediction_required" => (conflict, false, "Record your prediction before the run."),
+        "edit_mismatch" => (bad, false, "Make exactly the change the item states."),
+        "model_not_built" => (conflict, false, "Build the two models first."),
+        "model_build_failed" => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            true,
+            "The models did not build.",
+        ),
+        "program_unknown" => (bad, false, "Choose one of your built programs."),
+        "claim_invalid" => (
+            bad,
+            false,
+            "Give the cycle, the signal, the rule and the exercise.",
+        ),
+        "run_failed" | "run_lost" => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            true,
+            "The run could not be recorded.",
+        ),
+        _ => return None,
+    })
 }
 
 /// Task mode is off unless `--task-mode` asked for it and the server listens
@@ -153,9 +251,6 @@ pub(super) fn unavailable(state: &AppState) -> Response {
         },
     )
 }
-
-/// The address an assignment link opens; the one place it is spelled.
-pub(crate) const TASK_PAGE_ROUTE: &str = "/t/{set_id}/{task_id}";
 
 /// The set and task an assignment page's path names, when it is one.
 pub(crate) fn task_page(path: &str) -> Option<(&str, &str)> {
@@ -290,10 +385,10 @@ impl axum::extract::FromRequestParts<AppState> for TaskOwner {
 pub(crate) fn with_built_in_task(state: &AppState, mut session: Value) -> Value {
     if state.config.tasks.is_some() {
         session["builtInTask"] = json!({
-            "setId": crate::tasks::access::BUILT_IN_SET,
-            "taskId": crate::tasks::access::BUILT_IN_TASK,
-            "site": crate::tasks::access::BUILT_IN_SITE,
-            "version": crate::tasks::access::BUILT_IN_VERSION,
+            "setId": crate::tasks::package::BUILT_IN_SET,
+            "taskId": crate::tasks::package::BUILT_IN_TASK,
+            "site": crate::tasks::package::BUILT_IN_SITE,
+            "version": crate::tasks::package::BUILT_IN_VERSION,
         });
     }
     session

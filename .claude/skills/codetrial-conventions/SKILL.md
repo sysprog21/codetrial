@@ -205,14 +205,19 @@ has how to answer a bot finding.
 
 ## Layout
 
-`README.md` has the tree under "Repository layout" and wins on it. Three
+`README.md` has the tree under "Repository layout" and wins on it. Four
 directories it does not name matter as soon as you add a test:
 
 ```text
 tests/unit/     Unit test bodies, compiled into src/ by `#[path]`
 tests/common/   What the integration tests share
 tests/stubs/    Fake executables the Python suites install, read by support.stub()
+tests/check-structure/  The fixture crates and end-to-end test of tools/check-structure
 ```
+
+A directory of `src/` holds at most 15 files and subdirectories
+(`tools/check-structure`, `wide-directory`): group by concept into a
+subdirectory, and count before adding a module.
 
 ## No test bodies under src/
 
@@ -245,7 +250,7 @@ Four rules follow, and each of them cost something to learn:
 
 - **Never name a file `tests/<dir>/main.rs`.** Cargo reads that as an
   integration-test target and compiles it a second time as a crate root, where
-  every `super::` in it fails. `src/main.rs` declares `tests/unit/bin.rs` for
+  every `super::` in it fails. `src/main.rs` declares `tests/unit/root/bin.rs` for
   this reason. Any other name under `tests/unit/` is inert to autodiscovery.
 - **`include_str!` and `include_bytes!` resolve against the file that writes
   them**, so a test reading its own production source needs the path rewritten

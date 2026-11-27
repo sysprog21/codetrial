@@ -1,0 +1,5 @@
+# Build into the repository's one target/ directory, beside the interviewer's
+# own, instead of a target/ inside tools/. The documented commands pass the same
+# --target-dir from the repository root, where this file is not read.
+[build]
+target-dir = "../../target/structure-tool"

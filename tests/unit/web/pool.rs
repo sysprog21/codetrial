@@ -66,8 +66,8 @@ fn config_with(ids: &[&str]) -> WebServerConfig {
 /// refusal here instead of passing unnoticed.
 ///
 /// One of three copies of this shape; `tests/web.rs` and
-/// `src/livekit/rooms.rs` carry the others, and the one in
-/// `src/livekit/rooms.rs` states why they stay copies.
+/// `src/livekit/room/rooms.rs` carry the others, and the one in
+/// `src/livekit/room/rooms.rs` states why they stay copies.
 fn probe_credential_accepted(
     headers: &axum::http::HeaderMap,
     api_key: &str,

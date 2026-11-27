@@ -145,25 +145,7 @@ pub fn normalized_github_login(value: &str) -> String {
     value.trim().trim_start_matches('@').to_ascii_lowercase()
 }
 
-/// Alphanumerics and dashes, alphanumeric at both ends, 39 bytes at most.
-///
-/// Deliberately looser than what GitHub accepts at signup today, which also
-/// forbids consecutive dashes. That rule is not retroactive, and this gates a
-/// handle a candidate types about themselves rather than a name this server
-/// derives anything from: a legacy account turned away at the door costs an
-/// interview, and letting an odd-looking one through costs nothing, because
-/// the handle is a label and never a key. Callers that need the stricter form
-/// add it themselves; [`crate::config`] does, for a name it puts in a filename.
-pub fn valid_github_login(value: &str) -> bool {
-    let bytes = value.as_bytes();
-    !bytes.is_empty()
-        && bytes.len() <= 39
-        && bytes[0].is_ascii_alphanumeric()
-        && bytes[bytes.len() - 1].is_ascii_alphanumeric()
-        && bytes
-            .iter()
-            .all(|byte| byte.is_ascii_alphanumeric() || *byte == b'-')
-}
+pub use crate::config::valid_github_login;
 
 /// rusqlite is synchronous, so every account query runs on the blocking pool
 /// instead of parking an async worker on disk I/O.

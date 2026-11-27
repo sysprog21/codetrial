@@ -167,7 +167,8 @@ fn observed_source(phase: &str) -> &'static str {
 }
 
 /// A run that executed one case against the code in the editor now. The unit
-/// tests keep the same helper in tests/unit/livekit.rs, which this crate cannot
+/// tests keep the same helper in tests/unit/livekit.rs, which this crate
+/// cannot
 /// reach; change the two together.
 fn receive_test_run(state: &mut RuntimeState) {
     let run = json!({"passed": 1, "total": 1, "code": state.code, "language": state.language});

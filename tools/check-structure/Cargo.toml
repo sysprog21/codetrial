@@ -1,0 +1,23 @@
+[package]
+name = "check-structure"
+version = "0.1.4"
+edition = "2024"
+rust-version = "1.98"
+description = "Architectural lints for CodeTrial: deep modules, narrow interfaces."
+license = "MIT"
+publish = false
+
+[dependencies]
+# Reads `cargo metadata`'s JSON.
+serde_json = "1.0.154"
+
+# The end-to-end test and its fixture crates live with the repository's other
+# tests, under tests/check-structure/.
+[[test]]
+name = "end_to_end"
+path = "../../tests/check-structure/end_to_end.rs"
+
+# A workspace of its own, like desktop/: the root manifest excludes this
+# directory, so the tool's dependencies and lockfile stay out of the
+# interviewer's build and the tool is built and tested by its own gate.
+[workspace]

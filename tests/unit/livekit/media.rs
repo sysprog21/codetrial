@@ -7,6 +7,7 @@
 use super::*;
 use crate::config::load_from_pairs;
 use crate::livekit::GEMINI_OUTPUT_AUDIO_SAMPLE_RATE;
+use crate::livekit::streams::{INGRESS_AGE, INGRESS_BYTES, INGRESS_FRAMES};
 use crate::livekit::tests::test_output_audio;
 use ::livekit::webrtc::video_frame::{I420Buffer, VideoBuffer, VideoFrame, VideoRotation};
 
@@ -103,13 +104,13 @@ async fn audio_is_buffered_to_a_threshold_and_the_tail_still_goes() {
         .await
         .unwrap();
     assert!(sink.sent.is_empty());
-    assert_eq!(media.audio_bytes.len(), 160);
+    assert_eq!(media.uplink.bytes.len(), 160);
     pump_audio(&mut media, &mut sink, Some(frame_of(80)))
         .await
         .unwrap();
     assert_eq!(sink.sent.len(), 1);
     assert_eq!(sink.sent[0].len(), 320);
-    assert!(media.audio_bytes.is_empty());
+    assert!(media.uplink.bytes.is_empty());
 
     pump_audio(&mut media, &mut sink, Some(frame_of(80)))
         .await
@@ -161,7 +162,7 @@ async fn a_failed_flush_is_an_error_the_caller_can_see() {
         fail: true,
         ..RecordingSink::default()
     };
-    media.audio_bytes.extend_from_slice(&[1, 2, 3, 4]);
+    media.uplink.bytes.extend_from_slice(&[1, 2, 3, 4]);
     assert!(
         pump_audio(&mut media, &mut sink, None).await.is_err(),
         "a flush that never reached Gemini is not a success"
@@ -177,14 +178,14 @@ async fn a_failed_flush_marks_the_bytes_it_may_have_sent_as_unconfirmed() {
         ..RecordingSink::default()
     };
     let mut media = CandidateMedia::new();
-    media.audio_bytes.extend_from_slice(&[1, 2]);
+    media.uplink.bytes.extend_from_slice(&[1, 2]);
     assert!(flush_candidate_audio(&mut sink, &mut media).await.is_err());
-    assert!(media.audio_unconfirmed);
-    assert_eq!(media.audio_bytes, [1, 2]);
+    assert!(media.uplink.unconfirmed);
+    assert_eq!(media.uplink.bytes, [1, 2]);
 
     let mut empty = CandidateMedia::new();
     assert!(flush_candidate_audio(&mut sink, &mut empty).await.is_ok());
-    assert!(!empty.audio_unconfirmed);
+    assert!(!empty.uplink.unconfirmed);
 }
 
 /// Bytes a socket refused with an error are still held, and a later flush on
@@ -198,16 +199,16 @@ async fn a_refused_flush_keeps_its_bytes_for_the_replacement_socket() {
         fail: true,
         ..RecordingSink::default()
     };
-    media.audio_bytes.extend_from_slice(&[1, 2, 3, 4]);
+    media.uplink.bytes.extend_from_slice(&[1, 2, 3, 4]);
     assert!(pump_audio(&mut media, &mut dead, None).await.is_err());
-    assert_eq!(media.audio_bytes, [1, 2, 3, 4]);
+    assert_eq!(media.uplink.bytes, [1, 2, 3, 4]);
 
     let mut replacement = RecordingSink::default();
-    flush_audio(&mut replacement, &mut media.audio_bytes)
+    flush_audio(&mut replacement, &mut media.uplink.bytes)
         .await
         .unwrap();
     assert_eq!(replacement.sent, [vec![1, 2, 3, 4]]);
-    assert!(media.audio_bytes.is_empty());
+    assert!(media.uplink.bytes.is_empty());
 }
 
 /// An ended audio track is let go of even when the final flush fails.
@@ -228,7 +229,7 @@ fn an_ended_audio_track_is_released_even_when_the_flush_fails() {
         .expect("the room loop still has a shared audio handler");
     let pump = arm.find("pump_audio").expect("the arm still pumps audio");
     let release = arm
-        .find("release_if_ended(&mut context.media.audio")
+        .find("release_if_ended(&mut context.streams.audio")
         .expect("the arm must let go of an ended audio stream itself");
     assert!(
         release > pump,
@@ -586,11 +587,17 @@ fn channel_order_survives_the_libyuv_naming_trap() {
 #[test]
 fn voiced_recently_spans_the_quiet_window_only() {
     let start = Instant::now();
-    let mut media = CandidateMedia::new();
-    assert!(!media.voiced_recently(start));
-    media.voiced_at = Some(start);
-    assert!(media.voiced_recently(start + Duration::from_millis(1_999)));
-    assert!(!media.voiced_recently(start + super::super::turn::CHECKPOINT_VOICE_QUIET));
+    let mut streams = CandidateStreams::default();
+    assert!(!voiced_recently(streams.voiced_at, start));
+    streams.voiced_at = Some(start);
+    assert!(voiced_recently(
+        streams.voiced_at,
+        start + Duration::from_millis(1_999)
+    ));
+    assert!(!voiced_recently(
+        streams.voiced_at,
+        start + super::super::timing::CHECKPOINT_VOICE_QUIET
+    ));
 }
 
 #[tokio::test]
@@ -603,7 +610,7 @@ async fn each_complete_input_frame_flushes_without_waiting_for_another() {
             .unwrap();
         assert_eq!(sink.sent.len(), expected_messages);
         assert_eq!(sink.sent.last().unwrap().len(), 320);
-        assert!(media.audio_bytes.is_empty());
+        assert!(media.uplink.bytes.is_empty());
     }
 }
 
@@ -1077,8 +1084,6 @@ async fn sdk_queue_keeps_the_newest_4000_frames_and_drops_the_oldest_with_no_cou
 /// dropped-byte count.
 #[tokio::test]
 async fn stacked_sdk_and_ingress_stores_exceed_the_local_age_bound_in_capture_age() {
-    use super::super::recovery::Ingress;
-
     let capture_start = Instant::now();
     let capture_time = |marker: i16| {
         capture_start + Duration::from_millis(10 * (u64::try_from(marker).unwrap() - 1))
@@ -1159,4 +1164,216 @@ async fn a_full_output_queue_is_reported_once_per_backlog_with_its_room() {
         output.queue_full_lines, 2,
         "a drained queue ends the backlog"
     );
+}
+
+#[test]
+fn ingress_has_independent_frame_byte_and_age_bounds() {
+    let now = Instant::now();
+    let frame = |samples| AudioFrame {
+        data: std::borrow::Cow::Owned(vec![1; samples]),
+        sample_rate: 16000,
+        num_channels: 1,
+        samples_per_channel: samples as u32,
+    };
+    let mut ring = Ingress::default();
+    for _ in 0..4001 {
+        ring.push(frame(1), now);
+    }
+    assert_eq!(ring.frames.len(), 4000);
+    assert_eq!(ring.dropped_bytes, 2);
+    assert!(ring.pop(now + INGRESS_AGE).is_none());
+    assert_eq!(ring.bytes, 0);
+    assert_eq!(ring.dropped_bytes, 8002);
+    ring.push(frame(INGRESS_BYTES / 2 + 1), now);
+    assert!(ring.is_empty());
+    ring.push(frame(INGRESS_BYTES / 2), now);
+    // Exactly the byte bound is kept: only one past it is refused.
+    assert_eq!(ring.bytes, INGRESS_BYTES);
+    ring.push(frame(160), now);
+    assert_eq!(ring.frames.len(), 1);
+    assert_eq!(ring.bytes, 320);
+    assert!(
+        matches!(ring.pop(now), Some(CandidateInput::BufferedFrame(frame)) if frame.data.len() == 160)
+    );
+    assert_eq!(ring.bytes, 0, "popping a frame gives its bytes back");
+    ring.push(frame(0), now);
+    assert!(ring.is_empty());
+}
+
+/// The analyzer sums the `recovery ingress` line per room, and the ingress
+/// count is cumulative across replacements, so a line must carry only the
+/// drops the previous line did not.
+#[test]
+fn each_ingress_log_line_carries_only_new_drops() {
+    let now = Instant::now();
+    let frame = |samples| AudioFrame {
+        data: std::borrow::Cow::Owned(vec![1; samples]),
+        sample_rate: 16000,
+        num_channels: 1,
+        samples_per_channel: samples as u32,
+    };
+    let mut ring = Ingress::default();
+    assert_eq!(ring.take_unlogged_drops(), 0);
+    for _ in 0..4001 {
+        ring.push(frame(1), now);
+    }
+    assert_eq!(ring.take_unlogged_drops(), 2);
+    assert_eq!(
+        ring.take_unlogged_drops(),
+        0,
+        "asking again repeats nothing"
+    );
+    assert!(ring.pop(now + INGRESS_AGE).is_none());
+    assert_eq!(ring.take_unlogged_drops(), 8000);
+    assert_eq!(ring.dropped_bytes, 8002, "the cumulative count is kept");
+}
+
+#[test]
+fn trimming_audio_carries_the_boundary_before_retained_later_frames() {
+    let at = Instant::now();
+    let frame = |value| AudioFrame {
+        data: vec![value; 160].into(),
+        sample_rate: 16000,
+        num_channels: 1,
+        samples_per_channel: 160,
+    };
+    let mut ring = Ingress::default();
+    ring.push(frame(7), at);
+    ring.yielded(at);
+    ring.push(frame(9), at + Duration::from_secs(5));
+    assert!(matches!(
+        ring.pop(at),
+        Some(CandidateInput::BufferedFrame(_))
+    ));
+    assert!(matches!(
+        ring.pop(at + INGRESS_AGE),
+        Some(CandidateInput::Yield)
+    ));
+    assert!(
+        matches!(ring.pop(at + INGRESS_AGE), Some(CandidateInput::BufferedFrame(frame)) if frame.data[0] == 9)
+    );
+    assert!(ring.is_empty());
+}
+
+#[test]
+fn expired_audio_cannot_defer_a_reply_and_empty_boundaries_are_coalesced() {
+    let now = Instant::now();
+    let mut ring = Ingress::default();
+    ring.yielded(now - INGRESS_AGE);
+    ring.push(
+        AudioFrame {
+            data: vec![7; 160].into(),
+            sample_rate: 16000,
+            num_channels: 1,
+            samples_per_channel: 160,
+        },
+        now - INGRESS_AGE,
+    );
+    assert!(!ring.has_audio(), "expired bytes cannot defer the action");
+    ring.yielded(now);
+    assert!(matches!(ring.pop(now), Some(CandidateInput::Yield)));
+    assert!(ring.pop(now).is_none(), "one empty boundary is sufficient");
+    assert_eq!(ring.dropped_bytes, 320);
+}
+
+#[test]
+fn a_yield_at_frame_capacity_drops_only_the_oldest_audio() {
+    let now = Instant::now();
+    let mut ring = Ingress::default();
+    for value in 0..INGRESS_FRAMES {
+        ring.push(
+            AudioFrame {
+                data: vec![i16::try_from(value).unwrap()].into(),
+                sample_rate: 16000,
+                num_channels: 1,
+                samples_per_channel: 1,
+            },
+            now,
+        );
+    }
+    ring.yielded(now);
+    assert_eq!(ring.frames.len(), INGRESS_FRAMES);
+    assert_eq!(ring.dropped_bytes, 2);
+    assert_eq!(ring.bytes, (INGRESS_FRAMES - 1) * 2);
+    for value in 1..INGRESS_FRAMES {
+        assert!(matches!(
+            ring.pop(now),
+            Some(CandidateInput::BufferedFrame(frame)) if frame.data[0] == i16::try_from(value).unwrap()
+        ));
+    }
+    assert!(matches!(ring.pop(now), Some(CandidateInput::Yield)));
+    assert!(ring.pop(now).is_none());
+}
+
+/// The camera gate: outside the candidate's speech only a socket's first frame
+/// is due, speech sends one a second apart, and a frame tried at all restarts
+/// the interval.
+#[test]
+fn the_camera_gate_follows_presence_speech_and_the_last_attempt() {
+    let mut media = CandidateMedia::new();
+    let after = |intervals| Instant::now() + GEMINI_VIDEO_FRAME_INTERVAL * intervals;
+    let first = after(1);
+    assert!(
+        media.begin_video_attempt(first, false),
+        "a new socket owes a frame"
+    );
+    assert!(
+        !media.begin_video_attempt(first, true),
+        "an attempt restarts the interval"
+    );
+    media.mark_presence_sent();
+    let second = after(3);
+    assert!(
+        !media.begin_video_attempt(second, false),
+        "silent frames are not sent"
+    );
+    assert!(
+        media.begin_video_attempt(second, true),
+        "speech earns another, a refused frame having cost nothing"
+    );
+    media.forget_presence_frame();
+    assert!(
+        media.begin_video_attempt(after(5), false),
+        "a replacement has seen none"
+    );
+}
+
+/// An acknowledgement still being generated, or generated with no sound in it,
+/// is not queued; one with sound is, and the output adopts whichever slot it
+/// is handed.
+#[tokio::test]
+async fn a_tool_acknowledgement_is_queued_only_once_it_has_sound() {
+    let (mut output, mut frames) = test_output_audio();
+    assert!(!output.tool_ack_ready());
+    assert!(!output.queue_tool_ack().await.unwrap());
+
+    let slot = std::sync::Arc::new(std::sync::OnceLock::new());
+    output.adopt_tool_ack(std::sync::Arc::clone(&slot), None);
+    assert!(!output.tool_ack_ready(), "still being generated");
+    slot.set(Vec::new()).unwrap();
+    assert!(!output.tool_ack_ready(), "generated with no sound");
+    assert!(!output.queue_tool_ack().await.unwrap());
+
+    let size = output.sample_rate as usize / 100 * 2;
+    let slot = std::sync::Arc::new(std::sync::OnceLock::new());
+    slot.set(vec![1; size * 2]).unwrap();
+    output.adopt_tool_ack(slot, None);
+    assert!(output.tool_ack_ready());
+    assert!(output.queue_tool_ack().await.unwrap());
+    assert!(frames.try_recv().is_ok(), "the clip's frames were queued");
+}
+
+/// A write that may have reached the provider is counted, not replayed, and
+/// the count is read once and then cleared.
+#[test]
+fn an_unconfirmed_write_is_quarantined_and_counted_once() {
+    let mut media = CandidateMedia::new();
+    assert_eq!(media.quarantined_bytes(), 0);
+    media.uplink.bytes.extend_from_slice(&[1, 2, 3]);
+    media.uplink.unconfirmed = true;
+    media.uplink.quarantine_unconfirmed();
+    assert_eq!(media.quarantined_bytes(), 3);
+    assert_eq!(media.take_quarantined(), 3);
+    assert_eq!(media.quarantined_bytes(), 0);
+    assert_eq!(media.take_quarantined(), 0);
 }

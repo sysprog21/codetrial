@@ -1,7 +1,7 @@
 use super::*;
 use crate::tasks::package::{Rules, SetConfig};
 use crate::tasks::test_support::{
-    PIN, SET, SITE, admit, assignment, download, preparation, unlocked_service,
+    PIN, SET, SITE, admit, admit_in_room, assignment, download, preparation, unlocked_service,
 };
 
 #[tokio::test]
@@ -263,13 +263,7 @@ async fn a_closed_set_refuses_new_attempts() {
 #[tokio::test]
 async fn the_result_is_pending_while_the_attempt_lasts_then_held_for_its_room_only() {
     let service = unlocked_service();
-    let task = admit(&service, "start", 100);
-    service.finish_admission(
-        1,
-        "start",
-        task.claim_id,
-        Some(json!({"roomName": "room-1"})),
-    );
+    let task = admit_in_room(&service, "room-1");
     assert_eq!(service.result(1, "room-1", 150), ResultLookup::Pending);
     task.retain_result("room-1", json!({"assessmentMode": "task", "x": 1}), 200);
     drop(task);
@@ -320,9 +314,10 @@ async fn a_result_too_large_to_keep_drops_the_review_but_keeps_the_ending_and_co
     let task = admit(&service, "start", 100);
     let huge = "x".repeat(default_number("reviewBytes") as usize);
     // Code at the byte limit, every byte of it escaped twice over in JSON.
-    let code = "\"".repeat(crate::tasks::session::MAX_CODE_BYTES);
+    let code = "\"".repeat(crate::tasks::MAX_CODE_BYTES);
     let outcome = json!({"outcome": "completed", "cause": "finish", "at": 600, "durationMs": 0});
-    task.retain_result(
+    crate::tasks::report::retain(
+        &task,
         "room-1",
         json!({"taskAssessment": {"finalRevisionId": "rev", "finalCode": code,
             "outcome": outcome, "gaps": [huge]}}),
@@ -345,7 +340,8 @@ async fn an_oversized_invalid_result_never_claims_its_review_was_lost() {
     let task = admit(&service, "start", 100);
     let outcome = json!({"outcome": "invalid", "cause": "visibility", "at": 60, "durationMs": 0});
     let huge = "x".repeat(default_number("reviewBytes") as usize);
-    task.retain_result(
+    crate::tasks::report::retain(
+        &task,
         "room-1",
         json!({"taskAssessment": {"outcome": outcome, "pad": huge}}),
         200,
@@ -722,7 +718,7 @@ fn a_compiled_language_is_unavailable_without_compiler_explorer_not_unsupported(
 /// nothing an instructor's link can spell is mistaken for it.
 #[test]
 fn only_the_built_in_site_set_and_version_name_the_default_task() {
-    use crate::tasks::access::{BUILT_IN_SET, BUILT_IN_SITE, BUILT_IN_VERSION};
+    use crate::tasks::package::{BUILT_IN_SET, BUILT_IN_SITE, BUILT_IN_VERSION};
     let built_in = Assignment::built_in();
     assert!(built_in.is_built_in());
     for site in [BUILT_IN_SITE, BUILT_IN_SITE.trim_end_matches('/')] {
@@ -809,4 +805,13 @@ async fn the_default_task_opens_without_an_unlock_for_anyone() {
         ("guest", 0)
     );
     assert_eq!(admitted.config.id, "default");
+}
+
+#[test]
+fn a_result_is_kept_whole_up_to_the_review_limit_and_not_past_it() {
+    let limit = default_number("reviewBytes") as usize;
+
+    // The quotes of a JSON string are two of its bytes.
+    assert!(result_fits(&json!("x".repeat(limit - 2))));
+    assert!(!result_fits(&json!("x".repeat(limit - 1))));
 }

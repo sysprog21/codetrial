@@ -18,33 +18,34 @@ pub use assessment::{
     phase_judgment_note, received_test_note, report_prompt, report_system_instruction,
     report_system_instruction_for_examples, rolling_assessment, unvoiced_record_note,
 };
-pub use instructions::build_instructions_for_plan;
-pub(crate) use material::hint_rung_held_text;
+pub use instructions::{RuntimeOptions, build_instructions_for_plan};
+#[cfg(test)]
+pub(crate) use material::editor_update_execution_status;
 pub use material::{
     MAX_EXCERPT_LINE_CHARS, MAX_NUMBERED_BYTES, changed_excerpt, format_test_run,
     format_test_run_for_reaction, hint_ladder_used_text, hint_rung_text, hint_rung_withheld_text,
     log_hint_text, numbered, numbered_from, read_board_text, read_editor_text,
 };
+pub(crate) use material::{editor_update_body, hint_rung_held_text};
 pub(crate) use material::{
     numbered_bounded_line, numbered_from_with_limit, numbered_page, read_editor_text_from_numbered,
     untrusted_block,
-};
-pub(crate) use nudges::{
-    behavioral_round_start, end_interview_refusal, report_transcript_lines, tool_editor_review,
 };
 pub use nudges::{
     behavioral_silence_nudge, behavioral_time_warning, board_silence_nudge, proactive_review,
     round_skipped, round_started, silence_nudge, time_warning, wrap_up,
 };
+pub(crate) use nudges::{end_interview_refusal, report_transcript_lines, tool_editor_review};
 pub(crate) use progress::evidenced_among;
 pub use progress::{
-    LanguageChoiceContext, SincePrevious, TestRecord, greeting, greeting_with_language,
-    language_choice, released_follow_ups, spoken_language, test_results_reaction,
-    test_runner_outage_reaction, test_runner_unavailable_reaction, test_setup_error_reaction,
-    uncredited_test_results_reaction, unrecorded_earlier_phases,
+    LanguageChoiceContext, SincePrevious, greeting, greeting_with_language, language_choice,
+    released_follow_ups, spoken_language, test_results_reaction, test_runner_outage_reaction,
+    test_runner_unavailable_reaction, test_setup_error_reaction, uncredited_test_results_reaction,
+    unrecorded_earlier_phases,
 };
 pub use recovery::{
-    cold_restart, compressed_context, owed_reply, resumed_context, with_owed_reply,
+    cold_restart, compressed_context, earlier_references, owed_reply, resumed_context,
+    with_owed_reply,
 };
 pub(crate) use recovery::{
     editor_tool_continuity, latest_candidate_continuity, pending_candidate_line,

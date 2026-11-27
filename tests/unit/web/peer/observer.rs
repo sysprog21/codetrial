@@ -313,7 +313,7 @@ async fn observer_advice_provider_runs_only_after_session_end_and_never_requests
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("http://{}/generateContent", listener.local_addr().unwrap());
     let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    let mut config = crate::config::load_peer_observer(&std::collections::BTreeMap::from([(
+    let mut config = crate::gemini::load_peer_observer(&std::collections::BTreeMap::from([(
         "GOOGLE_API_KEY".into(),
         "observer-test-key".into(),
     )]))
@@ -689,7 +689,7 @@ fn spoken_words_in_evidence_do_not_void_the_advice() {
 fn start_fixture() -> (
     PeerObservers,
     Arc<Accounts>,
-    crate::config::PeerObserverConfig,
+    crate::gemini::PeerObserverConfig,
     crate::config::Provider,
 ) {
     let accounts = Accounts::open(crate::accounts::GitHubLoginConfig {
@@ -701,7 +701,7 @@ fn start_fixture() -> (
     })
     .unwrap();
     accounts.initialize_schema().unwrap();
-    let config = crate::config::load_peer_observer(&std::collections::BTreeMap::from([(
+    let config = crate::gemini::load_peer_observer(&std::collections::BTreeMap::from([(
         "GOOGLE_API_KEY".to_owned(),
         "start-ready-key".to_owned(),
     )]))
@@ -821,7 +821,7 @@ async fn observation_with_provider()
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("http://{}/generateContent", listener.local_addr().unwrap());
     let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    let mut config = crate::config::load_peer_observer(&std::collections::BTreeMap::from([(
+    let mut config = crate::gemini::load_peer_observer(&std::collections::BTreeMap::from([(
         "GOOGLE_API_KEY".into(),
         "observation-test-key".into(),
     )]))
@@ -1164,7 +1164,7 @@ async fn run_observer(
             )
         })
         .unwrap();
-    let config = crate::config::load_peer_observer(&std::collections::BTreeMap::from([(
+    let config = crate::gemini::load_peer_observer(&std::collections::BTreeMap::from([(
         "GOOGLE_API_KEY".to_owned(),
         "run-key".to_owned(),
     )]))

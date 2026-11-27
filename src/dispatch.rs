@@ -9,6 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use crate::config::{AgentConfig, Provider};
+use crate::livekit::RoomLease;
 use crate::web::{AgentJob, DispatchRefusal, NoShowConsent, RoomDispatcher};
 
 const MAX_CONCURRENT_GUEST_INTERVIEWS: usize = 2;
@@ -265,7 +266,7 @@ impl LocalDispatcher {
                             &config,
                             &slot.room_name,
                             crate::web::current_epoch_seconds(),
-                            Some(&slot),
+                            Some(&slot as &dyn RoomLease),
                         ),
                         || slot.has_joined(),
                     )
@@ -490,21 +491,6 @@ pub struct Slot {
 }
 
 impl Slot {
-    /// Resolves once the page that began this start has given it up.
-    pub(crate) async fn released(&self) {
-        self.released.notified().await;
-    }
-
-    /// Whether the start has already been given up, read without taking the
-    /// release [`Slot::released`] waits on.
-    pub(crate) fn is_released(&self) -> bool {
-        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-        state
-            .starts
-            .get(&self.room_name)
-            .is_some_and(|start| start.phase == StartPhase::Released)
-    }
-
     /// Whether a candidate was accepted into this start.
     fn has_joined(&self) -> bool {
         let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
@@ -513,10 +499,22 @@ impl Slot {
             .get(&self.room_name)
             .is_some_and(|start| start.phase == StartPhase::Joined)
     }
+}
 
-    /// Records that a candidate was accepted, unless the start was released
-    /// first. `false` means the room is to be left as a no-show.
-    pub(crate) fn claim_join(&self) -> bool {
+impl RoomLease for Slot {
+    fn released(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+        Box::pin(self.released.notified())
+    }
+
+    fn is_released(&self) -> bool {
+        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        state
+            .starts
+            .get(&self.room_name)
+            .is_some_and(|start| start.phase == StartPhase::Released)
+    }
+
+    fn claim_join(&self) -> bool {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
 
         // Every slot is made beside its start, and only its own drop removes
@@ -532,7 +530,7 @@ impl Slot {
         true
     }
 
-    pub(crate) fn assessment_finished(&self) {
+    fn assessment_finished(&self) {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
 
         if let Some(assessing) = state.live.get_mut(&self.room_name) {
@@ -569,5 +567,5 @@ pub fn agent_config_for(base: &AgentConfig, provider: &Provider) -> AgentConfig 
 }
 
 #[cfg(test)]
-#[path = "../tests/unit/dispatch.rs"]
+#[path = "../tests/unit/dispatch/mod.rs"]
 mod tests;

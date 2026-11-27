@@ -533,3 +533,21 @@ async fn every_owner_scoped_route_refuses_an_anonymous_request() {
     server.shutdown().await;
     remove_database(path).await;
 }
+
+/// Without an account database there is no session to read. A caller of a
+/// route that needs an account is told the feature is off, not that they are
+/// signed out, which would send them to a sign-in that cannot work.
+#[tokio::test]
+async fn an_owner_route_without_accounts_says_so_instead_of_asking_to_sign_in() {
+    let (base, _server) = spawn_web_server(web_config()).await;
+    let response = http_client()
+        .get(format!("{base}/api/reports"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 404);
+    assert_eq!(
+        response.json::<Value>().await.unwrap()["error"],
+        "GitHub username recording is not configured."
+    );
+}

@@ -1,5 +1,5 @@
 use crate::accounts::peer::{Session, observer::Segment};
-use crate::config::PeerObserverConfig;
+use crate::gemini::PeerObserverConfig;
 use serde_json::{Value, json};
 
 /// The shortest one-word excerpt that can ground a piece of advice.

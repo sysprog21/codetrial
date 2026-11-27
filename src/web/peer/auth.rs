@@ -1,4 +1,5 @@
-use crate::web::{AppState, Owner, json_response};
+use crate::web::owner::Owner;
+use crate::web::{AppState, json_response};
 use axum::extract::FromRequestParts;
 use axum::http::{Method, StatusCode, header, request::Parts};
 use axum::response::Response;

@@ -6,6 +6,7 @@
 
 use super::*;
 use crate::agent::{InterviewLoop, ThinkingHold};
+use crate::livekit::session;
 
 /// A hold arms the discard so a turn already in flight cannot speak over
 /// the release. Arming it on a turn that has finished is the failure: its
@@ -17,13 +18,13 @@ fn only_a_turn_still_being_produced_leaves_output_to_discard() {
     let now = Instant::now();
     let mut activity = RuntimeActivity::new(now);
     activity.floor = Floor::Speaking;
-    assert!(hold_leaves_output_in_flight(&activity, now));
+    assert!(activity.hold_leaves_output_in_flight(now));
     activity.floor = Floor::AwaitingPlayout;
-    assert!(!hold_leaves_output_in_flight(&activity, now));
+    assert!(!activity.hold_leaves_output_in_flight(now));
     activity.floor = Floor::Listening;
-    assert!(!hold_leaves_output_in_flight(&activity, now));
+    assert!(!activity.hold_leaves_output_in_flight(now));
     activity.note_output(now);
-    assert!(hold_leaves_output_in_flight(&activity, now));
+    assert!(activity.hold_leaves_output_in_flight(now));
 
     // A generation silent for a stall is dead, and nothing will end its turn,
     // including the floor its audio took.
@@ -31,19 +32,19 @@ fn only_a_turn_still_being_produced_leaves_output_to_discard() {
     let just_short = stalled - Duration::from_millis(1);
     activity.note_reply_audible();
     assert_eq!(activity.floor, Floor::Speaking);
-    assert!(hold_leaves_output_in_flight(&activity, just_short));
-    assert!(!hold_leaves_output_in_flight(&activity, stalled));
+    assert!(activity.hold_leaves_output_in_flight(just_short));
+    assert!(!activity.hold_leaves_output_in_flight(stalled));
 
     // A tool continuation stalls the same way.
     let mut continuation = RuntimeActivity::new(now);
     continuation.note_tool_response(now);
-    assert!(hold_leaves_output_in_flight(&continuation, just_short));
-    assert!(!hold_leaves_output_in_flight(&continuation, stalled));
+    assert!(continuation.hold_leaves_output_in_flight(just_short));
+    assert!(!continuation.hold_leaves_output_in_flight(stalled));
 
     // A prompt nothing has answered yet still has its reply on the way.
     let mut prompted = RuntimeActivity::new(now);
     prompted.mark_prompted(now, None, false);
-    assert!(hold_leaves_output_in_flight(&prompted, stalled));
+    assert!(prompted.hold_leaves_output_in_flight(stalled));
 }
 
 #[test]
@@ -1184,9 +1185,8 @@ fn continuing_while_a_held_reply_is_discarded_owes_one_reply_after_its_boundary(
 
     // The dropped turn's ending, the way the room loop takes it: it ends the
     // discard and settles nothing sent since.
-    assert!(!super::super::session::accept_gemini_event(
+    assert!(!activity.accept_event(
         &crate::gemini::GeminiEvent::TurnComplete,
-        &mut activity,
         false,
         Instant::now()
     ));
@@ -2177,9 +2177,12 @@ async fn completed_coding_idle_later_failed_send_retries_after_thirty_without_sp
         .watch_prompt(&mut state, start + Duration::from_secs(210))
         .unwrap();
     assert!(
-        crate::livekit::send_watched_prompt(&mut activity, &failed, async {
-            Err::<(), _>(std::io::Error::other("closed socket"))
-        })
+        crate::livekit::send_watched_prompt(
+            &mut activity,
+            &mut TurnProbes::default(),
+            &failed,
+            async { Err::<(), _>(std::io::Error::other("closed socket")) }
+        )
         .await
         .is_err()
     );
@@ -2454,73 +2457,6 @@ fn review_settling_silent_delivery_and_cut_sync_hold_at_their_edges() {
     assert!(!state.context_cut_plausible);
 }
 
-#[test]
-fn latency_recovery_prompt_keeps_the_wait_and_runtime_prompt_debt() {
-    let start = Instant::now();
-    let mut activity = RuntimeActivity::new(start);
-    activity.latency.voice(start);
-    activity.live_socket = 2;
-    activity.reset_context_observations(true);
-    activity.mark_recovery_prompted(start + Duration::from_secs(10), Some("owed"));
-    let record = activity
-        .latency
-        .audio(start + Duration::from_secs(11))
-        .unwrap();
-    assert_eq!(record["origin"], "last_voiced_pcm");
-    assert_eq!(record["elapsed_ms"], 11_000);
-    assert!(activity.owes_prompt());
-    assert_eq!(activity.prompt_text.as_deref(), Some("owed"));
-}
-
-#[test]
-fn a_late_transcript_does_not_seed_the_next_latency_trace() {
-    let start = Instant::now();
-    let mut activity = RuntimeActivity::new(start);
-    activity.latency.voice(start);
-    activity.latency.audio(start + Duration::from_millis(500));
-    let ended = start + Duration::from_secs(1);
-    activity
-        .latency
-        .boundary(super::super::latency::Boundary::TurnComplete, ended);
-    activity.turn_completed_at = Some(ended);
-    activity.note_latency_transcript(ended + Duration::from_millis(500));
-    let record = activity
-        .latency
-        .audio(ended + Duration::from_secs(30))
-        .unwrap();
-    assert_eq!(record["origin"], "provider_event");
-    assert_eq!(record["elapsed_ms"], 0);
-}
-
-#[test]
-fn either_confirmation_path_closes_a_provisional_holds_latency_trace() {
-    for timed_out in [false, true] {
-        let start = Instant::now();
-        let mut activity = RuntimeActivity::new(start);
-        activity.latency.voice(start);
-        let mut state = RuntimeState {
-            thinking_hold: ThinkingHold::Requested { since: start },
-            ..RuntimeState::default()
-        };
-        let declared = start + crate::agent::THINKING_REQUEST_SETTLE;
-        if timed_out {
-            activity.settle_stale_request(&mut state, declared, 1);
-        } else {
-            activity.confirm_thinking_request(&mut state, declared, 1);
-        }
-        assert!(state.thinking_hold.is_active());
-        assert!(state.end_thinking(2));
-        let released = declared + Duration::from_secs(45);
-        activity.note_latency_transcript(released);
-        let record = activity
-            .latency
-            .audio(released + Duration::from_millis(500))
-            .unwrap();
-        assert_eq!(record["origin"], "transcript");
-        assert_eq!(record["elapsed_ms"], 500);
-    }
-}
-
 /// A generation that only called tools leaves the candidate who finished
 /// speaking unanswered; one that spoke, or that nobody was waiting on, does
 /// not.
@@ -2554,21 +2490,22 @@ fn recovery_debt_preserves_the_yield_for_current_and_pending_candidate_input() {
     for pending in [false, true] {
         let start = Instant::now();
         let mut activity = RuntimeActivity::new(start);
-        activity.latency.voice(start);
+        let mut probes = TurnProbes::default();
+        probes.latency.voice(start);
         if pending {
-            activity.latency.audio(start + Duration::from_millis(100));
-            activity.latency.voice_start();
-            activity.latency.voice(start + Duration::from_millis(200));
+            probes.latency.audio(start + Duration::from_millis(100));
+            probes.latency.voice_start();
+            probes.latency.voice(start + Duration::from_millis(200));
         }
-        activity.latency.yielded(start + Duration::from_millis(300));
+        probes.latency.yielded(start + Duration::from_millis(300));
         activity.mark_recovery_prompted(start + Duration::from_millis(400), None);
         if pending {
-            activity.latency.boundary(
+            probes.latency.boundary(
                 super::super::latency::Boundary::TurnComplete,
                 start + Duration::from_millis(500),
             );
         }
-        let record = activity
+        let record = probes
             .latency
             .audio(start + Duration::from_millis(800))
             .unwrap();
@@ -2644,10 +2581,11 @@ fn a_cold_socket_forgets_the_last_context_size() {
     for resumed in [false, true] {
         let start = Instant::now();
         let mut activity = RuntimeActivity::new(start);
-        activity.latency.observe_usage(9000, 0);
-        activity.reset_context_observations(resumed);
-        activity.latency.voice(start);
-        let record = activity.latency.audio(start).unwrap();
+        let mut probes = TurnProbes::default();
+        probes.latency.observe_usage(9000, 0);
+        session::reset_context_observations(&mut activity, &mut probes, resumed);
+        probes.latency.voice(start);
+        let record = probes.latency.audio(start).unwrap();
         assert_eq!(
             record["context_tokens"],
             if resumed {
@@ -3141,7 +3079,8 @@ fn candidate_speech_marks_the_replacement_watch_without_disarming_it() {
     activity.note_candidate_voice_activity(true, first);
     activity.note_candidate_voice_activity(true, start + Duration::from_secs(4));
     let spoken_over = activity
-        .take_rotation_watch()
+        .rotation
+        .take()
         .expect("speech keeps the watch armed");
     assert_eq!(spoken_over.candidate_spoke_at, Some(first));
 }
@@ -3403,3 +3342,5 @@ fn the_handoff_reply_wait_ends_when_the_socket_speaks_is_prompted_or_replaced() 
         assert!(!activity.handoff_reply_due(late, SILENCE, false), "{case}");
     }
 }
+include!("turn_parts/latency_traces.rs");
+include!("turn_parts/stale_discard.rs");

@@ -2,7 +2,8 @@
 //! speech started and ended, whether fresh microphone evidence says it is still
 //! under way, and the transcription tail a socket replacement waits out.
 
-use super::{CHECKPOINT_VOICE_QUIET, Duration, Instant, RuntimeActivity, STALE_VOICE_ACTIVITY};
+use super::{Duration, Instant, RuntimeActivity, STALE_VOICE_ACTIVITY};
+use crate::livekit::timing::CHECKPOINT_VOICE_QUIET;
 
 impl RuntimeActivity {
     pub(in crate::livekit) fn note_candidate_voice_activity(&mut self, active: bool, now: Instant) {

@@ -17,6 +17,7 @@ show it.
 | Concern | Where |
 | --- | --- |
 | The room loop, media, and the management API over HTTP | `src/livekit.rs` and `src/livekit/`, whose module header maps the regions |
+| Turn state and what an event does to it | `src/livekit/turn/` (`RuntimeActivity`; its intent methods are under `turn/activity/`, the latency and timing observers in `turn/probes.rs`); ask the owner for the effect, do not write its fields. The candidate's receivers and queued audio are `src/livekit/streams.rs`. After moving any of these run `tools/check-structure` ([Structure lints](../codetrial-improve/rust.md#structure-lints)) |
 | Join tokens | `src/token.rs`, served by `src/web/token.rs` |
 | One agent per room, no-show release | `src/dispatch.rs` |
 | Agent state the page reads (`lk.agent.state`) | set in `src/livekit.rs`, decided by `docs/avatar-contract.md` |

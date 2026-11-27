@@ -4,12 +4,14 @@ use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::Router;
 use axum::extract::connect_info::IntoMakeServiceWithConnectInfo;
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
+use ring::rand::SecureRandom;
 use serde_json::{Value, json};
 
 use crate::accounts::{Accounts, GitHubLoginConfig, blocking, release_interview_room};
@@ -22,6 +24,8 @@ mod auth;
 mod consent;
 pub(crate) mod defense;
 mod interviews;
+mod limits;
+mod owner;
 mod peer;
 mod policy;
 mod pool;
@@ -36,7 +40,7 @@ mod update;
 // Flattened back into one namespace so the split is a file boundary and not an
 // API change: every path that named `web::thing` before still does.
 pub(crate) use {
-    assets::*, auth::*, consent::*, interviews::*, policy::*, recordings::*, token::*,
+    assets::*, auth::*, consent::*, interviews::*, limits::*, policy::*, recordings::*, token::*,
 };
 
 // The whole of this module's public surface, named rather than left to fall out
@@ -118,7 +122,7 @@ pub struct WebServerConfig {
     pub recording: Option<crate::config::RecordingConfig>,
     /// Peer practice is opt-in and requires verified GitHub accounts.
     pub peer: Option<crate::config::PeerConfig>,
-    pub peer_observer: Option<crate::config::PeerObserverConfig>,
+    pub peer_observer: Option<crate::gemini::PeerObserverConfig>,
     /// Every LiveKit project this server can hand a candidate to, primary
     /// first. The single source: the primary used to be stored here and again
     /// in three flat fields, which cost a fallback chain at every read and a
@@ -1173,6 +1177,33 @@ fn replay_body(snapshot: &crate::recording::Snapshot) -> Value {
     })
 }
 
+/// Room-name suffix. Random, not clock-derived.
+///
+/// Room names are not secrets, so the old `SystemTime::now().as_nanos()` was
+/// not an exploit. It was the wrong tool for a namespace that must not collide,
+/// and it read as random to anyone who did not look. Two tokens minted inside
+/// the same nanosecond tick produced the same suffix.
+///
+/// Falls back to the clock only if the OS entropy source fails, which is the
+/// same behaviour as before rather than a panic in the middle of a request.
+pub(crate) fn suffix(len: usize) -> String {
+    const DIGITS: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyz";
+    let mut bytes = vec![0u8; len];
+    if ring::rand::SystemRandom::new().fill(&mut bytes).is_err() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        for (byte, clock) in bytes.iter_mut().zip(nanos.to_le_bytes()) {
+            *byte = clock;
+        }
+    }
+    bytes
+        .iter()
+        .map(|byte| DIGITS[(*byte as usize) % DIGITS.len()] as char)
+        .collect()
+}
+
 #[cfg(test)]
-#[path = "../../tests/unit/web.rs"]
+#[path = "../../tests/unit/web/mod.rs"]
 mod tests;

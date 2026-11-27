@@ -143,8 +143,29 @@ pub fn provider_id_from_room<'a>(room_name: &'a str, room_prefix: &str) -> Optio
         .map(|(id, _)| id)
 }
 
+/// Alphanumerics and dashes, alphanumeric at both ends, 39 bytes at most.
+///
+/// Deliberately looser than what GitHub accepts at signup today, which also
+/// forbids consecutive dashes. That rule is not retroactive, and this gates a
+/// handle a candidate types about themselves rather than a name this server
+/// derives anything from: a legacy account turned away at the door costs an
+/// interview, and letting an odd-looking one through costs nothing, because
+/// the handle is a label and never a key. Callers that need the stricter form
+/// add it themselves; `is_provider_id` does, for a name it puts in a filename.
+pub fn valid_github_login(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    !bytes.is_empty()
+        && bytes.len() <= 39
+        && bytes[0].is_ascii_alphanumeric()
+        && bytes[bytes.len() - 1].is_ascii_alphanumeric()
+        && bytes
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || *byte == b'-')
+}
+
 /// Provider ids are GitHub usernames, because a provider file normally belongs
-/// to its operator. The shape comes from `accounts` rather than being spelled
+/// to its operator. The shape comes from `valid_github_login` above rather than
+/// being spelled
 /// out again: two definitions of "GitHub username" in one crate is one that
 /// drifts.
 ///
@@ -157,9 +178,7 @@ pub fn provider_id_from_room<'a>(room_name: &'a str, room_prefix: &str) -> Optio
 /// Ids are otherwise matched exactly, so a case-insensitive filesystem holds
 /// `Foo` or `foo`, never both.
 fn is_provider_id(id: &str) -> bool {
-    crate::accounts::valid_github_login(id)
-        && !id.contains("--")
-        && !id.eq_ignore_ascii_case(PRIMARY_PROVIDER_ID)
+    valid_github_login(id) && !id.contains("--") && !id.eq_ignore_ascii_case(PRIMARY_PROVIDER_ID)
 }
 
 /// Names the providers that lead the rotation, in order, comma separated.

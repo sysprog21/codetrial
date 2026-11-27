@@ -1,5 +1,5 @@
 use super::*;
-use crate::tasks::session::Phase;
+use crate::tasks::Phase;
 
 fn fixture(name: &str) -> Value {
     serde_json::from_str(
@@ -631,7 +631,7 @@ fn each_bank_rule_refuses_on_its_own() {
 
 #[test]
 fn a_starter_may_fill_the_code_limit_and_no_more() {
-    let limit = crate::tasks::session::MAX_CODE_BYTES;
+    let limit = crate::tasks::MAX_CODE_BYTES;
     let base = fixture("customized");
     let raw = base["problem"]["starterCode"]["python"].as_str().unwrap();
     // The limit is the posed starter's, which the variant's renames lengthen.
@@ -768,7 +768,7 @@ fn a_task_names_the_languages_a_learner_may_choose() {
     let mut row = fixture("customized");
     row["sidecar"]["languages"] = json!(["python", "javascript"]);
     row["problem"]["starterCode"]["javascript"] =
-        json!("x".repeat(crate::tasks::session::MAX_CODE_BYTES + 1));
+        json!("x".repeat(crate::tasks::MAX_CODE_BYTES + 1));
     assert_eq!(
         record(&row).map(|_| ()).unwrap_err().0,
         "starter exceeds the code byte limit"

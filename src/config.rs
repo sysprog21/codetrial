@@ -4,17 +4,19 @@ use std::num::IntErrorKind;
 use std::path::Path;
 
 mod peer_observer;
-pub use peer_observer::{
-    MAX_CAPTURE_SECONDS, PeerObserverConfig, load_peer_observer, peer_audio_storage_is_private,
-};
+pub(crate) use peer_observer::ensure_private_directory;
+pub use peer_observer::{MAX_CAPTURE_SECONDS, peer_audio_storage_is_private};
 
 mod peer;
 pub use peer::{PeerConfig, load_peer};
 
+pub(crate) mod service_account;
+pub use service_account::readable_service_account;
+
 mod providers;
 pub use providers::{
     PRIMARY_PROVIDER_ID, PROVIDER_ORDER_KEY, Provider, ProviderPool, discover_providers,
-    order_providers, pool_summary, provider_id_from_room,
+    order_providers, pool_summary, provider_id_from_room, valid_github_login,
 };
 
 pub const DEFAULT_GEMINI_LIVE_MODEL: &str = "gemini-3.1-flash-live-preview";
@@ -567,7 +569,7 @@ pub fn is_production(values: &BTreeMap<String, String>) -> bool {
 ///
 /// One definition of "set", because every caller below needs the same one and a
 /// second spelling of it is a second answer to whether `KEY=" "` counts.
-fn present<'a>(values: &'a BTreeMap<String, String>, key: &str) -> Option<&'a str> {
+pub(crate) fn present<'a>(values: &'a BTreeMap<String, String>, key: &str) -> Option<&'a str> {
     values
         .get(key)
         .map(|value| value.trim())
@@ -609,7 +611,7 @@ fn sensitivity_or_default(
     }
 }
 
-fn report_model_or_default(values: &BTreeMap<String, String>) -> String {
+pub(crate) fn report_model_or_default(values: &BTreeMap<String, String>) -> String {
     match optional(values, "GEMINI_REPORT_MODEL", DEFAULT_GEMINI_REPORT_MODEL).as_str() {
         "gemini-flash-latest" | "gemini-2.5-flash" | "models/gemini-2.5-flash" => {
             DEFAULT_GEMINI_REPORT_MODEL.to_string()
@@ -865,8 +867,9 @@ const _: () = assert!(
     DEFAULT_DURATION_MIN <= DEFAULT_RECORDING_MAX_MINUTES,
     "the default recording cap is below the default interview length"
 );
-/// Kilobits per second. The contract's ceiling, written down in one place.
-pub const DEFAULT_RECORDING_BITRATE: u32 = crate::recording::OUTPUT_VIDEO_BITRATE;
+/// Kilobits per second. The contract's ceiling, written down in one place:
+/// `recording::OUTPUT_VIDEO_BITRATE` is this value.
+pub const DEFAULT_RECORDING_BITRATE: u32 = 2000;
 /// Bounds, not preferences. Below the floor the 720p output is unwatchable and
 /// the recording is worthless; above the ceiling an operator has quietly
 /// tripled the transcode bill for a talking-head video.
@@ -973,7 +976,7 @@ pub fn load_recording(
     // over, and finding that out an hour into the first one is finding it out
     // from a candidate.
     if let Some(service_account) = present("CODETRIAL_RECORDING_SERVICE_ACCOUNT_JSON")
-        && let Err(message) = crate::delivery::readable_service_account(service_account)
+        && let Err(message) = readable_service_account(service_account)
     {
         invalid_entries.push(format!(
             "CODETRIAL_RECORDING_SERVICE_ACCOUNT_JSON: {message}"

@@ -203,5 +203,5 @@ pub(super) const JUDGMENT_RULES: [JudgmentRule; 3] = [
 ];
 
 #[cfg(test)]
-#[path = "../../../tests/unit/report_judgment_rules.rs"]
+#[path = "../../../tests/unit/report/judgment_rules.rs"]
 mod tests;

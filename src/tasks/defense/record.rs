@@ -3,59 +3,15 @@
 //! 2 explains it, 3 predicts and confirms with a run). The instructors set
 //! the marks; these are what the evidence supports.
 //!
-//! In two steps: `facts` reads the attempt, and `marked` adds the marks from
+//! In two steps: `Attempt::facts` reads the attempt, and `marked` adds the
+//! marks from
 //! those facts and the review's `explanations`, so the facts kept after each
 //! request can stand in for an attempt a run still holds when it ends.
 
 use serde_json::{Value, json};
 
 use super::attempt::Attempt;
-
-/// What the attempt recorded, item by item, without marks.
-pub fn facts(attempt: &Attempt) -> Value {
-    let plan = attempt.plan();
-    let items: Vec<Value> = plan
-        .lines
-        .iter()
-        .map(|item| {
-            let runs: Vec<Value> = attempt
-                .runs()
-                .iter()
-                .filter(|run| run.item == item.id)
-                .map(|run| {
-                    // The test output is the page's; the result has no room for
-                    // it.
-                    let mut run = json!(run);
-                    if let Some(object) = run.as_object_mut() {
-                        object.remove("summary");
-                    }
-                    run
-                })
-                .collect();
-            // A prediction no run consumed is still the learner's record.
-            json!({"id": item.id, "file": item.file, "line": item.line, "quote": item.quote,
-                "exercise": item.exercise, "change": item.change, "changedLine": item.changed_line,
-                "runs": runs, "pendingPrediction": attempt.prediction(&item.id),
-                "begunAt": attempt.begun_at(&item.id)})
-        })
-        .collect();
-    let brief = attempt.bug_brief();
-
-    // The result the student keeps names the attempt's bug only by its place in
-    // the package's list, which the instructors resolve.
-    json!({
-        "stamp": plan.stamp,
-        "items": items,
-        "bug": {"id": "bug", "task": plan.bug.task, "variant": plan.bug.variant,
-            "bugIndex": plan.bug_index, "begunAt": attempt.begun_at("bug"), "modelsBuilt": brief.built, "buildError": brief.build_error,
-            "simulations": attempt.sims().len(),
-            "claim": attempt.claim().map(|c| &c.stated),
-            // What the marks read; `marked` takes them out of the result.
-            "checks": attempt.claim().map(|c| json!({"cycleClose": c.cycle_close,
-                "exerciseMatches": c.exercise_matches}))},
-        "scored": !plan.stamp.auditor,
-    })
-}
+use super::hints::Hints;
 
 /// Whether any run in `facts` said something about its change.
 pub fn ran(facts: &Value) -> bool {
@@ -283,21 +239,7 @@ fn kept_runs(runs: &[Value]) -> Vec<Value> {
         .collect()
 }
 
-/// The hints an attempt allows, and those Jim gave, by item.
-#[derive(Debug, Default, Clone)]
-pub struct Hints {
-    pub given: std::collections::BTreeMap<String, u64>,
-    pub allowed: u64,
-}
-
-impl Hints {
-    /// The hints given on `item`.
-    pub fn on(&self, item: &str) -> u64 {
-        self.given.get(item).copied().unwrap_or(0)
-    }
-}
-
 /// The `defense` section of the result of `attempt`.
 pub fn record(attempt: &Attempt, explanations: &Value, hints: &Hints, completed: bool) -> Value {
-    marked(facts(attempt), explanations, hints, false, completed)
+    marked(attempt.facts(), explanations, hints, false, completed)
 }

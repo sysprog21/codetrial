@@ -77,7 +77,7 @@ fn silent_observer_configuration_is_optional_and_never_formats_credentials() {
         "GOOGLE_API_KEYS".into(),
         "first-observer-key,second-observer-key".into(),
     )]);
-    let config = codetrial::config::load_peer_observer(&values)
+    let config = codetrial::gemini::load_peer_observer(&values)
         .unwrap()
         .unwrap();
     assert!(config.audio_dir.is_none());
@@ -86,7 +86,7 @@ fn silent_observer_configuration_is_optional_and_never_formats_credentials() {
     assert!(!debug.contains("first-observer-key"));
     assert!(!debug.contains("second-observer-key"));
     assert!(
-        codetrial::config::load_peer_observer(&BTreeMap::new())
+        codetrial::gemini::load_peer_observer(&BTreeMap::new())
             .unwrap()
             .is_none()
     );
@@ -153,7 +153,7 @@ fn audio_storage_cannot_be_served_under_the_static_web_root() {
 #[test]
 fn observer_configurations_are_equal_only_when_every_part_matches() {
     let values = BTreeMap::from([("GOOGLE_API_KEY".into(), "observer-key".into())]);
-    let config = codetrial::config::load_peer_observer(&values)
+    let config = codetrial::gemini::load_peer_observer(&values)
         .unwrap()
         .unwrap();
     let mut other_model = config.clone();
@@ -162,7 +162,7 @@ fn observer_configurations_are_equal_only_when_every_part_matches() {
     let mut other_audio = config.clone();
     other_audio.audio_dir = Some("/somewhere/private".into());
     assert_ne!(config, other_audio);
-    let separate = codetrial::config::load_peer_observer(&values)
+    let separate = codetrial::gemini::load_peer_observer(&values)
         .unwrap()
         .unwrap();
     assert_ne!(
@@ -174,7 +174,7 @@ fn observer_configurations_are_equal_only_when_every_part_matches() {
 #[test]
 fn observer_debug_output_names_the_model_and_hides_the_keys() {
     let values = BTreeMap::from([("GOOGLE_API_KEY".into(), "observer-key".into())]);
-    let config = codetrial::config::load_peer_observer(&values)
+    let config = codetrial::gemini::load_peer_observer(&values)
         .unwrap()
         .unwrap();
     let debug = format!("{config:?}");

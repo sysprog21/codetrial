@@ -21,7 +21,8 @@
 /// `TcpStream`, and nothing is gained by teaching this function about either.
 ///
 /// Two more copies live in the unit tests that `src/web/pool.rs` and
-/// `src/livekit/rooms.rs` declare, and they stay copies by choice rather than
+/// `src/livekit/room/rooms.rs` declare, and they stay copies by choice rather
+/// than
 /// by necessity. The necessity argument used to be written here and was wrong:
 /// it said a unit test compiles under `--cfg test` while an integration test
 /// links the plain rlib, so the two halves cannot see one module. They cannot
@@ -31,7 +32,8 @@
 /// needing only `extern crate self as codetrial;` in `src/lib.rs` for the paths
 /// below to resolve on the inside.
 ///
-/// What actually keeps them apart is the trade `src/livekit/rooms.rs` states:
+/// What actually keeps them apart is the trade `src/livekit/room/rooms.rs`
+/// states:
 /// three lines are common, while each site's token source and follow-on check
 /// are not. This copy exists because two integration tests in the same position
 /// needed the same judgement; that reason does not reach a unit test, and the

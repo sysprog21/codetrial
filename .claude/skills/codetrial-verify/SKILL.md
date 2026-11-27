@@ -50,6 +50,13 @@ audit, the Python unittest suites, the Node browser tests, ESLint,
 `ruff check`, `shellcheck`, the generated-artifact drift checks, the hook suite,
 the skill references, `cargo-audit`, `cargo-deny` and `actionlint`.
 
+The architecture lints of `tools/check-structure` are not a gate: a cold index
+takes minutes, so `.github/workflows/structure.yml` runs them daily and the
+[Rust profile](../codetrial-improve/rust.md#structure-lints) says how to run them
+after a restructure. Nothing else catches a new tangle or leak before that run,
+so run it before calling a structural refactor done. The tool's own tests are
+`cargo test --manifest-path tools/check-structure/Cargo.toml`.
+
 It is not offline. The `fetch-vendor` gate downloads missing assets named by a
 `web/vendor/**/FETCH` manifest; it cannot restore committed vendor files.
 `actionlint` publishes itself as a container, so that lane may reach for docker.

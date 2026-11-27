@@ -5,13 +5,11 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::access::PinnedTask;
-use super::{TaskError, default_number, invalid, opaque_id};
+mod evidence;
 
-/// Bytes of learner code one revision may carry.
-/// `codeBytes` in task-defaults.json, as a constant the message bound below
-/// it can be computed from; a test holds the two, and the page's copy, equal.
-pub const MAX_CODE_BYTES: usize = 32000;
+use super::access::PinnedTask;
+use super::{MAX_CODE_BYTES, Phase, TaskError, default_number, invalid, opaque_id};
+
 /// Bytes of one captured learner turn.
 pub const MAX_TURN_BYTES: usize = 8192;
 /// Learner turns captured per session.
@@ -24,33 +22,6 @@ const MAX_DIAGNOSTIC_BYTES: usize = 4096;
 const MAX_CHECK_REFERENCES: usize = 8;
 /// What Start has the interviewer say first.
 const GREETING: &str = "Welcome. Ask the learner to explain their first reading of the task. Ask one question and wait; never provide completed code.";
-
-/// The server-owned task phase. Setup states before `Work` are the page's;
-/// the interviewer's availability is an overlay, not a phase.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum Phase {
-    Ready,
-    Work,
-    WrapUp,
-    Feedback,
-}
-
-impl Phase {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Ready => "ready",
-            Self::Work => "work",
-            Self::WrapUp => "wrap-up",
-            Self::Feedback => "feedback",
-        }
-    }
-
-    /// Whether the learner can still change the work.
-    pub fn is_active(self) -> bool {
-        matches!(self, Self::Work | Self::WrapUp)
-    }
-}
 
 /// What the learner is told about Jim.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

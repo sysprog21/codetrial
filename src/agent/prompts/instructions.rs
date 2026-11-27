@@ -5,7 +5,7 @@ use crate::agent::{
     InterviewGrounding, InterviewLoop, InterviewMode, InterviewProfile, Problem,
     evidence_tool_declared,
 };
-use crate::runtime::AGENT_NAME;
+use crate::protocol::AGENT_NAME;
 
 fn reacto_policy(mode: InterviewMode, code_execution_disabled: bool) -> String {
     if mode.is_whiteboard() {
@@ -353,12 +353,26 @@ There is no code editor and no test runner, and nothing they draw will run.",
     };
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RuntimeOptions {
+    pub voice: Option<&'static str>,
+    pub accent: Option<&'static str>,
+    pub profile: InterviewProfile,
+    pub grounding: InterviewGrounding,
+    pub interview_loop: InterviewLoop,
+    pub examples_hidden: bool,
+    pub interview_mode: InterviewMode,
+    pub code_execution_disabled: bool,
+    pub example_drawing_enabled: bool,
+    pub candidate_led_enabled: bool,
+}
+
 pub fn build_instructions_for_plan(
     problem: &Problem,
     duration_min: u32,
-    options: &crate::runtime::RuntimeOptions,
+    options: &RuntimeOptions,
 ) -> String {
-    let &crate::runtime::RuntimeOptions {
+    let &RuntimeOptions {
         voice: _,
         accent,
         ref profile,

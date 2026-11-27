@@ -3,6 +3,7 @@
 
 use std::sync::LazyLock;
 
+use serde::Serialize;
 use serde_json::Value;
 
 pub mod access;
@@ -14,6 +15,38 @@ pub mod session;
 mod validation;
 
 pub use exercise::{Exercise, TaskRecord};
+
+/// Bytes of learner code one revision may carry.
+/// `codeBytes` in task-defaults.json, as a constant the message bound below
+/// it can be computed from; a test holds the two, and the page's copy, equal.
+pub const MAX_CODE_BYTES: usize = 32000;
+
+/// The server-owned task phase. Setup states before `Work` are the page's;
+/// the interviewer's availability is an overlay, not a phase.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Phase {
+    Ready,
+    Work,
+    WrapUp,
+    Feedback,
+}
+
+impl Phase {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            Self::Work => "work",
+            Self::WrapUp => "wrap-up",
+            Self::Feedback => "feedback",
+        }
+    }
+
+    /// Whether the learner can still change the work.
+    pub fn is_active(self) -> bool {
+        matches!(self, Self::Work | Self::WrapUp)
+    }
+}
 
 /// Every language a task may be worked in: the ones the catalog ships
 /// starters for and the task page can run.

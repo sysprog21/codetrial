@@ -7,251 +7,13 @@
 //! integration one.
 
 use super::*;
-use crate::agent::{ThinkingHold, record_framework_evidence};
+use crate::agent::{SpeakerTurn, ThinkingHold, record_framework_evidence};
+use crate::livekit::turn::speakers::close_turn;
 
 // The room half's test module owns the audio fixture, because the room half
 // owns the track it is a stand-in for.
 use crate::livekit::GEMINI_OUTPUT_AUDIO_SAMPLE_RATE;
-use crate::livekit::tests::{observed_source, receive_test_run, test_output_audio};
-
-#[tokio::test]
-async fn an_unqueued_model_audio_chunk_freezes_the_speech_proxy() {
-    let start = Instant::now();
-    for mime_type in ["audio/pcm;rate=24000", "audio/unsupported"] {
-        let mut activity = RuntimeActivity::new(start);
-        activity.turn_timing.note_voice(start);
-        activity.note_candidate_finished(start, false);
-        let event = GeminiEvent::Audio {
-            bytes: vec![0, 0],
-            mime_type: mime_type.into(),
-        };
-        assert!(accept_gemini_event(&event, &mut activity, false, start));
-        let (mut output, _queued) = test_output_audio();
-        assert!(!output.capture(&[0, 0], mime_type).await.unwrap());
-        assert!(activity.turn_timing.note_audio(start, false).is_none());
-        activity
-            .turn_timing
-            .note_voice(start + Duration::from_millis(900));
-        let summary = activity
-            .turn_timing
-            .note_audio(start + Duration::from_secs(1), true)
-            .unwrap();
-        assert_eq!(summary.wait, Some(Duration::from_secs(1)));
-    }
-}
-
-#[test]
-fn late_output_transcripts_do_not_reopen_a_completed_measurement() {
-    let start = Instant::now();
-    for audio in [false, true] {
-        let mut activity = RuntimeActivity::new(start);
-        activity.note_candidate_finished(start, false);
-        let text = GeminiEvent::OutputTranscript("reply".into());
-        assert!(accept_gemini_event(&text, &mut activity, false, start));
-        if audio {
-            assert!(activity.turn_timing.note_audio(start, true).is_some());
-        }
-        assert!(accept_gemini_event(
-            &GeminiEvent::TurnComplete,
-            &mut activity,
-            false,
-            start
-        ));
-        activity.turn_timing.finish(start, TimingOutcome::NoAudio);
-        assert!(accept_gemini_event(&text, &mut activity, false, start));
-        assert!(
-            activity
-                .turn_timing
-                .finish(start, TimingOutcome::Ended)
-                .is_none()
-        );
-
-        // A real new candidate observation still allows transcript-only output.
-        activity
-            .turn_timing
-            .note_transcript(start + Duration::from_secs(2));
-        assert!(accept_gemini_event(&text, &mut activity, false, start));
-        activity
-            .turn_timing
-            .note_voice(start + Duration::from_millis(2_900));
-        let next = activity
-            .turn_timing
-            .note_audio(start + Duration::from_secs(3), true)
-            .unwrap();
-        assert_eq!(next.id, 2);
-        assert_eq!(next.wait, Some(Duration::from_secs(1)));
-    }
-}
-
-#[test]
-fn activity_before_interruption_preserves_reply_debt_and_next_turn_timing() {
-    let start = Instant::now();
-    let state = RuntimeState::default();
-    let mut activity = RuntimeActivity::new(start);
-    activity.note_candidate_finished(start, false);
-    assert!(accept_gemini_event(
-        &GeminiEvent::Text("old reply".into()),
-        &mut activity,
-        false,
-        start
-    ));
-    let voice = start + Duration::from_millis(300);
-    activity.note_candidate_voice(voice);
-    activity.turn_timing.note_voice(voice);
-    assert!(observe_voice_activity(
-        &state,
-        &mut activity,
-        true,
-        None,
-        voice,
-        true
-    ));
-    assert!(accept_gemini_event(
-        &GeminiEvent::Interrupted,
-        &mut activity,
-        false,
-        voice
-    ));
-    let (mut output, _queued) = test_output_audio();
-    cut_off_turn(&mut RuntimeState::default(), &mut activity, &mut output);
-    activity
-        .turn_timing
-        .finish(voice, TimingOutcome::Interrupted);
-    assert!(!accept_gemini_event(
-        &GeminiEvent::TurnComplete,
-        &mut activity,
-        false,
-        voice
-    ));
-    // The guard rebases existing debt; it does not create debt by itself.
-    activity.owe_prompt(voice, Some("new prompt".into()));
-    let end = start + Duration::from_millis(400);
-    assert!(observe_voice_activity(
-        &state,
-        &mut activity,
-        false,
-        Some(Duration::from_secs(50)),
-        end,
-        true
-    ));
-    assert_eq!(
-        activity.prompted_at,
-        Some(end),
-        "activity end must rebase the owed prompt"
-    );
-    let next = activity
-        .turn_timing
-        .note_audio(start + Duration::from_secs(1), true)
-        .unwrap();
-    assert_eq!(next.id, 2);
-    assert_eq!(next.wait, Some(Duration::from_millis(700)));
-    assert_eq!(next.turn_close, Some(Duration::from_millis(100)));
-}
-
-#[test]
-fn timing_emission_writes_one_line_per_measurement_with_session_identity() {
-    let start = Instant::now();
-    let mut activity = RuntimeActivity::for_interview(start, 0, 42);
-    activity.live_socket = 3;
-    let mut output = Vec::new();
-    finish_turn_timing(
-        "room-a",
-        &mut activity,
-        "0:01.000",
-        TimingOutcome::Audio,
-        &mut output,
-    );
-    finish_turn_timing(
-        "room-a",
-        &mut activity,
-        "0:01.100",
-        TimingOutcome::Audio,
-        &mut output,
-    );
-    finish_turn_timing(
-        "room-a",
-        &mut activity,
-        "0:01.200",
-        TimingOutcome::NoAudio,
-        &mut output,
-    );
-    activity.turn_timing.note_transcript(start);
-    finish_turn_timing(
-        "room-a",
-        &mut activity,
-        "0:02.000",
-        TimingOutcome::Held,
-        &mut output,
-    );
-    finish_turn_timing(
-        "room-a",
-        &mut activity,
-        "0:02.100",
-        TimingOutcome::Ended,
-        &mut output,
-    );
-    let log = String::from_utf8(output).unwrap();
-    let lines = log.lines().collect::<Vec<_>>();
-    assert_eq!(lines.len(), 2);
-    assert!(
-        lines[0].starts_with(
-            "codetrial turn_timing room=room-a session=42 socket=3 turn=1 at=0:01.000 "
-        )
-    );
-    assert!(lines[0].ends_with("outcome=audio"));
-    assert!(lines[1].contains("turn=2 at=0:02.000 "));
-    assert!(lines[1].contains("wait_ms=unknown "));
-    assert!(lines[1].ends_with("outcome=held"));
-    assert!(log.ends_with('\n'));
-}
-
-#[test]
-fn voice_observations_preserve_runtime_and_timing_hold_filters() {
-    let start = Instant::now();
-    for (held, discarding, has_audio) in [
-        (false, false, true),
-        (true, false, true),
-        (false, true, true),
-        (false, false, false),
-    ] {
-        for active in [true, false] {
-            let mut state = RuntimeState::default();
-            if held {
-                state.thinking_hold = ThinkingHold::Held { since: start };
-            }
-            let mut activity = RuntimeActivity::new(start);
-            activity.socket.discarding_output = discarding;
-            activity.note_candidate_voice(start);
-            activity.turn_timing.note_voice(start);
-            let observed = observe_voice_activity(
-                &state,
-                &mut activity,
-                active,
-                Some(Duration::from_secs(5)),
-                start,
-                has_audio,
-            );
-            assert_eq!(observed, has_audio);
-            assert_eq!(activity.incoming_speech_active(start), observed && active);
-            let summary = activity.turn_timing.finish(start, TimingOutcome::NoAudio);
-            assert_eq!(summary.is_some(), !held && !discarding);
-            if let Some(summary) = summary {
-                assert_eq!(
-                    summary.turn_close_reason,
-                    if active { "not_observed" } else { "observed" }
-                );
-                assert_eq!(
-                    summary.audio_offset,
-                    if active {
-                        None
-                    } else {
-                        Some(Duration::from_secs(5))
-                    }
-                );
-            }
-        }
-    }
-}
+use crate::livekit::tests::{accept_timed, observed_source, receive_test_run, test_output_audio};
 
 #[test]
 fn compressed_inputs_keep_the_pending_request_and_final_timer() {
@@ -363,26 +125,38 @@ fn continuity_reminders_leave_opening_default_and_inactive_inputs_alone() {
 }
 
 include!("session_parts/tool_execution.rs");
+include!("session_parts/timing_and_latency.rs");
 
 #[test]
 fn timing_transcripts_follow_the_existing_late_fragment_guard() {
     let start = Instant::now();
     let mut activity = RuntimeActivity::new(start);
-    activity.note_candidate_finished(start, false);
+    let mut probes = TurnProbes::default();
+    note_candidate_finished(&mut activity, &mut probes, start, false);
     activity.note_output(start + Duration::from_millis(100));
-    activity.note_candidate_finished(start + Duration::from_millis(500), false);
-    let summary = activity
+    note_candidate_finished(
+        &mut activity,
+        &mut probes,
+        start + Duration::from_millis(500),
+        false,
+    );
+    let summary = probes
         .turn_timing
         .note_audio(start + Duration::from_millis(600), true)
         .unwrap();
     assert_eq!(summary.wait, Some(Duration::from_millis(600)));
-    activity
+    probes
         .turn_timing
         .finish(start + Duration::from_secs(1), TimingOutcome::NoAudio);
     activity.generating = false;
     activity.turn_completed_at = Some(start + Duration::from_secs(1));
-    activity.note_candidate_finished(start + Duration::from_millis(1_500), false);
-    let next = activity
+    note_candidate_finished(
+        &mut activity,
+        &mut probes,
+        start + Duration::from_millis(1_500),
+        false,
+    );
+    let next = probes
         .turn_timing
         .note_audio(start + Duration::from_secs(2), true)
         .unwrap();
@@ -396,19 +170,26 @@ fn timing_transcripts_follow_the_existing_late_fragment_guard() {
 fn obsolete_completion_does_not_close_the_new_turn_timing() {
     let start = Instant::now();
     let mut activity = RuntimeActivity::new(start);
-    activity.note_candidate_finished(start, false);
-    activity
+    let mut probes = TurnProbes::default();
+    note_candidate_finished(&mut activity, &mut probes, start, false);
+    probes
         .turn_timing
         .finish(start + Duration::from_secs(1), TimingOutcome::Interrupted);
-    activity.note_candidate_finished(start + Duration::from_secs(2), false);
+    note_candidate_finished(
+        &mut activity,
+        &mut probes,
+        start + Duration::from_secs(2),
+        false,
+    );
     activity.socket.stale_turn_pending = true;
-    assert!(!accept_gemini_event(
+    assert!(!accept_timed(
         &GeminiEvent::TurnComplete,
         &mut activity,
+        &mut probes,
         false,
         start + Duration::from_secs(3)
     ));
-    let summary = activity
+    let summary = probes
         .turn_timing
         .note_audio(start + Duration::from_secs(4), true)
         .unwrap();
@@ -621,62 +402,10 @@ fn a_turn_ending_under_a_hold_still_ends_the_discard() {
         OutputDisposition::EndsTheDiscard
     );
 }
-/// The browser patches one row per segment id, so an in-progress turn has
-/// to carry the same id it will carry when it closes.
-#[test]
-fn transcript_stream_options_carry_a_segment_id_and_final_flag() {
-    let open = transcript_stream_options("interviewer-0".to_string(), false, None);
-
-    assert_eq!(open.topic, TOPIC_TRANSCRIPTION);
-    assert_eq!(
-        open.attributes.get("lk.segment_id"),
-        Some(&"interviewer-0".to_string())
-    );
-    assert_eq!(
-        open.attributes.get("lk.transcription_final"),
-        Some(&"false".to_string())
-    );
-    assert_eq!(open.sender_identity, None);
-
-    let closed = transcript_stream_options("interviewer-0".to_string(), true, None);
-
-    assert_eq!(
-        closed.attributes.get("lk.segment_id"),
-        Some(&"interviewer-0".to_string()),
-        "closing a turn must not change the row it patches"
-    );
-    assert_eq!(
-        closed.attributes.get("lk.transcription_final"),
-        Some(&"true".to_string())
-    );
-}
-#[test]
-fn transcript_stream_options_can_preserve_candidate_identity() {
-    let options =
-        transcript_stream_options("candidate-0".to_string(), true, Some("candidate-fixed"));
-
-    assert_eq!(
-        options.sender_identity.as_ref().map(ToString::to_string),
-        Some("candidate-fixed".to_string())
-    );
-}
 #[test]
 fn transcript_text_trims_and_drops_empty_events() {
     assert_eq!(transcript_text("  hello  "), Some("hello"));
     assert_eq!(transcript_text("  \n\t  "), None);
-}
-#[test]
-fn agent_state_attributes_preserve_existing_values() {
-    let attributes = agent_state_attributes(
-        HashMap::from([("role".to_string(), "interviewer".to_string())]),
-        AGENT_STATE_SPEAKING,
-    );
-
-    assert_eq!(attributes.get("role"), Some(&"interviewer".to_string()));
-    assert_eq!(
-        attributes.get(LIVEKIT_AGENT_STATE),
-        Some(&AGENT_STATE_SPEAKING.to_string())
-    );
 }
 /// The closing message is the one turn barge-in must not touch. Cutting it
 /// leaves the candidate without the ending, and the wrap-up wait reads the
@@ -1811,6 +1540,7 @@ fn a_spoken_hold_cuts_generation_so_the_next_reply_is_tracked_as_its_own() {
     cut_off_for_hold(
         &mut RuntimeState::default(),
         &mut activity,
+        &mut TurnProbes::default(),
         &mut output_audio,
     );
     assert!(!activity.generating);
@@ -1824,6 +1554,7 @@ fn a_spoken_hold_cuts_generation_so_the_next_reply_is_tracked_as_its_own() {
     cut_off_for_hold(
         &mut RuntimeState::default(),
         &mut activity,
+        &mut TurnProbes::default(),
         &mut output_audio,
     );
     activity.note_candidate_finished(Instant::now(), false);
@@ -1855,29 +1586,6 @@ fn speech_ending_a_hold_says_ready_only_for_a_declared_one() {
     let declared = speech_release_briefing(&state, false);
     assert!(declared.contains("Nothing you said while the candidate was thinking"));
     assert!(declared.contains("ready after thinking time"));
-}
-
-#[test]
-fn the_turn_window_rides_beside_the_agent_state() {
-    let attributes = turn_window_attributes(
-        agent_state_attributes(HashMap::new(), AGENT_STATE_LISTENING),
-        3_000,
-    );
-    assert_eq!(attributes[TURN_WINDOW_ATTRIBUTE], "3000");
-    assert_eq!(attributes[LIVEKIT_AGENT_STATE], AGENT_STATE_LISTENING);
-    let attributes = agent_state_attributes(attributes, AGENT_STATE_SPEAKING);
-    assert_eq!(attributes[TURN_WINDOW_ATTRIBUTE], "3000");
-}
-
-#[test]
-fn the_page_reads_the_turn_window_under_the_same_key() {
-    let page = std::fs::read_to_string("web/lib.js").expect("the page is readable");
-    assert!(
-        page.contains(&format!(
-            "export const TURN_WINDOW_ATTRIBUTE = \"{TURN_WINDOW_ATTRIBUTE}\";"
-        )),
-        "web/lib.js must name {TURN_WINDOW_ATTRIBUTE}"
-    );
 }
 
 #[test]
@@ -1939,7 +1647,12 @@ fn a_hold_cuts_a_live_turn_and_spares_a_stalled_one() {
 
     let mut live = RuntimeActivity::new(start);
     live.note_output(Instant::now());
-    cut_off_for_hold(&mut RuntimeState::default(), &mut live, &mut output_audio);
+    cut_off_for_hold(
+        &mut RuntimeState::default(),
+        &mut live,
+        &mut TurnProbes::default(),
+        &mut output_audio,
+    );
     assert!(live.socket.discarding_output);
     assert!(!live.socket.stale_turn_pending);
 
@@ -1948,13 +1661,19 @@ fn a_hold_cuts_a_live_turn_and_spares_a_stalled_one() {
     cut_off_for_hold(
         &mut RuntimeState::default(),
         &mut stalled,
+        &mut TurnProbes::default(),
         &mut output_audio,
     );
     assert!(!stalled.socket.discarding_output);
     assert!(stalled.socket.stale_turn_pending);
 
     let mut idle = RuntimeActivity::new(start);
-    cut_off_for_hold(&mut RuntimeState::default(), &mut idle, &mut output_audio);
+    cut_off_for_hold(
+        &mut RuntimeState::default(),
+        &mut idle,
+        &mut TurnProbes::default(),
+        &mut output_audio,
+    );
     assert!(!idle.socket.discarding_output);
     assert!(!idle.socket.stale_turn_pending);
 
@@ -1963,6 +1682,7 @@ fn a_hold_cuts_a_live_turn_and_spares_a_stalled_one() {
     cut_off_for_hold(
         &mut RuntimeState::default(),
         &mut discarding,
+        &mut TurnProbes::default(),
         &mut output_audio,
     );
     assert!(
@@ -1982,7 +1702,7 @@ fn a_turn_end_settles_a_requested_hold() {
     activity.note_candidate_finished(start, false);
     activity.observe_thinking_fragment(&mut state, "Let me think", start, 100);
     assert!(state.thinking_hold.is_requested());
-    settle_hold_at_turn_end(&mut state, &mut activity);
+    settle_hold_at_turn_end(&mut state, &mut activity, &mut TurnProbes::default());
     assert!(state.thinking_hold.is_declared());
     assert!(!activity.reply_in_flight());
 
@@ -1990,7 +1710,7 @@ fn a_turn_end_settles_a_requested_hold() {
     let mut state = RuntimeState::default();
     let mut activity = RuntimeActivity::new(start);
     activity.note_candidate_finished(start, false);
-    settle_hold_at_turn_end(&mut state, &mut activity);
+    settle_hold_at_turn_end(&mut state, &mut activity, &mut TurnProbes::default());
     assert!(activity.reply_in_flight());
 }
 
@@ -3650,24 +3370,38 @@ fn conversation_rows_spend_their_budget_exactly() {
 fn tools_from_a_stalled_generation_during_a_hold_do_not_claim_the_resume_reply() {
     let start = Instant::now();
     let mut activity = RuntimeActivity::new(start);
-    activity.latency.voice(start);
-    activity.latency.boundary(Boundary::Held, start);
+    let mut probes = TurnProbes::default();
+    probes.latency.voice(start);
+    probes.latency.boundary(Boundary::Held, start);
     activity.socket.stale_turn_pending = true;
     let calls = GeminiEvent::ToolCall(vec![GeminiFunctionCall {
         id: "old".into(),
         name: "read_editor".into(),
         args: serde_json::json!({}),
     }]);
-    assert!(accept_gemini_event(&calls, &mut activity, true, start));
-    assert!(observe_latency_event(&mut activity, &calls, true, start).is_none());
-    assert!(!accept_gemini_event(
-        &GeminiEvent::TurnComplete,
+    assert!(accept_timed(
+        &calls,
         &mut activity,
+        &mut probes,
         true,
         start
     ));
-    activity.mark_prompted(start + Duration::from_secs(45), Some("resume"), false);
-    let record = activity
+    assert!(observe_latency_event(&mut probes, &activity, &calls, true, start).is_none());
+    assert!(!accept_timed(
+        &GeminiEvent::TurnComplete,
+        &mut activity,
+        &mut probes,
+        true,
+        start
+    ));
+    mark_prompted(
+        &mut activity,
+        &mut probes,
+        start + Duration::from_secs(45),
+        Some("resume"),
+        false,
+    );
+    let record = probes
         .latency
         .audio(start + Duration::from_millis(45_500))
         .unwrap();
@@ -3679,21 +3413,36 @@ fn tools_from_a_stalled_generation_during_a_hold_do_not_claim_the_resume_reply()
 fn a_silent_completion_settles_runtime_and_latency_debt_together() {
     let start = Instant::now();
     let mut activity = RuntimeActivity::new(start);
-    activity.note_candidate_finished(start, false);
-    activity.latency.voice(start);
+    let mut probes = TurnProbes::default();
+    note_candidate_finished(&mut activity, &mut probes, start, false);
+    probes.latency.voice(start);
     let ended = start + Duration::from_secs(1);
-    assert!(accept_gemini_event(
+    assert!(accept_timed(
         &GeminiEvent::TurnComplete,
         &mut activity,
+        &mut probes,
         false,
         ended
     ));
     assert!(!activity.owes_reply());
-    let record =
-        observe_latency_event(&mut activity, &GeminiEvent::TurnComplete, false, ended).unwrap();
+    let record = observe_latency_event(
+        &mut probes,
+        &activity,
+        &GeminiEvent::TurnComplete,
+        false,
+        ended,
+    )
+    .unwrap();
     assert_eq!(record["stage"], "turn_complete");
     assert!(
-        observe_latency_event(&mut activity, &GeminiEvent::TurnComplete, false, ended).is_none()
+        observe_latency_event(
+            &mut probes,
+            &activity,
+            &GeminiEvent::TurnComplete,
+            false,
+            ended
+        )
+        .is_none()
     );
 }
 
@@ -3701,20 +3450,40 @@ fn a_silent_completion_settles_runtime_and_latency_debt_together() {
 fn provider_text_starts_a_generation_before_a_queued_prompt() {
     let start = Instant::now();
     let mut activity = RuntimeActivity::new(start);
-    activity.latency.voice(start);
+    let mut probes = TurnProbes::default();
+    probes.latency.voice(start);
     let text = GeminiEvent::Text("provider progress".into());
-    assert!(accept_gemini_event(&text, &mut activity, false, start));
-    observe_latency_event(&mut activity, &text, false, start);
-    activity.mark_prompted(start + Duration::from_millis(100), Some("next"), false);
+    assert!(accept_timed(
+        &text,
+        &mut activity,
+        &mut probes,
+        false,
+        start
+    ));
+    observe_latency_event(&mut probes, &activity, &text, false, start);
+    mark_prompted(
+        &mut activity,
+        &mut probes,
+        start + Duration::from_millis(100),
+        Some("next"),
+        false,
+    );
     let ended = start + Duration::from_millis(200);
-    assert!(accept_gemini_event(
+    assert!(accept_timed(
         &GeminiEvent::TurnComplete,
         &mut activity,
+        &mut probes,
         false,
         ended
     ));
-    observe_latency_event(&mut activity, &GeminiEvent::TurnComplete, false, ended);
-    let record = activity
+    observe_latency_event(
+        &mut probes,
+        &activity,
+        &GeminiEvent::TurnComplete,
+        false,
+        ended,
+    );
+    let record = probes
         .latency
         .audio(start + Duration::from_millis(500))
         .unwrap();
@@ -3726,33 +3495,42 @@ fn provider_text_starts_a_generation_before_a_queued_prompt() {
 fn confirmation_on_a_swallowed_turn_end_closes_the_requested_hold_trace() {
     let start = Instant::now();
     let mut activity = RuntimeActivity::new(start);
-    activity.latency.voice(start);
-    activity.latency.audio(start + Duration::from_millis(100));
-    activity.latency.voice(start + Duration::from_millis(200));
+    let mut probes = TurnProbes::default();
+    probes.latency.voice(start);
+    probes.latency.audio(start + Duration::from_millis(100));
+    probes.latency.voice(start + Duration::from_millis(200));
     let interrupted = start + Duration::from_millis(300);
-    assert!(accept_gemini_event(
+    assert!(accept_timed(
         &GeminiEvent::Interrupted,
         &mut activity,
+        &mut probes,
         false,
         interrupted
     ));
-    observe_latency_event(&mut activity, &GeminiEvent::Interrupted, false, interrupted);
+    observe_latency_event(
+        &mut probes,
+        &activity,
+        &GeminiEvent::Interrupted,
+        false,
+        interrupted,
+    );
     let mut state = RuntimeState {
         thinking_hold: ThinkingHold::Requested { since: start },
         ..RuntimeState::default()
     };
-    assert!(!accept_gemini_event(
+    assert!(!accept_timed(
         &GeminiEvent::TurnComplete,
         &mut activity,
+        &mut probes,
         false,
         interrupted
     ));
-    settle_hold_at_turn_end(&mut state, &mut activity);
+    settle_hold_at_turn_end(&mut state, &mut activity, &mut probes);
     assert!(state.thinking_hold.is_active());
     assert!(state.end_thinking(2));
     let released = start + Duration::from_secs(45);
-    activity.note_latency_transcript(released);
-    let record = activity
+    note_latency_transcript(&activity, &mut probes, released);
+    let record = probes
         .latency
         .audio(released + Duration::from_millis(500))
         .unwrap();
@@ -4164,9 +3942,12 @@ fn local_pcm_barge_in_preserves_the_wait_without_recovering_mid_speech() {
     activity.note_candidate_voice(latest);
     assert!(activity.incoming_speech_active(latest));
     assert!(!activity.reply_timed_out(latest, false));
-    activity.settle_stalls(latest + crate::livekit::turn::CHECKPOINT_VOICE_QUIET, false);
+    activity.settle_stalls(
+        latest + crate::livekit::timing::CHECKPOINT_VOICE_QUIET,
+        false,
+    );
     let due = latest
-        + crate::livekit::turn::CHECKPOINT_VOICE_QUIET
+        + crate::livekit::timing::CHECKPOINT_VOICE_QUIET
         + crate::livekit::turn::FIRST_OUTPUT_DEADLINE;
     assert!(!activity.reply_timed_out(due - Duration::from_millis(1), false));
     assert!(activity.reply_timed_out(due, false));
@@ -4182,12 +3963,7 @@ fn a_provider_cut_of_a_discard_keeps_the_deferred_thinking_reply() {
         if candidate {
             activity.note_candidate_voice_activity(true, start);
         }
-        assert!(!accept_gemini_event(
-            &GeminiEvent::Interrupted,
-            &mut activity,
-            false,
-            start
-        ));
+        assert!(!activity.accept_event(&GeminiEvent::Interrupted, false, start));
         assert_eq!(
             activity.claim_thinking_reply(&RuntimeState::default()),
             !candidate
@@ -4229,8 +4005,9 @@ fn agent_state_reports_the_state_last_shown() {
 fn only_substantive_output_starts_the_measured_reply() {
     let start = Instant::now();
     let at = |offset| start + Duration::from_millis(offset);
-    let mut activity = RuntimeActivity::new(start);
-    activity.latency.voice(start);
+    let activity = RuntimeActivity::new(start);
+    let mut probes = TurnProbes::default();
+    probes.latency.voice(start);
     for (event, offset) in [
         (GeminiEvent::OutputTranscript("  ".into()), 100),
         (GeminiEvent::Text("\n".into()), 120),
@@ -4244,9 +4021,9 @@ fn only_substantive_output_starts_the_measured_reply() {
             200,
         ),
     ] {
-        assert!(observe_latency_event(&mut activity, &event, false, at(offset)).is_none());
+        assert!(observe_latency_event(&mut probes, &activity, &event, false, at(offset)).is_none());
     }
-    let record = activity.latency.audio(at(500)).unwrap();
+    let record = probes.latency.audio(at(500)).unwrap();
     assert_eq!(record["first_provider_output_ms"], 200);
     assert_eq!(record["first_tool_call_ms"], 200);
 }
@@ -4256,11 +4033,13 @@ fn only_substantive_output_starts_the_measured_reply() {
 #[test]
 fn an_interruption_after_output_closes_the_latency_trace() {
     let start = Instant::now();
-    let mut activity = RuntimeActivity::new(start);
-    activity.latency.voice(start);
-    activity.latency.audio(start + Duration::from_millis(300));
+    let activity = RuntimeActivity::new(start);
+    let mut probes = TurnProbes::default();
+    probes.latency.voice(start);
+    probes.latency.audio(start + Duration::from_millis(300));
     let record = observe_latency_event(
-        &mut activity,
+        &mut probes,
+        &activity,
         &GeminiEvent::Interrupted,
         false,
         start + Duration::from_millis(600),
@@ -4365,19 +4144,21 @@ fn a_silent_completion_is_classified_before_the_accept_settles_it() {
         ("tool_continuation", Some("tool_continuation"), false),
     ] {
         let mut activity = RuntimeActivity::new(now);
+        let mut probes = TurnProbes::default();
         match debt {
-            "candidate_turn" => activity.note_candidate_finished(now, false),
-            "required_prompt" => activity.mark_prompted(now, None, false),
-            "optional_prompt" => activity.mark_prompted(now, None, true),
+            "candidate_turn" => note_candidate_finished(&mut activity, &mut probes, now, false),
+            "required_prompt" => mark_prompted(&mut activity, &mut probes, now, None, false),
+            "optional_prompt" => mark_prompted(&mut activity, &mut probes, now, None, true),
             "tool_continuation" => activity.socket.tool_response_outstanding = true,
             _ => unreachable!(),
         }
-        let (accepted, _, owed) = accept_event_noting_silence(&complete, &mut activity, false, now);
+        let (accepted, _, owed) =
+            accept_event_noting_silence(&complete, &mut activity, &mut probes, false, now);
         assert!(accepted, "{debt}");
         assert_eq!(owed, Some(debt));
         assert_eq!(silent_completion_kind(&complete, &activity), left, "{debt}");
         assert_eq!(
-            activity
+            probes
                 .turn_timing
                 .finish(now, TimingOutcome::NoAudio)
                 .is_some(),
@@ -4389,13 +4170,15 @@ fn a_silent_completion_is_classified_before_the_accept_settles_it() {
     // A thinking release stays owed, so neither the log nor the timing treats
     // the completion as its answer.
     let mut activity = RuntimeActivity::new(now);
+    let mut probes = TurnProbes::default();
     activity.socket.reply_after_thinking_discard = true;
-    let (accepted, _, owed) = accept_event_noting_silence(&complete, &mut activity, false, now);
+    let (accepted, _, owed) =
+        accept_event_noting_silence(&complete, &mut activity, &mut probes, false, now);
     assert!(accepted);
     assert_eq!(owed, None);
     assert!(activity.owes_reply());
     assert!(
-        activity
+        probes
             .turn_timing
             .finish(now, TimingOutcome::NoAudio)
             .is_none()
@@ -4403,9 +4186,10 @@ fn a_silent_completion_is_classified_before_the_accept_settles_it() {
 
     // A completion the accept swallows is no silence at all.
     let mut activity = RuntimeActivity::new(now);
-    activity.note_candidate_finished(now, false);
+    note_candidate_finished(&mut activity, &mut probes, now, false);
     activity.socket.stale_turn_pending = true;
-    let (accepted, _, owed) = accept_event_noting_silence(&complete, &mut activity, false, now);
+    let (accepted, _, owed) =
+        accept_event_noting_silence(&complete, &mut activity, &mut probes, false, now);
     assert!(!accepted);
     assert_eq!(owed, None);
     assert!(activity.reply_in_flight());
@@ -4421,12 +4205,7 @@ fn closing_both_turns_counts_each_before_anything_is_published() {
     turns
         .interviewer
         .record(&mut state.transcript, INTERVIEWER_SPEAKER, "Go ahead.");
-    let closing = close_both_turns(
-        &mut turns,
-        &mut state.evidence_ledger,
-        1,
-        Some("candidate-1"),
-    );
+    let closing = turns.close_both(&mut state.evidence_ledger, 1, Some("candidate-1"));
 
     // In transcript order, attributed, and both already counted: a publish that
     // fails after this cannot leave a closed turn out of the report's counts.
@@ -4444,7 +4223,11 @@ fn closing_both_turns_counts_each_before_anything_is_published() {
     assert!(!turns.candidate.is_open() && !turns.interviewer.is_open());
 
     // Nothing open, nothing to publish or count.
-    assert!(close_both_turns(&mut turns, &mut state.evidence_ledger, 2, None).is_empty());
+    assert!(
+        turns
+            .close_both(&mut state.evidence_ledger, 2, None)
+            .is_empty()
+    );
     assert_eq!(state.evidence_ledger.conversation.candidate_turns, 1);
 }
 
@@ -4706,7 +4489,7 @@ fn a_waiting_cut_is_settled_before_the_next_cut_replaces_it() {
     );
 
     // The close in `on_interruption` ends the turn that held those words.
-    close_both_turns(&mut turns, &mut state.evidence_ledger, 1, None);
+    turns.close_both(&mut state.evidence_ledger, 1, None);
     turns.note_cut("0:20.000".to_string(), start + Duration::from_secs(10));
 
     turns
@@ -5128,9 +4911,13 @@ async fn the_room_link_carries_what_the_handlers_send() {
         }]
     );
 
-    publish_opening_attributes(&harness.room, &mut harness.turn.agent_state, 3_000)
-        .await
-        .unwrap();
+    crate::livekit::agent_state::publish_opening_attributes(
+        &harness.room,
+        &mut harness.turn.agent_state,
+        3_000,
+    )
+    .await
+    .unwrap();
     set_agent_state(
         &harness.room,
         &mut harness.turn.agent_state,
@@ -5141,7 +4928,10 @@ async fn the_room_link_carries_what_the_handlers_send() {
         loop {
             tokio::task::yield_now().await;
             let attributes = harness.room.participant().attributes();
-            if attributes.get(LIVEKIT_AGENT_STATE).map(String::as_str) == Some(AGENT_STATE_SPEAKING)
+            if attributes
+                .get(crate::livekit::LIVEKIT_AGENT_STATE)
+                .map(String::as_str)
+                == Some(AGENT_STATE_SPEAKING)
             {
                 return attributes;
             }
@@ -5150,7 +4940,9 @@ async fn the_room_link_carries_what_the_handlers_send() {
     .await
     .expect("the writer sets the state");
     assert_eq!(
-        latest.get(TURN_WINDOW_ATTRIBUTE).map(String::as_str),
+        latest
+            .get(crate::livekit::agent_state::TURN_WINDOW_ATTRIBUTE)
+            .map(String::as_str),
         Some("3000"),
         "the state is merged into the attributes already set: {latest:?}"
     );
@@ -5335,8 +5127,12 @@ async fn delivery_uncertainty_ends_at_cold_and_resumed_socket_replacement() {
         ))
         .await;
         h.event(reply_audio()).await;
-        let (owed, _, prompt) =
-            crate::livekit::hand_over(&mut h.turn.state, &mut h.turn.activity, &mut h.output);
+        let (owed, _, prompt) = crate::livekit::hand_over(
+            &mut h.turn.state,
+            &mut h.turn.activity,
+            &mut TurnProbes::default(),
+            &mut h.output,
+        );
         assert!(h.turn.state.interviewer_delivery.uncertain.contains(&1));
         // The room closes transcript accumulators before replacing a socket.
         let mut context = h
@@ -5355,6 +5151,7 @@ async fn delivery_uncertainty_ends_at_cold_and_resumed_socket_replacement() {
             &mut h.gemini,
             &mut h.turn.state,
             &mut h.turn.activity,
+            &mut TurnProbes::default(),
             kind,
             prompt.as_deref(),
         )
@@ -5429,7 +5226,7 @@ async fn a_padded_tail_leaves_the_next_reply_its_first_audio_record() {
     h.event(GeminiEvent::TurnComplete).await;
     assert!(h.output.pending_bytes.is_empty(), "the tail was padded");
     assert!(
-        !h.turn.activity.latency.is_open(),
+        !h.turn.probes.latency.is_open(),
         "the padding opened no trace of its own"
     );
     while h.queued.try_recv().is_ok() {}
@@ -5480,7 +5277,7 @@ async fn a_kept_turn_tail_leaves_the_voice_that_cut_in_its_first_audio_record() 
     })
     .await;
     while h.queued.try_recv().is_ok() {}
-    h.turn.activity.latency.voice(Instant::now());
+    h.turn.probes.latency.voice(Instant::now());
     h.event(GeminiEvent::Interrupted).await;
     assert!(
         h.output.pending_bytes.is_empty(),
@@ -5748,6 +5545,7 @@ fn floor_resets_flush_once_before_socket_identity_changes() {
         write_floor(
             "room-a",
             &mut activity,
+            &TurnProbes::default(),
             || "0:01.000".into(),
             Event::Start {
                 generating: true,
@@ -5756,11 +5554,19 @@ fn floor_resets_flush_once_before_socket_identity_changes() {
             &mut output,
         );
         assert!(output.is_empty());
-        finish_turn_timing("room-a", &mut activity, "0:02.000", outcome, &mut output);
+        finish_turn_timing(
+            "room-a",
+            &mut activity,
+            &mut TurnProbes::default(),
+            "0:02.000",
+            outcome,
+            &mut output,
+        );
         activity.live_socket = 4;
         finish_turn_timing(
             "room-a",
             &mut activity,
+            &mut TurnProbes::default(),
             "0:03.000",
             TimingOutcome::Ended,
             &mut output,
@@ -5891,6 +5697,7 @@ fn loop_floor_reconciliation_waits_for_generation_and_playout() {
         write_floor(
             "room-a",
             &mut activity,
+            &TurnProbes::default(),
             || "0:01.000".into(),
             Event::Start {
                 generating: true,
@@ -5901,6 +5708,7 @@ fn loop_floor_reconciliation_waits_for_generation_and_playout() {
         write_floor(
             "room-a",
             &mut activity,
+            &TurnProbes::default(),
             || "0:02.000".into(),
             Event::End,
             &mut output,
@@ -5908,6 +5716,7 @@ fn loop_floor_reconciliation_waits_for_generation_and_playout() {
         reconcile_floor(
             "room-a",
             &mut activity,
+            &TurnProbes::default(),
             || "0:03.000".into(),
             playing,
             &mut output,
@@ -5930,6 +5739,7 @@ fn loop_floor_reconciliation_observes_loss_and_natural_drain() {
         write_floor(
             "room-a",
             &mut activity,
+            &TurnProbes::default(),
             || "0:01.000".into(),
             Event::Start {
                 generating: false,
@@ -5940,6 +5750,7 @@ fn loop_floor_reconciliation_observes_loss_and_natural_drain() {
         reconcile_floor(
             "room-a",
             &mut activity,
+            &TurnProbes::default(),
             || "0:02.000".into(),
             false,
             &mut output,
@@ -5949,6 +5760,7 @@ fn loop_floor_reconciliation_observes_loss_and_natural_drain() {
             write_floor(
                 "room-a",
                 &mut activity,
+                &TurnProbes::default(),
                 || "0:03.000".into(),
                 Event::End,
                 &mut output,

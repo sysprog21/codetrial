@@ -3755,7 +3755,7 @@ test("every startup failure reason the agent can send has its own wording", () =
     [...body.matchAll(/"([a-z]+)"/g)].map((match) => match[1]),
   );
   const readiness = readFileSync(
-    new URL("../../src/livekit/readiness.rs", import.meta.url),
+    new URL("../../src/livekit/startup/readiness.rs", import.meta.url),
     "utf8",
   );
   assert.match(readiness, /"delivery"/);

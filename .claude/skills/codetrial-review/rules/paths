@@ -16,6 +16,7 @@ src/web/setup.rs room.md
 src/web/token.rs room.md
 src/agent* agent.md
 src/agent/report.rs judge.md
+src/protocol.rs agent.md
 src/runtime.rs agent.md
 src/* server.md
 src/web/setup.rs browser.md

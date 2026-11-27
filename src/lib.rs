@@ -7,6 +7,7 @@ pub mod gemini;
 pub mod launch;
 pub mod livekit;
 mod peer_audio;
+mod protocol;
 mod quote;
 pub mod recording;
 pub mod runtime;
@@ -15,7 +16,7 @@ pub mod token;
 pub mod web;
 
 #[cfg(test)]
-#[path = "../tests/unit/isolation.rs"]
+#[path = "../tests/unit/root/isolation.rs"]
 mod test_isolation;
 
 /// Lives here rather than in one of the modules because `accounts` stamps rows
@@ -251,5 +252,5 @@ pub fn install_crypto_provider() {
 }
 
 #[cfg(test)]
-#[path = "../tests/unit/lib.rs"]
+#[path = "../tests/unit/root/lib.rs"]
 mod tests;

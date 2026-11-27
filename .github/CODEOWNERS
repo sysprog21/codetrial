@@ -6,6 +6,7 @@
 # the check reads this file from the base, and a team is not expanded.
 /.github/                         @jserv
 /scripts/                         @jserv
+/tools/                           @jserv
 /.claude/skills/codetrial-review/ @jserv
 
 # The product code, Rust and JavaScript, and its tests are shared.

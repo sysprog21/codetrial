@@ -48,7 +48,7 @@ pub(crate) async fn check_live_session_at(
     keys: &GeminiKeys,
     boot: &dyn LiveSession,
 ) -> Result<GeminiLiveSession, Box<dyn std::error::Error + Send + Sync>> {
-    let attempts = keys.count().min(crate::livekit::GEMINI_RESTART_LIMIT + 1);
+    let attempts = keys.count().min(super::GEMINI_RESTART_LIMIT + 1);
     first_open_within(FIRST_OPEN_LIMIT, async {
         for _ in 1..attempts {
             match live_session_with_keys_at(endpoint, keys, boot, None).await {
