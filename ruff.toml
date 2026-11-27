@@ -2,5 +2,13 @@
 # so the same tree passed under the version CI pins and failed 32 times under
 # the one a contributor had installed. These are the defaults the gate was
 # written against; adopting another rule is a decision made here.
+
+# The candidate code the browser tests run uses names, such as TreeNode and
+# Optional, that the Python driver defines before it runs, so a lint of it on
+# its own reports names it never misses. force-exclude keeps that true when
+# scripts/indent.sh names these files one by one.
+extend-exclude = ["tests/fixtures/candidates"]
+force-exclude = true
+
 [lint]
 select = ["E4", "E7", "E9", "F"]

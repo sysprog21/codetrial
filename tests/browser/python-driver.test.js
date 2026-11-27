@@ -8,6 +8,7 @@ import test from "node:test";
 import { pythonDriver } from "../../web/runners.js";
 import {
   assertVoidTable,
+  candidateSource,
   finalVoidJudge,
   operationsOf,
   read,
@@ -89,22 +90,7 @@ test(
       "the judge's cases no longer expose a Solution shared across cases",
     );
     const reply = runDriver(
-      `class Solution:
-    def __init__(self):
-        self.best = float("-inf")
-
-    def bestRouteYield(self, root: Optional[TreeNode]) -> int:
-        def gain(node):
-            if node is None:
-                return 0
-            left = max(gain(node.left), 0)
-            right = max(gain(node.right), 0)
-            self.best = max(self.best, node.val + left + right)
-            return node.val + max(left, right)
-
-        gain(root)
-        return self.best
-`,
+      candidateSource("python-driver/shared-self.py"),
       spec,
     );
     assert.deepEqual(
@@ -124,20 +110,7 @@ test(
     // already had. A driver that shares, copies, re-initializes or prebuilds
     // an instance gets at least one of the three wrong.
     const reply = runDriver(
-      `class Solution:
-    built = []
-
-    def __init__(self):
-        Solution.built.append(self)
-
-    def count(self, value):
-        newest = Solution.built[-1] is self and Solution.built.count(self) == 1
-        seen = [len(Solution.built), newest, list(vars(self))]
-        self.value = value
-        if value == 2:
-            raise ValueError("two")
-        return seen
-`,
+      candidateSource("python-driver/counts-init.py"),
       countToThree,
     );
     assert.deepEqual(reply.results.map(outcome), [
@@ -155,17 +128,7 @@ test(
     // Only the second construction raises, so a driver that repeats the
     // first constructor error, or stops at it, gets the third case wrong.
     const reply = runDriver(
-      `class Solution:
-    built = 0
-
-    def __init__(self):
-        Solution.built += 1
-        if Solution.built == 2:
-            self.memo = {}[0]
-
-    def count(self, value):
-        return value
-`,
+      candidateSource("python-driver/init-raises.py"),
       countToThree,
     );
     assert.equal(reply.setupError, undefined);
@@ -196,34 +159,24 @@ test(
 );
 
 test("a class judge calls a case's methods on one instance", { skip }, () => {
-  const reply = runDriver(
-    `class Counter:
-    def __init__(self):
-        self.count = 0
-
-    def add(self):
-        self.count += 1
-        return self.count
-`,
-    {
-      kind: "class",
-      className: "Counter",
-      cases: [
-        {
-          input: [
-            ["Counter", "add", "add"],
-            [[], [], []],
-          ],
-        },
-        {
-          input: [
-            ["Counter", "add"],
-            [[], []],
-          ],
-        },
-      ],
-    },
-  );
+  const reply = runDriver(candidateSource("python-driver/counter-class.py"), {
+    kind: "class",
+    className: "Counter",
+    cases: [
+      {
+        input: [
+          ["Counter", "add", "add"],
+          [[], [], []],
+        ],
+      },
+      {
+        input: [
+          ["Counter", "add"],
+          [[], []],
+        ],
+      },
+    ],
+  });
   assert.deepEqual(
     reply.results.map((result) => result.actual),
     [

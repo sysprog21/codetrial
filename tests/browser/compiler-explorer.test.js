@@ -29,6 +29,7 @@ import {
 import { checkAnswer } from "../../web/lib.js";
 import { parseCandidateCase } from "../../web/runners.js";
 import { createSyntaxParser } from "../../web/syntax-parser.js";
+import { candidateSource } from "./source.js";
 
 const cppSyntax = createSyntaxParser({
   loadBytes: async (url) => new Uint8Array(readFileSync(url)),
@@ -2855,57 +2856,12 @@ describe("toolchain harnesses", { concurrency: 4 }, () => {
   for (const [id, solution] of [
     [
       "reverse-words-in-a-string",
-      `static void reverseRange(char* s, int left, int right) {
-    while (left < right) {
-        char temp = s[left];
-        s[left++] = s[right];
-        s[right--] = temp;
-    }
-}
-char* restoreCaptionOrder(char* s) {
-    int read = 0, write = 0;
-    while (s[read]) {
-        while (s[read] == ' ') read++;
-        if (!s[read]) break;
-        if (write) s[write++] = ' ';
-        while (s[read] && s[read] != ' ') s[write++] = s[read++];
-    }
-    s[write] = '\\0';
-    reverseRange(s, 0, write - 1);
-    int start = 0;
-    for (int i = 0; i <= write; i++) {
-        if (s[i] == ' ' || s[i] == '\\0') {
-            reverseRange(s, start, i - 1);
-            start = i + 1;
-        }
-    }
-    return s;
-}`,
+      candidateSource("compiler-explorer/reverse-words-in-a-string.c"),
     ],
-    [
-      "valid-anagram",
-      `static int compareCharacters(const void* a, const void* b) {
-    return *(const unsigned char*)a - *(const unsigned char*)b;
-}
-bool isRearrangedCode(char* s, char* t) {
-    size_t length = strlen(s);
-    if (length != strlen(t)) return false;
-    qsort(s, length, sizeof(*s), compareCharacters);
-    qsort(t, length, sizeof(*t), compareCharacters);
-    return strcmp(s, t) == 0;
-}`,
-    ],
+    ["valid-anagram", candidateSource("compiler-explorer/valid-anagram.c")],
     [
       "longest-common-prefix",
-      `char* sharedLeadingText(char** strs, int strsSize) {
-    for (int i = 0; strs[0][i]; i++)
-        for (int j = 1; j < strsSize; j++)
-            if (strs[j][i] != strs[0][i]) {
-                strs[0][i] = '\\0';
-                return strs[0];
-            }
-    return strs[0];
-}`,
+      candidateSource("compiler-explorer/longest-common-prefix.c"),
     ],
   ]) {
     it(
@@ -3023,21 +2979,7 @@ bool isRearrangedCode(char* s, char* t) {
           generateHarness(
             "c",
             judges["two-sum"],
-            `int* matchDisputedCharge(int* nums, int numsSize, int target, int* returnSize) {
-    int* out = malloc(sizeof(int) * 2);
-    for (int i = 0; i < numsSize; i++) {
-        for (int j = i + 1; j < numsSize; j++) {
-            if (nums[i] + nums[j] == target) {
-                out[0] = i;
-                out[1] = j;
-                *returnSize = 2;
-                return out;
-            }
-        }
-    }
-    *returnSize = 0;
-    return out;
-}`,
+            candidateSource("compiler-explorer/two-sum.c"),
           ),
         );
         await run("cc", ["-std=c17", source, "-o", binary]);
@@ -3092,17 +3034,9 @@ bool isRearrangedCode(char* s, char* t) {
           await results(
             "distinct",
             judges["longest-substring-without-repeating-characters"],
-            `int longestDistinctRun(char* s) {
-    int last[256], best = 0, start = 0;
-    for (int i = 0; i < 256; i++) last[i] = -1;
-    for (int i = 0; s[i]; i++) {
-        unsigned char c = (unsigned char)s[i];
-        if (last[c] >= start) start = last[c] + 1;
-        last[c] = i;
-        if (i - start + 1 > best) best = i - start + 1;
-    }
-    return best;
-}`,
+            candidateSource(
+              "compiler-explorer/longest-substring-without-repeating-characters.c",
+            ),
             counted,
           ),
           [5, 4, 3, 3],
@@ -3172,88 +3106,18 @@ bool isRearrangedCode(char* s, char* t) {
   for (const [id, solution] of [
     [
       "average-of-levels-in-binary-tree",
-      `double* meanReadingPerHop(struct TreeNode* root, int* returnSize) {
-    struct TreeNode* queue[64];
-    double* out = malloc(sizeof(double) * 64);
-    int head = 0, tail = 0;
-    *returnSize = 0;
-    if (root) queue[tail++] = root;
-    while (head < tail) {
-        int count = tail - head;
-        double sum = 0;
-        for (int i = 0; i < count; i++) {
-            struct TreeNode* node = queue[head++];
-            sum += node->val;
-            if (node->left) queue[tail++] = node->left;
-            if (node->right) queue[tail++] = node->right;
-        }
-        out[(*returnSize)++] = sum / count;
-    }
-    return out;
-}`,
+      candidateSource("compiler-explorer/average-of-levels-in-binary-tree.c"),
     ],
-    [
-      "spiral-matrix",
-      `int* clockwiseScanOrder(int** matrix, int matrixSize, int* matrixColSize, int* returnSize) {
-    int rows = matrixSize, cols = matrixSize ? matrixColSize[0] : 0;
-    int* out = malloc(sizeof(int) * (rows * cols + 1));
-    int top = 0, bottom = rows - 1, left = 0, right = cols - 1;
-    *returnSize = 0;
-    while (top <= bottom && left <= right) {
-        for (int j = left; j <= right; j++) out[(*returnSize)++] = matrix[top][j];
-        for (int i = top + 1; i <= bottom; i++) out[(*returnSize)++] = matrix[i][right];
-        if (top < bottom)
-            for (int j = right - 1; j >= left; j--) out[(*returnSize)++] = matrix[bottom][j];
-        if (left < right)
-            for (int i = bottom - 1; i > top; i--) out[(*returnSize)++] = matrix[i][left];
-        top++, bottom--, left++, right--;
-    }
-    return out;
-}`,
-    ],
+    ["spiral-matrix", candidateSource("compiler-explorer/spiral-matrix.c")],
     [
       "binary-tree-right-side-view",
-      `int* sidebarLabels(struct TreeNode* root, int* returnSize) {
-    struct TreeNode* queue[64];
-    int* out = malloc(sizeof(int) * 64);
-    int head = 0, tail = 0;
-    *returnSize = 0;
-    if (root) queue[tail++] = root;
-    while (head < tail) {
-        int count = tail - head;
-        for (int i = 0; i < count; i++) {
-            struct TreeNode* node = queue[head++];
-            if (i == count - 1) out[(*returnSize)++] = node->val;
-            if (node->left) queue[tail++] = node->left;
-            if (node->right) queue[tail++] = node->right;
-        }
-    }
-    return out;
-}`,
+      candidateSource("compiler-explorer/binary-tree-right-side-view.c"),
     ],
     [
       "substring-with-concatenation-of-all-words",
-      `int* findChunkBlockOffsets(char* s, char** words, int wordsSize, int* returnSize) {
-    int length = strlen(s), width = strlen(words[0]);
-    int span = width * wordsSize;
-    int* out = malloc(sizeof(int) * (length + 1));
-    *returnSize = 0;
-    for (int start = 0; start + span <= length; start++) {
-        bool used[64] = {false};
-        int matched = 0;
-        for (int chunk = 0; chunk < wordsSize; chunk++) {
-            const char* piece = s + start + chunk * width;
-            int found = -1;
-            for (int w = 0; w < wordsSize && found < 0; w++)
-                if (!used[w] && strncmp(piece, words[w], width) == 0) found = w;
-            if (found < 0) break;
-            used[found] = true;
-            matched++;
-        }
-        if (matched == wordsSize) out[(*returnSize)++] = start;
-    }
-    return out;
-}`,
+      candidateSource(
+        "compiler-explorer/substring-with-concatenation-of-all-words.c",
+      ),
     ],
   ]) {
     it(
@@ -3727,22 +3591,7 @@ void* failing_malloc(size_t size) {
           generateHarness(
             "c",
             judges["merge-k-sorted-lists"],
-            `struct ListNode* combineShardChains(struct ListNode** lists, int listsSize) {
-    struct ListNode dummy = {0, NULL};
-    struct ListNode* tail = &dummy;
-    for (;;) {
-        int best = -1;
-        for (int i = 0; i < listsSize; i++) {
-            if (lists[i] && (best < 0 || lists[i]->val < lists[best]->val)) best = i;
-        }
-        if (best < 0) break;
-        tail->next = lists[best];
-        tail = tail->next;
-        lists[best] = lists[best]->next;
-        tail->next = NULL;
-    }
-    return dummy.next;
-}`,
+            candidateSource("compiler-explorer/merge-k-sorted-lists.c"),
           ),
         );
         await run("cc", ["-std=c17", source, "-o", binary]);
@@ -3773,37 +3622,7 @@ void* failing_malloc(size_t size) {
           generateHarness(
             "c",
             judges["construct-quad-tree"],
-            `static bool same(int** grid, int row, int col, int size) {
-    int first = grid[row][col];
-    for (int r = row; r < row + size; r++) {
-        for (int c = col; c < col + size; c++) {
-            if (grid[r][c] != first) return false;
-        }
-    }
-    return true;
-}
-
-static struct Node* build(int** grid, int row, int col, int size) {
-    struct Node* node = calloc(1, sizeof(*node));
-    if (same(grid, row, col, size)) {
-        node->val = grid[row][col];
-        node->isLeaf = true;
-        return node;
-    }
-    int half = size / 2;
-    node->val = 1;
-    node->isLeaf = false;
-    node->topLeft = build(grid, row, col, half);
-    node->topRight = build(grid, row, col + half, half);
-    node->bottomLeft = build(grid, row + half, col, half);
-    node->bottomRight = build(grid, row + half, col + half, half);
-    return node;
-}
-
-struct Node* buildTileTree(int** grid, int gridSize, int* gridColSize) {
-    (void)gridColSize;
-    return build(grid, 0, 0, gridSize);
-}`,
+            candidateSource("compiler-explorer/construct-quad-tree.c"),
           ),
         );
         await run("cc", ["-std=c17", source, "-o", binary]);
@@ -3834,22 +3653,7 @@ struct Node* buildTileTree(int** grid, int gridSize, int* gridColSize) {
           generateHarness(
             "cpp",
             judges["min-stack"],
-            `class BidLedger {
-    vector<int> values;
-    vector<int> minimums;
-public:
-    BidLedger() {}
-    void push(int value) {
-        values.push_back(value);
-        minimums.push_back(minimums.empty() ? value : min(value, minimums.back()));
-    }
-    void pop() {
-        values.pop_back();
-        minimums.pop_back();
-    }
-    int top() { return values.back(); }
-    int getMin() { return minimums.back(); }
-};`,
+            candidateSource("compiler-explorer/min-stack.cpp"),
           ),
         );
         await run("g++", ["-std=c++20", source, "-o", binary]);
@@ -3877,22 +3681,9 @@ public:
           generateHarness(
             "java",
             judges["binary-search-tree-iterator"],
-            `class OrderedCursor {
-    private final ArrayDeque<TreeNode> stack = new ArrayDeque<>();
-    public OrderedCursor(TreeNode root) { pushLeft(root); }
-    private void pushLeft(TreeNode node) {
-        while (node != null) {
-            stack.push(node);
-            node = node.left;
-        }
-    }
-    public int next() {
-        TreeNode node = stack.pop();
-        pushLeft(node.right);
-        return node.val;
-    }
-    public boolean hasNext() { return !stack.isEmpty(); }
-}`,
+            candidateSource(
+              "compiler-explorer/binary-search-tree-iterator.java",
+            ),
           ),
         );
         await run("javac", [source]);
@@ -3961,30 +3752,7 @@ public:
           generateHarness(
             "cpp",
             judges["construct-quad-tree"],
-            `class Solution {
-    bool same(vector<vector<int>>& grid, int row, int col, int size) {
-        int first = grid[row][col];
-        for (int r = row; r < row + size; r++) {
-            for (int c = col; c < col + size; c++) {
-                if (grid[r][c] != first) return false;
-            }
-        }
-        return true;
-    }
-    Node* build(vector<vector<int>>& grid, int row, int col, int size) {
-        if (same(grid, row, col, size)) return new Node(grid[row][col], true);
-        int half = size / 2;
-        return new Node(1, false,
-            build(grid, row, col, half),
-            build(grid, row, col + half, half),
-            build(grid, row + half, col, half),
-            build(grid, row + half, col + half, half));
-    }
-public:
-    Node* buildTileTree(vector<vector<int>>& grid) {
-        return build(grid, 0, 0, grid.size());
-    }
-};`,
+            candidateSource("compiler-explorer/construct-quad-tree.cpp"),
           ),
         );
         await run("g++", ["-std=c++20", source, "-o", binary]);
@@ -4015,33 +3783,7 @@ public:
           generateHarness(
             "cpp",
             judges["lru-cache"],
-            `class ThumbnailStore {
-    int capacity;
-    list<pair<int, int>> order;
-    unordered_map<int, list<pair<int, int>>::iterator> byKey;
-public:
-    ThumbnailStore(int capacity) : capacity(capacity) {}
-    int get(int key) {
-        auto found = byKey.find(key);
-        if (found == byKey.end()) return -1;
-        order.splice(order.begin(), order, found->second);
-        return found->second->second;
-    }
-    void put(int key, int value) {
-        auto found = byKey.find(key);
-        if (found != byKey.end()) {
-            found->second->second = value;
-            order.splice(order.begin(), order, found->second);
-            return;
-        }
-        order.push_front({key, value});
-        byKey[key] = order.begin();
-        if ((int)order.size() > capacity) {
-            byKey.erase(order.back().first);
-            order.pop_back();
-        }
-    }
-};`,
+            candidateSource("compiler-explorer/lru-cache.cpp"),
           ),
         );
         await run("g++", ["-std=c++20", source, "-o", binary]);
@@ -4070,30 +3812,7 @@ public:
           generateHarness(
             "cpp",
             judges["fixed-capacity-ring-buffer"],
-            `class EventQueue {
-    vector<int> values;
-    int head = 0;
-    int tail = 0;
-    int count = 0;
-public:
-    EventQueue(int capacity) : values(capacity) {}
-    bool push(int value) {
-        if (count == (int)values.size()) return false;
-        values[tail] = value;
-        tail = (tail + 1) % values.size();
-        count++;
-        return true;
-    }
-    int pop() {
-        if (count == 0) return -1;
-        int value = values[head];
-        head = (head + 1) % values.size();
-        count--;
-        return value;
-    }
-    int front() { return count == 0 ? -1 : values[head]; }
-    int size() { return count; }
-};`,
+            candidateSource("compiler-explorer/fixed-capacity-ring-buffer.cpp"),
           ),
         );
         await run("g++", ["-std=c++20", source, "-o", binary]);
@@ -4116,36 +3835,10 @@ public:
   // that null is an empty list rather than a missing answer. Both judges
   // carry a case whose expected answer is [].
   for (const [id, solution] of [
-    [
-      "rotate-list",
-      `class Solution {
-    public ListNode wrapPlaylistTail(ListNode head, int k) {
-        if (head == null || head.next == null) return head;
-        int n = 1;
-        ListNode tail = head;
-        while (tail.next != null) { tail = tail.next; n++; }
-        k %= n;
-        if (k == 0) return head;
-        ListNode newTail = head;
-        for (int i = 0; i < n - k - 1; i++) newTail = newTail.next;
-        ListNode newHead = newTail.next;
-        newTail.next = null;
-        tail.next = head;
-        return newHead;
-    }
-}`,
-    ],
+    ["rotate-list", candidateSource("compiler-explorer/rotate-list.java")],
     [
       "invert-binary-tree",
-      `class Solution {
-    public TreeNode mirrorLayout(TreeNode root) {
-        if (root == null) return null;
-        TreeNode left = mirrorLayout(root.left);
-        root.left = mirrorLayout(root.right);
-        root.right = left;
-        return root;
-    }
-}`,
+      candidateSource("compiler-explorer/invert-binary-tree.java"),
     ],
   ]) {
     it(
@@ -4175,53 +3868,11 @@ public:
   // in the right order, so only a serializer that refuses a revisited node can
   // tell it from a correct answer. "both empty" returns no node to link back.
   const cyclicMerges = {
-    c: `struct ListNode* interleaveEvents(struct ListNode* list1, struct ListNode* list2) {
-    struct ListNode dummy = { 0, NULL };
-    struct ListNode* tail = &dummy;
-    while (list1 && list2) {
-        if (list1->val <= list2->val) { tail->next = list1; list1 = list1->next; }
-        else { tail->next = list2; list2 = list2->next; }
-        tail = tail->next;
-    }
-    tail->next = list1 ? list1 : list2;
-    struct ListNode* last = dummy.next;
-    while (last && last->next) last = last->next;
-    if (last) last->next = dummy.next;
-    return dummy.next;
-}`,
-    cpp: `class Solution {
-public:
-    ListNode* interleaveEvents(ListNode* list1, ListNode* list2) {
-        ListNode dummy;
-        ListNode* tail = &dummy;
-        while (list1 && list2) {
-            if (list1->val <= list2->val) { tail->next = list1; list1 = list1->next; }
-            else { tail->next = list2; list2 = list2->next; }
-            tail = tail->next;
-        }
-        tail->next = list1 ? list1 : list2;
-        ListNode* last = dummy.next;
-        while (last && last->next) last = last->next;
-        if (last) last->next = dummy.next;
-        return dummy.next;
-    }
-};`,
-    java: `class Solution {
-    public ListNode interleaveEvents(ListNode list1, ListNode list2) {
-        ListNode dummy = new ListNode(0);
-        ListNode tail = dummy;
-        while (list1 != null && list2 != null) {
-            if (list1.val <= list2.val) { tail.next = list1; list1 = list1.next; }
-            else { tail.next = list2; list2 = list2.next; }
-            tail = tail.next;
-        }
-        tail.next = list1 != null ? list1 : list2;
-        ListNode last = dummy.next;
-        while (last != null && last.next != null) last = last.next;
-        if (last != null) last.next = dummy.next;
-        return dummy.next;
-    }
-}`,
+    c: candidateSource("compiler-explorer/merge-two-sorted-lists.cyclic.c"),
+    cpp: candidateSource("compiler-explorer/merge-two-sorted-lists.cyclic.cpp"),
+    java: candidateSource(
+      "compiler-explorer/merge-two-sorted-lists.cyclic.java",
+    ),
   };
   const cyclicMergeRuns = {
     c: { skip: noCc, file: "merge.c" },
@@ -4340,55 +3991,9 @@ public:
   // prints. A correct solution in each language must return the new block
   // there, and every other case unchanged.
   const insertBlock = {
-    c: `int** addBusyBlock(int** intervals, int intervalsSize, int* intervalsColSize, int* newInterval, int newIntervalSize, int* returnSize, int** returnColumnSizes) {
-    int** out = malloc(sizeof(int*) * (intervalsSize + 1));
-    *returnColumnSizes = malloc(sizeof(int) * (intervalsSize + 1));
-    int n = 0, i = 0, start = newInterval[0], end = newInterval[1];
-    while (i < intervalsSize && intervals[i][1] < start) out[n++] = intervals[i++];
-    for (; i < intervalsSize && intervals[i][0] <= end; i++) {
-        if (intervals[i][0] < start) start = intervals[i][0];
-        if (intervals[i][1] > end) end = intervals[i][1];
-    }
-    out[n] = malloc(2 * sizeof(int));
-    out[n][0] = start;
-    out[n++][1] = end;
-    while (i < intervalsSize) out[n++] = intervals[i++];
-    for (int k = 0; k < n; k++) (*returnColumnSizes)[k] = 2;
-    *returnSize = n;
-    return out;
-}`,
-    cpp: `class Solution {
-public:
-    vector<vector<int>> addBusyBlock(vector<vector<int>>& intervals, vector<int>& newInterval) {
-        vector<vector<int>> out;
-        size_t i = 0;
-        int start = newInterval[0], end = newInterval[1];
-        while (i < intervals.size() && intervals[i][1] < start) out.push_back(intervals[i++]);
-        for (; i < intervals.size() && intervals[i][0] <= end; i++) {
-            start = min(start, intervals[i][0]);
-            end = max(end, intervals[i][1]);
-        }
-        out.push_back({start, end});
-        while (i < intervals.size()) out.push_back(intervals[i++]);
-        return out;
-    }
-};`,
-    java: `class Solution {
-    public int[][] addBusyBlock(int[][] intervals, int[] newInterval) {
-        int[][] out = new int[intervals.length + 1][];
-        int n = 0, i = 0, start = newInterval[0], end = newInterval[1];
-        while (i < intervals.length && intervals[i][1] < start) out[n++] = intervals[i++];
-        for (; i < intervals.length && intervals[i][0] <= end; i++) {
-            start = Math.min(start, intervals[i][0]);
-            end = Math.max(end, intervals[i][1]);
-        }
-        out[n++] = new int[] {start, end};
-        while (i < intervals.length) out[n++] = intervals[i++];
-        int[][] result = new int[n][];
-        for (int k = 0; k < n; k++) result[k] = out[k];
-        return result;
-    }
-}`,
+    c: candidateSource("compiler-explorer/insert-interval.c"),
+    cpp: candidateSource("compiler-explorer/insert-interval.cpp"),
+    java: candidateSource("compiler-explorer/insert-interval.java"),
   };
   for (const [language, skip] of flattenLanguages) {
     it(
@@ -4419,53 +4024,15 @@ public:
   // so the run timed out or was killed and no case reported anything. The
   // single-node and empty cases have no thread to leave, so they still pass.
   const cyclicFlatten = {
-    c: `void linearizeMenu(struct TreeNode* root) {
-    struct TreeNode* last = NULL;
-    for (struct TreeNode* cur = root; cur; cur = cur->right) {
-        if (cur->left) {
-            struct TreeNode* pre = cur->left;
-            while (pre->right) pre = pre->right;
-            pre->right = cur->right;
-            cur->right = cur->left;
-            cur->left = NULL;
-        }
-        last = cur;
-    }
-    if (last && last != root) last->right = root;
-}`,
-    cpp: `class Solution {
-public:
-    void linearizeMenu(TreeNode* root) {
-        TreeNode* last = nullptr;
-        for (TreeNode* cur = root; cur; cur = cur->right) {
-            if (cur->left) {
-                TreeNode* pre = cur->left;
-                while (pre->right) pre = pre->right;
-                pre->right = cur->right;
-                cur->right = cur->left;
-                cur->left = nullptr;
-            }
-            last = cur;
-        }
-        if (last && last != root) last->right = root;
-    }
-};`,
-    java: `class Solution {
-    public void linearizeMenu(TreeNode root) {
-        TreeNode last = null;
-        for (TreeNode cur = root; cur != null; cur = cur.right) {
-            if (cur.left != null) {
-                TreeNode pre = cur.left;
-                while (pre.right != null) pre = pre.right;
-                pre.right = cur.right;
-                cur.right = cur.left;
-                cur.left = null;
-            }
-            last = cur;
-        }
-        if (last != null && last != root) last.right = root;
-    }
-}`,
+    c: candidateSource(
+      "compiler-explorer/flatten-binary-tree-to-linked-list.cyclic.c",
+    ),
+    cpp: candidateSource(
+      "compiler-explorer/flatten-binary-tree-to-linked-list.cyclic.cpp",
+    ),
+    java: candidateSource(
+      "compiler-explorer/flatten-binary-tree-to-linked-list.cyclic.java",
+    ),
   };
   for (const [language, skip] of flattenLanguages) {
     it(
@@ -4565,52 +4132,15 @@ public:
   // and every random pointer, so only a serializer that refuses a revisited
   // node can tell it from a correct answer. "empty random list" has no node.
   const cyclicCopies = {
-    c: `struct Node* snapshotOutline(struct Node* head) {
-    int n = 0;
-    for (struct Node* p = head; p; p = p->next) n++;
-    if (!n) return NULL;
-    struct Node** copies = calloc(n, sizeof(*copies));
-    struct Node* p = head;
-    for (int i = 0; i < n; i++, p = p->next) {
-        copies[i] = calloc(1, sizeof(*copies[i]));
-        copies[i]->val = p->val;
-    }
-    p = head;
-    for (int i = 0; i < n; i++, p = p->next) {
-        copies[i]->next = copies[(i + 1) % n];
-        struct Node* q = head;
-        for (int j = 0; j < n; j++, q = q->next)
-            if (q == p->random) copies[i]->random = copies[j];
-    }
-    struct Node* copy = copies[0];
-    free(copies);
-    return copy;
-}`,
-    cpp: `class Solution {
-public:
-    Node* snapshotOutline(Node* head) {
-        if (!head) return nullptr;
-        unordered_map<Node*, Node*> copies;
-        for (Node* p = head; p; p = p->next) copies[p] = new Node(p->val);
-        for (Node* p = head; p; p = p->next) {
-            copies[p]->next = p->next ? copies[p->next] : copies[head];
-            copies[p]->random = p->random ? copies[p->random] : nullptr;
-        }
-        return copies[head];
-    }
-};`,
-    java: `class Solution {
-    public Node snapshotOutline(Node head) {
-        if (head == null) return null;
-        java.util.HashMap<Node, Node> copies = new java.util.HashMap<>();
-        for (Node p = head; p != null; p = p.next) copies.put(p, new Node(p.val));
-        for (Node p = head; p != null; p = p.next) {
-            copies.get(p).next = p.next != null ? copies.get(p.next) : copies.get(head);
-            copies.get(p).random = p.random != null ? copies.get(p.random) : null;
-        }
-        return copies.get(head);
-    }
-}`,
+    c: candidateSource(
+      "compiler-explorer/copy-list-with-random-pointer.cyclic.c",
+    ),
+    cpp: candidateSource(
+      "compiler-explorer/copy-list-with-random-pointer.cyclic.cpp",
+    ),
+    java: candidateSource(
+      "compiler-explorer/copy-list-with-random-pointer.cyclic.java",
+    ),
   };
   const cyclicCopyRuns = [
     ["c", noCc],
@@ -4661,42 +4191,23 @@ public:
     {
       name: "a shallow copy that loops",
       message: deepCopy,
-      candidate: `struct Node* snapshotOutline(struct Node* head) {
-    struct Node* tail = head;
-    while (tail && tail->next) tail = tail->next;
-    if (tail) tail->next = head;
-    return head;
-}`,
+      candidate: candidateSource(
+        "compiler-explorer/copy-list-with-random-pointer.shallow-loop.c",
+      ),
     },
     {
       name: "a full copy whose last node links back into the input",
       message: deepCopy,
-      candidate: `struct Node* snapshotOutline(struct Node* head) {
-    struct Node dummy = { 0 };
-    struct Node* tail = &dummy;
-    for (struct Node* p = head; p; p = p->next) {
-        tail->next = calloc(1, sizeof(*tail->next));
-        tail = tail->next;
-        tail->val = p->val;
-    }
-    tail->next = head;
-    return dummy.next;
-}`,
+      candidate: candidateSource(
+        "compiler-explorer/copy-list-with-random-pointer.links-into-input.c",
+      ),
     },
     {
       name: "a random pointer into the original",
       message: strayRandom,
-      candidate: `struct Node* snapshotOutline(struct Node* head) {
-    struct Node dummy = { 0 };
-    struct Node* tail = &dummy;
-    for (struct Node* p = head; p; p = p->next) {
-        tail->next = calloc(1, sizeof(*tail->next));
-        tail = tail->next;
-        tail->val = p->val;
-        tail->random = p->random;
-    }
-    return dummy.next;
-}`,
+      candidate: candidateSource(
+        "compiler-explorer/copy-list-with-random-pointer.random-into-input.c",
+      ),
     },
   ];
   for (const { name, message, candidate } of strayCopies) {
@@ -4744,31 +4255,14 @@ public:
   for (const [name, candidate, check, flags] of [
     [
       "copies a 10001-node random list",
-      `struct Node* snapshotOutline(struct Node* head) {
-    int n = 0;
-    for (struct Node* p = head; p; p = p->next) n++;
-    if (!n) return NULL;
-    struct Node** copy = calloc(n, sizeof(*copy));
-    int i = 0;
-    for (struct Node* p = head; p; p = p->next, i++) {
-        copy[i] = calloc(1, sizeof(*copy[i]));
-        copy[i]->val = p->val;
-        copy[i]->random = p->random;
-    }
-    for (i = 0; i < n; i++) {
-        copy[i]->next = i + 1 < n ? copy[i + 1] : NULL;
-        if (copy[i]->random) copy[i]->random = copy[copy[i]->random->val];
-    }
-    return copy[0];
-}`,
+      candidateSource("compiler-explorer/copy-list-with-random-pointer.c"),
       (result) => assert.deepEqual(result.actual, longList),
     ],
     [
       "refuses the last node of a 10001-node random list as a shallow copy",
-      `struct Node* snapshotOutline(struct Node* head) {
-    while (head && head->next) head = head->next;
-    return head;
-}`,
+      candidateSource(
+        "compiler-explorer/copy-list-with-random-pointer.last-node.c",
+      ),
       (result) => assert.equal(result.error, deepCopy),
       ["-fsanitize=address"],
     ],
@@ -4799,43 +4293,21 @@ public:
   for (const [name, candidate] of [
     [
       "a 200000-node random list",
-      `struct Node* snapshotOutline(struct Node* head) {
-    (void)head;
-    struct Node* list = NULL;
-    for (int i = 0; i < 200000; i++) {
-        struct Node* node = calloc(1, sizeof(*node));
-        node->next = list;
-        list = node;
-    }
-    return list;
-}`,
+      candidateSource(
+        "compiler-explorer/copy-list-with-random-pointer.fresh-200000.c",
+      ),
     ],
     [
       "n + 1 fresh nodes in front of its input",
-      `struct Node* snapshotOutline(struct Node* head) {
-    int n = 0;
-    for (struct Node* p = head; p; p = p->next) n++;
-    for (int i = 0; i <= n; i++) {
-        struct Node* node = calloc(1, sizeof(*node));
-        node->next = head;
-        head = node;
-    }
-    return head;
-}`,
+      candidateSource(
+        "compiler-explorer/copy-list-with-random-pointer.fresh-prefix.c",
+      ),
     ],
     [
       "a copy with one node more than its input",
-      `struct Node* snapshotOutline(struct Node* head) {
-    struct Node dummy = { 0 };
-    struct Node* tail = &dummy;
-    for (struct Node* p = head; p; p = p->next) {
-        tail->next = calloc(1, sizeof(*tail->next));
-        tail = tail->next;
-        tail->val = p->val;
-    }
-    tail->next = calloc(1, sizeof(*tail->next));
-    return dummy.next;
-}`,
+      candidateSource(
+        "compiler-explorer/copy-list-with-random-pointer.one-node-more.c",
+      ),
     ],
   ]) {
     it(`c harness refuses ${name}`, { skip: noCc }, async () => {
@@ -4965,14 +4437,9 @@ public:
         const results = await runJudge(
           "c",
           id,
-          `struct TreeNode* nearestSharedApprover(struct TreeNode* root, struct TreeNode* p, struct TreeNode* q) {
-    if (!q || !p) return NULL;
-    if (!root || root == p || root == q) return root;
-    struct TreeNode* left = nearestSharedApprover(root->left, p, q);
-    struct TreeNode* right = nearestSharedApprover(root->right, p, q);
-    if (left && right) return root;
-    return left ? left : right;
-}`,
+          candidateSource(
+            "compiler-explorer/lowest-common-ancestor-of-a-binary-tree.c",
+          ),
           [
             {
               input: [

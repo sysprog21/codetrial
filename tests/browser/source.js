@@ -35,6 +35,13 @@ export function read(name) {
   return readFileSync(join(root, name), "utf8");
 }
 
+/// A candidate's code that a test hands to a harness or a driver, kept under
+/// `tests/fixtures/candidates/<test>/` so it reads as its own language rather
+/// than as a string with its backslashes doubled.
+export function candidateSource(name) {
+  return read(`tests/fixtures/candidates/${name}`);
+}
+
 /// `web/interview.js` and the modules it hands its bindings to.
 ///
 /// One list, in one place, because every assertion that reads it is a
