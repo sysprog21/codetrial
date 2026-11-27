@@ -598,6 +598,7 @@ pub(crate) async fn session_handler(
                     &state,
                     json!({
                         "signedIn": true,
+                        "recordingAvailable": state.recorder.is_some() && user.verified_email.is_some(),
                         "identityVerified": user.identity_verified,
 
                         // Task mode admits only a login GitHub vouched for; the

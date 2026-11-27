@@ -130,6 +130,7 @@ let historyLoad = 0;
 // finish before that pick can start, even if an older load completes first.
 let historyRefreshing = false;
 let loginPending = false;
+let logoutPending = false;
 // Successful and uncertain POSTs need an account check before another login.
 // Null means no check is owed; otherwise this is "recorded" or "unknown", or
 // "unchecked" for a session check that failed where storage is blocked, which
@@ -199,6 +200,8 @@ const nodes = {
   githubLogin: document.querySelector("#github-login"),
   loginLink: document.querySelector("#login-link"),
   logout: document.querySelector("#logout"),
+  sessionHeading: document.querySelector("#session-heading"),
+  recordingHistory: document.querySelector("#recording-history"),
   historyHeader: document.querySelector("#history-header"),
   history: document.querySelector("#history"),
   deleteReports: document.querySelector("#delete-reports"),
@@ -1508,7 +1511,11 @@ function syncLobbyControls() {
     deletingReports;
   selection.disabled = starting;
   nodes.loginLink.disabled =
-    starting || loginPending || historyRefreshing || deletingReports;
+    starting ||
+    loginPending ||
+    logoutPending ||
+    historyRefreshing ||
+    deletingReports;
   nodes.randomProblem.disabled =
     !historyReady || accountBusy || deletingReports;
   if (!practiceList.size && document.activeElement === nodes.practiceListPick)
@@ -1525,6 +1532,13 @@ function syncLobbyControls() {
     !historyReady || starting || accountBusy || deletingReports;
   nodes.siblingSuggestionPick.disabled = nodes.sequelSuggestionPick.disabled;
   syncPresetControls();
+  nodes.logout.disabled = logoutPending;
+  if (nodes.recordingHistory) {
+    const recordingBlocked = deletingReports || logoutPending;
+    if (recordingBlocked)
+      moveFocusOut(nodes.sessionHeading, nodes.recordingHistory);
+    nodes.recordingHistory.inert = recordingBlocked;
+  }
   const deleteBlocked = reportDeletesBlocked();
   nodes.deleteReports.disabled = deleteBlocked;
   for (const remove of nodes.attemptHistory.querySelectorAll(
@@ -1535,7 +1549,9 @@ function syncLobbyControls() {
 }
 
 function accountUpdatePending() {
-  return loginPending || loginResult !== null || historyRefreshing;
+  return (
+    loginPending || loginResult !== null || logoutPending || historyRefreshing
+  );
 }
 
 /// Practice may start before the account answers, except where storage is
@@ -1559,12 +1575,12 @@ function setStartGate(blocked) {
 }
 
 nodes.logout.addEventListener("click", async () => {
-  nodes.logout.disabled = true;
-  try {
-    await fetch("/api/logout", { method: "POST" });
-  } finally {
-    window.location.reload();
-  }
+  if (logoutPending) return;
+  logoutPending = true;
+  syncLobbyControls();
+  // A fresh session decides what to show even if the logout response was lost.
+  await fetch("/api/logout", { method: "POST" }).catch(() => {});
+  window.location.reload();
 });
 
 applyDifficulties();
@@ -1630,6 +1646,13 @@ function settle() {
   if (focusedCard?.button.hidden) focusProblemPicker();
 }
 
+function setRecordingHistoryAvailable(available) {
+  if (!nodes.recordingHistory) return;
+  if (!available) moveFocusOut(nodes.sessionHeading, nodes.recordingHistory);
+  nodes.recordingHistory.hidden = !available;
+  nodes.historyHeader.hidden = !available && nodes.deleteReports.hidden;
+}
+
 async function loadAccount(generation) {
   accountHistory = null;
   let signedOutMessage = "Signed out";
@@ -1693,6 +1716,9 @@ async function loadAccount(generation) {
         ? session.candidateVideo
         : null;
     applyCostNote();
+    setRecordingHistoryAvailable(
+      session.signedIn && session.recordingAvailable === true,
+    );
     if (session.signedIn) {
       loginResult = null;
       accountHistory = true;
@@ -1735,6 +1761,7 @@ async function loadAccount(generation) {
     // can no longer tell who pays, not because nothing will be billed: Start
     // stays enabled, and an interview started now may still be.
     if (generation === historyLoad) {
+      setRecordingHistoryAvailable(false);
       candidateVideo = null;
       applyCostNote();
     }
@@ -2550,6 +2577,7 @@ function showProgressError(message) {
   renderSequelSuggestion();
   hideRecentPerformance();
   nodes.historyHeader.hidden = false;
+  nodes.deleteReports.hidden = false;
   nodes.history.hidden = false;
   nodes.progressSummary.textContent = message;
   nodes.progressTrends.replaceChildren();
@@ -2587,7 +2615,9 @@ function showProgress(entries, suffix, uncheckedProblemIds = null) {
   }
   progressSuffix = suffix;
   const erasable = entries.length > 0 || readDeviceHistory().length > 0;
-  nodes.historyHeader.hidden = !erasable;
+  nodes.historyHeader.hidden =
+    !erasable && nodes.recordingHistory?.hidden !== false;
+  nodes.deleteReports.hidden = !erasable;
   nodes.history.hidden = false;
   const model = progressModelFrom(progressNormalized);
   syncFilter(nodes.progressProblem, model.options.problemId, "All problems");

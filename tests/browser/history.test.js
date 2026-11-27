@@ -419,6 +419,7 @@ test("the response window panel says what the number is worth, in words a test c
       "CODETRIAL",
       "Your recordings",
       "Interviews this account recorded. A recording is kept for 24 hours and then deleted, along with everything on this page.",
+      "Back to lobby",
       "Older",
       "No recordings yet.",
       "Choose a recording",
