@@ -669,6 +669,18 @@ export function reportMarkup({
       </li>`,
           )
           .join("")}</ol></section>`;
+  const keyMoments =
+    report.incomplete || !report.keyMoments?.length
+      ? ""
+      : `<section class="key-moments"><h3>Key moments</h3><ol>${report.keyMoments
+          .map(
+            (moment) => `
+      <li><strong>${frameworkTime(moment.atMs)} · ${escapeHtml(keyMomentLabel(moment.kind))}</strong>
+        <p>${escapeHtml(moment.note)}</p>
+        <blockquote>${escapeHtml(moment.quote)}</blockquote>
+      </li>`,
+          )
+          .join("")}</ol></section>`;
   const unclear = unclearLines.length
     ? `<section><h3>Lines you marked as unclear</h3><ol>${unclearLines
         .map((line) => `<li>${escapeHtml(line)}</li>`)
@@ -740,6 +752,7 @@ export function reportMarkup({
       ${atBoard ? boardTimelineMarkup(report, board, boardPhases) : ""}
       ${feedback}
       ${practiceNext}
+      ${keyMoments}
       ${unclear}
       ${categoryProgress}
       ${debrief}
@@ -962,6 +975,18 @@ export function reportMarkdown({
             `   - Drill: ${mdText(item.drill)}`,
             `   - Success: ${mdText(item.successCriterion)}`,
             ...item.selfReview.map((check) => `   - Check: ${mdText(check)}`),
+          ]),
+          "",
+        ];
+  const keyMoments =
+    report.incomplete || !report.keyMoments?.length
+      ? []
+      : [
+          "## Key moments",
+          "",
+          ...report.keyMoments.flatMap((moment) => [
+            `- **${frameworkTime(moment.atMs)} · ${mdText(keyMomentLabel(moment.kind))}** ${mdText(moment.note)}`,
+            `  > ${mdText(moment.quote)}`,
           ]),
           "",
         ];
@@ -1214,6 +1239,7 @@ export function reportMarkdown({
     "",
     ...phaseScores,
     ...practiceNext,
+    ...keyMoments,
     ...unclear,
     ...categoryProgress,
     ...debrief,
@@ -1238,6 +1264,19 @@ export function reportMarkdown({
     conversation || "(no speech captured)",
     "",
   ].join("\n");
+}
+
+/// What a key moment was, as its heading names it.
+function keyMomentLabel(kind) {
+  return (
+    {
+      hint: "Hint given",
+      hint_withheld: "Hint asked for, none given",
+      fixed_run: "Failing run fixed",
+      approach: "Approach stated",
+      complexity: "Complexity discussed",
+    }[kind] ?? kind
+  );
 }
 
 function frameworkTime(atMs) {

@@ -234,6 +234,18 @@ class UsageTests(unittest.TestCase):
         self.assertEqual(room["http"]["phase"]["records"], 1)
         self.assertEqual(room["http_failures"]["phase_judge_skipped"], 1)
 
+    def test_key_moment_calls_and_skips_are_counted(self):
+        report = USAGE.analyze(
+            [
+                "gemini moments room=team:a call=1 retry=0 usage usage_samples=1 "
+                "prompt_tokens=40\n",
+                "key moments skipped room=team:a: quota\n",
+            ]
+        )
+        room = report["rooms"][0]
+        self.assertEqual(room["http"]["moments"]["records"], 1)
+        self.assertEqual(room["http_failures"]["key_moments_skipped"], 1)
+
     def test_failure_lines_keep_a_room_name_with_a_colon(self):
         report = USAGE.analyze(
             [
@@ -252,6 +264,7 @@ class UsageTests(unittest.TestCase):
                 "report_transport_failed": 1,
                 "interim_skipped": 1,
                 "phase_judge_skipped": 0,
+                "key_moments_skipped": 0,
             },
         )
 
@@ -328,6 +341,7 @@ class UsageTests(unittest.TestCase):
                 "report_transport_failed": 2,
                 "interim_skipped": 1,
                 "phase_judge_skipped": 0,
+                "key_moments_skipped": 0,
             },
         )
         self.assertNotIn("http", room)

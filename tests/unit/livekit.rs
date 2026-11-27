@@ -1541,7 +1541,7 @@ fn a_skip_is_acknowledged_before_the_agent_leaves() {
         .next()
         .unwrap_or_default();
     let skipped = ending
-        .split("let Some((generated, ())) = outcome else {")
+        .split("let Some((key_moments, generated, ())) = outcome else {")
         .nth(1)
         .expect("the skip branch is still where generation ends")
         .split("\n    };\n")

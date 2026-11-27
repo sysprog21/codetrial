@@ -40,13 +40,14 @@ COUNTERS = (
 LIVE_SUMMARY = re.compile(r"\bcodetrial live_usage ")
 LIVE_EVENT = re.compile(r"\bcodetrial live_turn_usage ")
 HTTP_USAGE = re.compile(
-    r"\bgemini (report|interim|phase) (?!transport_failed )(?=.*\busage )"
+    r"\bgemini (report|interim|phase|moments) (?!transport_failed )(?=.*\busage )"
 )
 # A room name may contain a colon; the interim line's delimiter is the colon
 # followed by a space.
 TRANSPORT_FAILED = re.compile(r"\bgemini report transport_failed room=(\S+)")
 INTERIM_SKIPPED = re.compile(r"\binterim review skipped room=(\S+?): ")
 PHASE_SKIPPED = re.compile(r"\bphase judge skipped room=(\S+?): ")
+MOMENTS_SKIPPED = re.compile(r"\bkey moments skipped room=(\S+?): ")
 CONTEXT_REFRESH = re.compile(r"\bcodetrial context_refresh ")
 
 UNKNOWN = "unknown"
@@ -214,6 +215,7 @@ class Room:
             "report_transport_failed": 0,
             "interim_skipped": 0,
             "phase_judge_skipped": 0,
+            "key_moments_skipped": 0,
         }
         self.refreshes = {}
 
@@ -277,13 +279,20 @@ def analyze(lines, room_filter=None):
         # Every recognized line names one of these; most server lines do not.
         if not any(
             word in line
-            for word in ("codetrial ", "gemini ", "interim ", "phase judge ")
+            for word in (
+                "codetrial ",
+                "gemini ",
+                "interim ",
+                "phase judge ",
+                "key moments ",
+            )
         ):
             continue
         failure = (
             TRANSPORT_FAILED.search(line)
             or INTERIM_SKIPPED.search(line)
             or PHASE_SKIPPED.search(line)
+            or MOMENTS_SKIPPED.search(line)
         )
         if failure:
             state = room_state(failure.group(1))
@@ -292,6 +301,7 @@ def analyze(lines, room_filter=None):
                     TRANSPORT_FAILED: "report_transport_failed",
                     INTERIM_SKIPPED: "interim_skipped",
                     PHASE_SKIPPED: "phase_judge_skipped",
+                    MOMENTS_SKIPPED: "key_moments_skipped",
                 }[failure.re]
                 state.failures[key] += 1
             continue

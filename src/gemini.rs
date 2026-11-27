@@ -60,7 +60,7 @@ use credentials::{
 pub(crate) use credentials::{QUOTA_COOLDOWN, exhausted_until, rotation_ran_dry};
 pub(crate) use http_calls::{
     GENERATION_SEED, REGENERATION_SEED, generate_interim_review_with_keys,
-    generate_phase_judgment_with_keys,
+    generate_key_moments_with_keys, generate_phase_judgment_with_keys,
 };
 use http_calls::{
     content_request, generate_content_once, http_usage_label, post_generate_content, response_text,
@@ -74,8 +74,8 @@ use tool_ack::tool_ack_pcm;
 #[cfg(test)]
 use {
     http_calls::{
-        generate_interim_review_at, generate_phase_judgment_at, http_failure_diagnostic,
-        interim_generation_config,
+        generate_interim_review_at, generate_key_moments_at, generate_phase_judgment_at,
+        http_failure_diagnostic, interim_generation_config,
     },
     report_calls::{
         ReportAttemptFailure, ReportAttemptObserver, ReportAttempts, ReportCalls, ReportOutcome,

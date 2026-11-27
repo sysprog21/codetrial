@@ -14,11 +14,13 @@ use ::livekit::prelude::{DataPacket, Room, RoomEvent};
 use std::time::Duration;
 
 use crate::agent::{
-    ModelInputKind, ReportPromptInput, RuntimeState, final_report, format_test_run,
-    framework_evidence_json, interview_contract_json, report_prompt,
+    KeyMomentsRequest, ModelInputKind, ReportPromptInput, RuntimeState, final_report,
+    format_test_run, framework_evidence_json, interview_contract_json, report_prompt,
     report_system_instruction_for_examples, rolling_assessment, transcript_for_report,
 };
-use crate::gemini::{GeminiKeys, ReportMaterial, generate_report_with_keys};
+use crate::gemini::{
+    GeminiKeys, ReportMaterial, generate_key_moments_with_keys, generate_report_with_keys,
+};
 use crate::runtime::{RuntimeBootstrap, TOPIC_REPORT};
 
 use super::board::ReportBoard;
@@ -67,6 +69,9 @@ pub(super) struct FrozenAssessment {
     state: RuntimeState,
     /// Whether the first generation had an answer refused, for recovery.
     pub refused: std::sync::atomic::AtomicBool,
+    /// The key-moment notes the report asks for beside itself, or `None` when
+    /// the rules picked no moment.
+    key_moments: Option<KeyMomentsRequest>,
 }
 
 impl FrozenAssessment {
@@ -80,6 +85,12 @@ impl FrozenAssessment {
 
     pub(super) fn report_boards(&self) -> Vec<(&str, &[u8])> {
         labeled_boards(&self.boards)
+    }
+
+    /// Keeps the notes the call beside the report returned, which every report
+    /// published from this assessment carries, a regenerated one included.
+    pub(super) fn keep_key_moments(&mut self, notes: Option<serde_json::Value>) {
+        self.state.key_moments.notes = notes;
     }
 }
 
@@ -102,11 +113,55 @@ pub(super) fn freeze_assessment(
         Vec::new()
     };
     let prompt = freeze_report_prompt(boot, state, elapsed_min, !boards.is_empty());
+    let key_moments = crate::agent::key_moments_request(
+        state,
+        boot.problem.variant().title,
+        boot.problem.source_title().unwrap_or(""),
+        crate::agent::session_started_epoch_ms(state, crate::current_epoch_millis()),
+    );
+
+    // Counted as a side call, as the phase judge is: one more request on the
+    // report keys, not a second report.
+    if let Some(request) = &key_moments {
+        state.evidence_ledger.record_model_input(
+            ModelInputKind::Interim,
+            &format!(
+                "{}\n\n{}",
+                crate::agent::key_moments_system_instruction(),
+                request.prompt
+            ),
+        );
+    }
     FrozenAssessment {
         prompt,
         boards,
         state: state.clone(),
         refused: std::sync::atomic::AtomicBool::new(false),
+        key_moments,
+    }
+}
+
+/// The key-moment notes, from one call made beside the report's. Answered with
+/// nothing when there is no moment or the call fails, which leaves the report
+/// without the section and changes nothing else in it.
+pub(super) async fn generate_key_moments(
+    boot: &RuntimeBootstrap<'_>,
+    assessment: &FrozenAssessment,
+    keys: &GeminiKeys,
+) -> Option<serde_json::Value> {
+    let request = assessment.key_moments.as_ref()?;
+    match generate_key_moments_with_keys(keys, boot.report_model, &request.prompt, boot.room_name)
+        .await
+    {
+        Ok(text) => request.apply(&text),
+        Err(error) => {
+            eprintln!(
+                "key moments skipped room={}: {}",
+                boot.room_name,
+                keys.redact(&error.to_string())
+            );
+            None
+        }
     }
 }
 
@@ -803,6 +858,7 @@ pub(super) async fn publish_with_recovery(
         boards,
         mut state,
         refused,
+        key_moments: _,
     } = assessment;
     let refused = refused.into_inner() || refused_report(&generated);
     let again = std::sync::atomic::AtomicBool::new(false);
@@ -998,8 +1054,22 @@ fn report_value(
         ),
     };
     stamp_report_debrief(&mut report, boot, state);
+    stamp_key_moments(&mut report, state);
     stamp_report_contract(&mut report, boot);
     report_with_integrity_events(report, state, reason)
+}
+
+/// The key-moment notes, on a report that has a verdict to sit beside. An
+/// incomplete report says the review could not be written, and notes under it
+/// would read as the review.
+fn stamp_key_moments(report: &mut serde_json::Value, state: &RuntimeState) {
+    let complete = report
+        .get("incomplete")
+        .and_then(serde_json::Value::as_bool)
+        != Some(true);
+    if let Some(notes) = state.key_moments.notes.as_ref().filter(|_| complete) {
+        report["keyMoments"] = notes.clone();
+    }
 }
 
 /// The teaching material that becomes useful only after an interview ends.

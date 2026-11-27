@@ -227,7 +227,7 @@ pub fn take_phase_judge_window(state: &mut RuntimeState, problem: &Problem) -> S
 
 /// Lowercase words, punctuation dropped: a quote is checked for the words the
 /// candidate said, not for how the recognizer punctuated them.
-fn quote_words(text: &str) -> String {
+pub(super) fn quote_words(text: &str) -> String {
     text.chars()
         .map(|c| {
             if c.is_alphanumeric() {

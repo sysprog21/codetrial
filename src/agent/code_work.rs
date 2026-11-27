@@ -22,6 +22,20 @@ pub(super) const MIN_WRITTEN_CHARS: usize = 5;
 /// Cells in the table `changed_characters` fills, a few milliseconds of work.
 pub(super) const MAX_WRITTEN_TABLE: usize = 4_000_000;
 
+/// Code a test run executed; see `RuntimeState::tested_code`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TestedCode {
+    pub language: String,
+    pub code: String,
+}
+
+impl TestedCode {
+    /// The same source the editor holds now, language included.
+    fn is_current(&self, state: &RuntimeState) -> bool {
+        self.language == state.language && self.code == state.code
+    }
+}
+
 /// Whether the editor holds code the candidate wrote.
 ///
 /// The interviewer's say-so is not enough for the phases that are about code.

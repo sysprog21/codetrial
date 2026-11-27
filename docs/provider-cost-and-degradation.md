@@ -452,6 +452,17 @@ a judgment does not cool the key, so the judge cannot leave the final report
 without one, and neither does a rate limit on a peer transcription, which
 shares the report keys with the interviews running beside it.
 
+The report's key moments add at most one call per interview, on the same model
+and keys, made beside the report call from the same frozen state and only when
+the session holds a moment the rules pick: a hint the candidate asked for, the
+first failing run a later run fixed, or the first approach or complexity they
+stated. It is one attempt within the interim call's deadline, with no repair,
+and it reads only the lines within 30 seconds before and 15 seconds after each
+of at most six moments, plus up to 3 KiB of a fixed run's failing code. A
+failure leaves the report without the section and changes nothing else in it.
+A rate limit on it does not cool the key, since the report call beside it
+needs that key.
+
 ## Candidate absence and room lifetime
 
 The agent ends an interview whose candidate has been gone for 90 seconds
@@ -884,10 +895,10 @@ infer an account balance from them.
   `gemini_unreachable` or `billing`. It is written on every exit of the room
   loop, and once with `phase=startup` and no socket count when the interview
   failed before its first turn, a first open that was refused included.
-- `gemini report`, `gemini interim` and `gemini phase` lines carry the room,
+- `gemini report`, `gemini interim`, `gemini phase` and `gemini moments` lines carry the room,
   call number and retry count of each HTTP call. Failures are counted from
   `gemini report transport_failed` (with `final=true` when it was not retried),
-  `interim review skipped` and `phase judge skipped`. A failure before usage is
+  `interim review skipped`, `phase judge skipped` and `key moments skipped`. A failure before usage is
   decoded has unknown cost, never an assumed zero. A successful HTTP response
   with usage but no usable text can log both usage and a failure for the same
   call; do not count that failure as a second request or extra unknown cost.

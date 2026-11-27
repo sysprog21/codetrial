@@ -1156,6 +1156,83 @@ test("practice-next drills render accessibly in HTML and Markdown", () => {
   assert.doesNotMatch(markdown, /Practice this/);
 });
 
+test("key moments render after practice-next in HTML and Markdown", () => {
+  const report = {
+    codingScore: 70,
+    communicationScore: 70,
+    decision: "HIRE",
+    summary: "Grounded",
+    codingFeedback: { strengths: [], improvements: [] },
+    communicationFeedback: { strengths: [], improvements: [] },
+    hintsUsed: 1,
+    improvementPlan: [
+      {
+        phase: "Test",
+        weakness: "Test boundaries",
+        impact: "high",
+        frequency: 2,
+        drill: "Build a test table",
+        durationMin: 10,
+        successCriterion: "Cover four case classes",
+        selfReview: ["Included a boundary"],
+      },
+    ],
+    keyMoments: [
+      {
+        atMs: 280_000,
+        kind: "fixed_run",
+        quote: "three matched <itself>",
+        note: "Look up before you insert.",
+      },
+    ],
+  };
+  const session = {
+    report,
+    problemTitle: "Two Sum",
+    language: "python",
+    code: "pass",
+    transcript: [],
+    at: "now",
+  };
+  const html = reportMarkup(session);
+  const markdown = reportMarkdown(session);
+  assert.match(html, /<h3>Key moments<\/h3>/);
+  assert.match(html, /04:40 · Failing run fixed/);
+  assert.match(html, /three matched &lt;itself&gt;/);
+  assert.ok(html.indexOf("Practice next") < html.indexOf("Key moments"));
+  assert.match(markdown, /## Key moments/);
+  assert.ok(
+    markdown.indexOf("## Practice next") < markdown.indexOf("## Key moments"),
+  );
+  assert.match(
+    markdown,
+    /- \*\*04:40 · Failing run fixed\*\* Look up before you insert\./,
+  );
+  assert.match(markdown, /\n {2}> three matched \\<itself>/);
+  // Each kind under its own label, so a swap of two labels fails here.
+  for (const [kind, label] of [
+    ["hint", "Hint given"],
+    ["hint_withheld", "Hint asked for, none given"],
+    ["fixed_run", "Failing run fixed"],
+    ["approach", "Approach stated"],
+    ["complexity", "Complexity discussed"],
+  ]) {
+    const card = reportMarkup({
+      ...session,
+      report: {
+        ...report,
+        keyMoments: [{ ...report.keyMoments[0], kind }],
+      },
+    });
+    assert.match(card, new RegExp(`04:40 · ${label}</strong>`), kind);
+  }
+  const incomplete = reportMarkup({
+    ...session,
+    report: { ...report, incomplete: true },
+  });
+  assert.doesNotMatch(incomplete, /Key moments/);
+});
+
 test("the report shows the debrief collapsed", () => {
   const body = reportMarkup({
     report: {

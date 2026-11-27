@@ -579,9 +579,7 @@ pub fn record_hint(state: &mut RuntimeState, requested: bool) -> String {
     if clue.is_some() {
         let mark = state.hint_attempt.mark;
         if state.candidate_led_enabled && mark.is_some_and(|mark| !mark.acted_since(state)) {
-            state
-                .evidence_ledger
-                .record_hint(receipt_timestamp_ms, requested, false);
+            state.record_hint_event(receipt_timestamp_ms, requested, false);
             let spoken = phase_judge_open(state)
                 .into_iter()
                 .any(|id| id != phase_id(FrameworkPhase::Coding));
@@ -592,9 +590,7 @@ pub fn record_hint(state: &mut RuntimeState, requested: bool) -> String {
             item.phase == FrameworkPhase::Algorithm && item.kind == EvidenceKind::Observed
         }) || phases_evidenced(state, &[FrameworkPhase::Coding]);
         if last && !approach_stated {
-            state
-                .evidence_ledger
-                .record_hint(receipt_timestamp_ms, requested, false);
+            state.record_hint_event(receipt_timestamp_ms, requested, false);
             return hint_rung_withheld_text(state.hints_used);
         }
     }
@@ -608,21 +604,15 @@ pub fn record_hint(state: &mut RuntimeState, requested: bool) -> String {
             if state.candidate_led_enabled {
                 state.hint_attempt.mark = Some(HintAttemptMark::of(state));
             }
-            state
-                .evidence_ledger
-                .record_hint(receipt_timestamp_ms, requested, true);
+            state.record_hint_event(receipt_timestamp_ms, requested, true);
             hint_rung_text(state.hints_used, state.hint_rungs_given, clue)
         }
         None if requested => {
-            state
-                .evidence_ledger
-                .record_hint(receipt_timestamp_ms, requested, false);
+            state.record_hint_event(receipt_timestamp_ms, requested, false);
             hint_ladder_used_text(state.hints_used)
         }
         None => {
-            state
-                .evidence_ledger
-                .record_hint(receipt_timestamp_ms, requested, true);
+            state.record_hint_event(receipt_timestamp_ms, requested, true);
             log_hint_text(state.hints_used)
         }
     }

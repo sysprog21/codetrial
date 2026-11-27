@@ -1457,3 +1457,5 @@ async fn an_oversized_answer_is_refused_while_it_is_read() {
     );
     server.abort();
 }
+
+include!("key_moment_calls.rs");

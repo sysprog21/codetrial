@@ -569,8 +569,12 @@ async fn finish_interview(
         close_turns(room, context);
         context.transcripts.flush(TRANSCRIPT_FLUSH_LIMIT).await;
     };
+
+    // The key-moment notes are one more call beside the report's, read from the
+    // same frozen state, so they add no wait unless they outlast it.
     let generation = async {
         tokio::join!(
+            report::generate_key_moments(interview.boot, &assessment, api_key),
             generate_report_bounded(
                 interview.boot,
                 &assessment.prompt,
@@ -599,7 +603,7 @@ async fn finish_interview(
     context.media.audio = None;
     context.media.video = None;
     context.media.audio_bytes.clear();
-    let Some((generated, ())) = outcome else {
+    let Some((key_moments, generated, ())) = outcome else {
         eprintln!(
             "candidate skipped the report; discarding it room={}",
             interview.boot.room_name
@@ -620,6 +624,8 @@ async fn finish_interview(
         leave_room(room).await;
         return Ok(ControlFlow::Break(()));
     };
+    let mut assessment = assessment;
+    assessment.keep_key_moments(key_moments);
     let close_live = async {
         if let Err(error) = context.gemini.shutdown().await {
             eprintln!("Gemini close failed ({error}); leaving anyway");
