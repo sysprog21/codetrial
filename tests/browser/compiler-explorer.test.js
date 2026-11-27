@@ -1177,6 +1177,213 @@ test("longest-substring cases reject shortcuts in moving the stretch", () => {
   }
 });
 
+test("merge-intervals cases reject shortcuts in consolidating windows", () => {
+  const sorted = (intervals) =>
+    structuredClone(intervals).sort(([a], [b]) => a - b);
+  // The sorted sweep a right answer makes. Most shortcuts below change only
+  // when a window joins the last kept one or how it extends it.
+  const sweep =
+    (
+      joins = (last, start) => start <= last[1],
+      extend = (last, end) => Math.max(last[1], end),
+    ) =>
+    (intervals) => {
+      const merged = [];
+      for (const [start, end] of sorted(intervals)) {
+        const last = merged.at(-1);
+        if (last && joins(last, start, merged)) {
+          last[1] = extend(last, end, merged);
+        } else {
+          merged.push([start, end]);
+        }
+      }
+      return merged;
+    };
+  const consolidate = sweep();
+  // Absorbs at most `limit` following windows into each kept one, so a
+  // longer chain is cut short.
+  const absorbing = (limit) => (intervals) => {
+    const windows = sorted(intervals);
+    const merged = [];
+    for (let i = 0; i < windows.length; i += 1) {
+      let [start, end] = windows[i];
+      for (let n = 0; n < limit; n += 1) {
+        if (i + 1 < windows.length && windows[i + 1][0] <= end) {
+          i += 1;
+          end = Math.max(end, windows[i][1]);
+        } else {
+          break;
+        }
+      }
+      merged.push([start, end]);
+    }
+    return merged;
+  };
+  // Merges a window with the next one, then skips both, so a merged window
+  // is never compared with the window after it.
+  const onePair = absorbing(1);
+  // Compares each window with the previous input window, not the merged one,
+  // so a window inside an earlier long one starts a window of its own.
+  const previousInput = (intervals) => {
+    const windows = sorted(intervals);
+    const merged = [];
+    windows.forEach(([start, end], i) => {
+      if (i > 0 && start <= windows[i - 1][1]) {
+        merged.at(-1)[1] = Math.max(merged.at(-1)[1], end);
+      } else {
+        merged.push([start, end]);
+      }
+    });
+    return merged;
+  };
+  const twoNeighbours = absorbing(2);
+  // Compares each window with the first merged window, not the last one.
+  const firstMerged = (intervals) => {
+    const merged = [];
+    for (const [start, end] of sorted(intervals)) {
+      if (merged.length > 0 && start <= merged[0][1]) {
+        merged[0][1] = Math.max(merged[0][1], end);
+      } else {
+        merged.push([start, end]);
+      }
+    }
+    return merged;
+  };
+  // Folds each window, in input order, into a kept window it overlaps among
+  // those `candidates` offers, and sorts only the result.
+  const foldUnsorted = (candidates) => (intervals) => {
+    const merged = [];
+    for (const [start, end] of structuredClone(intervals)) {
+      const kept = candidates(merged).find(([a, b]) => start <= b && end >= a);
+      if (kept) {
+        kept[0] = Math.min(kept[0], start);
+        kept[1] = Math.max(kept[1], end);
+      } else {
+        merged.push([start, end]);
+      }
+    }
+    return merged.sort(([a], [b]) => a - b);
+  };
+  // Merges neighbours in input order and sorts only the result, so two
+  // overlapping windows that are apart in the input stay apart.
+  const inputOrder = foldUnsorted((merged) => merged.slice(-1));
+  // Folds each window into the first kept window it overlaps and sorts only
+  // the result, so a window that bridges two kept ones joins just the first.
+  const firstOverlap = foldUnsorted((merged) => merged);
+  // Takes the next window's end without max once a window was kept before
+  // the one being extended, so a window inside the second one shortens it.
+  const noMaxAfterFirst = sweep(undefined, (last, end, merged) =>
+    merged.length > 1 ? end : Math.max(last[1], end),
+  );
+  // Merges touching windows only into the first kept window; later ones need
+  // a real overlap.
+  const touchOnlyFirst = sweep((last, start, merged) =>
+    merged.length > 1 ? start < last[1] : start <= last[1],
+  );
+  // Skips a window whose start equals its end as if it were empty.
+  const skipEmpty = (intervals) =>
+    consolidate(intervals.filter(([start, end]) => start !== end));
+  // Tests the last end for truthiness, so a window ending at 0 is never
+  // extended.
+  const truthyEnd = sweep((last, start) => last[1] && start <= last[1]);
+  // Keeps one end per start and lets a later window overwrite it, so a
+  // shorter window after a longer one at the same start replaces it.
+  const endPerStart = (intervals) => {
+    const endAt = new Map();
+    for (const [start, end] of intervals) endAt.set(start, end);
+    return consolidate([...endAt]);
+  };
+  // Buckets windows by start in a table one slot short of the 0..10^4 range,
+  // so a window starting at 10000 is dropped.
+  const shortTable = (intervals) => {
+    const endAt = new Int32Array(10000).fill(-1);
+    for (const [start, end] of intervals) {
+      if (end > endAt[start]) endAt[start] = end;
+    }
+    const windows = [];
+    endAt.forEach((end, start) => {
+      if (end >= 0) windows.push([start, end]);
+    });
+    return consolidate(windows);
+  };
+  const judge = judges["merge-intervals"];
+  for (const testCase of judge.cases) {
+    assert.ok(
+      checkAnswer(judge, testCase, consolidate(...testCase.input)),
+      `"${testCase.label}" must expect the consolidated windows`,
+    );
+  }
+  for (const [name, shortcut, label] of [
+    [
+      "merging only one neighbouring pair",
+      onePair,
+      "chained overlaps: [[1,3],[2,5],[4,8]]",
+    ],
+    [
+      "comparing with the previous input window",
+      previousInput,
+      "later window inside the first: [[1,10],[2,3],[4,5]]",
+    ],
+    [
+      "absorbing at most two following windows",
+      twoNeighbours,
+      "four windows in one chain: [[1,3],[2,5],[4,8],[7,10]]",
+    ],
+    [
+      "comparing with the first merged window",
+      firstMerged,
+      "overlap after a separate first window: [[1,2],[4,6],[5,7]]",
+    ],
+    [
+      "merging in input order and sorting only the result",
+      inputOrder,
+      "overlapping windows apart in the input: [[1,3],[5,6],[2,4]]",
+    ],
+    [
+      "folding into the first kept window it overlaps",
+      firstOverlap,
+      "window joining two earlier ones: [[1,2],[5,6],[2,5]]",
+    ],
+    [
+      "dropping max once a window was kept before",
+      noMaxAfterFirst,
+      "later window inside a second window: [[1,2],[4,10],[5,6]]",
+    ],
+    [
+      "merging touching windows only into the first",
+      touchOnlyFirst,
+      "touching endpoints after a separate first window: [[1,2],[4,5],[5,6]]",
+    ],
+    [
+      "skipping zero-length windows",
+      skipEmpty,
+      "zero-length and zero-end windows: [[0,0],[0,3],[5,5]]",
+    ],
+    [
+      "testing the last end for truthiness",
+      truthyEnd,
+      "zero-length and zero-end windows: [[0,0],[0,3],[5,5]]",
+    ],
+    [
+      "overwriting the end kept for a start",
+      endPerStart,
+      "longer window first at a shared start: [[1,4],[1,2]]",
+    ],
+    [
+      "sizing the start table one short",
+      shortTable,
+      "window starting at the time limit: [[1,2],[10000,10000]]",
+    ],
+  ]) {
+    const pinned = pinnedCase("merge-intervals", label);
+    assert.equal(
+      checkAnswer(judge, pinned, shortcut(...structuredClone(pinned.input))),
+      false,
+      `"${label}" must reject ${name}`,
+    );
+  }
+});
+
 test("basic-calculator cases reject parsers without a unary minus", () => {
   // One parser for the wrong ones, which differ only in when a "-" that starts
   // a term is read as a sign, and in what that sign negates. `sign` sees the
