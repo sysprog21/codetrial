@@ -704,6 +704,9 @@ async fn dispatch_or_release_consent(
         super::DispatchRefusal::Stopping => {
             "The server is shutting down and is not starting new interviews. Try again later."
         }
+        super::DispatchRefusal::Restarting => {
+            "The server restarts on new keys once the interviews already running have finished. Try again later."
+        }
     };
 
     Some(json_response(

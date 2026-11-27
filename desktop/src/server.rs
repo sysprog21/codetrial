@@ -4,7 +4,7 @@
 //! Nothing here touches the window, so all of it can be tested without one.
 
 use std::collections::VecDeque;
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
@@ -18,6 +18,11 @@ use std::time::{Duration, Instant};
 /// than being refused, and the Setup socket is handed over to the full app
 /// rather than closed. The CLI tests run the real server against this text.
 const BOUND_LINE: &str = "codetrial: open http://";
+
+/// What the server prints once Change keys has saved and nothing is running
+/// any more, for this app to start it again on the new keys. The CLI tests run
+/// the real server against this text too.
+const RESTART_LINE: &str = "codetrial: keys saved and no interview running: restart now";
 
 /// How much of the server's stderr explains an exit. The reason is its last
 /// line; the ones before it are the warnings it printed on the way.
@@ -70,6 +75,9 @@ pub fn cli_config_in(start: &Path) -> Option<PathBuf> {
 pub enum Status {
     /// Listening on `Launch::addr`.
     Ready,
+    /// Asking to be started again: Change keys saved new ones, which only a
+    /// new launch reads, and no interview is running or will start here.
+    Restart,
     /// Gone, and why, in words for the person looking at the window.
     Exited(String),
 }
@@ -130,6 +138,10 @@ fn command(launch: &Launch) -> Command {
         .current_dir(&launch.data_dir)
         .env("CODETRIAL_EXIT_WITH_STDIN", "1")
         .env("CODETRIAL_CHANGE_KEYS_CODE", &launch.change_keys_code)
+        // This app starts the server again when it asks to be, once Change keys
+        // has saved: without this the server keeps serving on its old keys, as
+        // it does for any other program that starts it as a child.
+        .env("CODETRIAL_RESTART_AFTER_SAVE", "1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -144,17 +156,16 @@ fn command(launch: &Launch) -> Command {
     command
 }
 
-/// Starts the server and reports to `report` once: `Ready` and later perhaps
-/// `Exited`, or `Exited` alone. Never `Ready` after `Exited`, so a window that
-/// has been told the server is gone is not sent back to the port.
+/// Starts the server and reports to `report`: `Ready` once, then `Restart` for
+/// every restart line the server prints, then perhaps `Exited`; or `Exited`
+/// alone. `Restart` comes only after `Ready`, and neither comes after
+/// `Exited`, so a window that has been told the server is gone is not sent
+/// back to the port.
 pub fn start(
     launch: &Launch,
     report: impl Fn(Status) + Send + Sync + 'static,
 ) -> Result<Server, String> {
-    let log_path = launch.data_dir.join(SERVER_LOG);
-    let log = Arc::new(Mutex::new(File::create(&log_path).map_err(|error| {
-        format!("cannot write {}: {error}", log_path.display())
-    })?));
+    let log = Arc::new(Mutex::new(open_log(&launch.data_dir)?));
 
     let mut child = command(launch).spawn().map_err(|error| {
         format!(
@@ -191,17 +202,21 @@ pub fn start(
         copiers.push(std::thread::spawn(move || {
             let mut bound = false;
             copy_lines(stdout, &log, |line| {
-                if bound || !line.starts_with(BOUND_LINE) {
+                let status = if !bound && line.starts_with(BOUND_LINE) {
+                    bound = true;
+                    Status::Ready
+                } else if bound && line == RESTART_LINE {
+                    Status::Restart
+                } else {
                     return;
-                }
-                bound = true;
+                };
 
                 // Held across the report: a guard taken in the `if` alone is
                 // dropped before its body runs, and `Exited` could land
                 // between.
                 let finished = finished.lock().expect("report order lock");
                 if !*finished {
-                    report(Status::Ready);
+                    report(status);
                 }
             });
         }));
@@ -264,6 +279,102 @@ impl Server {
             std::thread::sleep(Duration::from_millis(50));
         }
     }
+}
+
+/// The server this app runs, and the restart under way that is replacing it.
+/// One owner for both, so a quit can wait for a server a restart is still
+/// stopping, and for the one that restart starts, instead of exiting while
+/// either still holds the port.
+#[derive(Default)]
+pub struct Slot {
+    server: Mutex<Option<Server>>,
+    replacing: Mutex<Option<std::thread::JoinHandle<()>>>,
+    /// Held from before a server starts until it has been put here.
+    installing: Mutex<()>,
+}
+
+impl Slot {
+    /// Taken before `start` and dropped after `put`, so that what the server
+    /// reports is acted on only once it is here to be stopped. `start` runs its
+    /// reporter threads before it returns the server: a restart asked for in
+    /// that gap would find nothing to stop and start a second one beside it.
+    pub fn installing(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.installing.lock().expect("installing lock")
+    }
+
+    /// Returns once any server being started has been put here. Called first
+    /// by a report, which `installing` holds back until then.
+    pub fn installed(&self) {
+        drop(self.installing());
+    }
+
+    pub fn put(&self, server: Server) {
+        *self.server.lock().expect("server lock") = Some(server);
+    }
+
+    /// Stops the running server and then runs `next`, on a thread of its own:
+    /// the stop can take up to `grace`, and the caller may be the thread
+    /// reading that server's output, which has to keep reading until it is
+    /// gone.
+    pub fn replace(&self, grace: Duration, next: impl FnOnce() + Send + 'static) {
+        // Held while the server is taken and until the thread is recorded, so a
+        // `stop` that finds the server gone also finds the thread to wait for.
+        let mut replacing = self.replacing.lock().expect("replacing lock");
+        let server = self.server.lock().expect("server lock").take();
+        *replacing = Some(std::thread::spawn(move || {
+            if let Some(server) = server {
+                server.stop(grace);
+            }
+            next();
+        }));
+    }
+
+    /// Stops the running server, waits for a restart under way, and stops
+    /// the server that restart started.
+    pub fn stop(&self, grace: Duration) {
+        let running = || self.server.lock().expect("server lock").take();
+        if let Some(server) = running() {
+            server.stop(grace);
+        }
+        let replacing = self.replacing.lock().expect("replacing lock").take();
+        if let Some(replacing) = replacing {
+            let _ = replacing.join();
+        }
+        if let Some(server) = running() {
+            server.stop(grace);
+        }
+    }
+}
+
+/// Empties the server log, once, when the app opens: it then holds what every
+/// server this app ran has printed since, a restart's included.
+pub fn clear_log(data_dir: &Path) -> Result<(), String> {
+    let path = data_dir.join(SERVER_LOG);
+    File::create(&path)
+        .map(drop)
+        .map_err(|error| format!("cannot write {}: {error}", path.display()))
+}
+
+/// A line of this app's own in the server log, where a restart ends one run
+/// and begins the next. Lost, as `note` is, if the log cannot be opened.
+pub fn log_line(data_dir: &Path, line: &str) {
+    if let Ok(mut log) = open_log(data_dir) {
+        let _ = writeln!(log, "{line}");
+    }
+}
+
+/// For appending. A restart opens the log while the old server's output may
+/// still be on its way in: something the server started can hold its pipe
+/// open after it exits, so its copiers cannot be waited for. Appended, every
+/// write lands at the end whichever handle makes it, where emptying the file
+/// under them would leave their next lines past its end, after a run of NULs.
+fn open_log(data_dir: &Path) -> Result<File, String> {
+    let path = data_dir.join(SERVER_LOG);
+    OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .map_err(|error| format!("cannot write {}: {error}", path.display()))
 }
 
 /// Lossy rather than `lines()`, which ends at the first line that is not

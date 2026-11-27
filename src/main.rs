@@ -296,7 +296,12 @@ fn run_web(options: CliOptions) -> Result<(), String> {
     // A child has no terminal anyone reads, so the code Change keys asks for is
     // the one its launcher handed over, if any.
     let launched_by = if codetrial::exit_when_stdin_closes() {
-        LaunchedBy::Parent(codetrial::handed_change_keys_code())
+        let code = codetrial::handed_change_keys_code();
+        if codetrial::handed_restart_after_save() {
+            LaunchedBy::RestartingParent(code)
+        } else {
+            LaunchedBy::Parent(code)
+        }
     } else {
         LaunchedBy::Operator
     };

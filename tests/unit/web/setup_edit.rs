@@ -120,6 +120,7 @@ fn only_a_loopback_launch_with_a_code_and_without_a_proxy_may_change_keys() {
             BTreeMap::new(),
             bound.parse().unwrap(),
             standalone.then(|| "code".to_string()),
+            AfterSave::Operator,
             hops,
         )
     };
@@ -224,6 +225,14 @@ impl Server {
     /// A running server whose config names the LiveKit project at `livekit`
     /// with keys that project refuses, so a save has to bring the new pair.
     async fn start(livekit: &str, dispatcher: Option<Arc<dyn RoomDispatcher>>) -> Self {
+        Self::start_after(livekit, dispatcher, AfterSave::Operator).await
+    }
+
+    async fn start_after(
+        livekit: &str,
+        dispatcher: Option<Arc<dyn RoomDispatcher>>,
+        after_save: AfterSave,
+    ) -> Self {
         let scratch = Scratch::new();
         let contents = format!(
             "# keep this\nLIVEKIT_URL={livekit}\nLIVEKIT_API_KEY=old-key\n\
@@ -236,8 +245,15 @@ impl Server {
             .unwrap()
             .into_iter()
             .collect();
-        let context =
-            SetupContext::new(path.clone(), values, bound, Some("code".to_string()), 0).unwrap();
+        let context = SetupContext::new(
+            path.clone(),
+            values,
+            bound,
+            Some("code".to_string()),
+            after_save,
+            0,
+        )
+        .unwrap();
         let code = context.code().to_string();
         let config = super::super::WebServerConfig {
             web_dir: PathBuf::new(),
@@ -357,6 +373,7 @@ async fn change_keys_answers_only_its_loopback_host_and_code() {
             "livekitEndpoint": livekit,
             "googleApiKey": false,
             "restartPending": false,
+            "appRestarts": false,
         })
     );
     for body in [
@@ -412,7 +429,13 @@ async fn a_save_writes_only_the_new_keys_and_this_process_keeps_the_old_ones() {
             "livekitApiSecret": NEW_SECRET,
         }))
         .await;
-    assert_eq!((status, body), (StatusCode::OK, json!({ "saved": true })));
+    assert_eq!(
+        (status, body),
+        (
+            StatusCode::OK,
+            json!({ "saved": true, "appRestarts": false })
+        )
+    );
     assert_eq!(
         std::fs::read_to_string(&server.path).unwrap(),
         format!(
@@ -534,6 +557,251 @@ async fn an_edit_saved_while_the_keys_are_checked_is_kept() {
         server.contents.replace("keep-session", "edited-session")
     );
     assert_eq!(std::fs::read_dir(&server.scratch.0).unwrap().count(), 1);
+}
+
+/// Running nothing until told otherwise, and remembering whether admission
+/// was closed.
+#[derive(Default)]
+struct Closable {
+    busy: std::sync::atomic::AtomicBool,
+    closed: std::sync::atomic::AtomicBool,
+    /// Whether it was closed for a restart, which a start is refused with its
+    /// own words for.
+    restarting: std::sync::atomic::AtomicBool,
+}
+
+impl RoomDispatcher for Closable {
+    fn is_idle(&self) -> bool {
+        !self.busy.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    fn close_admission(&self) {
+        self.closed.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    fn close_admission_for_restart(&self) {
+        self.close_admission();
+        self.restarting
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    fn supports_guest_admission(&self) -> bool {
+        Idle.supports_guest_admission()
+    }
+
+    fn ensure_agent(
+        &self,
+        room: &str,
+        provider: &Provider,
+        job: super::super::AgentJob,
+    ) -> Result<(), super::super::DispatchRefusal> {
+        Idle.ensure_agent(room, provider, job)
+    }
+
+    fn ensure_guest_agent(
+        &self,
+        room: &str,
+        provider: &Provider,
+        candidate: &str,
+    ) -> Result<(), super::super::DispatchRefusal> {
+        Idle.ensure_guest_agent(room, provider, candidate)
+    }
+}
+
+/// The desktop app restarts its child as soon as a save is announced, so that
+/// child stops admitting interviews at the save. A server the operator
+/// restarts by hand keeps admitting them on the keys it runs on.
+#[tokio::test]
+async fn only_a_launchers_child_stops_admitting_interviews_once_it_saves() {
+    let (livekit, _livekit) = livekit().await;
+    for (after_save, closes) in [(AfterSave::Launcher, true), (AfterSave::Operator, false)] {
+        let dispatcher = Arc::new(Closable::default());
+        let server = Server::start_after(
+            &livekit,
+            Some(Arc::clone(&dispatcher) as Arc<dyn RoomDispatcher>),
+            after_save,
+        )
+        .await;
+        let (status, body) = server
+            .save(json!({
+                "code": server.code,
+                "livekitApiKey": NEW_KEY,
+                "livekitApiSecret": NEW_SECRET,
+            }))
+            .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["appRestarts"], closes);
+        assert_eq!(server.summary().await["appRestarts"], closes);
+        let closed = || dispatcher.closed.load(std::sync::atomic::Ordering::SeqCst);
+        let began = std::time::Instant::now();
+        while !closed() && began.elapsed() < std::time::Duration::from_secs(2) {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert_eq!(closed(), closes);
+
+        // Closed for the restart, not as for a stop: a candidate who starts an
+        // interview meanwhile is told the server is coming back.
+        assert_eq!(
+            dispatcher
+                .restarting
+                .load(std::sync::atomic::Ordering::SeqCst),
+            closes
+        );
+    }
+}
+
+/// A config file edited by hand is a restart pending that nothing schedules: a
+/// launcher's child says the app restarts it only once a save here has asked
+/// for that, so the page keeps telling the person to restart it themselves.
+#[tokio::test]
+async fn a_config_edited_by_hand_keeps_the_restart_by_hand_notice() {
+    let (livekit, _livekit) = livekit().await;
+    let dispatcher = Arc::new(Closable::default());
+    let server = Server::start_after(
+        &livekit,
+        Some(Arc::clone(&dispatcher) as Arc<dyn RoomDispatcher>),
+        AfterSave::Launcher,
+    )
+    .await;
+    assert_eq!(server.summary().await["appRestarts"], false);
+
+    std::fs::write(
+        &server.path,
+        format!("{}# added by hand\n", server.contents),
+    )
+    .unwrap();
+    let summary = server.summary().await;
+    assert_eq!(summary["restartPending"], true);
+    assert_eq!(summary["appRestarts"], false);
+    assert!(!dispatcher.closed.load(std::sync::atomic::Ordering::SeqCst));
+}
+
+/// A launcher's child without an interviewer of its own never asks for the
+/// restart, so its page tells the person to restart it by hand.
+#[tokio::test]
+async fn a_launchers_child_without_an_interviewer_says_it_is_restarted_by_hand() {
+    let (livekit, _livekit) = livekit().await;
+    let server = Server::start_after(&livekit, None, AfterSave::Launcher).await;
+    assert_eq!(server.summary().await["appRestarts"], false);
+    let (status, body) = server
+        .save(json!({
+            "code": server.code,
+            "livekitApiKey": NEW_KEY,
+            "livekitApiSecret": NEW_SECRET,
+        }))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["appRestarts"], false);
+}
+
+/// An interview admitted between the save's own check and the close still runs
+/// to its end, report included, before the restart is announced.
+#[tokio::test(start_paused = true)]
+async fn the_restart_waits_for_an_interview_admitted_before_the_close() {
+    let dispatcher = Closable::default();
+    dispatcher
+        .busy
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let (sent, gone_out) = oneshot::channel();
+    sent.send(()).unwrap();
+    let drained = drain(&dispatcher, gone_out);
+    tokio::pin!(drained);
+    let hour = std::time::Duration::from_secs(3600);
+    assert!(tokio::time::timeout(hour, &mut drained).await.is_err());
+    assert!(dispatcher.closed.load(std::sync::atomic::Ordering::SeqCst));
+
+    dispatcher
+        .busy
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    tokio::time::timeout(std::time::Duration::from_secs(1), drained)
+        .await
+        .unwrap();
+}
+
+/// The launcher closes the server's stdin as soon as it reads the restart line,
+/// so the line waits for the save's response to have gone out, however idle the
+/// server already is. Admission closes at once all the same.
+#[tokio::test(start_paused = true)]
+async fn the_restart_waits_for_the_save_response_to_go_out() {
+    let dispatcher = Closable::default();
+    let (sent, gone_out) = oneshot::channel();
+    let drained = drain(&dispatcher, gone_out);
+    tokio::pin!(drained);
+    let hour = std::time::Duration::from_secs(3600);
+    assert!(tokio::time::timeout(hour, &mut drained).await.is_err());
+    assert!(dispatcher.closed.load(std::sync::atomic::Ordering::SeqCst));
+
+    sent.send(()).unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(1), drained)
+        .await
+        .unwrap();
+}
+
+/// The response goes out whole, with its length, and its receiver has a value
+/// only once the transport has taken the body and asked for its end: not while
+/// the body is still waiting to be read.
+#[tokio::test]
+async fn the_sent_signal_comes_after_the_body_is_read_out() {
+    let response = json_response(StatusCode::OK, json!({ "saved": true }));
+    let (response, mut sent) = sent_signal(response).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers().get(header::CONTENT_LENGTH).unwrap(),
+        "14"
+    );
+    assert!(sent.try_recv().is_err(), "nothing has been read yet");
+
+    let body = axum::body::to_bytes(response.into_body(), 1024)
+        .await
+        .unwrap();
+    assert_eq!(body.as_ref(), br#"{"saved":true}"#);
+    assert!(sent.try_recv().is_ok(), "the body has been read out");
+}
+
+/// A client that leaves before reading the response does not hold the restart
+/// back: nothing more of it is coming.
+#[tokio::test]
+async fn the_sent_signal_also_comes_when_the_response_is_dropped_unread() {
+    let (response, mut sent) =
+        sent_signal(json_response(StatusCode::OK, json!({ "saved": true }))).await;
+    assert!(sent.try_recv().is_err());
+    drop(response);
+    assert!(sent.try_recv().is_ok());
+}
+
+/// A refused save leaves a launcher's child admitting interviews on the keys
+/// it runs on: only a save that wrote new keys has anything to restart onto.
+#[tokio::test]
+async fn a_launchers_child_keeps_admitting_interviews_after_a_refused_save() {
+    let (livekit, _livekit) = livekit().await;
+    let dispatcher = Arc::new(Closable::default());
+    let server = Server::start_after(
+        &livekit,
+        Some(Arc::clone(&dispatcher) as Arc<dyn RoomDispatcher>),
+        AfterSave::Launcher,
+    )
+    .await;
+    for (body, refused) in [
+        (
+            json!({ "code": "wrong", "livekitApiKey": NEW_KEY, "livekitApiSecret": NEW_SECRET }),
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            json!({ "code": server.code, "livekitApiKey": "old-key" }),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            json!({ "code": server.code, "livekitApiKey": NEW_KEY, "livekitApiSecret": "wrong" }),
+            StatusCode::BAD_REQUEST,
+        ),
+    ] {
+        let (status, error) = server.save(body).await;
+        assert_eq!(status, refused, "{error}");
+    }
+    // Time for a close spawned by any of them to have run.
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    assert!(!dispatcher.closed.load(std::sync::atomic::Ordering::SeqCst));
+    server.unchanged();
 }
 
 #[cfg(windows)]

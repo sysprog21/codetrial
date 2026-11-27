@@ -223,12 +223,34 @@ async fn change_keys_rewrites_the_config_the_launch_read() {
 
 /// Change keys for a launcher's child, as the desktop app starts it: the code
 /// comes in `CODETRIAL_CHANGE_KEYS_CODE`, a save with it rewrites the config,
-/// and the code never reaches stdout, which the app writes to a log file.
+/// and the code never reaches stdout, which the app writes to a log file. What
+/// does reach it after the save is the line the app restarts the child on.
 #[test]
 fn a_child_saves_with_the_code_its_launcher_handed_over_and_never_prints_it() {
+    save_as_a_child("GOOGLE_API_KEY=old-google\n", true, true);
+}
+
+/// A program that starts the server as its child and hands over a code, but
+/// has not said it restarts the child, keeps a server that serves on its old
+/// keys after the save, as before: it never closes admission for a restart
+/// that no one performs.
+#[test]
+fn a_child_whose_launcher_does_not_restart_it_never_asks_for_one() {
+    save_as_a_child("GOOGLE_API_KEY=old-google\n", false, false);
+}
+
+/// A child without a Google key serves interviews hosted elsewhere, which it
+/// cannot see, so it never says that none is running: the person restarts it.
+#[test]
+fn a_child_without_an_interviewer_of_its_own_never_asks_for_a_restart() {
+    save_as_a_child("", true, false);
+}
+
+fn save_as_a_child(google: &str, opts_in: bool, restarts: bool) {
     use std::io::{BufRead, BufReader};
 
     const CODE: &str = "0123456789abcdef0123456789abcdef";
+    const RESTART: &str = "codetrial: keys saved and no interview running: restart now";
     let dir = exe_temp_path("change-keys-child");
     std::fs::create_dir_all(&dir).unwrap();
     let exe = binary_beside(&dir);
@@ -238,7 +260,7 @@ fn a_child_saves_with_the_code_its_launcher_handed_over_and_never_prints_it() {
     let contents = |livekit_key: &str| {
         format!(
             "LIVEKIT_URL=http://{livekit}\nLIVEKIT_API_KEY={livekit_key}\n\
-             LIVEKIT_API_SECRET=secret\n"
+             LIVEKIT_API_SECRET=secret\n{google}"
         )
     };
     std::fs::write(&config, contents("old-key")).unwrap();
@@ -257,37 +279,72 @@ fn a_child_saves_with_the_code_its_launcher_handed_over_and_never_prints_it() {
             .env("CODETRIAL_CHANGE_KEYS_CODE", CODE)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped());
+        if opts_in {
+            command.env("CODETRIAL_RESTART_AFTER_SAVE", "1");
+        }
         command
     });
     let stdout = server.stdout.take().unwrap();
-    let lines = thread::spawn(move || {
-        BufReader::new(stdout)
-            .lines()
-            .map_while(Result::ok)
-            .collect::<Vec<_>>()
+    let (sender, lines) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            let _ = sender.send(line);
+        }
     });
 
     let save = |code: &str| {
         let body = format!(r#"{{"code":"{code}","livekitApiKey":"new-key"}}"#);
-        http_request(
-            &addr,
-            &format!(
-                "POST /api/setup HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\n\
-                 Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
-            ),
+        format!(
+            "POST /api/setup HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\n\
+             Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
         )
     };
-    let refused = save("ffffffffffffffffffffffffffffffff");
-    let saved = save(CODE);
+    let refused = http_request(&addr, &save("ffffffffffffffffffffffffffffffff"));
+
+    // Sent from a thread of its own while this one plays the launcher, which
+    // closes the server's stdin, and so ends it, the moment the restart line
+    // arrives: the response has to be out by then.
+    let saving = {
+        let (addr, request) = (addr.clone(), save(CODE));
+        thread::spawn(move || http_request(&addr, &request))
+    };
+
+    // Printed once nothing is running, which here is at once. Where it never
+    // comes, a quiet wait as long as it would take is what shows that.
+    let quiet = Duration::from_secs(if restarts { 10 } else { 2 });
+    let mut printed = Vec::new();
+    while let Ok(line) = lines.recv_timeout(quiet) {
+        let restart = line == RESTART;
+        printed.push(line);
+        if restart {
+            drop(server.stdin.take());
+            break;
+        }
+    }
+    let saved = saving
+        .join()
+        .expect("the save was answered before the server ended");
     let written = std::fs::read_to_string(&config).unwrap();
     drop(server);
-    let printed = lines.join().unwrap();
+    printed.extend(lines.try_iter());
     let _ = std::fs::remove_dir_all(&dir);
 
     assert!(refused.starts_with("HTTP/1.1 403"), "{refused}");
     assert!(saved.starts_with("HTTP/1.1 200 OK"), "{saved}");
+
+    // Whole, however the server frames it, though the launcher ended the server
+    // on the restart line: that line waits for this to have gone out.
+    assert!(
+        saved.ends_with(&format!(r#"{{"appRestarts":{restarts},"saved":true}}"#)),
+        "{saved}"
+    );
     assert_eq!(written, contents("new-key"));
+    assert_eq!(
+        printed.iter().any(|line| line == RESTART),
+        restarts,
+        "{printed:?}"
+    );
     assert!(
         printed.iter().all(|line| !line.contains(CODE)),
         "{printed:?}"

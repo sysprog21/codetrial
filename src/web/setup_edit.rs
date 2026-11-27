@@ -9,14 +9,40 @@ use std::fs::File;
 use std::io::Write;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::task::{Context, Poll};
 
 use axum::Json;
+use axum::body::{Body, Bytes};
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use serde_json::{Value, json};
+use tokio::sync::oneshot;
 
 use super::{AppState, RoomDispatcher, json_response};
+
+/// What a launcher's child prints once a save has rewritten its config, its
+/// response has gone out and no interview is left running, for the launcher to
+/// restart it on the new keys.
+const RESTART_LINE: &str = "codetrial: keys saved and no interview running: restart now";
+
+/// Who restarts the server onto keys a save wrote.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AfterSave {
+    /// The operator, by hand and whenever they choose. Until then the server
+    /// admits interviews on the keys it started with.
+    Operator,
+    /// The launcher that owns this child and said, in
+    /// `CODETRIAL_RESTART_AFTER_SAVE`, that it restarts it: as soon as it reads
+    /// `RESTART_LINE`. Interviews that were already admitted finish first, and
+    /// no new one is admitted in the meantime, so the restart cuts nothing off.
+    /// Only a child that hosts its interviewer prints it: one without sees none
+    /// of the interviews hosted elsewhere, so it is restarted by hand, as an
+    /// operator's is, and so is the child of a launcher that did not say so.
+    Launcher,
+}
 
 /// What Change keys needs of the launch serving it. No `Debug`: it holds keys.
 pub struct SetupContext {
@@ -27,6 +53,11 @@ pub struct SetupContext {
     values: BTreeMap<String, String>,
     port: u16,
     code: String,
+    after_save: AfterSave,
+    /// Set by the save that scheduled the launcher's restart, and by nothing
+    /// else: a hand edit of the config file makes a restart pending too, but no
+    /// restart comes of it.
+    restart_scheduled: AtomicBool,
     /// One save at a time. The next one finds the file changed and is refused.
     saving: tokio::sync::Mutex<()>,
 }
@@ -51,6 +82,7 @@ impl SetupContext {
         values: BTreeMap<String, String>,
         bound: SocketAddr,
         code: Option<String>,
+        after_save: AfterSave,
         trusted_proxy_hops: u32,
     ) -> Option<Self> {
         let code = code.filter(|_| bound.ip().is_loopback() && trusted_proxy_hops == 0)?;
@@ -61,6 +93,8 @@ impl SetupContext {
             values,
             port: bound.port(),
             code,
+            after_save,
+            restart_scheduled: AtomicBool::new(false),
             saving: tokio::sync::Mutex::new(()),
         })
     }
@@ -68,6 +102,31 @@ impl SetupContext {
     /// For `run_web` to print, and for nothing else.
     pub fn code(&self) -> &str {
         &self.code
+    }
+
+    /// Who restarts the server after a save, as the launch decided it.
+    pub fn after_save(&self) -> AfterSave {
+        self.after_save
+    }
+
+    /// Whether a save here has scheduled the launcher's restart, so the page
+    /// says the app restarts the server rather than asking the person to. Not
+    /// whether this server would be restarted after a save: a config file
+    /// edited by hand is a restart pending that nothing schedules.
+    fn app_restarts(&self) -> bool {
+        self.restart_scheduled.load(Ordering::SeqCst)
+    }
+
+    /// Records, for the save that succeeded, that the launcher restarts this
+    /// server, and says so. Only a launcher's child that hosts its interviewer
+    /// does: one without sees none of the interviews hosted elsewhere, so it is
+    /// restarted by hand, as an operator's is.
+    fn schedule_restart(&self, dispatcher: Option<&dyn RoomDispatcher>) -> bool {
+        let schedules = self.after_save == AfterSave::Launcher && dispatcher.is_some();
+        if schedules {
+            self.restart_scheduled.store(true, Ordering::SeqCst);
+        }
+        schedules
     }
 
     /// What the page may show of the running config. Never a key.
@@ -78,6 +137,7 @@ impl SetupContext {
             "livekitEndpoint": super::setup::public_endpoint(value("LIVEKIT_URL")),
             "googleApiKey": !value("GOOGLE_API_KEY").is_empty() || !value("GOOGLE_API_KEYS").is_empty(),
             "restartPending": regular_file(&self.path).as_deref() != Some(self.contents.as_str()),
+            "appRestarts": self.app_restarts(),
         })
     }
 
@@ -188,7 +248,10 @@ impl SetupContext {
                 json!({ "error": format!("could not write {}: {error}", self.path.display()) }),
             );
         }
-        json_response(StatusCode::OK, json!({ "saved": true }))
+        json_response(
+            StatusCode::OK,
+            json!({ "saved": true, "appRestarts": self.schedule_restart(dispatcher) }),
+        )
     }
 }
 
@@ -361,9 +424,98 @@ pub(super) async fn save_handler(
     headers: HeaderMap,
     Json(submission): Json<Value>,
 ) -> Response {
-    match allowed(&state, &headers) {
-        Ok(context) => context.save(&submission, state.dispatcher.as_deref()).await,
-        Err(refusal) => refusal,
+    let context = match allowed(&state, &headers) {
+        Ok(context) => context,
+        Err(refusal) => return refusal,
+    };
+    let response = context.save(&submission, state.dispatcher.as_deref()).await;
+    if response.status() == StatusCode::OK
+        && context.app_restarts()
+        && let Some(dispatcher) = state.dispatcher.clone()
+    {
+        // The save refused while anything ran, but an interview can be admitted
+        // between that check and this one. The launcher closes this server's
+        // stdin as soon as it reads the line, so the line waits for the
+        // response to have gone out: the person's page is told the save worked.
+        let (response, sent) = sent_signal(response).await;
+        tokio::spawn(async move {
+            drain(&*dispatcher, sent).await;
+            let _ = writeln!(std::io::stdout(), "{RESTART_LINE}");
+        });
+        return response;
+    }
+    response
+}
+
+/// Returns once `dispatcher` admits nothing new, `sent` says the save's
+/// response has gone out, and nothing it admitted is still running, report
+/// included.
+async fn drain(dispatcher: &dyn RoomDispatcher, sent: oneshot::Receiver<()>) {
+    dispatcher.close_admission_for_restart();
+
+    // Dropped unsent is as good as sent: the client left, and nothing more of
+    // the response is coming.
+    let _ = sent.await;
+    while !dispatcher.is_idle() {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}
+
+/// The response and a receiver that has a value once the transport has taken
+/// the whole body, or dropped it.
+///
+/// The body is read out first, which is small JSON this module made, so it can
+/// be handed on as one chunk that reports when the end of the stream is polled:
+/// hyper asks for the next chunk after it has written the last.
+async fn sent_signal(response: Response) -> (Response, oneshot::Receiver<()>) {
+    let (mut parts, body) = response.into_parts();
+    // An error here cannot come of a body that is already in memory.
+    let bytes = axum::body::to_bytes(body, 64 * 1024)
+        .await
+        .unwrap_or_default();
+    parts
+        .headers
+        .insert(header::CONTENT_LENGTH, bytes.len().into());
+    let (sender, receiver) = oneshot::channel();
+    let body = Body::from_stream(UntilSent {
+        body: Some(bytes),
+        sent: Some(sender),
+    });
+    (Response::from_parts(parts, body), receiver)
+}
+
+/// A body of one chunk that tells `sent` once the chunk has been taken and the
+/// end of the stream is asked for, or when it is dropped first.
+struct UntilSent {
+    body: Option<Bytes>,
+    sent: Option<oneshot::Sender<()>>,
+}
+
+impl UntilSent {
+    fn tell(&mut self) {
+        if let Some(sent) = self.sent.take() {
+            let _ = sent.send(());
+        }
+    }
+}
+
+impl futures_util::Stream for UntilSent {
+    type Item = Result<Bytes, std::convert::Infallible>;
+
+    fn poll_next(mut self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        match self.body.take() {
+            Some(bytes) => Poll::Ready(Some(Ok(bytes))),
+            None => {
+                self.tell();
+                Poll::Ready(None)
+            }
+        }
+    }
+}
+
+impl Drop for UntilSent {
+    fn drop(&mut self) {
+        self.tell();
     }
 }
 

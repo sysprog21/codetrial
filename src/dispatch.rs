@@ -32,6 +32,9 @@ pub struct DispatchState {
     /// Set once by `close_admission`: no new room is admitted after it, under
     /// the same lock that decides every admission and `is_idle`.
     closed: bool,
+    /// Set with `closed` by `close_admission_for_restart`, so a refused start
+    /// says the server is coming back rather than that it is shutting down.
+    restarting: bool,
 }
 
 struct Start {
@@ -139,11 +142,18 @@ impl RoomDispatcher for LocalDispatcher {
         true
     }
 
+    /// Also after a close for a restart: a quit that follows one is a shutdown,
+    /// and the last close decides what a refused start is told.
     fn close_admission(&self) {
-        self.state
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .closed = true;
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        state.closed = true;
+        state.restarting = false;
+    }
+
+    fn close_admission_for_restart(&self) {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        state.closed = true;
+        state.restarting = true;
     }
 
     fn candidate_video(&self) -> Option<bool> {
@@ -246,7 +256,7 @@ impl LocalDispatcher {
             }
             Reservation::Closed => {
                 eprintln!("codetrial dispatch_refused room={room_name} reason=closed");
-                return Err(DispatchRefusal::Stopping);
+                return Err(self.closed_refusal());
             }
             Reservation::New(slot) => slot,
         };
@@ -386,6 +396,18 @@ enum Reservation {
 }
 
 impl LocalDispatcher {
+    /// What a start refused after `close_admission` is told: that the server is
+    /// coming back on new keys when a restart closed it, and that it is
+    /// stopping otherwise.
+    fn closed_refusal(&self) -> DispatchRefusal {
+        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        if state.restarting {
+            DispatchRefusal::Restarting
+        } else {
+            DispatchRefusal::Stopping
+        }
+    }
+
     #[cfg(test)]
     fn reserve_with_kind(&self, room_name: &str, guest: bool) -> Reservation {
         self.reserve_for(room_name, guest, None, None)

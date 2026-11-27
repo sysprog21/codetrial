@@ -53,7 +53,7 @@ pub use recordings::READ_RATE_LIMIT;
 const PEER_RATE_LIMIT: u32 = 120;
 const PEER_SNAPSHOT_RATE_LIMIT: u32 = 30;
 pub use setup::{config_from_values, setup_service};
-pub use setup_edit::SetupContext;
+pub use setup_edit::{AfterSave, SetupContext};
 pub use token::{TOKEN_RATE_LIMIT, TokenConfig, TokenResponse, token_response};
 
 pub const MAX_BODY_BYTES: usize = 8 * 1024;
@@ -858,6 +858,14 @@ pub trait RoomDispatcher: Send + Sync + 'static {
     /// bounds its stop waits out the whole bound and reports rooms running.
     fn close_admission(&self) {}
 
+    /// `close_admission` for a restart that follows, which a launcher asked for
+    /// after Change keys saved: a start refused meanwhile is told the server is
+    /// restarting rather than shutting down. A dispatcher that cannot tell the
+    /// two apart closes as it does for a stop.
+    fn close_admission_for_restart(&self) {
+        self.close_admission();
+    }
+
     fn ensure_guest_agent(
         &self,
         _room_name: &str,
@@ -884,12 +892,14 @@ pub enum AgentJob {
 /// Why no interviewer will come. Each answers the candidate differently: a
 /// full server frees up as any interview ends, a finalizing room only when its
 /// own report is out, and a stopping server not until it is started again.
+/// A restarting one is back within moments.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DispatchRefusal {
     AtCapacity,
     TooManyWaiting,
     Finalizing,
     Stopping,
+    Restarting,
 }
 
 pub fn web_service(config: WebServerConfig) -> IntoMakeServiceWithConnectInfo<Router, SocketAddr> {

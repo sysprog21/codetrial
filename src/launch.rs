@@ -863,10 +863,16 @@ pub fn prepare(
 /// Who started this server. An operator who started it is offered Change keys
 /// with a code made here; a launcher that owns it (the desktop app, a test
 /// fixture) offers it only with the code it handed its child, carried here.
-/// No `Debug`: `Parent` carries that code.
+/// No `Debug`: a parent carries that code.
 #[derive(Clone, PartialEq, Eq)]
 pub enum LaunchedBy {
+    /// A launcher that does not restart its child: after Change keys saves the
+    /// server keeps serving on the keys it started with until it is restarted
+    /// by hand, as an operator's is.
     Parent(Option<String>),
+    /// A launcher that said in `CODETRIAL_RESTART_AFTER_SAVE` that it restarts
+    /// its child when asked to, which only the desktop app does.
+    RestartingParent(Option<String>),
     Operator,
 }
 
@@ -874,7 +880,7 @@ pub enum LaunchedBy {
 /// the one the desktop app made and handed its child. A child given none gets
 /// no Change keys.
 fn change_keys_code(launched_by: &LaunchedBy) -> Result<Option<String>, String> {
-    if let LaunchedBy::Parent(code) = launched_by {
+    if let LaunchedBy::Parent(code) | LaunchedBy::RestartingParent(code) = launched_by {
         return Ok(code.clone());
     }
     crate::accounts::random_token(18)
@@ -900,6 +906,10 @@ pub fn finish(
         values.clone(),
         bound,
         change_keys_code(&launched_by)?,
+        match launched_by {
+            LaunchedBy::RestartingParent(_) => crate::web::AfterSave::Launcher,
+            LaunchedBy::Parent(_) | LaunchedBy::Operator => crate::web::AfterSave::Operator,
+        },
         config.trusted_proxy_hops,
     );
     // Same reason `serve_setup` prints this: say where to go.

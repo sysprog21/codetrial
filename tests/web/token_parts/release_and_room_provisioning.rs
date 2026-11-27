@@ -94,6 +94,56 @@ impl RoomDispatcher for OrderRecordingDispatcher {
     }
 }
 
+/// Refuses every start with the reason it was built with.
+struct RefusingDispatcher(DispatchRefusal);
+
+impl RoomDispatcher for RefusingDispatcher {
+    fn ensure_agent(
+        &self,
+        _room_name: &str,
+        _provider: &codetrial::config::Provider,
+        _job: codetrial::web::AgentJob,
+    ) -> Result<(), DispatchRefusal> {
+        Err(self.0)
+    }
+}
+
+/// A candidate who starts an interview while the server restarts on new keys
+/// is told that, with a retry-in-a-moment, and one who starts it on a server
+/// that is stopping is told it is shutting down.
+#[tokio::test]
+async fn a_start_refused_for_a_restart_says_the_server_is_restarting() {
+    for (refusal, wanted) in [
+        (
+            DispatchRefusal::Restarting,
+            "The server restarts on new keys once the interviews already running have finished. Try again later.",
+        ),
+        (
+            DispatchRefusal::Stopping,
+            "The server is shutting down and is not starting new interviews. Try again later.",
+        ),
+    ] {
+        let (config, cookie, db_path) = signed_in_web_config("refused-start-message");
+        let (base, server) = spawn_web_server_with_dispatcher(
+            config,
+            std::sync::Arc::new(RefusingDispatcher(refusal)),
+        )
+        .await;
+        let response = http_client()
+            .post(format!("{base}/api/token"))
+            .header("cookie", &cookie)
+            .json(&json!({"problemId":"two-sum","durationMin":45}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 503, "{refusal:?}");
+        let body: Value = response.json().await.unwrap();
+        assert_eq!(body["error"], wanted, "{refusal:?}");
+        server.shutdown().await;
+        remove_database(db_path).await;
+    }
+}
+
 /// A LiveKit RoomService that logs each CreateRoom body into `events` and
 /// answers with `status`. Returns the `ws://` URL a provider would be
 /// configured with.

@@ -46,8 +46,9 @@ fn the_server_is_started_on_the_data_dir_and_told_the_rest() {
     );
     assert_eq!(command.get_current_dir(), Some(Path::new("/data")));
 
-    // The pipe and the Change keys code are the two things it is told through
-    // the environment, which a `--data-dir` launch reads no configuration from.
+    // The pipe, the Change keys code and that this app restarts the server when
+    // asked to are what it is told through the environment, which a
+    // `--data-dir` launch reads no configuration from.
     let env = |key: &str| {
         command
             .get_envs()
@@ -55,9 +56,10 @@ fn the_server_is_started_on_the_data_dir_and_told_the_rest() {
             .and_then(|(_, value)| value)
             .map(|value| value.to_string_lossy().into_owned())
     };
-    assert_eq!(command.get_envs().count(), 2);
+    assert_eq!(command.get_envs().count(), 3);
     assert_eq!(env("CODETRIAL_EXIT_WITH_STDIN").as_deref(), Some("1"));
     assert_eq!(env("CODETRIAL_CHANGE_KEYS_CODE").as_deref(), Some(CODE));
+    assert_eq!(env("CODETRIAL_RESTART_AFTER_SAVE").as_deref(), Some("1"));
 }
 
 #[test]
@@ -226,6 +228,227 @@ fn a_server_is_ready_once_bound_and_stops_when_its_stdin_closes() {
 
     // An exit the app asked for is not news to report.
     assert!(received.recv_timeout(Duration::from_millis(500)).is_err());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A restart asked for after the server is ready, and only then: the same line
+/// before it is not one this server printed.
+#[cfg(unix)]
+#[test]
+fn a_server_asks_to_restart_once_change_keys_has_saved() {
+    let dir = temp_dir("restart");
+    let (sender, received) = mpsc::channel();
+    let sender = Mutex::new(sender);
+    let server = start_fake(
+        &dir,
+        "echo 'codetrial: keys saved and no interview running: restart now'\n\
+         echo 'codetrial: open http://127.0.0.1:9 in your browser'\n\
+         echo 'codetrial: keys saved and no interview running: restart now'\n\
+         cat >/dev/null",
+        move |status| {
+            let _ = sender.lock().unwrap().send(status);
+        },
+    );
+
+    let wait = Duration::from_secs(10);
+    assert_eq!(received.recv_timeout(wait).unwrap(), Status::Ready);
+    assert_eq!(received.recv_timeout(wait).unwrap(), Status::Restart);
+    assert!(received.recv_timeout(Duration::from_millis(300)).is_err());
+
+    server.stop(Duration::from_secs(5));
+    assert!(received.recv_timeout(Duration::from_millis(500)).is_err());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A restart appends to the server log rather than emptying it. The old server
+/// leaves a child holding its stdout, so a line arrives after it has stopped
+/// and the next one has started: emptied, the log would take that line past
+/// its end, after a run of NULs, and lose what the old run printed.
+#[cfg(unix)]
+#[test]
+fn a_restart_keeps_the_log_of_the_run_it_ends() {
+    let dir = temp_dir("log-restart");
+    let log = dir.join(SERVER_LOG);
+    let read = || std::fs::read(&log).unwrap();
+    clear_log(&dir).unwrap();
+    let old = start_fake(
+        &dir,
+        "echo 'first run: LiveKit rejected the key'\n\
+         (sleep 1; echo 'first run: written after the restart') &\n\
+         cat >/dev/null",
+        |_| {},
+    );
+    let began = Instant::now();
+    while !String::from_utf8_lossy(&read()).contains("rejected") {
+        assert!(
+            began.elapsed() < Duration::from_secs(10),
+            "the old run wrote nothing"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    old.stop(Duration::from_secs(5));
+    log_line(&dir, "codetrial-desktop: restarted");
+    let next = start_fake(&dir, "echo 'second run'\ncat >/dev/null", |_| {});
+    let began = Instant::now();
+    while !String::from_utf8_lossy(&read()).contains("after the restart") {
+        assert!(
+            began.elapsed() < Duration::from_secs(10),
+            "the late line never came"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    next.stop(Duration::from_secs(5));
+
+    let bytes = read();
+    assert!(!bytes.contains(&0), "{:?}", String::from_utf8_lossy(&bytes));
+    let text = String::from_utf8(bytes).unwrap();
+    let at = |line: &str| {
+        text.find(line)
+            .unwrap_or_else(|| panic!("{line:?} in {text:?}"))
+    };
+    assert!(at("first run: LiveKit rejected the key") < at("codetrial-desktop: restarted"));
+    assert!(at("codetrial-desktop: restarted") < at("second run"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The lines this app waits for are the server's own words, and the desktop
+/// crate cannot share the server's constants. The fake servers here print this
+/// crate's copies, so without this a reworded line on either side keeps every
+/// test green while the app stops hearing it: a missed restart line leaves a
+/// server that admits nothing until the app quits.
+#[test]
+fn the_lines_waited_for_are_the_ones_the_server_prints() {
+    let setup_edit = include_str!("../../../src/web/setup_edit.rs");
+    assert!(setup_edit.contains(&format!("\"{RESTART_LINE}\"")));
+    let launch = include_str!("../../../src/launch.rs");
+    assert!(launch.contains(&format!("\"{BOUND_LINE}{{bound}}")));
+}
+
+/// Opening the app empties what the last run left in the server log, and makes
+/// the file when there is none, so a restart has something to append to.
+#[test]
+fn opening_the_app_empties_the_log_of_the_last_run() {
+    let dir = temp_dir("log-clear");
+    let log = dir.join(SERVER_LOG);
+    clear_log(&dir).unwrap();
+    assert_eq!(std::fs::read(&log).unwrap(), b"");
+
+    std::fs::write(&log, "left by the last run\n").unwrap();
+    clear_log(&dir).unwrap();
+    assert_eq!(std::fs::read(&log).unwrap(), b"");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A fake server started in a folder of its own under `dir`, with the process
+/// id it wrote there once running.
+#[cfg(unix)]
+fn running(dir: &Path, name: &str, body: &str) -> (Server, String) {
+    let dir = dir.join(name);
+    std::fs::create_dir_all(&dir).unwrap();
+    let pid = dir.join("pid");
+
+    // Written to a name of its own and then moved into place, so the file never
+    // exists empty: `>` creates it before it writes the id, and a read in
+    // between would take no id for a server that is not running.
+    let server = start_fake(
+        &dir,
+        &format!(
+            "echo $$ > '{pid}.tmp' && mv '{pid}.tmp' '{pid}'
+{body}",
+            pid = pid.display()
+        ),
+        |_| {},
+    );
+    let began = Instant::now();
+    while !pid.exists() && began.elapsed() < Duration::from_secs(10) {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let id = std::fs::read_to_string(pid).unwrap().trim().to_string();
+    assert!(
+        id.parse::<u32>().is_ok(),
+        "no process id was written: {id:?}"
+    );
+    (server, id)
+}
+
+/// What a server reports is acted on only once it is installed in its slot: a
+/// restart asked for in the gap between `start` returning and `put` would find
+/// nothing to stop and start a second server beside the first.
+#[cfg(unix)]
+#[test]
+fn a_report_waits_until_the_server_it_came_from_is_installed() {
+    let dir = temp_dir("report-after-install");
+    let slot = Arc::new(Slot::default());
+    let events = Arc::new(Mutex::new(Vec::new()));
+
+    let installing = slot.installing();
+    let (started_sender, started) = std::sync::mpsc::channel();
+    let reporter = {
+        let (slot, events) = (Arc::clone(&slot), Arc::clone(&events));
+        std::thread::spawn(move || {
+            started_sender.send(()).unwrap();
+            slot.installed();
+            events.lock().unwrap().push("reported");
+        })
+    };
+    started.recv().unwrap();
+    // Time for a report that was not held back to have gone ahead.
+    std::thread::sleep(Duration::from_millis(200));
+
+    let (server, _) = running(&dir, "only", "cat >/dev/null");
+    events.lock().unwrap().push("installed");
+    slot.put(server);
+    drop(installing);
+    reporter.join().unwrap();
+
+    assert_eq!(*events.lock().unwrap(), ["installed", "reported"]);
+    slot.stop(Duration::from_secs(5));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A quit while a restart is still stopping the old server waits for that stop,
+/// and for the server the restart then started, so neither outlives the app.
+/// The old one ignores its stdin closing, so only the kill after the grace
+/// ends it, well after the quit was asked for.
+#[cfg(unix)]
+#[test]
+fn a_quit_during_a_restart_waits_for_both_servers_to_stop() {
+    let dir = temp_dir("quit-restart");
+    let alive = |pid: &str| {
+        // Started under `SPAWNING`, as every process this binary starts is.
+        let _spawning = SPAWNING
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Command::new("kill")
+            .args(["-0", pid])
+            .status()
+            .unwrap()
+            .success()
+    };
+    let (old, old_pid) = running(
+        &dir,
+        "old",
+        "cat >/dev/null
+sleep 60",
+    );
+    let slot = Arc::new(Slot::default());
+    slot.put(old);
+    let next_pid = Arc::new(Mutex::new(None));
+    let (next_slot, next_dir, next_seen) = (Arc::clone(&slot), dir.clone(), Arc::clone(&next_pid));
+    slot.replace(Duration::from_secs(1), move || {
+        let (next, pid) = running(&next_dir, "next", "cat >/dev/null");
+        *next_seen.lock().unwrap() = Some(pid);
+        next_slot.put(next);
+    });
+
+    slot.stop(Duration::from_secs(5));
+    assert!(!alive(&old_pid), "the old server outlived the quit");
+    let next_pid = next_pid.lock().unwrap().clone();
+    let next_pid = next_pid.expect("the restart had not finished when the quit returned");
+    assert!(
+        !alive(&next_pid),
+        "the server the restart started outlived the quit"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 

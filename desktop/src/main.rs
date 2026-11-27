@@ -15,6 +15,7 @@ mod server;
 use std::collections::HashSet;
 use std::io::Write as _;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{LazyLock, Mutex, mpsc};
 use std::time::Duration;
 
@@ -63,19 +64,90 @@ const CLOSE_PROBE: &str = r#"(() => {
   }
 })()"#;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Phase {
     /// Waiting for both the server to be ready and the starting page to say
     /// whether this web view has WebRTC. See `open_server`.
     Starting {
         server_ready: bool,
         webrtc: Option<bool>,
+        /// The default browser already has a tab on the server's port, left
+        /// open by the launch a restart replaced.
+        tab_open: bool,
     },
     Serving,
     /// Serving, to the default browser rather than to this window, because
     /// this window cannot make the call.
     InBrowser,
     Failed,
+}
+
+/// What a restart request from the server comes to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Restart {
+    /// Start the server again now, leaving the shell in this phase.
+    Now(Phase),
+    /// Not yet: the server is ready but the starting page has not said whether
+    /// this web view has WebRTC. The server prints its request once and has
+    /// already stopped admitting interviews, so it is kept until `open_server`
+    /// has settled the phase and then acted on.
+    WhenServing,
+    /// No server is running to restart.
+    Never,
+}
+
+impl Phase {
+    /// What a restart request comes to in this phase. WebRTC is already known
+    /// from the launch being replaced, so `open_server` acts on the new
+    /// server's ready line alone.
+    fn restart_request(self) -> Restart {
+        let webrtc = match self {
+            Phase::Serving => true,
+            Phase::InBrowser => false,
+            Phase::Starting { .. } => return Restart::WhenServing,
+            Phase::Failed => return Restart::Never,
+        };
+        Restart::Now(Phase::Starting {
+            server_ready: false,
+            webrtc: Some(webrtc),
+            tab_open: !webrtc,
+        })
+    }
+
+    /// The phase the server is shown in and how, once it is ready and the
+    /// starting page has said whether this web view has WebRTC; `None` until
+    /// both are known.
+    fn settle(self) -> Option<(Phase, Show)> {
+        let Phase::Starting {
+            server_ready: true,
+            webrtc: Some(webrtc),
+            tab_open,
+        } = self
+        else {
+            return None;
+        };
+        Some(if webrtc {
+            (Phase::Serving, Show::Window)
+        } else {
+            (
+                Phase::InBrowser,
+                Show::Browser {
+                    open_tab: !tab_open,
+                },
+            )
+        })
+    }
+}
+
+/// How `open_server` shows a server that is ready.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Show {
+    /// In this window.
+    Window,
+    /// In the default browser, opening a tab there unless the person already
+    /// has one on the server: a save made from it would otherwise leave one
+    /// more lobby tab beside the Setup page it was made from.
+    Browser { open_tab: bool },
 }
 
 /// Where a close stands. One value rather than two flags, so "quitting but not
@@ -90,10 +162,13 @@ enum Close {
 }
 
 struct Shell {
-    server: Mutex<Option<server::Server>>,
+    server: server::Slot,
     /// The running server's Change keys code, shown or filled in this window.
     change_keys_code: Mutex<Option<String>>,
     phase: Mutex<Phase>,
+    /// A restart the server asked for before the phase was settled, to be
+    /// done once it is. See `Restart::WhenServing`.
+    restart_pending: AtomicBool,
     close: Mutex<Close>,
 }
 
@@ -116,17 +191,19 @@ fn main() {
         }))
         .plugin(tauri_plugin_dialog::init())
         .manage(Shell {
-            server: Mutex::new(None),
+            server: server::Slot::default(),
             change_keys_code: Mutex::new(None),
             phase: Mutex::new(Phase::Starting {
                 server_ready: false,
                 webrtc: None,
+                tab_open: false,
             }),
+            restart_pending: AtomicBool::new(false),
             close: Mutex::new(Close::Open),
         })
         .setup(|app| {
             open_window(app.handle())?;
-            launch(app.handle());
+            launch(app.handle(), false);
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -150,17 +227,7 @@ fn main() {
                 request_quit(app);
             }
         }
-        RunEvent::Exit => {
-            if let Some(server) = app
-                .state::<Shell>()
-                .server
-                .lock()
-                .expect("server lock")
-                .take()
-            {
-                server.stop(STOP_GRACE);
-            }
-        }
+        RunEvent::Exit => app.state::<Shell>().server.stop(STOP_GRACE),
         _ => {}
     });
 }
@@ -317,7 +384,10 @@ fn open_window(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
-fn launch(app: &AppHandle) {
+/// Starts the server: the first time, on an emptied server log; again after
+/// Change keys, with a line in that log where the old run ends, so what the
+/// old keys were failing on is still there to read.
+fn launch(app: &AppHandle, restarted: bool) {
     let prepared = (|| -> Result<server::Launch, String> {
         let data_dir = app
             .path()
@@ -339,6 +409,14 @@ fn launch(app: &AppHandle) {
         Ok(launch) => launch,
         Err(message) => return show_failure(app, &message, None),
     };
+    if restarted {
+        server::log_line(
+            &launch.data_dir,
+            &format!("codetrial-desktop: {RESTARTING}"),
+        );
+    } else if let Err(message) = server::clear_log(&launch.data_dir) {
+        return show_failure(app, &message, Some(launch.data_dir.as_path()));
+    }
 
     *app.state::<Shell>()
         .change_keys_code
@@ -346,8 +424,14 @@ fn launch(app: &AppHandle) {
         .expect("code lock") = Some(launch.change_keys_code.clone());
     let data_dir = launch.data_dir.clone();
     let reporter = app.clone();
+
+    // Held until the server is put in its slot below: what it reports is not
+    // acted on before then.
+    let shell = app.state::<Shell>();
+    let installing = shell.server.installing();
     let started = server::start(&launch, move |status| {
         let app = &reporter;
+        app.state::<Shell>().server.installed();
         match status {
             server::Status::Ready => {
                 let shell = app.state::<Shell>();
@@ -358,6 +442,7 @@ fn launch(app: &AppHandle) {
                 }
                 open_server(app);
             }
+            server::Status::Restart => restart(app),
             server::Status::Exited(message) => {
                 if !app.state::<Shell>().quitting() {
                     show_failure(app, &message, Some(data_dir.as_path()));
@@ -366,12 +451,47 @@ fn launch(app: &AppHandle) {
         }
     });
     match started {
-        Ok(server) => {
-            *app.state::<Shell>().server.lock().expect("server lock") = Some(server);
-        }
+        Ok(server) => shell.server.put(server),
         Err(message) => show_failure(app, &message, Some(launch.data_dir.as_path())),
     }
+    drop(installing);
 }
+
+/// Starts the server again on the keys Change keys saved, which only a new
+/// launch reads, then shows the lobby where the old one was shown. The server
+/// asks only once nothing is running and nothing new will start.
+///
+/// Back to `Starting` with WebRTC already known, so `open_server` acts on the
+/// new server's ready line alone, and so `on_navigation` keeps the window off
+/// the port while no server is behind it.
+fn restart(app: &AppHandle) {
+    let shell = app.state::<Shell>();
+    {
+        let mut phase = shell.phase.lock().expect("phase lock");
+        match phase.restart_request() {
+            Restart::Now(next) => *phase = next,
+            Restart::WhenServing => {
+                shell.restart_pending.store(true, Ordering::SeqCst);
+                return;
+            }
+            Restart::Never => {
+                shell.restart_pending.store(false, Ordering::SeqCst);
+                return;
+            }
+        }
+    }
+    note(RESTARTING);
+    let relauncher = app.clone();
+    shell.server.replace(STOP_GRACE, move || {
+        if !relauncher.state::<Shell>().quitting() {
+            launch(&relauncher, true);
+        }
+    });
+}
+
+/// Said on stderr and in the server log, which a release build on Windows has
+/// in place of stderr.
+const RESTARTING: &str = "Change keys saved: starting the server again";
 
 /// The script that puts `code`, hex digits only, into the Setup page's code
 /// field. The page shows and enables that field itself once `/api/setup`
@@ -413,30 +533,34 @@ fn open_server(app: &AppHandle) {
 
     // Decided and recorded under the lock, acted on after it is released: the
     // navigation below reaches `on_navigation`, which takes the same lock.
-    let webrtc = {
+    let show = {
         let mut phase = shell.phase.lock().expect("phase lock");
-        let Phase::Starting {
-            server_ready: true,
-            webrtc: Some(webrtc),
-        } = *phase
-        else {
+        let Some((settled, show)) = phase.settle() else {
             return;
         };
-        *phase = if webrtc {
-            Phase::Serving
-        } else {
-            Phase::InBrowser
-        };
-        webrtc
+        *phase = settled;
+        show
     };
-    if webrtc {
-        note("the web view has WebRTC: the interview runs in this window");
-        let _ = window.navigate(SERVER_URL.clone());
+
+    // The server asked to be restarted while this was still being settled, and
+    // has stopped admitting interviews: nothing is to be shown from it.
+    if shell.restart_pending.swap(false, Ordering::SeqCst) {
+        restart(app);
         return;
     }
-    note("the web view has no WebRTC: the interview runs in the default browser");
-    open_in_browser(SERVER_URL.as_str());
-    show_start_page(app, &[("browser", "")]);
+    match show {
+        Show::Window => {
+            note("the web view has WebRTC: the interview runs in this window");
+            let _ = window.navigate(SERVER_URL.clone());
+        }
+        Show::Browser { open_tab } => {
+            note("the web view has no WebRTC: the interview runs in the default browser");
+            if open_tab {
+                open_in_browser(SERVER_URL.as_str());
+            }
+            show_start_page(app, &[("browser", "")]);
+        }
+    }
 }
 
 /// Errors are ignored: there is no better place to report a browser that will
@@ -543,17 +667,19 @@ fn confirm_quit(app: &AppHandle, message: &str) {
         });
 }
 
-/// Stops the server, then exits. Off the event loop, because the stop waits
-/// for the server and the window has to keep drawing while it does.
+/// Stops the server, and any a restart is still replacing, then exits. Off the
+/// event loop, because the stop waits for the server and the window has to
+/// keep drawing while it does.
 fn quit(app: &AppHandle) {
     let shell = app.state::<Shell>();
     *shell.close.lock().expect("close lock") = Close::Quitting;
-    let server = shell.server.lock().expect("server lock").take();
     let app = app.clone();
     std::thread::spawn(move || {
-        if let Some(server) = server {
-            server.stop(STOP_GRACE);
-        }
+        app.state::<Shell>().server.stop(STOP_GRACE);
         app.exit(0);
     });
 }
+
+#[cfg(test)]
+#[path = "../tests/unit/phase.rs"]
+mod tests;

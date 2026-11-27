@@ -22,7 +22,7 @@ the binary's: `src/main.rs` runs the Setup handover and binds the socket, and
 builds the server from `src/launch.rs` (config search, every refusal it makes
 before serving). Calling that from the app would have meant a second launcher
 beside the one the CLI's behavior is pinned to. As a child it is the binary the CLI
-tests already cover, started with six things a launcher needs that the CLI
+tests already cover, started with seven things a launcher needs that the CLI
 did not have. Each is decided in the server, so the app keeps no copy of the
 server's rules:
 
@@ -76,16 +76,27 @@ server's rules:
   Setup page in its own window, or, with the interview in the browser, shows
   it on the page it leaves in its window. Read from the environment for the
   same reason as the pipe above.
+- `CODETRIAL_RESTART_AFTER_SAVE`: the app restarts its server when asked to,
+  so it says so here. After Change keys saves, a server told this that has a
+  Google key, and so hosts its interviewer, stops admitting interviews and
+  prints `codetrial: keys saved and no interview running: restart now` once
+  none is running or writing its report and the save's response has gone out.
+  A candidate who starts an interview meanwhile is told the server is
+  restarting. It admits nothing more, so the app starts it again then. Without
+  this variable, or without a Google key, the server keeps its old keys until
+  it is restarted, as one started from a terminal does. Read from the
+  environment for the same reason as the pipe above.
 - `--no-update-check`: the lobby never offers a newer release, whatever the
   config file says about `CODETRIAL_UPDATE_CHECK`. That check compares the
   server with the `latest` release, and the app is published as
   `desktop-latest`, so it would offer every desktop install an update to the
   CLI binary.
 
-All six are ordinary server options, and a CLI install can use them the same
-way, except that the server takes `CODETRIAL_CHANGE_KEYS_CODE` only when
-`CODETRIAL_EXIT_WITH_STDIN` says it was started as a child: a launch from a
-terminal makes and prints its own code. `codetrial --help` lists the four
+All of these are ordinary server options, and a CLI install can use them the
+same way, except that the server takes `CODETRIAL_CHANGE_KEYS_CODE` and
+`CODETRIAL_RESTART_AFTER_SAVE` only when `CODETRIAL_EXIT_WITH_STDIN` says it
+was started as a child: a launch from a terminal makes and prints its own code
+and is restarted by hand. `codetrial --help` lists the four
 flags, and the README's configuration table lists `CODETRIAL_ALLOWED_HOSTS`.
 
 ## Where it keeps things
@@ -103,14 +114,19 @@ session signing key and a roaming profile is copied to a server:
 In it:
 
 - `codetrial.env.local`: the keys the Setup page takes, in plain text, the
-  same file the CLI writes. Change keys in the lobby rewrites its keys, which
-  take effect when the app next starts; edit it to add an option. The first
-  launch writes it from exported LiveKit keys without asking (see `--data-dir`
-  above); otherwise Setup asks, and offers to use a CLI config found in the
-  folder the app was started in (see `--import-config`). An app opened from the Dock,
-  Finder or the Start menu sees no shell exports and starts where no CLI config
-  is, so Setup's "Import from a config file" button is the way to bring one in:
-  it fills the form from a file you choose. Either way it asks once: later
+  same file the CLI writes. Change keys in the lobby rewrites its keys, and
+  once no interview is running or writing its report, the app starts its
+  server again on them and returns to the lobby, or, with the interview in
+  the browser, leaves the tab the save was made from open on the restarted
+  server. Without a Google key the interviews are hosted elsewhere, out of
+  the server's sight, so the keys take effect when the app next starts, as
+  an edit adding an option does. The first launch writes it from exported
+  LiveKit keys without asking (see `--data-dir` above); otherwise Setup
+  asks, and offers to use a CLI config found in the folder the app was
+  started in (see `--import-config`). An app opened from the Dock, Finder or
+  the Start menu sees no shell exports and starts where no CLI config is, so
+  Setup's "Import from a config file" button is the way to bring one in: it
+  fills the form from a file you choose. Either way it asks once: later
   launches read this file.
 - `codetrial.db`: accounts and saved reports.
 - `session-secret`: the key session cookies are signed with, which the server
@@ -120,7 +136,8 @@ In it:
   a data folder never uses it. A damaged file stops the server rather than
   being replaced, because replacing it signs everyone out and hides what
   damaged it.
-- `codetrial-server.log`: everything the server printed on its last launch.
+- `codetrial-server.log`: everything the server printed since the app last
+  opened, with a line where Change keys restarted it.
 - `codetrial-error.log`: why the last launch failed, when it did.
 
 What the page itself stores (practice history among it) is the web view's,

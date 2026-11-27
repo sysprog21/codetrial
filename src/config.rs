@@ -738,6 +738,13 @@ pub fn exit_with_stdin(value: Option<&str>) -> bool {
     parse_bool(value, false)
 }
 
+/// `CODETRIAL_RESTART_AFTER_SAVE`: off unless a launcher says it restarts its
+/// child when Change keys saves. A launcher that does not say so keeps a server
+/// that serves on the keys it started with, as before.
+pub fn restart_after_save(value: Option<&str>) -> bool {
+    parse_bool(value, false)
+}
+
 /// `CODETRIAL_CHANGE_KEYS_CODE`: the code the desktop app hands its child.
 /// One too short to stand in for the code `run_web` makes is no code, so a
 /// launcher that set it carelessly gets no Change keys rather than a weak one.

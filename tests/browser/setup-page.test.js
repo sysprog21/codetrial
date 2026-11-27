@@ -527,3 +527,39 @@ test("change keys keeps blank fields, asks for the code and says a restart is du
   await page.locator("#restart-notice").waitFor();
   assert.equal(await page.locator("#submit").isEnabled(), false);
 });
+
+test("change keys in the desktop app says the app restarts on the new keys", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  submissions = [];
+  running = {
+    configured: true,
+    livekitEndpoint: "wss://example.livekit.cloud",
+    googleApiKey: true,
+    restartPending: false,
+    appRestarts: true,
+  };
+  t.after(() => {
+    running = null;
+    saved = null;
+  });
+  const page = await browser.newPage();
+  t.after(() => page.close());
+  await page.goto(`${base}/setup`);
+  await page.getByRole("heading", { name: "Change keys" }).waitFor();
+
+  saved = { saved: true, appRestarts: true };
+  await page.locator("#code").fill("printed-code");
+  await page.locator("#googleApiKey").fill("new-google");
+  await page.locator("#submit").click();
+  await page.locator("#restart-notice").waitFor();
+  const appRestarts =
+    /^The app starts the server again on the new keys once no interview is running\./;
+  assert.match(await page.locator("#restart-notice").innerText(), appRestarts);
+
+  // A reload while the app waits for a running interview says the same.
+  running = { ...running, restartPending: true };
+  await page.reload();
+  await page.locator("#restart-notice").waitFor();
+  assert.match(await page.locator("#restart-notice").innerText(), appRestarts);
+  assert.equal(await page.locator("#submit").isEnabled(), false);
+});
