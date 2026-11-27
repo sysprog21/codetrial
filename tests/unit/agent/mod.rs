@@ -34,7 +34,7 @@ fn editor_execution_preferences_do_not_change_whiteboard_test_evidence() {
         ..RuntimeState::default()
     };
     assert_eq!(super::test_source(&state), super::TestSource::Board);
-    assert!(!super::test_recordable(&state));
+    assert!(!super::framework::test_recordable(&state));
     let refusal = super::end_interview_refusal(&state);
     assert!(refusal.contains("cases that would break their drawing"));
     assert!(!refusal.contains("written code"));

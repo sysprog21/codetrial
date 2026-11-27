@@ -5,11 +5,12 @@ use super::instructions::{DECLINED_PROBE, INTERVIEWER_DELIVERY_POLICY};
 use super::material::{
     NOTHING_RECORDED, format_test_run, numbered, numbered_line, untrusted_block,
 };
-use super::nudges::{behavioral_round_start, round_question};
+use super::nudges::round_question;
 use super::progress::{coding_only_ending, coding_progress, evidenced_among, released_follow_ups};
 use crate::agent::{
     CANDIDATE_SPEAKER, EARLIER_OMITTED, InterviewLoop, InterviewMode, REACTO_PHASE_IDS,
-    RuntimeState, STAR_PHASE_IDS, speaker_speech, tail_start, transcript_tail,
+    RuntimeState, STAR_PHASE_IDS, communication::behavioral_round_start, speaker_speech,
+    tail_start, transcript_tail,
 };
 
 /// What a cold briefing recovers of the conversation. The round, the steps
@@ -708,4 +709,17 @@ fn bounded_utterance(text: &str) -> String {
         &text[..text.floor_char_boundary(CONTINUITY_OPENING_BYTES)],
         crate::agent::tail_within(text, CONTINUITY_ENDING_BYTES)
     )
+}
+
+/// The reminder of earlier steps' references carried with a request, or
+/// nothing when there are none.
+pub fn earlier_references(steps: &[&str]) -> String {
+    if steps.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\n[SYSTEM EVENT] Earlier step references carried with this request: {}. Use current evidence to decide what remains open; do not repeat completed work.",
+            steps.join(", ")
+        )
+    }
 }

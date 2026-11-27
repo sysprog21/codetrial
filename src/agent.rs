@@ -21,13 +21,14 @@ mod turn_taking;
 pub(crate) use turn_taking::THINKING_REQUEST_SETTLE;
 pub use turn_taking::ThinkingHold;
 pub(crate) use turn_taking::{
-    owed_context, owed_context_after_briefing, thinking_change, thinking_check_in,
-    thinking_owes_context, thinking_resume, with_thinking_debt,
+    editor_review_allowed, owed_context, owed_context_after_briefing, thinking_change,
+    thinking_check_in, thinking_owes_context, thinking_resume, with_thinking_debt,
 };
 mod code_work;
 pub(crate) mod communication;
 mod evidence;
 mod framework;
+mod hints;
 mod integrity;
 mod phase_judge;
 mod problem_guides;
@@ -67,23 +68,23 @@ pub use problems::{DEFAULT_PROBLEM_ID, PROBLEMS, find_problem, get_problem, topi
 pub(crate) use prompts::BEHAVIORAL_ROUND_MARK;
 pub use prompts::{
     BehavioralRound, InterimReviewInput, LanguageChoiceContext, MAX_EXCERPT_LINE_CHARS,
-    MAX_NUMBERED_BYTES, PhaseJudgeInput, ReportPromptInput, SincePrevious, TestRecord,
+    MAX_NUMBERED_BYTES, PhaseJudgeInput, ReportPromptInput, RuntimeOptions, SincePrevious,
     behavioral_silence_nudge, behavioral_time_warning, board_silence_nudge,
     build_instructions_for_plan, changed_excerpt, cold_restart, compressed_context,
-    format_test_run, format_test_run_for_reaction, greeting, greeting_with_language,
-    hint_ladder_used_text, hint_rung_text, hint_rung_withheld_text, interim_review_prompt,
-    interim_system_instruction, language_choice, log_hint_text, numbered, numbered_from,
-    owed_reply, phase_judge_prompt, phase_judge_system_instruction, phase_judgment_note,
-    proactive_review, read_board_text, read_editor_text, received_test_note, released_follow_ups,
-    report_prompt, report_system_instruction, report_system_instruction_for_examples,
-    resumed_context, rolling_assessment, round_skipped, round_started, silence_nudge,
-    spoken_language, test_results_reaction, test_runner_outage_reaction,
-    test_runner_unavailable_reaction, test_setup_error_reaction, time_warning,
-    uncredited_test_results_reaction, unrecorded_earlier_phases, unvoiced_record_note,
-    with_owed_reply, wrap_up,
+    earlier_references, format_test_run, format_test_run_for_reaction, greeting,
+    greeting_with_language, hint_ladder_used_text, hint_rung_text, hint_rung_withheld_text,
+    interim_review_prompt, interim_system_instruction, language_choice, log_hint_text, numbered,
+    numbered_from, owed_reply, phase_judge_prompt, phase_judge_system_instruction,
+    phase_judgment_note, proactive_review, read_board_text, read_editor_text, received_test_note,
+    released_follow_ups, report_prompt, report_system_instruction,
+    report_system_instruction_for_examples, resumed_context, rolling_assessment, round_skipped,
+    round_started, silence_nudge, spoken_language, test_results_reaction,
+    test_runner_outage_reaction, test_runner_unavailable_reaction, test_setup_error_reaction,
+    time_warning, uncredited_test_results_reaction, unrecorded_earlier_phases,
+    unvoiced_record_note, with_owed_reply, wrap_up,
 };
 pub(crate) use prompts::{
-    behavioral_round_start, editor_tool_continuity, end_interview_refusal, evidenced_among,
+    editor_tool_continuity, editor_update_body, end_interview_refusal, evidenced_among,
     latest_candidate_continuity, numbered_bounded_line, numbered_from_with_limit, numbered_page,
     pending_candidate_line, read_editor_text_from_numbered, report_transcript_lines,
     tool_editor_review, untrusted_block,
@@ -104,30 +105,34 @@ pub(crate) use report::{SELF_REVIEW_REPLACEMENT, SUCCESS_CRITERION_REPLACEMENT};
 pub use value::json_number;
 pub(crate) use value::{bounded_model_text, json_int, python_truthy, truthy_string, value_string};
 
+pub use code_work::{Analysis, TestedCode, code_untouched, code_written};
 use code_work::{
     MAX_WRITTEN_TABLE, anchor_analysis, runner_unavailable_on_screen, split_comments, starter,
 };
 pub(crate) use code_work::{
-    TestSource, covers, editor_update_body, latest_test_report_is_exact,
-    latest_test_report_provenance_note, real_test_run, rewritten, test_record_after_run,
-    test_recordable, test_source, tested_code_is_current, tested_code_is_exact, written_in,
+    TestSource, covers, latest_test_report_is_exact, latest_test_report_provenance_note,
+    real_test_run, rewritten, test_source, tested_code_is_current, tested_code_is_exact,
+    written_in,
 };
-pub use code_work::{code_untouched, code_written};
 pub use communication::{CommunicationEvidence, communication_evidence};
+pub use framework::TestRecord;
 use framework::record_evidence;
 pub use framework::{
     HintAttempt, REACTO_PHASE_IDS, RECEIVED_TEST_SUMMARY, STAR_PHASE_IDS, framework_evidence_json,
-    framework_progress, record_framework_evidence, record_hint,
+    framework_progress, record_framework_evidence,
 };
 pub(crate) use framework::{
     RecordOutcome, coding_continues_past_gate, coding_round_complete, evidence_kind_id,
     evidence_source_id, phase_id, phases_evidenced, reconcile_received_test,
-    record_framework_evidence_outcome, skip_unassessed_star,
+    record_framework_evidence_outcome, skip_unassessed_star, test_record_after_run,
 };
+pub use hints::record_hint;
 pub use phase_judge::{
     PhaseJudgeDue, apply_phase_judgment, phase_judge_due, phase_judge_need, phase_judge_open,
     record_interim_notes, take_phase_judge_window,
 };
+#[cfg(test)]
+pub(crate) use prompts::editor_update_execution_status;
 pub(crate) use transcript::{
     EARLIER_OMITTED, assessed_speech, has_recognized_candidate_turn, is_unrecognized_speech,
     report_transcript_cut, speaker_speech,
@@ -139,7 +144,6 @@ pub use transcript::{
 use transcript::{is_unrecognized_turn, tail_start, tail_within};
 // Read by the test modules; nothing else needs them here.
 #[cfg(test)]
-pub(crate) use code_work::editor_update_execution_status;
 #[cfg(test)]
 use {
     code_work::{MIN_WRITTEN_CHARS, edited_within, uncommented_chars},
@@ -955,7 +959,7 @@ impl RuntimeState {
     /// The transcript as model readers see it, borrowed when nothing is
     /// marked.
     pub(crate) fn delivery_transcript(&self) -> std::borrow::Cow<'_, [String]> {
-        if self.interviewer_delivery.uncertain.is_empty() {
+        if !self.interviewer_delivery.any_uncertain_from(0) {
             return std::borrow::Cow::Borrowed(&self.transcript);
         }
         self.transcript
@@ -982,31 +986,6 @@ macro_rules! cancelled_interviewer_output {
 pub(crate) use cancelled_interviewer_output;
 
 pub(crate) const CANCELLED_INTERVIEWER_OUTPUT: &str = cancelled_interviewer_output!();
-
-/// What a recorded complexity analysis describes; see
-/// `RuntimeState::analysis`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Analysis {
-    /// Given with no run of the code on screen, so possibly over a draft: the
-    /// next credited run's code is what it describes.
-    AwaitingRun,
-    /// The code it describes.
-    Of(TestedCode),
-}
-
-/// Code a test run executed; see `RuntimeState::tested_code`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TestedCode {
-    pub language: String,
-    pub code: String,
-}
-
-impl TestedCode {
-    /// The same source the editor holds now, language included.
-    fn is_current(&self, state: &RuntimeState) -> bool {
-        self.language == state.language && self.code == state.code
-    }
-}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct RuntimeState {
@@ -1262,6 +1241,17 @@ impl RuntimeState {
         let pending = std::mem::take(&mut self.earlier_steps_pending);
         if delivered {
             self.earlier_steps_named.extend(pending);
+        }
+    }
+
+    /// Keeps a reply a replaced socket owed during a hold for the hold's
+    /// release to ask for. A known event is never replaced by an unknown one:
+    /// a candidate transcript landing in the hold leaves the handover no
+    /// prompt text, but the event the hold began on is still the one the reply
+    /// belongs to.
+    pub(crate) fn hold_owed_reply(&mut self, owed_prompt: Option<&str>) {
+        if owed_prompt.is_some() || self.owed_reply_on_resume.is_none() {
+            self.owed_reply_on_resume = Some(owed_prompt.map(str::to_string));
         }
     }
 
@@ -1999,5 +1989,5 @@ pub(crate) fn duration_from_metadata(value: Option<&serde_json::Value>) -> u32 {
 }
 
 #[cfg(test)]
-#[path = "../tests/unit/agent.rs"]
+#[path = "../tests/unit/agent/mod.rs"]
 mod tests;

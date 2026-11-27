@@ -494,6 +494,18 @@ pub(crate) fn thinking_change(hold: ThinkingHold, text: &str) -> Option<bool> {
     }
 }
 
+/// Whether the editor may be put in front of the model now: by a review, an
+/// evidence continuation's update, or silent delivery during speech.
+pub(crate) fn editor_review_allowed(state: &RuntimeState) -> bool {
+    !state.ended
+        && !state.end_requested
+        && !state.interviewer_silenced()
+        && !state.behavioral_round_started
+        && !state.interview_mode.is_whiteboard()
+        && state.evidence_ledger.code.parser_observation
+            == Some(crate::agent::CodeObservation::Parsed)
+}
+
 #[cfg(test)]
 #[path = "../../tests/unit/agent/turn_taking.rs"]
 mod tests;

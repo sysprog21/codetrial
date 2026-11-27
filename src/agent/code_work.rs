@@ -114,37 +114,28 @@ pub(crate) fn test_source(state: &RuntimeState) -> TestSource {
     }
 }
 
-/// Whether Test can be recorded now: it has no row yet, a received run still
-/// covers the code on screen, and that code is the candidate's. The one
-/// definition both the platform's own recording and the test reaction read.
-///
-/// Cheapest first, since a code update asks after every keystroke burst until
-/// Test is recorded: the row check, then the run's language and code, and only
-/// then whether the candidate wrote anything, which compares against the
-/// starter.
-pub(crate) fn test_recordable(state: &RuntimeState) -> bool {
-    // `test_source` answers Board for a whiteboard before it reads any run, so
-    // a page that sends editor packets there anyway records no execution: the
-    // interview has no test runner, as the evidence gate also holds.
-    !phases_evidenced(state, &[FrameworkPhase::Test])
-        && test_source(state) == TestSource::Run
-        && code_written(state)
+/// What a recorded complexity analysis describes; see
+/// `RuntimeState::analysis`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Analysis {
+    /// Given with no run of the code on screen, so possibly over a draft: the
+    /// next credited run's code is what it describes.
+    AwaitingRun,
+    /// The code it describes.
+    Of(TestedCode),
 }
 
-/// What a test reaction should say about recording Test after a run, given
-/// whether that run earned execution credit. RunAgain is only for a run that
-/// earned credit the candidate has already typed past. A run that earned
-/// nothing is answered by `uncredited_test_results_reaction` instead, so it is
-/// Settled here whatever an earlier run left recordable.
-pub(crate) fn test_record_after_run(state: &RuntimeState, credited: bool) -> TestRecord {
-    if !credited {
-        TestRecord::Settled
-    } else if test_recordable(state) {
-        TestRecord::Record
-    } else if !phases_evidenced(state, &[FrameworkPhase::Test]) && code_written(state) {
-        TestRecord::RunAgain
-    } else {
-        TestRecord::Settled
+/// Code a test run executed; see `RuntimeState::tested_code`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TestedCode {
+    pub language: String,
+    pub code: String,
+}
+
+impl TestedCode {
+    /// The same source the editor holds now, language included.
+    fn is_current(&self, language: &str, code: &str) -> bool {
+        self.language == language && self.code == code
     }
 }
 
@@ -170,7 +161,7 @@ pub(crate) fn tested_code_is_exact(state: &RuntimeState) -> bool {
     state
         .tested_code
         .as_ref()
-        .is_some_and(|tested| tested.is_current(state))
+        .is_some_and(|tested| tested.is_current(&state.language, &state.code))
 }
 
 /// Displayed-report outcomes belong to exact submitted source, independently
@@ -180,7 +171,7 @@ pub(crate) fn latest_test_report_is_exact(state: &RuntimeState) -> bool {
         && state
             .last_test_run_code
             .as_ref()
-            .is_some_and(|tested| tested.is_current(state))
+            .is_some_and(|tested| tested.is_current(&state.language, &state.code))
 }
 
 /// Trusted source provenance, outside candidate-controlled report text. No
@@ -201,26 +192,6 @@ pub(crate) fn latest_test_report_provenance_note(state: &RuntimeState) -> Option
         Some(
             "The displayed browser report has no recorded source provenance. Its outcome does not establish whether the current editor code passes or fails.",
         )
-    }
-}
-
-/// What changed since the model last saw the editor, with the execution status
-/// that keeps the update from reading as a new run. One wording for every
-/// route that delivers an update, so the routes cannot drift apart.
-pub(crate) fn editor_update_body(state: &RuntimeState) -> Option<String> {
-    changed_excerpt(&state.language, &state.code_shown, &state.code)
-        .map(|excerpt| format!("{excerpt}\n{}", editor_update_execution_status(state)))
-}
-
-/// Editor delivery carries no new execution and must not promote retained
-/// Test credit into an outcome for code that has since changed.
-pub(crate) fn editor_update_execution_status(state: &RuntimeState) -> &'static str {
-    if state.code_execution_disabled {
-        "Execution is disabled. Verify with hand traces, not a new test run."
-    } else if latest_test_report_is_exact(state) {
-        "The latest browser report belongs to this exact source and language; use only its recorded outcome. This update is not a new run."
-    } else {
-        "This update ran no tests. Do not assume earlier failures or passes describe this code."
     }
 }
 

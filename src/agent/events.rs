@@ -18,7 +18,7 @@ use super::{
     test_runner_outage_reaction, test_runner_unavailable_reaction, test_setup_error_reaction,
     time_warning, uncredited_test_results_reaction,
 };
-use crate::runtime::{TOPIC_CODE_UPDATE, TOPIC_CONTROL, TOPIC_INTEGRITY, TOPIC_TEST_RESULTS};
+use crate::protocol::{TOPIC_CODE_UPDATE, TOPIC_CONTROL, TOPIC_INTEGRITY, TOPIC_TEST_RESULTS};
 
 /// Applies an event, stamping it with the server's clock.
 ///

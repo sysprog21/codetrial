@@ -9,7 +9,7 @@ use super::progress::{
 };
 use crate::agent::{
     FrameworkPhase, InterviewLoop, InterviewMode, RuntimeState, SILENCE_THRESHOLD_S, TestSource,
-    coding_continues_past_gate, phases_evidenced,
+    coding_continues_past_gate, communication::behavioral_round_start, phases_evidenced,
 };
 
 /// Its conditions come before the invitation: a model follows the first
@@ -313,21 +313,6 @@ pub(super) fn round_question() -> String {
     format!(
         "Ask exactly one concise question under the private STAR, profile, and document-grounding policies. If {DECLINED_PROBE} for an earlier behavioral question, that probe stays closed: do not repeat or rephrase it, and choose a clearly different theme for this round's one question."
     )
-}
-
-/// Where the behavioral round begins in the transcript. An interviewer turn
-/// still in flight when the round opened keeps rewriting its own earlier line,
-/// so a change to that line since the transition moves the start back to it.
-/// Candidate lines interleaved before the transition come with it. A declined
-/// behavioral question there counts as the round's question, so the round then
-/// goes without one and its STAR parts stay unassessed: accepted over asking
-/// for another story right after a refusal.
-pub(crate) fn behavioral_round_start(state: &RuntimeState) -> usize {
-    state
-        .behavioral_round_prior_turn
-        .as_ref()
-        .filter(|(index, before)| state.transcript.get(*index) != Some(before))
-        .map_or(state.behavioral_round_transcript_start, |(index, _)| *index)
 }
 
 /// The line the report transcript carries where the platform opened the

@@ -3,7 +3,8 @@
 
 use super::code_map;
 use crate::agent::{
-    MAX_CANDIDATE_CASES, MAX_TEST_FAILURES, python_truthy, truthy_string, value_string,
+    MAX_CANDIDATE_CASES, MAX_TEST_FAILURES, RuntimeState, latest_test_report_is_exact,
+    python_truthy, truthy_string, value_string,
 };
 
 pub(super) fn numbered_list(items: &[&str]) -> String {
@@ -543,4 +544,24 @@ pub fn hint_ladder_used_text(hints_used: u32) -> String {
         "{} Every rung is used. Keep helping them reason from their own code without revealing another step.",
         log_hint_text(hints_used)
     )
+}
+
+/// What changed since the model last saw the editor, with the execution status
+/// that keeps the update from reading as a new run. One wording for every
+/// route that delivers an update, so the routes cannot drift apart.
+pub(crate) fn editor_update_body(state: &RuntimeState) -> Option<String> {
+    changed_excerpt(&state.language, &state.code_shown, &state.code)
+        .map(|excerpt| format!("{excerpt}\n{}", editor_update_execution_status(state)))
+}
+
+/// Editor delivery carries no new execution and must not promote retained
+/// Test credit into an outcome for code that has since changed.
+pub(crate) fn editor_update_execution_status(state: &RuntimeState) -> &'static str {
+    if state.code_execution_disabled {
+        "Execution is disabled. Verify with hand traces, not a new test run."
+    } else if latest_test_report_is_exact(state) {
+        "The latest browser report belongs to this exact source and language; use only its recorded outcome. This update is not a new run."
+    } else {
+        "This update ran no tests. Do not assume earlier failures or passes describe this code."
+    }
 }

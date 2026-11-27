@@ -26,5 +26,5 @@ pub(super) fn note_replacement(
 }
 
 #[cfg(test)]
-#[path = "../../../tests/unit/report_plan_key.rs"]
+#[path = "../../../tests/unit/report/plan_key.rs"]
 mod tests;

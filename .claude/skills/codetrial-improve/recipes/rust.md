@@ -20,7 +20,7 @@ callers pass `.as_deref()`; it accepts both.
 Returning `Option<&str>` looks like the same recipe and is not. Its caller in
 `src/livekit/session.rs` applies one `missing` closure to this value and to
 `first_candidate`, which would both have to change, and the re-export in
-`src/agent.rs` and the assertion in `tests/unit/agent.rs` with them. The cost
+`src/agent.rs` and the assertion in `tests/unit/agent/mod.rs` with them. The cost
 is in the `opening` closure there: it calls `std::slice::from_ref(line)` to
 build the `&[String]` that `transcript_tail` takes, so with a `&str` it would
 have to allocate `[line.to_owned()]` on a path that allocates nothing today. A

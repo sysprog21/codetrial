@@ -160,7 +160,7 @@ semantics do not change, so no interview contract bundle or component version
 is bumped. The receipt's format tag versions only selection metadata.
 
 Regression coverage lives in `tests/unit/web/selection.rs`,
-`tests/unit/dispatch_http.rs`, `tests/web/token.rs`, `tests/web/recording.rs`,
+`tests/unit/dispatch/http.rs`, `tests/web/token.rs`, `tests/web/recording.rs`,
 `tests/browser/strict-selection.test.js` and
 `tests/browser/token-requests.test.js`. The
 credential-free browser tests use the real preflight and page reload with a

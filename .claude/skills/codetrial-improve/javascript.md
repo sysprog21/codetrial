@@ -51,7 +51,7 @@ When behavior moves, add a test that imports the new module, in the commit that
 moves it.
 
 The wire topics are a contract implemented twice, in `web/lib.js` and in the
-`TOPIC_` constants in `src/runtime.rs`. A refactor of either side changes
+`TOPIC_` constants in `src/protocol.rs`. A refactor of either side changes
 neither name nor payload; see
 [the data channel](../codetrial-web/SKILL.md#the-data-channel-is-two-implementations).
 

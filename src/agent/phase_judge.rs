@@ -3,6 +3,7 @@
 //! recorded.
 
 // This module reads the hub's imports and types through `use super::*`.
+use super::communication::behavioral_round_start;
 #[cfg_attr(
     not(test),
     expect(

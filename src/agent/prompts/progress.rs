@@ -5,10 +5,10 @@
 use super::material::numbered_list;
 use crate::agent::{
     FrameworkEvidence, FrameworkPhase, InterviewLoop, InterviewMode, REACTO_PHASE_IDS,
-    RuntimeState, STAR_PHASE_IDS, coding_continues_past_gate, coding_round_complete,
+    RuntimeState, STAR_PHASE_IDS, TestRecord, coding_continues_past_gate, coding_round_complete,
     framework_progress, phase_id, phases_evidenced,
 };
-use crate::runtime::AGENT_NAME;
+use crate::protocol::AGENT_NAME;
 
 /// One opening per surface, and neither names the problem: the title and brief
 /// are already in THE EXERCISE, which every turn is billed on, and repeated
@@ -432,19 +432,6 @@ fn reaction_code(excerpt: Option<&str>) -> String {
     excerpt
         .map(|excerpt| format!("Their code, numbered:\n{excerpt}\n"))
         .unwrap_or_default()
-}
-
-/// What a test reaction says about recording Test, as the evidence gate would
-/// answer for this run right now.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TestRecord {
-    /// The run executed the code on screen and the platform records Test.
-    Record,
-    /// The run would have counted, but the candidate kept editing while it
-    /// was in flight, so only a run of the code now on screen can.
-    RunAgain,
-    /// Test is already recorded, or this run could never have counted.
-    Settled,
 }
 
 /// A run that earned no execution credit: no code with it, starter code, an

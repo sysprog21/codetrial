@@ -69,13 +69,28 @@ pub fn communication_evidence(lines: &[String]) -> CommunicationEvidence {
     classify(lines, None, None)
 }
 
+/// Where the behavioral round begins in the transcript. An interviewer turn
+/// still in flight when the round opened keeps rewriting its own earlier line,
+/// so a change to that line since the transition moves the start back to it.
+/// Candidate lines interleaved before the transition come with it. A declined
+/// behavioral question there counts as the round's question, so the round then
+/// goes without one and its STAR parts stay unassessed: accepted over asking
+/// for another story right after a refusal.
+pub(crate) fn behavioral_round_start(state: &super::RuntimeState) -> usize {
+    state
+        .behavioral_round_prior_turn
+        .as_ref()
+        .filter(|(index, before)| state.transcript.get(*index) != Some(before))
+        .map_or(state.behavioral_round_transcript_start, |(index, _)| *index)
+}
+
 pub(crate) fn report_communication_evidence(
     state: &super::RuntimeState,
     lines: &[String],
 ) -> CommunicationEvidence {
     let round_mark = state
         .behavioral_round_started
-        .then(|| super::behavioral_round_start(state));
+        .then(|| behavioral_round_start(state));
     classify(lines, Some(&state.transcript), round_mark)
 }
 

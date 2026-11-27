@@ -9,12 +9,12 @@ bad it is.
 
 ## One source of truth for anything both sides spell
 
-Applies to: `web/lib.js`, `src/runtime.rs`, `src/agent.rs`,
+Applies to: `web/lib.js`, `src/protocol.rs`, `src/runtime.rs`, `src/agent.rs`,
 `web/interview.html`, `web/*.js`, `tests/fixtures/`,
 `scripts/browser-check.cjs`
 
 Data-channel payloads are produced once in `web/lib.js` and consumed against
-the `TOPIC_*` constants in `src/runtime.rs`. `tests/fixtures/README.md` lists
+the `TOPIC_*` constants in `src/protocol.rs`. `tests/fixtures/README.md` lists
 each producer and consumer, and `node scripts/gen-wire-fixtures.mjs`
 regenerates them. A payload built inline in `interview.js` and spelled as a
 byte literal in Rust tests crosses nothing. Flag new hand-kept copies: voice

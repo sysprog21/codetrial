@@ -51,7 +51,7 @@ diverge and silently empty the evidence section of every camera interview while
 the gate stayed green.
 
 The direction decides what keeps the two sides honest. `web/lib.js` defines the
-topic set in `topics` and `src/runtime.rs` defines the matching `TOPIC_*`
+topic set in `topics` and `src/protocol.rs` defines the matching `TOPIC_*`
 constants; that pair is the authority, and `grep -rn TOPIC_ src/` names every
 Rust publisher and consumer, several of them outside `src/agent/`. A
 browser-to-agent topic has a generated producer fixture, and the `files` map in
