@@ -296,7 +296,7 @@ async fn a_hint_needs_an_answer_since_the_item_opened_and_the_last_hint() {
     for account in [json!(null), json!(2)] {
         assert_eq!(
             validate(with_row(row(account, json!(null)))).unwrap_err().0,
-            "invalid explanation evidence",
+            format!("defense explanation row {item}: invalid explanation evidence"),
             "a mark with its evidence left out"
         );
     }
@@ -307,7 +307,7 @@ async fn a_hint_needs_an_answer_since_the_item_opened_and_the_last_hint() {
         )))
         .unwrap_err()
         .0,
-        "dangling review evidence reference",
+        format!("defense explanation row {item}: dangling review evidence reference"),
         "a reference of another kind does not cite a turn"
     );
 }

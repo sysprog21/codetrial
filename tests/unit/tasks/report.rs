@@ -1,5 +1,5 @@
 use super::*;
-use crate::tasks::test_support::admitted;
+use crate::tasks::test_support::{admitted, rename};
 
 async fn session() -> TaskSession {
     let mut session = TaskSession::new(admitted().await, 100);
@@ -88,6 +88,327 @@ async fn reviews_refuse_hiring_unsupported_judgments_code_and_dangling_reference
     value["dimensions"]["implementationOwnership"]["evidence"] =
         json!([{"kind":"turn", "id":"turn-1"}]);
     assert!(validate(&session, &value, "").is_err());
+}
+
+/// Value refusals are listed together too, each named by its dimension or list,
+/// since each refusal spends one of the review's repairs (#744).
+#[tokio::test]
+async fn value_refusals_across_dimensions_and_lists_come_at_once() {
+    let session = session().await;
+    let mut value = review();
+    for name in ["implementationOwnership", "revisionAndImprovement"] {
+        value["dimensions"][name]["insufficientReason"] = json!("unknown");
+    }
+    value["gaps"] = json!("not a list");
+    assert_eq!(
+        validate(&session, &value, "").unwrap_err().0,
+        [
+            "learning review dimension implementationOwnership: null rating requires an insufficient-evidence reason",
+            "learning review dimension revisionAndImprovement: null rating requires an insufficient-evidence reason",
+            "learning review gaps: invalid learning review list",
+        ]
+        .join("; ")
+    );
+}
+
+/// A refusal of the review's shape names the object, what is wrong with it and
+/// the key, since that message is all the repair prompt and the log get (#744).
+/// An unknown key that is not a short plain identifier is text the model wrote,
+/// so it is reported without being repeated.
+#[tokio::test]
+async fn a_refused_review_shape_names_the_object_and_the_key() {
+    let session = session().await;
+    let refusal = |value: Value| validate(&session, &value, "").unwrap_err().to_string();
+
+    assert_eq!(refusal(json!([])), "learning review is not an object");
+    let mut value = review();
+    value.as_object_mut().unwrap().remove("gaps");
+    assert_eq!(refusal(value), r#"learning review is missing "gaps""#);
+    let mut value = review();
+    value["summary"] = json!("A summary.");
+    assert_eq!(
+        refusal(value),
+        r#"learning review has unknown field "summary""#
+    );
+    let mut value = review();
+    rename(&mut value, "nextActions", "next_actions");
+    assert_eq!(
+        refusal(value),
+        r#"learning review is missing "nextActions" and has unknown field "next_actions""#
+    );
+
+    let mut value = review();
+    value["dimensions"] = json!([]);
+    assert_eq!(
+        refusal(value),
+        "learning review dimensions is not an object"
+    );
+    let mut value = review();
+    value["dimensions"]["overall"] = json!({});
+    assert_eq!(
+        refusal(value),
+        r#"learning review dimensions has unknown field "overall""#
+    );
+    let mut value = review();
+    let dimension = value["dimensions"]["testingAndDiagnosis"]
+        .as_object_mut()
+        .unwrap();
+    dimension.remove("support");
+    dimension.remove("evidence");
+    assert_eq!(
+        refusal(value),
+        r#"learning review dimension testingAndDiagnosis is missing "support", "evidence""#
+    );
+    let mut value = review();
+    value["dimensions"]["reasoningParticipation"]["evidence"] =
+        json!([{"type": "turn", "id": "turn-1"}]);
+    assert_eq!(
+        refusal(value),
+        r#"learning review dimension reasoningParticipation evidence reference is missing "kind" and has unknown field "type""#
+    );
+
+    // Every problem in one refusal, since each refusal spends a repair: all the
+    // unknown keys of an object, up to a cap, and every misshapen dimension.
+    let mut value = review();
+    for key in ["summary", "overall", "score"] {
+        value[key] = json!("x");
+    }
+    assert_eq!(
+        refusal(value),
+        r#"learning review has unknown fields "overall", "score", "summary""#
+    );
+    let mut value = review();
+    for n in 0..9 {
+        value[format!("k{n}")] = json!(1);
+    }
+    assert_eq!(
+        refusal(value),
+        r#"learning review has 9 unknown fields, among them "k0", "k1", "k2", "k3", "k4", "k5", "k6", "k7""#
+    );
+    let mut value = review();
+    value["summary"] = json!("x");
+    value["9lives"] = json!(1);
+    assert_eq!(
+        refusal(value),
+        r#"learning review has 2 unknown fields, among them "summary""#
+    );
+    let mut value = review();
+    for name in DIMENSIONS {
+        rename(
+            &mut value["dimensions"][name],
+            "insufficientReason",
+            "insufficient_reason",
+        );
+    }
+    let one = |name: &str| {
+        format!(
+            r#"learning review dimension {name} is missing "insufficientReason" and has unknown field "insufficient_reason""#
+        )
+    };
+    assert_eq!(refusal(value), DIMENSIONS.map(one).join("; "));
+    let typed = |name: &str| {
+        format!(
+            r#"learning review dimension {name} evidence reference is missing "kind" and has unknown field "type""#
+        )
+    };
+    let mut value = review();
+    for name in DIMENSIONS {
+        value["dimensions"][name]["evidence"] = json!([
+            {"type": "turn", "id": "turn-1"},
+            {"type": "revision", "id": "initial"}
+        ]);
+    }
+    assert_eq!(
+        refusal(value),
+        DIMENSIONS.map(typed).join("; "),
+        "each dimension once, however many of its references share the fault"
+    );
+
+    // A dimension's references are read even when its own keys are refused:
+    // snake_case and `type` in every dimension are eight places, which fit in
+    // one refusal, and used to take two.
+    let mut value = review();
+    for name in DIMENSIONS {
+        rename(
+            &mut value["dimensions"][name],
+            "insufficientReason",
+            "insufficient_reason",
+        );
+        value["dimensions"][name]["evidence"] = json!([{"type": "turn", "id": "turn-1"}]);
+    }
+    assert_eq!(
+        refusal(value),
+        DIMENSIONS
+            .into_iter()
+            .flat_map(|name| [one(name), typed(name)])
+            .collect::<Vec<_>>()
+            .join("; ")
+    );
+
+    // A value fault in a dimension whose shape passed comes in the same refusal
+    // as a shape fault in another, after it, and used to wait for the next.
+    let mut value = review();
+    rename(
+        &mut value["dimensions"]["testingAndDiagnosis"],
+        "insufficientReason",
+        "insufficient_reason",
+    );
+    value["dimensions"]["reasoningParticipation"]["support"] = json!("guessed");
+    assert_eq!(
+        refusal(value),
+        [
+            one("testingAndDiagnosis"),
+            "learning review dimension reasoningParticipation: invalid support provenance"
+                .to_owned(),
+        ]
+        .join("; ")
+    );
+
+    // A dimension whose references are refused is not read for its values,
+    // which would name the reference again as a dangling one.
+    let mut value = review();
+    value["dimensions"]["reasoningParticipation"]["evidence"] =
+        json!([{"type": "turn", "id": "turn-1"}]);
+    value["dimensions"]["revisionAndImprovement"]["support"] = json!("guessed");
+    assert_eq!(
+        refusal(value),
+        [
+            typed("reasoningParticipation"),
+            "learning review dimension revisionAndImprovement: invalid support provenance"
+                .to_owned(),
+        ]
+        .join("; ")
+    );
+
+    let mut value = review();
+    value["dimensions"]["reasoningParticipation"]
+        .as_object_mut()
+        .unwrap()
+        .remove("support");
+    value["dimensions"]["revisionAndImprovement"]["evidence"] =
+        json!([{"type": "turn", "id": "turn-1"}]);
+    assert_eq!(
+        refusal(value),
+        [
+            r#"learning review dimension reasoningParticipation is missing "support""#.to_owned(),
+            typed("revisionAndImprovement"),
+        ]
+        .join("; ")
+    );
+
+    // A dimension that is not an object is named, and one after it is still
+    // read.
+    let mut value = review();
+    value["dimensions"]["testingAndDiagnosis"] = Value::Null;
+    value["dimensions"]["revisionAndImprovement"]
+        .as_object_mut()
+        .unwrap()
+        .remove("support");
+    assert_eq!(
+        refusal(value),
+        [
+            "learning review dimension testingAndDiagnosis is not an object",
+            r#"learning review dimension revisionAndImprovement is missing "support""#,
+        ]
+        .join("; ")
+    );
+
+    // Every level at once: snake_case throughout used to be told one level per
+    // refusal, the review, then `dimensions`, then each dimension. The renamed
+    // dimension is not read, so its own keys add nothing.
+    let mut value = review();
+    for name in DIMENSIONS {
+        rename(
+            &mut value["dimensions"][name],
+            "insufficientReason",
+            "insufficient_reason",
+        );
+    }
+    rename(&mut value, "nextActions", "next_actions");
+    rename(
+        &mut value["dimensions"],
+        "reasoningParticipation",
+        "reasoning_participation",
+    );
+    assert_eq!(
+        refusal(value),
+        [
+            r#"learning review is missing "nextActions" and has unknown field "next_actions""#
+                .to_owned(),
+            r#"learning review dimensions is missing "reasoningParticipation" and has unknown field "reasoning_participation""#
+                .to_owned(),
+            one("implementationOwnership"),
+            one("testingAndDiagnosis"),
+            one("revisionAndImprovement"),
+        ]
+        .join("; ")
+    );
+    let mut value = review();
+    for n in 0..5 {
+        value[format!("next-actions-{n}")] = json!(1);
+    }
+    assert_eq!(
+        refusal(value),
+        "learning review has 5 unknown fields whose names are not identifiers"
+    );
+
+    // One refusal names at most `MAX_REFUSALS` places, however many references
+    // carry a key of their own.
+    let mut value = review();
+    for name in DIMENSIONS {
+        let references: Vec<Value> = (0..8)
+            .map(|n| {
+                let mut reference = json!({"kind": "turn", "id": "turn-1"});
+                reference[format!("k{n}")] = json!(1);
+                reference
+            })
+            .collect();
+        value["dimensions"][name]["evidence"] = json!(references);
+    }
+    let why = refusal(value);
+    assert!(why.ends_with("; and 24 more"), "{why}");
+    assert_eq!(why.matches("; ").count(), 8, "{why}");
+
+    // The eighth reference is read, and a ninth is refused as a value.
+    let good = json!({"kind": "turn", "id": "turn-1"});
+    let extra = json!({"kind": "turn", "id": "turn-1", "note": "x"});
+    let mut eight = vec![good.clone(); 7];
+    eight.push(extra.clone());
+    let mut value = review();
+    value["dimensions"]["reasoningParticipation"]["evidence"] = json!(eight);
+    assert_eq!(
+        refusal(value),
+        r#"learning review dimension reasoningParticipation evidence reference has unknown field "note""#
+    );
+    let mut nine = vec![good; 8];
+    nine.push(extra);
+    let mut value = review();
+    value["dimensions"]["reasoningParticipation"]["evidence"] = json!(nine);
+    assert_eq!(
+        refusal(value),
+        "learning review dimension reasoningParticipation: invalid dimension evidence"
+    );
+
+    let named = "a".repeat(64);
+    let mut value = review();
+    value[named.as_str()] = json!(1);
+    assert_eq!(
+        refusal(value),
+        format!(r#"learning review has unknown field "{named}""#)
+    );
+    for key in [
+        "a".repeat(65),
+        "9lives".to_owned(),
+        "int main() { return 0; }".to_owned(),
+    ] {
+        let mut value = review();
+        value[key.as_str()] = json!(1);
+        assert_eq!(
+            refusal(value),
+            "learning review has an unknown field whose name is not an identifier",
+            "{key}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -408,12 +729,15 @@ async fn a_testing_rating_cites_a_run_that_ran_tests() {
     dimension["evidence"] = json!([{"kind": "turn", "id": "turn-1"}]);
     assert_eq!(
         validate(&session, &value, "").map_err(|error| error.0),
-        Err("numeric rating needs reliable evidence".to_owned())
+        Err("learning review dimension reasoningParticipation: numeric rating needs reliable evidence".to_owned())
     );
     // A runner failure ran no test, so it is no evidence about testing.
     assert_eq!(
         rated("broke"),
-        Err("numeric rating needs reliable evidence".to_owned())
+        Err(
+            "learning review dimension testingAndDiagnosis: numeric rating needs reliable evidence"
+                .to_owned()
+        )
     );
 }
 
@@ -438,12 +762,12 @@ async fn a_zero_cites_an_unresolved_check_and_a_two_names_its_support() {
     // turn-1 covered its check, so it is no unresolved opportunity.
     assert_eq!(
         rated(&session, 0, "none", "turn-1"),
-        Err("zero needs an observed unresolved opportunity".to_owned())
+        Err("learning review dimension reasoningParticipation: zero needs an observed unresolved opportunity".to_owned())
     );
     // A two needs both the support named and the evidence bound to it.
     assert_eq!(
         rated(&session, 2, "conceptual_hint", "turn-1"),
-        Err("supported rating needs support provenance".to_owned())
+        Err("learning review dimension reasoningParticipation: supported rating needs support provenance".to_owned())
     );
     session
         .checks
@@ -453,7 +777,7 @@ async fn a_zero_cites_an_unresolved_check_and_a_two_names_its_support() {
         .insert("turn-1".to_owned(), Support::ConceptualHint);
     assert_eq!(
         rated(&session, 2, "none", "turn-1"),
-        Err("supported rating needs support provenance".to_owned())
+        Err("learning review dimension reasoningParticipation: supported rating needs support provenance".to_owned())
     );
     assert_eq!(rated(&session, 2, "conceptual_hint", "turn-1"), Ok(()));
 }

@@ -3,6 +3,7 @@ use std::path::Path;
 use serde_json::{Value, json};
 
 use super::*;
+use crate::tasks::test_support::rename;
 
 pub(super) const SALT: &[u8] = b"0123456789abcdef";
 
@@ -856,6 +857,162 @@ fn a_defense_is_admitted_with_its_attempt_and_examined_by_jim() {
     assert!(asked.contains(&serde_json::to_string(&items).unwrap()));
     let validate = |value: Value| crate::tasks::report::validate(&session, &value, "");
     validate(review(json!(rows))).unwrap();
+
+    // A refused row names its item and the key, for the repair to fix (#744).
+    let mut renamed = rows.clone();
+    rename(&mut renamed[0], "reason", "why");
+    assert_eq!(
+        validate(review(json!(renamed))).unwrap_err().0,
+        format!(
+            r#"defense explanation row {} is missing "reason" and has unknown field "why""#,
+            items[0]
+        )
+    );
+    let mut swapped = rows.clone();
+    swapped[0]["item"] = json!(items[1]);
+    assert_eq!(
+        validate(review(json!(swapped))).unwrap_err().0,
+        format!("defense explanation row {} names another item", items[0])
+    );
+    let mut typed = rows.clone();
+    typed[0]["evidence"] = json!([{"type": "turn", "id": "turn-3"}]);
+    assert_eq!(
+        validate(review(json!(typed))).unwrap_err().0,
+        format!(
+            r#"defense explanation row {} evidence reference is missing "kind" and has unknown field "type""#,
+            items[0]
+        )
+    );
+
+    // A row is told about its keys and its item at once, while a row without an
+    // item is told only that it is missing.
+    let mut keyed = rows.clone();
+    rename(&mut keyed[0], "reason", "why");
+    keyed[0]["item"] = json!(items[1]);
+    keyed[1].as_object_mut().unwrap().remove("item");
+    assert_eq!(
+        validate(review(json!(keyed))).unwrap_err().0,
+        [
+            format!(
+                r#"defense explanation row {} is missing "reason" and has unknown field "why""#,
+                items[0]
+            ),
+            format!("defense explanation row {} names another item", items[0]),
+            format!(r#"defense explanation row {} is missing "item""#, items[1]),
+        ]
+        .join("; ")
+    );
+
+    // A row's references are read even when its keys or its item are refused.
+    let mut both = rows.clone();
+    rename(&mut both[0], "reason", "why");
+    both[0]["evidence"] = json!([{"type": "turn", "id": "turn-3"}]);
+    both[1]["item"] = json!(items[0]);
+    both[1]["evidence"] = json!([{"type": "turn", "id": "turn-3"}]);
+    let typed = |item: &str| {
+        format!(
+            r#"defense explanation row {item} evidence reference is missing "kind" and has unknown field "type""#
+        )
+    };
+    assert_eq!(
+        validate(review(json!(both))).unwrap_err().0,
+        [
+            format!(
+                r#"defense explanation row {} is missing "reason" and has unknown field "why""#,
+                items[0]
+            ),
+            typed(&items[0]),
+            format!("defense explanation row {} names another item", items[1]),
+            typed(&items[1]),
+        ]
+        .join("; ")
+    );
+
+    // Every row in one refusal, beside the dimensions: three items and three
+    // calls left no call to fix the last row when each refusal named one.
+    let mut renamed = rows.clone();
+    for row in &mut renamed {
+        rename(row, "reason", "why");
+    }
+    let mut value = review(json!(renamed));
+    value["dimensions"]["testingAndDiagnosis"]
+        .as_object_mut()
+        .unwrap()
+        .remove("support");
+    let named: Vec<String> = items
+        .iter()
+        .map(|item| {
+            format!(
+                r#"defense explanation row {item} is missing "reason" and has unknown field "why""#
+            )
+        })
+        .collect();
+    assert_eq!(
+        validate(value).unwrap_err().0,
+        [
+            r#"learning review dimension testingAndDiagnosis is missing "support""#.to_owned(),
+            named.join("; "),
+        ]
+        .join("; ")
+    );
+    let mut value = review(json!(renamed));
+    value["dimensions"]["overall"] = json!({});
+    assert_eq!(
+        validate(value).unwrap_err().0,
+        [
+            r#"learning review dimensions has unknown field "overall""#.to_owned(),
+            named.join("; "),
+        ]
+        .join("; "),
+        "an unknown dimension does not hide the rows"
+    );
+
+    // A row whose shape passed is read for its values beside a row refused for
+    // its keys or for its item, which is not.
+    let mark = |item: &str| {
+        format!("defense explanation row {item}: an explanation mark needs a recognized turn")
+    };
+    let mut keyed = rows.clone();
+    rename(&mut keyed[0], "reason", "why");
+    let mut swapped = rows.clone();
+    swapped[0]["item"] = json!(items[1]);
+    for (mixed, refused) in [
+        (
+            keyed,
+            format!(
+                r#"defense explanation row {} is missing "reason" and has unknown field "why""#,
+                items[0]
+            ),
+        ),
+        (
+            swapped,
+            format!("defense explanation row {} names another item", items[0]),
+        ),
+    ] {
+        let mut mixed = mixed;
+        for row in &mut mixed {
+            row["rating"] = json!(2);
+        }
+        assert_eq!(
+            validate(review(json!(mixed))).unwrap_err().0,
+            [refused, mark(&items[1])].join("; ")
+        );
+    }
+    let mut unrecognized = rows.clone();
+    for row in &mut unrecognized {
+        row["rating"] = json!(2);
+    }
+    let marks: Vec<String> = items
+        .iter()
+        .map(|item| {
+            format!("defense explanation row {item}: an explanation mark needs a recognized turn")
+        })
+        .collect();
+    assert_eq!(
+        validate(review(json!(unrecognized))).unwrap_err().0,
+        marks.join("; "),
+        "every row's value refusal at once"
+    );
     let mut missing = review(json!(rows));
     missing.as_object_mut().unwrap().remove("explanations");
     assert!(
