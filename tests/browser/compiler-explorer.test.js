@@ -400,10 +400,13 @@ const pinnedCase = (problem, label) => {
   return row;
 };
 
-/// Asserts that `run`, a wrong solution, misses the answer case `label` expects.
+/// Asserts that the judge rejects `run` on the built-in case `label`.
 const assertRejects = (problem, label, run, message) => {
-  const { input, expected } = pinnedCase(problem, label);
-  assert.notEqual(run(...structuredClone(input)), expected, message);
+  const row = pinnedCase(problem, label);
+  assert.ok(
+    !checkAnswer(judges[problem], row, run(...structuredClone(row.input))),
+    message,
+  );
 };
 
 test("longest-common-prefix cases reject incomplete comparisons", () => {
@@ -490,6 +493,212 @@ test("longest-common-prefix cases reject incomplete comparisons", () => {
       `"${label}" must expect the longest shared prefix`,
     );
   }
+});
+
+/// Asserts that the judge accepts `solve` on every built-in case of `problem`.
+const assertSolves = (problem, solve, message) => {
+  const judge = judges[problem];
+  for (const row of judge.cases) {
+    assert.ok(
+      checkAnswer(judge, row, solve(...structuredClone(row.input))),
+      message(row.label),
+    );
+  }
+};
+
+test("merge-sorted-array cases reject zero-as-padding shortcuts", async (t) => {
+  function writeBack(nums1, values) {
+    nums1.fill(0);
+    values.forEach((value, index) => {
+      nums1[index] = value;
+    });
+  }
+
+  function dropZerosFromNums1(nums1, m, nums2, n) {
+    const merged = [
+      ...nums1.slice(0, m).filter((value) => value !== 0),
+      ...nums2.slice(0, n),
+    ].sort((a, b) => a - b);
+    writeBack(nums1, merged);
+  }
+
+  function stripTrailingZerosFromNums1(nums1, m, nums2, n) {
+    const prefix = nums1.slice(0, m);
+    while (prefix.at(-1) === 0) prefix.pop();
+    const merged = [...prefix, ...nums2.slice(0, n)].sort((a, b) => a - b);
+    writeBack(nums1, merged);
+  }
+
+  function stripLeadingZerosFromNums1(nums1, m, nums2, n) {
+    const prefix = nums1.slice(0, m);
+    while (prefix[0] === 0) prefix.shift();
+    const merged = [...prefix, ...nums2.slice(0, n)].sort((a, b) => a - b);
+    writeBack(nums1, merged);
+  }
+
+  function skipLeadingZerosInNums1Merge(nums1, m, nums2, n) {
+    let start = 0;
+    while (start < m && nums1[start] === 0) start += 1;
+    let left = m - 1;
+    let right = n - 1;
+
+    for (let write = m + n - 1; right >= 0; write -= 1) {
+      nums1[write] =
+        left >= start && nums1[left] > nums2[right]
+          ? nums1[left--]
+          : nums2[right--];
+    }
+  }
+
+  function skipZerosInNums1Merge(nums1, m, nums2, n) {
+    let left = m - 1;
+    let right = n - 1;
+    let write = m + n - 1;
+
+    while (right >= 0) {
+      if (left >= 0 && nums1[left] === 0) left -= 1;
+      else if (left >= 0 && nums1[left] > nums2[right])
+        nums1[write--] = nums1[left--];
+      else nums1[write--] = nums2[right--];
+    }
+  }
+
+  function skipZerosInNums2Merge(nums1, m, nums2, n) {
+    let left = m - 1;
+    let right = n - 1;
+    let write = m + n - 1;
+
+    while (right >= 0) {
+      if (nums2[right] === 0) right -= 1;
+      else if (left >= 0 && nums1[left] > nums2[right])
+        nums1[write--] = nums1[left--];
+      else nums1[write--] = nums2[right--];
+    }
+  }
+
+  function filterZerosFromNums2(nums1, m, nums2, n) {
+    const merged = [
+      ...nums1.slice(0, m),
+      ...nums2.slice(0, n).filter((value) => value !== 0),
+    ].sort((a, b) => a - b);
+    writeBack(nums1, merged);
+  }
+
+  function stripTrailingZerosFromNums2(nums1, m, nums2, n) {
+    const prefix = nums2.slice(0, n);
+    while (prefix.at(-1) === 0) prefix.pop();
+    const merged = [...nums1.slice(0, m), ...prefix].sort((a, b) => a - b);
+    writeBack(nums1, merged);
+  }
+
+  function stripLeadingZerosFromNums2(nums1, m, nums2, n) {
+    const prefix = nums2.slice(0, n);
+    while (prefix[0] === 0) prefix.shift();
+    const merged = [...nums1.slice(0, m), ...prefix].sort((a, b) => a - b);
+    writeBack(nums1, merged);
+  }
+
+  function skipLeadingZerosInNums2Merge(nums1, m, nums2, n) {
+    let start = 0;
+    while (start < n && nums2[start] === 0) start += 1;
+    let left = m - 1;
+    let right = n - 1;
+
+    for (let write = m + n - 1; right >= start; write -= 1) {
+      nums1[write] =
+        left >= 0 && nums1[left] > nums2[right]
+          ? nums1[left--]
+          : nums2[right--];
+    }
+  }
+
+  function keepFirstZero(values) {
+    let keptZero = false;
+    return values.filter((value) => {
+      if (value !== 0) return true;
+      if (keptZero) return false;
+      keptZero = true;
+      return true;
+    });
+  }
+
+  function coalesceZerosAcrossInputs(nums1, m, nums2, n) {
+    const merged = keepFirstZero([
+      ...nums1.slice(0, m),
+      ...nums2.slice(0, n),
+    ]).sort((a, b) => a - b);
+    writeBack(nums1, merged);
+  }
+
+  function coalesceZerosAcrossInputsInPlace(nums1, m, nums2, n) {
+    let left = m - 1;
+    let right = n - 1;
+    let write = m + n - 1;
+
+    while (right >= 0) {
+      if (left >= 0 && nums1[left] === 0 && nums2[right] === 0) left -= 1;
+      else if (left >= 0 && nums1[left] > nums2[right])
+        nums1[write--] = nums1[left--];
+      else nums1[write--] = nums2[right--];
+    }
+  }
+
+  function coalesceZerosWithinInputs(nums1, m, nums2, n) {
+    const merged = [
+      ...keepFirstZero(nums1.slice(0, m)),
+      ...keepFirstZero(nums2.slice(0, n)),
+    ].sort((a, b) => a - b);
+    writeBack(nums1, merged);
+  }
+
+  function merge(nums1, m, nums2, n) {
+    let left = m - 1;
+    let right = n - 1;
+
+    for (let write = m + n - 1; right >= 0; write -= 1) {
+      nums1[write] =
+        left >= 0 && nums1[left] > nums2[right]
+          ? nums1[left--]
+          : nums2[right--];
+    }
+
+    return nums1;
+  }
+
+  for (const [label, shortcut] of [
+    ["trailing zero in valid prefix", dropZerosFromNums1],
+    ["trailing zero in valid prefix", stripTrailingZerosFromNums1],
+    ["trailing zero in valid prefix", skipZerosInNums1Merge],
+    ["leading zero in valid prefix", dropZerosFromNums1],
+    ["leading zero in valid prefix", stripLeadingZerosFromNums1],
+    ["leading zero changes position", skipLeadingZerosInNums1Merge],
+    ["trailing zero in nums2", skipZerosInNums2Merge],
+    ["trailing zero in nums2", filterZerosFromNums2],
+    ["trailing zero in nums2", stripTrailingZerosFromNums2],
+    ["leading zero in nums2", stripLeadingZerosFromNums2],
+    ["leading zero in nums2", skipLeadingZerosInNums2Merge],
+    ["zero in both inputs", coalesceZerosAcrossInputs],
+    ["zero in both inputs", coalesceZerosAcrossInputsInPlace],
+    ["repeated zeros in both inputs", coalesceZerosWithinInputs],
+  ]) {
+    await t.test(`${shortcut.name} on "${label}"`, () =>
+      assertRejects(
+        "merge-sorted-array",
+        label,
+        (nums1, m, nums2, n) => {
+          shortcut(nums1, m, nums2, n);
+          return nums1;
+        },
+        `"${label}" must reject ${shortcut.name}`,
+      ),
+    );
+  }
+
+  assertSolves(
+    "merge-sorted-array",
+    merge,
+    (label) => `"${label}" must expect the merged array`,
+  );
 });
 
 test("word-pattern cases reject shortcuts that skip a length or mapping check", () => {
