@@ -1176,5 +1176,178 @@ class PageNameTests(unittest.TestCase):
         self.assertEqual({c for c in checkers if GEN.camel_words(c) in titles}, set())
 
 
+class ReferenceTests(unittest.TestCase):
+    """A reference solution is run over its judge's cases by --check."""
+
+    def judge(self, cases, **extra):
+        return {
+            "kind": "function",
+            "entry": "solve",
+            "checker": "exact",
+            "paramNames": ["nums"],
+            "paramTypes": ["int[]"],
+            "returnType": "int",
+            "cases": [{"input": i, "expected": e} for i, e in cases],
+            **extra,
+        }
+
+    def check(self, judges, references):
+        with tempfile.TemporaryDirectory() as directory:
+            for name, source in references.items():
+                (Path(directory) / f"{name}.py").write_text(source)
+            GEN.check_references(judges, Path(directory))
+
+    def test_a_reference_that_matches_every_case_passes(self):
+        judges = {"sum": self.judge([[[[1, 2]], 3], [[[]], 0]])}
+        self.check(judges, {"sum": "def solve(nums):\n    return sum(nums)\n"})
+
+    def test_a_wrong_expected_value_names_the_judge_and_case(self):
+        judges = {"sum": self.judge([[[[1, 2]], 3], [[[2, 2]], 5]])}
+        with self.assertRaisesRegex(
+            RuntimeError, r"sum: case 2 expects 5, the reference returns 4"
+        ):
+            self.check(judges, {"sum": "def solve(nums):\n    return sum(nums)\n"})
+
+    def test_values_compare_as_the_browser_compares_them(self):
+        # JSON carries both to the page, where Object.is decides: true is not
+        # 1, while 2.0 and 2 are the same number.
+        judges = {"sum": self.judge([[[[1]], 1]])}
+        with self.assertRaisesRegex(
+            RuntimeError, "expects 1, the reference returns true"
+        ):
+            self.check(judges, {"sum": "def solve(nums):\n    return True\n"})
+        self.check(judges, {"sum": "def solve(nums):\n    return 1.0\n"})
+        judges = {"sum": self.judge([[[[1]], [1, 2]]])}
+        self.check(judges, {"sum": "def solve(nums):\n    return (1, 2)\n"})
+        # JSON.parse reads every number as a double, so integers past 2**53
+        # that round to the same one are equal there, and one too large for
+        # a double is Infinity.
+        judges = {"sum": self.judge([[[[1]], 2**53 + 1], [[[2]], 10**400]])}
+        self.check(
+            judges,
+            {"sum": "def solve(nums):\n    return 2**53 if nums == [1] else 10**401\n"},
+        )
+
+    def test_a_reference_reads_its_input_as_the_page_hands_it_over(self):
+        # The page passes each input through JSON.parse and JSON.stringify:
+        # 2.0 arrives as 2, 2**53 + 1 as 2**53, 1e400 as null, and 2**60 in
+        # the shortest digits of its double, 1152921504606847000.
+        judges = {
+            "seen": self.judge(
+                [[[[2.0, 2**53 + 1, 1e400, 2**60]], ["int", 2**53, "NoneType", 0]]]
+            )
+        }
+        self.check(
+            judges,
+            {
+                "seen": "def solve(nums):\n"
+                "    return [\n"
+                "        type(nums[0]).__name__, nums[1], type(nums[2]).__name__, nums[3] % 1000\n"
+                "    ]\n"
+            },
+        )
+
+    def test_a_reference_runs_as_a_module(self):
+        # A dataclass looks its module up while it is built, which fails when
+        # the module has already left sys.modules.
+        judges = {"sum": self.judge([[[[1]], 1]])}
+        self.check(
+            judges,
+            {
+                "sum": "from __future__ import annotations\n"
+                "from dataclasses import dataclass\n\n\n"
+                "def solve(nums):\n"
+                "    @dataclass\n"
+                "    class Box:\n"
+                "        value: int\n\n"
+                "    return Box(nums[0]).value\n"
+            },
+        )
+
+    def test_an_output_parameter_is_read_after_the_call(self):
+        judges = {
+            "fill": self.judge([[[[1, 2]], [0, 0]]], outputParam=0),
+            "keep": self.judge([[[[1, 0, 2]], [1, 2]]], outputPrefixParam=0),
+        }
+        self.check(
+            judges,
+            {
+                "fill": "def solve(nums):\n    nums[:] = [0] * len(nums)\n",
+                "keep": "def solve(nums):\n"
+                "    nums[:] = [n for n in nums if n] + [0]\n"
+                "    return 2\n",
+            },
+        )
+
+    def test_a_case_the_reference_changes_does_not_reach_the_judge(self):
+        judges = {"fill": self.judge([[[[1]], [0]], [[[1]], [0]]], outputParam=0)}
+        self.check(judges, {"fill": "def solve(nums):\n    nums[0] = 0\n"})
+        self.assertEqual(judges["fill"]["cases"][0]["input"], [[1]])
+        self.assertEqual(judges["fill"]["cases"][1]["input"], [[1]])
+
+    def test_a_reference_that_raises_names_the_case(self):
+        judges = {"sum": self.judge([[[[1]], 1]])}
+        with self.assertRaisesRegex(
+            RuntimeError, "sum: case 1 raises ZeroDivisionError"
+        ):
+            self.check(judges, {"sum": "def solve(nums):\n    return 1 // 0\n"})
+
+    def test_a_reference_that_fails_to_load_names_the_judge(self):
+        judges = {"candy": self.judge([[[[1]], 1]], entry="candy")}
+        with self.assertRaisesRegex(RuntimeError, "candy: fails to load: SyntaxError"):
+            self.check(judges, {"candy": "def candy(r): return 1 +\n"})
+
+    def test_a_reference_needs_a_judge_it_can_check(self):
+        with self.assertRaisesRegex(RuntimeError, "ghost: no judge has this id"):
+            self.check({}, {"ghost": "def solve(nums):\n    return 0\n"})
+        judges = {"bag": self.judge([[[[1]], [1]]], checker="arrayBag")}
+        with self.assertRaisesRegex(RuntimeError, "bag: only an exact judge"):
+            self.check(judges, {"bag": "def solve(nums):\n    return nums\n"})
+        for extra, message in [
+            ({"argTypes": ["linkedList"]}, "a linked or tree value needs a codec"),
+            ({"outputType": "binaryTree"}, "a linked or tree value needs a codec"),
+            ({"kind": "class"}, "only an exact judge"),
+        ]:
+            judges = {"odd": self.judge([[[[1]], 1]], **extra)}
+            with self.assertRaisesRegex(RuntimeError, f"odd: {message}"):
+                self.check(judges, {"odd": "def solve(nums):\n    return 1\n"})
+        with self.assertRaisesRegex(RuntimeError, "sum: defines no function solve"):
+            self.check(
+                {"sum": self.judge([[[[1]], 1]])},
+                {"sum": "def other(nums):\n    return 1\n"},
+            )
+
+    def test_every_reference_in_the_bank_passes(self):
+        # check_references visits only the files it finds, so a reference
+        # deleted, or the whole folder, would drop its judge's check silently.
+        directory = GEN.ROOT / "problem-bank" / "references"
+        found = {path.stem for path in directory.glob("*.py")}
+        expected = {
+            "add-binary",
+            "best-time-to-buy-and-sell-stock",
+            "best-time-to-buy-and-sell-stock-ii",
+            "best-time-to-buy-and-sell-stock-iv",
+            "bitwise-and-of-numbers-range",
+            "candy",
+            "climbing-stairs",
+            "coin-change",
+            "container-with-most-water",
+            "contains-duplicate-ii",
+            "course-schedule",
+            "edit-distance",
+            "evaluate-division",
+            "evaluate-reverse-polish-notation",
+            "factorial-trailing-zeroes",
+            "find-first-and-last-position-of-element-in-sorted-array",
+            "find-minimum-in-rotated-sorted-array",
+            "find-peak-element",
+            "find-the-index-of-the-first-occurrence-in-a-string",
+            "game-of-life",
+            "gas-station",
+        }
+        self.assertEqual(set(), expected - found, "references missing from the bank")
+        GEN.check_references(GEN.read_json(GEN.JUDGE_SOURCE), directory)
+
+
 if __name__ == "__main__":
     unittest.main()
