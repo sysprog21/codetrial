@@ -702,6 +702,86 @@ test("merge-sorted-array cases reject zero-as-padding shortcuts", async (t) => {
   );
 });
 
+const addColumns = (a, b, digit = (sum) => sum % 2) => {
+  let i = a.length - 1;
+  let j = b.length - 1;
+  let carry = 0;
+  const bits = [];
+  while (i >= 0 || j >= 0 || carry) {
+    const sum = Number(a[i--] ?? 0) + Number(b[j--] ?? 0) + carry;
+    bits.push(digit(sum));
+    carry = Math.floor(sum / 2);
+  }
+  return bits.reverse().join("");
+};
+
+test("add-binary cases accept exact addition of wide values", () => {
+  for (const {
+    input: [a, b],
+    expected,
+    label,
+  } of judges["add-binary"].cases) {
+    assert.equal(addColumns(a, b), expected, label);
+    assert.equal(
+      (BigInt(`0b${a}`) + BigInt(`0b${b}`)).toString(2),
+      expected,
+      label,
+    );
+  }
+});
+
+for (const [name, label, add] of [
+  [
+    "parseInt addition through Number",
+    "wide value plus one",
+    (a, b) => (parseInt(a, 2) + parseInt(b, 2)).toString(2),
+  ],
+  [
+    "BigInt converted from an already rounded Number",
+    "wide odd value plus zero",
+    (a, b) => (BigInt(parseInt(a, 2)) + BigInt(parseInt(b, 2))).toString(2),
+  ],
+  [
+    "addition limited to 64 bits",
+    "wide all ones plus one",
+    (a, b) =>
+      BigInt.asUintN(64, BigInt(`0b${a}`) + BigInt(`0b${b}`)).toString(2),
+  ],
+  [
+    "addition limited to 128 bits",
+    "wide all ones plus one",
+    (a, b) =>
+      BigInt.asUintN(128, BigInt(`0b${a}`) + BigInt(`0b${b}`)).toString(2),
+  ],
+]) {
+  test(`add-binary cases reject ${name}`, () => {
+    assertRejects("add-binary", label, add, `${label} must reject ${name}`);
+  });
+}
+
+test("add-binary cases reject rounding only the shorter operand", () => {
+  const add = (a, b) => {
+    const [longer, shorter] = a.length > b.length ? [a, b] : [b, a];
+    return (BigInt(`0b${longer}`) + BigInt(parseInt(shorter, 2))).toString(2);
+  };
+  const label = "two wide values with multi-bit carry";
+  const { input } = pinnedCase("add-binary", label);
+  assert.ok(input.every((bits) => bits.length > 53));
+  assert.notEqual(input[0].length, input[1].length);
+  assertRejects("add-binary", label, add, `${label} must reject rounding`);
+});
+
+test("add-binary cases reject writing a column of three as zero", () => {
+  const add = (a, b) => addColumns(a, b, (sum) => (sum === 3 ? 0 : sum % 2));
+  const label = "two wide values with multi-bit carry";
+  assertRejects(
+    "add-binary",
+    label,
+    add,
+    `${label} must reject a column of three`,
+  );
+});
+
 test("word-pattern cases reject shortcuts that skip a length or mapping check", () => {
   const distinct = (values) => new Set(values).size;
   const sameDistinct = (p, w) =>
@@ -4932,6 +5012,32 @@ void* failing_malloc(size_t size) {
     ["cpp", noGpp],
     ["java", noJava],
   ];
+
+  const addBits = {
+    c: candidateSource("compiler-explorer/add-binary.c"),
+    cpp: candidateSource("compiler-explorer/add-binary.cpp"),
+    java: candidateSource("compiler-explorer/add-binary.java"),
+  };
+  for (const [language, skip] of flattenLanguages) {
+    it(
+      `${language} harness preserves exact add-binary sums beyond 64 bits`,
+      { skip },
+      async () => {
+        const { cases } = judges["add-binary"];
+        assert.ok(cases.some(({ expected }) => expected.length > 64));
+        const results = await runJudge(
+          language,
+          "add-binary",
+          addBits[language],
+        );
+        assert.equal(results.length, cases.length);
+        cases.forEach(({ label, expected }, index) => {
+          assert.equal(results[index].error, undefined, label);
+          assert.equal(results[index].actual, expected, label);
+        });
+      },
+    );
+  }
 
   // The empty block list reaches a compiled harness as a matrix with no rows,
   // which the JavaScript model in the insert-interval test never builds or

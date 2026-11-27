@@ -76,6 +76,41 @@ const outcome = (result) =>
   "error" in result ? { error: result.error } : { actual: result.actual };
 
 test(
+  "Python driver preserves exact add-binary sums beyond 64 bits",
+  { skip },
+  () => {
+    const spec = JSON.parse(read("web/judges/wide-register-arithmetic.json"));
+    assert.ok(spec.cases.some(({ expected }) => expected.length > 64));
+    const reply = runDriver(
+      candidateSource("python-driver/add-binary.py"),
+      spec,
+    );
+    assert.equal(reply.setupError, undefined);
+    assert.equal(reply.results.length, spec.cases.length);
+    spec.cases.forEach(({ label, expected }, index) => {
+      assert.equal(reply.results[index].error, undefined, label);
+      assert.equal(reply.results[index].actual, expected, label);
+    });
+  },
+);
+
+test("add-binary cases reject per-character Python recursion", { skip }, () => {
+  const spec = JSON.parse(read("web/judges/wide-register-arithmetic.json"));
+  const label = "maximum length all ones plus one";
+  const row = spec.cases.find((testCase) => testCase.label === label);
+  assert.ok(row, `the built-in cases must keep "${label}"`);
+  assert.equal(row.input[0].length, 10000);
+  const reply = runDriver(
+    candidateSource("python-driver/add-binary.per-character-recursion.py"),
+    spec,
+  );
+  assert.equal(reply.setupError, undefined);
+  assert.equal(reply.results.length, spec.cases.length);
+  const index = spec.cases.indexOf(row);
+  assert.match(reply.results[index].error ?? "", /RecursionError/, label);
+});
+
+test(
   "state an answer keeps on self starts fresh in every case",
   { skip },
   () => {
