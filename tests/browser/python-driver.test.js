@@ -150,7 +150,7 @@ test(
     );
     assert.deepEqual(reply.results.map(outcome), [
       { actual: [1, true, []] },
-      { error: "ValueError: two" },
+      { error: "ValueError: two (line 12, in count)" },
       { actual: [3, true, []] },
     ]);
   },
@@ -169,7 +169,7 @@ test(
     assert.equal(reply.setupError, undefined);
     assert.deepEqual(reply.results.map(outcome), [
       { actual: 1 },
-      { error: "KeyError: 0" },
+      { error: "KeyError: 0 (line 7, in __init__)" },
       { actual: 3 },
     ]);
   },
@@ -269,3 +269,80 @@ test("an answer written as a plain function still runs", { skip }, () => {
     [4, 10],
   );
 });
+
+// A runtime error names the candidate's editor line: the driver compiles the
+// code as <candidate> and reports its innermost frame there.
+const indexPair = {
+  kind: "function",
+  entry: "matchDisputedCharge",
+  checker: "indexPair",
+  paramNames: ["nums", "target"],
+  paramTypes: ["integer[]", "integer"],
+  returnType: "integer[]",
+  cases: [{ label: "first", input: [[2, 7, 11, 15], 9], expected: [0, 1] }],
+};
+
+const errorLines = [
+  {
+    name: "a Python error names the candidate's innermost line and function",
+    code: `def helper(nums, i):
+    return nums[i]
+
+class Solution:
+    def matchDisputedCharge(self, nums, target):
+        a = helper(nums, 0)
+        b = helper(nums, 99)
+        return [a, b]
+`,
+    error: "IndexError: list index out of range (line 2, in helper)",
+  },
+  {
+    name: "a Python error at the top level names its line",
+    code: `limit = undefined_name
+
+class Solution:
+    def matchDisputedCharge(self, nums, target):
+        return []
+`,
+    setupError: "NameError: name 'undefined_name' is not defined (line 1)",
+  },
+  {
+    name: "a Python syntax error names its line without the code's file name",
+    code: `class Solution:
+    def matchDisputedCharge(self, nums, target):
+        for i in range(len(nums)):
+            if nums[i] == target
+                return [i]
+        return []
+`,
+    setupError: "SyntaxError: expected ':' (line 4)",
+  },
+  {
+    name: "a Python syntax error raised by eval names the line that ran it",
+    code: `class Solution:
+    def matchDisputedCharge(self, nums, target):
+        return eval("1 +")
+`,
+    error: "SyntaxError: invalid syntax (line 3, in matchDisputedCharge)",
+  },
+  {
+    name: "a long Python error in a case keeps its line within the bound",
+    code: `class Solution:
+    def matchDisputedCharge(self, nums, target):
+        raise ValueError("${"x".repeat(500)}")
+`,
+    error:
+      `ValueError: ${"x".repeat(500)}`.slice(
+        0,
+        400 - " (line 3, in matchDisputedCharge)".length,
+      ) + " (line 3, in matchDisputedCharge)",
+  },
+];
+
+for (const { name, code, error, setupError } of errorLines) {
+  test(name, { skip }, () => {
+    const reply = runDriver(code, indexPair);
+    assert.equal(reply.setupError, setupError);
+    if (error !== undefined) assert.equal(reply.results[0].error, error);
+  });
+}

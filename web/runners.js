@@ -638,7 +638,38 @@ const JS_RUNNER_SOURCE = `
     self.onmessage = (event) => {
       // \`name\` is the one \`runWorker\` checked and bound in the prelude, sent
       // rather than re-derived so the message names what was looked up.
-      const { spec, name } = event.data;
+      const { spec, name, lines } = event.data;
+      // The candidate's code opens this worker's script, so a frame in it at or
+      // above the code's last line is an editor line. Frames come innermost
+      // first. The runner's own checks below that code name no such frame and
+      // keep their bare message, so the type and the line come together. The
+      // candidate controls the value thrown, and one whose \`toString\` or
+      // \`stack\` throws, or that has no text at all, must still fail its own
+      // case and not the whole run.
+      const candidateError = (error) => {
+        const message = () => {
+          try {
+            return String((error && error.message) || error).slice(0, 400);
+          } catch {
+            return "The code threw a value that cannot be shown.";
+          }
+        };
+        try {
+          const here = self.location && self.location.href;
+          const stack = error instanceof Error && typeof error.stack === "string" ? error.stack : "";
+          for (const frame of here && lines ? stack.split("\\n") : []) {
+            const at = frame.indexOf(here + ":");
+            const line = at === -1 ? NaN : Number.parseInt(frame.slice(at + here.length + 1), 10);
+            if (line >= 1 && line <= lines) {
+              const suffix = " (line " + line + ")";
+              return String(error).slice(0, 400 - suffix.length) + suffix;
+            }
+          }
+        } catch {
+          // Falls back to the message alone, as before the line was read.
+        }
+        return message();
+      };
       const sanitize = (value) => {
         const normalized = value === undefined ? null : value;
         try { return JSON.parse(JSON.stringify(normalized)); } catch { return String(normalized); }
@@ -914,7 +945,7 @@ const JS_RUNNER_SOURCE = `
           }
           results.push({ actual: sanitize(actual), timeMs: performance.now() - started });
         } catch (error) {
-          results.push({ error: String((error && error.message) || error).slice(0, 400), timeMs: performance.now() - started });
+          results.push({ error: candidateError(error), timeMs: performance.now() - started });
         }
       }
       self.postMessage({ results });
@@ -980,24 +1011,35 @@ function runWorker(code, spec) {
       URL.revokeObjectURL(url);
       resolve(event.data);
     };
+    // What reaches onerror is what the script itself left uncaught: a syntax
+    // error or a throw at the candidate's top level, since the runner below it
+    // catches every case. Its line is an editor line while it falls inside the
+    // code, and the browser's "Uncaught " says nothing the type does not.
+    const lines = code.split("\n").length;
     worker.onerror = (event) => {
       clearTimeout(timer);
       worker.terminate();
       URL.revokeObjectURL(url);
-      const error = new Error(
-        event.message || "Worker crashed while running your code.",
-      );
+      const message = event.message
+        ? event.message.replace(/^Uncaught /, "")
+        : "Worker crashed while running your code.";
+      const line =
+        event.lineno >= 1 && event.lineno <= lines
+          ? ` (line ${event.lineno})`
+          : "";
+      // Cut to the 400 characters runBrowserTests keeps, leaving the line.
+      const error = new Error(message.slice(0, 400 - line.length) + line);
       error.runnerUnavailable = false;
       reject(error);
     };
-    worker.postMessage({ spec, name });
+    worker.postMessage({ spec, name, lines });
   });
 }
 
 /// Exported so tests/browser/python-driver.test.js can run it on CPython,
 /// which needs no Pyodide download.
 export const pythonDriver = `
-import json, math, time
+import json, math, time, traceback
 from typing import List, Optional
 
 class ListNode:
@@ -1266,14 +1308,35 @@ def _prepare_args(case, spec, arg_types=None):
             args.append(value)
     return args
 
+# The candidate's code is compiled as <candidate>, so its frames are the ones the
+# editor shows; a check of this driver's own raises with none, and keeps its text.
+# A SyntaxError's own text names the file it parsed, so only its message is kept:
+# its line when that file is the candidate's, else the frame that ran eval.
+def _candidate_error(exc, limit=None):
+    text = f"{type(exc).__name__}: {exc}"
+    where = None
+    if isinstance(exc, SyntaxError):
+        text = f"{type(exc).__name__}: {exc.msg or exc}"
+        if exc.filename == "<candidate>":
+            where = f"line {exc.lineno}"
+    if where is None:
+        frames = [frame for frame in traceback.extract_tb(exc.__traceback__) if frame.filename == "<candidate>"]
+        if frames:
+            last = frames[-1]
+            where = f"line {last.lineno}" if last.name == "<module>" else f"line {last.lineno}, in {last.name}"
+    suffix = f" ({where})" if where else ""
+    if limit is not None:
+        text = text[: limit - len(suffix)]
+    return text + suffix
+
 def _codetrial_run(user_code, spec_json):
     spec = json.loads(spec_json)
     node_class = QuadNode if spec.get("outputType") == "quadTree" else (GraphNode if "graphNode" in (spec.get("argTypes") or []) or spec.get("outputType") == "graphNode" else (NextNode if "nextTree" in (spec.get("argTypes") or []) or spec.get("outputType") == "nextTree" else Node))
     ns = {"ListNode": ListNode, "TreeNode": TreeNode, "Node": node_class, "List": List, "Optional": Optional}
     try:
-        exec(user_code, ns)
+        exec(compile(user_code, "<candidate>", "exec"), ns)
     except Exception as exc:
-        return json.dumps({"setupError": f"{type(exc).__name__}: {exc}"})
+        return json.dumps({"setupError": _candidate_error(exc)})
 
     try:
         if spec["kind"] == "class":
@@ -1340,7 +1403,7 @@ def _codetrial_run(user_code, spec_json):
                 actual = repr(actual)
             results.append({"actual": actual, "timeMs": (time.perf_counter() - t0) * 1000})
         except Exception as exc:
-            results.append({"error": f"{type(exc).__name__}: {exc}"[:400], "timeMs": (time.perf_counter() - t0) * 1000})
+            results.append({"error": _candidate_error(exc, 400), "timeMs": (time.perf_counter() - t0) * 1000})
     return json.dumps({"results": results})
 
 _codetrial_run(_CODETRIAL_CODE, _CODETRIAL_SPEC)
