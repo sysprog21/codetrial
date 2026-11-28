@@ -150,3 +150,12 @@ pub(crate) fn rename(object: &mut serde_json::Value, from: &str, to: &str) {
     let value = map.remove(from).unwrap();
     map.insert(to.to_owned(), value);
 }
+
+/// Marks a stand-in tool executable. The stand-ins are shell scripts, so every
+/// test that runs one is Unix-only.
+#[cfg(unix)]
+pub(crate) fn executable(tool: &std::path::Path) {
+    let mut permissions = std::fs::metadata(tool).unwrap().permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
+    std::fs::set_permissions(tool, permissions).unwrap();
+}

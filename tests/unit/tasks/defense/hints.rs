@@ -9,7 +9,6 @@ use super::*;
 /// A package that allows hints lets Jim reserve them on opened items until the
 /// budget is spent, and each caps its item's suggested marks at 2; one that
 /// allows none refuses them, as a strict exam.
-#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread")]
 async fn hints_are_reserved_within_the_budget_and_cap_their_item() {
     use crate::web::defense::{BeginRequest, begin, with_attempt};
@@ -112,7 +111,6 @@ async fn hints_are_reserved_within_the_budget_and_cap_their_item() {
 /// Jim is granted a hint only for an attempt: after the learner has spoken
 /// since the item was opened, and not twice without an answer between; each
 /// is recorded against the item and not as a task's hint rung.
-#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread")]
 async fn a_hint_needs_an_answer_since_the_item_opened_and_the_last_hint() {
     use crate::tasks::access::{Admission, Preparation, TaskService};

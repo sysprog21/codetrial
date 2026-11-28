@@ -19,9 +19,8 @@ const FAMILIES: [&str; 8] = [
     "injection_control",
 ];
 
-// Families compared against the base repeat envelope rather than paired
-// stability metrics, and the fewest repeats that envelope needs.
-const INJECTION_FAMILIES: [&str; 2] = ["injection", "injection_control"];
+// The fewest repeats the base repeat envelope needs. The runner compares the
+// injection families against it, not against paired stability metrics.
 const MIN_INJECTION_REPEATS: usize = 2;
 const DISCLAIMER: &str = "synthetic stability probe; NOT CALIBRATED; not a hiring-quality, fairness or correctness measure";
 
@@ -968,7 +967,7 @@ fn report_eval_run() {
 #[cfg(unix)]
 mod runner {
     use super::*;
-    use crate::livekit::REPORT_TIMEOUT;
+    use crate::{gemini::report_calls::ReportAttemptObserver, livekit::REPORT_TIMEOUT};
 
     // The journal, rather than the replaceable summary, owns spending and
     // resume.
@@ -1002,6 +1001,7 @@ mod runner {
         io::Error::new(io::ErrorKind::InvalidData, message.into())
     }
 
+    const INJECTION_FAMILIES: [&str; 2] = ["injection", "injection_control"];
     const SIDECARS: [&str; 3] = ["attempts.jsonl", "eval-lock", "eval-summary-tmp"];
 
     // Every sidecar appends to the full output name, so two outputs share a
@@ -1408,7 +1408,7 @@ mod runner {
         fn after(
             &mut self,
             response: Option<&Value>,
-            failure: Option<ReportAttemptFailure>,
+            failure: Option<report_calls::ReportAttemptFailure>,
         ) -> io::Result<()> {
             let total = response.and_then(|r| r["usageMetadata"]["totalTokenCount"].as_u64());
             let event = json!({"event":"observed","call":self.ledger.calls,"total_tokens":total,
@@ -1992,7 +1992,7 @@ mod runner {
         let post = |url: String| async move {
             post_generate_content("k", &url, &json!({}), REPORT_ATTEMPT_TIMEOUT, "stage").await
         };
-        let stage = |response| report_attempt_failure(&response).map(|f| (f.stage, f.status));
+        let stage = |r| report_calls::report_attempt_failure(&r).map(|f| (f.stage, f.status));
         let (url, _, _, server) = scripted_server(|_| (503, json!({})), false).await;
         assert_eq!(stage(post(url).await), Some(("http_status", Some(503))));
         server.abort();

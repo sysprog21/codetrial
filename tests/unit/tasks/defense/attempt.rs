@@ -1,13 +1,19 @@
 //! The edges of an attempt's runs: the bounds of what it reads, keeps and
 //! refuses.
 
+#[cfg(unix)]
 use std::path::Path;
 
 use serde_json::json;
 
-use super::tests::{HAZARD, Repo, config, executable, fake_make, student_repo, trace as obs_trace};
+use super::tests::trace as obs_trace;
+#[cfg(unix)]
+use super::tests::{HAZARD, Repo, config, fake_make, student_repo};
 use super::*;
+#[cfg(unix)]
+use crate::tasks::test_support::executable;
 
+#[cfg(unix)]
 fn attempt_over(repo: &Repo, config: Config, tools: Tools) -> Attempt {
     let checkout = Checkout::open(repo.path()).unwrap();
     let plan = plan(&config, &checkout).unwrap();
@@ -18,6 +24,7 @@ fn attempt_over(repo: &Repo, config: Config, tools: Tools) -> Attempt {
 /// A program that reads `long` pads the log with a few megabytes of marks;
 /// one that reads `quiet` writes no log. Each run adds the paths of its log
 /// and its program to `paths`.
+#[cfg(unix)]
 fn vsim(paths: &Path) -> String {
     format!(
         r#"#!/bin/sh
@@ -33,6 +40,7 @@ case $0 in *-no-flush/Vsim) third='pc=0000000c x';; *) third='pc=00000008 c';; e
 }
 
 /// The tools of the bug item: no `sbt`, and a `make` building `vsim`.
+#[cfg(unix)]
 fn bug_tools(repo: &Repo) -> Tools {
     let dir = repo.path().join("build");
     std::fs::create_dir_all(&dir).unwrap();
@@ -43,6 +51,7 @@ fn bug_tools(repo: &Repo) -> Tools {
 }
 
 /// What the claim's exercise check says of `said` for the package's 4.4.
+#[cfg(unix)]
 fn exercise_claimed(label: &str, said: &str) -> Option<bool> {
     let repo = student_repo(label);
     repo.write("build/sw/mycpu/rv32im_zicsr/fib.elf", "");

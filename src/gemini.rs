@@ -74,11 +74,11 @@ use tool_ack::tool_ack_pcm;
 use {
     http_calls::http_failure_diagnostic,
     report_calls::{
-        ReportAttemptFailure, ReportAttemptObserver, ReportAttempts, ReportCalls, ReportOutcome,
-        ReportStep, ReportTransport, ReportTransportFailure, bounded_errors,
-        compact_report_repair_echo, generate_report_request, generate_report_with_keys_at,
-        is_retryable, parse_report_text, repair_prompt, report_attempt_failure, report_attempts,
-        report_key_after_backoff, report_retry_backoff, salvage_report,
+        ReportAttempts, ReportCalls, ReportOutcome, ReportStep, ReportTransport,
+        ReportTransportFailure, bounded_errors, compact_report_repair_echo,
+        generate_report_request, generate_report_with_keys_at, is_retryable, parse_report_text,
+        repair_prompt, report_attempts, report_key_after_backoff, report_retry_backoff,
+        salvage_report,
     },
     side_calls::{
         generate_interim_review_at, generate_phase_judgment_at, interim_generation_config,
