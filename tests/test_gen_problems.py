@@ -1345,6 +1345,7 @@ class ReferenceTests(unittest.TestCase):
             "game-of-life",
             "gas-station",
             "happy-number",
+            "minimum-size-subarray-sum",
         }
         self.assertEqual(set(), expected - found, "references missing from the bank")
         GEN.check_references(GEN.read_json(GEN.JUDGE_SOURCE), directory)

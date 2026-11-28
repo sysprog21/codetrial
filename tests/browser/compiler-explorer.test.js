@@ -499,6 +499,55 @@ const assertRejects = (problem, label, run, message) => {
   );
 };
 
+test("minimum-size-subarray-sum cases reject window shortcuts", () => {
+  const problem = "minimum-size-subarray-sum";
+  const shortest = (
+    target,
+    nums,
+    { qualifies = () => true, update = Math.min } = {},
+  ) => {
+    let best = nums.length + 1;
+    let start = 0;
+    let sum = 0;
+    for (let end = 0; end < nums.length; end++) {
+      sum += nums[end];
+      while (sum >= target) {
+        const length = end - start + 1;
+        if (qualifies(sum)) best = update(best, length);
+        sum -= nums[start++];
+      }
+    }
+    return best <= nums.length ? best : 0;
+  };
+  for (const { label, input, expected } of judges[problem].cases) {
+    assert.equal(shortest(...input), expected, label);
+  }
+  const exactThresholdOnly = (target, nums) =>
+    shortest(target, nums, { qualifies: (sum) => sum === target });
+  const fullBatchWithoutExactWindow = (target, nums) => {
+    const exact = exactThresholdOnly(target, nums);
+    const total = nums.reduce((sum, size) => sum + size, 0);
+    return exact || (total >= target ? nums.length : 0);
+  };
+  const exactFirst = (target, nums) =>
+    exactThresholdOnly(target, nums) || shortest(target, nums);
+  const lastQualifyingWindow = (target, nums) =>
+    shortest(target, nums, { update: (_best, length) => length });
+  for (const [label, shortcut] of [
+    ["middle pair exceeds target", exactThresholdOnly],
+    ["middle pair exceeds target", fullBatchWithoutExactWindow],
+    ["exact prefix and larger final pair", exactFirst],
+    ["one early file and a later run", lastQualifyingWindow],
+  ]) {
+    assertRejects(
+      problem,
+      label,
+      shortcut,
+      `"${label}" must reject ${shortcut.name}`,
+    );
+  }
+});
+
 test("longest-common-prefix cases reject incomplete comparisons", () => {
   const firstAndLast = (strs) => {
     const first = strs[0];
