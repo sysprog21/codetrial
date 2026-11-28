@@ -14,7 +14,11 @@
 #        rework requested (rework in the sweep) and no open thread, is left out;
 #        the newest ledger line for the head, if it records an open-thread
 #        count, counts only while the PR still has that many, so a thread
-#        opened without a push is read.
+#        opened without a push is read, unless every open thread is the
+#        viewer's own and none is a bot's: that asks the author nothing and
+#        leaves no diff to read. A PR listed in the sweep loop's hold file
+#        (<git common dir>/codetrial-sweep/hold-prs) is being reviewed by hand
+#        and is left out.
 #        Exits 2 on bad arguments.
 
 set -eu
@@ -29,22 +33,28 @@ sweep=$1
     echo "review-pick.sh: $sweep is not a file" >&2
     exit 2
 }
-ledger="$(git rev-parse --git-common-dir)/codetrial-triage/reviewed"
+common=$(git rev-parse --git-common-dir)
+ledger=$common/codetrial-triage/reviewed
 mkdir -p "$(dirname "$ledger")"
 touch "$ledger"
+hold=$common/codetrial-sweep/hold-prs
+[ -f "$hold" ] || hold=/dev/null
 
-jq -c --rawfile ledger "$ledger" '
-  ($ledger | split("\n") | map(select(length > 0) | split(" "))) as $seen
+jq -c --rawfile ledger "$ledger" --rawfile hold "$hold" '
+  ($hold | split("\n") | map(gsub("\\s"; ""))) as $held
+  | ($ledger | split("\n") | map(select(length > 0) | split(" "))) as $seen
   | . as $s
   | $s.status[]
   | select(.author != $s.viewer)
+  | select(.pr | tostring | IN($held[]) | not)
   | . as $p
   | ((.threads.human // 0) + (.threads.bot // 0)) as $open
   | select(((.grade == "low" or .grade == "blocked") and (.rework | not)) or $open > 0)
   | ([$seen[] | select(.[0] == ($p.pr | tostring) and .[1] == $p.head)] | last) as $last
   | select($last == null
            or ((($last[2] // "") | tonumber? // null) as $n
-               | $n != null and $n < $open))
+               | $n != null and $n < $open
+                 and ($p.threads.bot != 0 or $p.threads.by != [$s.viewer])))
   | {pr, head, title, why, open: $open,
      since: ([$seen[] | select(.[0] == ($p.pr | tostring)) | .[1]] | last),
      outdated: [$s.outdated[] | select(.pr == $p.pr) | {thread, path}],

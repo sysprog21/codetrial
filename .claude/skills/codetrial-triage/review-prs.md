@@ -30,7 +30,8 @@ recorded for the PR, or null), `outdated` (the thread ids and paths to
 recheck), `collide` (the other PR, the file and the function) and `why`.
 
 ```sh
-.claude/skills/codetrial-triage/review-pick.sh "$snap"
+# A bare run already has this file from triage-run.sh.
+.claude/skills/codetrial-triage/review-pick.sh "$snap" > "$SCRATCH/picks.jsonl"
 ```
 
 The ledger lives in the git directory, so it survives sessions and is never
@@ -39,18 +40,25 @@ A head in the ledger got a full review, even when nothing came of it, so
 reviewing it again only finds the same nothing. A push moves the head and brings
 the PR back with `since` set, which goes to the bundle as `--since`, so the
 reviewers read the new commits first and the earlier comments are not posted
-again. A PR whose only open threads are the maintainer's own, with nothing new
-to say, still gets its review: an empty draft is a result, and recording it is
-what stops the next sweep from reading the same head again.
+again. A PR whose only open threads are the viewer's own still gets one review
+of each head: an empty draft is a result, and recording it leaves that head out
+afterwards. The script also leaves out a PR listed in the sweep loop's hold file
+(`<git common dir>/codetrial-sweep/hold-prs`, one number per line). Two
+reviewers on one head post the same defect twice (#854, #883), so append the
+number there before launching an agent (`mkdir -p` its directory first); a
+number already listed is someone else's, so leave that PR to them. Remove your
+line once the PR is finished or given up, and also when an error or an
+interrupted session stops the run, or no later sweep picks the PR up.
 
-Two cases need no review agent: `since` equals `head` (the ledger read this very
-head and only the open-thread count moved, with no push), and a head that a full
-review by hand or by another skill (a manual `/gh-review`, or `post-review.sh`)
-already covered this session, with every finding posted. A partial review does
-not qualify: run the agent. For either case, bundle the PR, do the similar-work
-and open-thread checks of step 2 below, write the draft with empty `comments`,
-and finish it as below. `review-finish.sh` records the head itself on exit 0;
-after an exit 4, record it once the remaining actions succeed.
+Two cases need no review agent: `since` equals `head`, which the digest marks
+`needs_agent` false (the ledger read this very head and only the open-thread
+count moved, with no push), and a head that a full review by hand or by another
+skill (a manual `/gh-review`, or `post-review.sh`) already covered this session,
+with every finding posted. A partial review does not qualify: run the agent. For
+either case, bundle the PR, do the similar-work and open-thread checks of step 2
+below, write the draft with empty `comments`, and finish it as below.
+`review-finish.sh` records the head itself on exit 0; after an exit 4, record it
+once the remaining actions succeed.
 
 An author's reply that says a change was made is checked against the head, not
 believed: look for the named test, entry or line at the head, and compare the
@@ -93,12 +101,12 @@ Once that outcome is read, `review-brief.sh` renders each brief below from a
 collisions filled in:
 
 ```sh
-.claude/skills/codetrial-triage/review-pick.sh "$snap" | while read -r pick; do
+while read -r pick; do
   printf '%s\n' "$pick" > "$SCRATCH/pick.json"
   .claude/skills/codetrial-triage/review-brief.sh "$SCRATCH/pick.json" \
     "$SCRATCH" "$SCRATCH/memory-status.json" "$memory_exit"
   printf '\n---\n\n'
-done
+done < "$SCRATCH/picks.jsonl"
 ```
 
 Launch every agent in a single response, in the background, with the same
@@ -263,7 +271,11 @@ finding's `evidence` cites, from the bundle's `head/` (and `gh api
 lines do not bear out. Read the code each `resolve` entry names the same way, and keep only those the head
 bears out and the brief listed as this PR's outdated threads: the sweep
 resolves nothing else. Drop as well any text comments.md would not let
-through. Then finish the PR with one call. Bind `pr`, `draft` and `sha` for this PR
+through. When the draft has comments, read the PR's inline comments once more,
+since another reviewer may have posted while the agent ran, and drop any finding
+one of them now states, the viewer's own included
+(`gh api --paginate "repos/$repo/pulls/$pr/comments" --jq '.[] | {user: .user.login, path, line, body: .body[0:200]}'`).
+Then finish the PR with one call. Bind `pr`, `draft` and `sha` for this PR
 first, since the manual steps below use them and a value left over from another
 PR would record the wrong head:
 
@@ -362,9 +374,9 @@ while threads are open it trims all but the newest copy, on PRs within 100
 comments and 100 threads
 (`refine_stale`, [pulls.md](pulls.md#what-a-sweep-may-apply-without-asking)).
 The PR stays graded `low` while threads are open, and the `stale` nudge in
-[pulls.md](pulls.md) reminds an author who goes quiet. A thread opened without a
-push brings the PR back, because the ledger line records the open-thread count
-the sweep saw and a larger count is read again. Outdated threads the head
+[pulls.md](pulls.md) reminds an author who goes quiet. A thread opened without a push brings the PR back, because the ledger line
+records the open-thread count the sweep saw and a larger count is read again,
+unless every open thread is the viewer's own. Outdated threads the head
 addresses are resolved as above; anything else stays open until its author or
 reviewer resolves it.
 

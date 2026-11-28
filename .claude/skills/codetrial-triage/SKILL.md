@@ -39,36 +39,44 @@ follows [pulls.md](pulls.md) after the scope below. The duplicate reasoning
 here applies to PRs too, and the confirmed-list rule governs every comment it
 drafts.
 
-A bare run reads only what the sweep makes necessary. Read the sections of
-[pulls.md](pulls.md) for the PR lists the sweep filled (`approve`, `rebase`,
-`hide*`, `refine_stale`, `stale`, `refs_only`, `overlap`), and its ranking
-section for the report's `status` and `waits_on`; `apply-pr-actions.sh
---hygiene` prints nothing when there is nothing to apply.
-[review-prs.md](review-prs.md) says which PRs get an agent at all.
-
 A bare `/codetrial-triage` is both halves at once, and it runs often, so run
-it wide. One call starts `issue-sweep.sh` and the PR half, `codetrial-odds/snapshot.sh`
-(which runs `pr-sweep.sh` against the saved last sweep, so `moved` and `gone` are
-filled, and keeps that baseline unless the sweep is whole), together (each
-in the background of one shell, then `wait`). The next response does
-everything that needs only their output in parallel: the no-ask actions in
-[pulls.md](pulls.md) (its `--hygiene` runs `hygiene.sh` for every open PR), one review agent per picked PR
-that [review-prs.md](review-prs.md) does not exempt, and the issue body, comment
-and search reads below. Each PR's review is verified and posted the moment it lands, and the
+it wide and read little. One call opens it:
+
+```sh
+.claude/skills/codetrial-triage/triage-run.sh "$SCRATCH" "$repo"
+```
+
+It runs `issue-sweep.sh` and the PR half, `codetrial-odds/snapshot.sh` (the
+sweep against the saved last one), at once, and prints one digest: the PRs in
+each non-empty action list, what moved or went, the PRs to review, the issue
+counts and the issue numbers that changed since the previous run. Work from the
+digest, and take a field from `$SCRATCH/sweep.json` or `$SCRATCH/issues.json` with `jq` only when
+a step needs it, never printing either whole. A caller that hands over its own
+snapshot does not run it, since it would move the baselines the next run is
+compared against.
+
+The next response does everything that needs only that output, in parallel: the
+no-ask actions (`apply-pr-actions.sh "$SCRATCH/sweep.json" "$repo" --hygiene`,
+[pulls.md](pulls.md#what-a-sweep-may-apply-without-asking)), one review agent
+per pick with `needs_agent` that [review-prs.md](review-prs.md) does not exempt,
+and the issue body, comment and search reads below. The apply script checks and
+receipts each action itself, so open it, `hygiene.sh` or pulls.md only for a
+`confirm` or `failed` receipt, an `outdated`, `stale`, `refs_only`, `overlap` or `hide_ask` entry, or the ranking the report needs (`status`, `waits_on`), and then only the section that
+names it. Each PR's review is verified and posted the moment it lands, and the
 report waits only for the last of them. The agents run in the background and
 announce themselves when done: do not poll their output files or sleep-loop,
 handle each PR when its notification arrives, and say in one line what is still
 running if a long wait leaves the user without news.
 
-The PR sweep fails now and then on a GitHub 504 or `unexpected end of JSON
-input`, and `snapshot.sh` then keeps the old baseline and exits 1. Run it again,
-up to three times with a pause between, before reporting a coverage gap; never
-read the kept baseline as today's state. A run whose `moved` and `gone` are empty, whose
-titles, descriptions and routing match the last snapshot, with no new hygiene
-action and the same issue lists as the last report, is reported in a few lines
-saying so, plus what still waits on the maintainer: a second table of the same
-open PRs only hides that nothing changed. `moved` does not cover a title or
-description edit, so compare those before calling a run unchanged.
+`triage-run.sh` tries each half three times and exits 1, printing nothing,
+when either half still fails: report that coverage gap and never read a kept
+baseline as today's state. A run whose digest shows no `moved`, `gone`, `retitled`, pick or
+`issue_changes`, whose search for issues updated since `issues_since` returns
+nothing, and whose actions all receipt as nothing new, is reported in a
+few lines saying so, plus what still waits on the maintainer: a second table of
+the same open PRs only hides that nothing changed. The digest names `retitled`
+PRs and does not see a description edit, so call a run unchanged apart from
+descriptions.
 
 How work moves on this tracker (who the maintainers are, how a PR is scoped,
 what the one-line review requests mean) is in
@@ -104,6 +112,13 @@ what changed, naming the session's own comments and renames as such, since
 they move issues between the sweep's lists without anything new happening.
 
 ## Retrieve evidence efficiently
+
+A bare run already holds `$SCRATCH/issues.json` and `$SCRATCH/sweep.json`:
+run neither sweep again, and read only the issues `issue_changes` and
+`unanswered` name, plus those edited since the previous run (`gh issue list
+--repo "$repo" --limit 1000 --search "updated:>=<issues_since>" --json
+number,title,updatedAt`). The full inventory below is for a first run
+(`issue_changes` null) and for a backlog sweep the user asked for.
 
 For a question about one symptom ("is there already an issue for X"), skip the
 inventory and go straight to the search below. A backlog sweep starts with one
@@ -219,6 +234,12 @@ PR and ask the reporter to review that branch instead of writing a second one. A
 request whose mechanics already merged but whose stated acceptance criterion did
 not is still open work: narrow it to the remainder rather than closing it as
 done.
+
+An issue waiting on a decision is rarely untouched: read the open PRs in its
+`linked` and `closing_prs` entries, and the issues its body names, before
+advising on it. A second opinion, from an agent or another model, gets those
+numbers and diffs with the question, since a snapshot of `main` hides the work
+in flight (advice on #896 missed that #889 already ported the exact comparison).
 
 ## Decide duplicate status and completeness separately
 

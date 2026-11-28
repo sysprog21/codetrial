@@ -36,6 +36,7 @@ ISSUE_SWEEP = SKILLS / "codetrial-triage" / "issue-sweep.sh"
 PR_SWEEP = SKILLS / "codetrial-triage" / "pr-sweep.sh"
 SKILL_REFS = ROOT / "scripts" / "check-skill-refs.py"
 REVIEW_PICK = SKILLS / "codetrial-triage" / "review-pick.sh"
+TRIAGE_RUN = SKILLS / "codetrial-triage" / "triage-run.sh"
 REVIEW_FINISH = SKILLS / "codetrial-triage" / "review-finish.sh"
 APPLY_ACTIONS = SKILLS / "codetrial-triage" / "apply-pr-actions.sh"
 POST_SIMILAR = SKILLS / "codetrial-triage" / "post-similar.sh"
@@ -4549,6 +4550,35 @@ class ReviewQueueTests(unittest.TestCase):
         }
         self.assertEqual([p["pr"] for p in self.pick(sweep)], [2, 3])
 
+    def test_pick_skips_a_reviewed_head_whose_only_threads_are_the_viewers(self):
+        # Nothing was pushed and every open thread is the viewer's own, so the
+        # author is asked nothing and no diff is left to read.
+        self.ledger.parent.mkdir(parents=True, exist_ok=True)
+        self.ledger.write_text("1 h 0\n")
+
+        def picked(by, bot=0, head="h"):
+            sweep = self.one_pr_sweep(1)
+            sweep["status"][0]["head"] = head
+            sweep["status"][0]["threads"] = {"human": 1, "bot": bot, "by": by}
+            return [p["pr"] for p in self.pick(sweep)]
+
+        self.assertEqual(picked(["maint"]), [])
+        self.assertEqual(picked(["maint", "other"]), [1])
+        self.assertEqual(picked(["maint"], bot=1), [1])
+        self.assertEqual(picked([]), [1])
+        # A new head is read whoever opened its threads.
+        self.assertEqual(picked(["maint"], head="h2"), [1])
+
+    def test_pick_leaves_a_pr_held_in_the_sweep(self):
+        hold = self.repo / ".git" / "codetrial-sweep" / "hold-prs"
+        hold.parent.mkdir(parents=True)
+        hold.write_text("1\n")
+        self.assertEqual(self.pick(self.one_pr_sweep(1)), [])
+        hold.write_text(" 1 \r\n")
+        self.assertEqual(self.pick(self.one_pr_sweep(1)), [])
+        hold.write_text("11\n")
+        self.assertEqual(len(self.pick(self.one_pr_sweep(1))), 1)
+
     def test_pick_rereads_a_head_only_when_open_threads_grew(self):
         self.ledger.parent.mkdir(parents=True, exist_ok=True)
         self.ledger.write_text("1 h 2\n")
@@ -4961,7 +4991,17 @@ class ApplyPrActionsTests(unittest.TestCase):
         }
         return json.dumps(base | fields)
 
-    def run_actions(self, sweep, workflows=None, repo=None, hygiene=None, **env):
+    def run_actions(
+        self,
+        sweep,
+        workflows=None,
+        repo=None,
+        hygiene=None,
+        args=(),
+        cwd=None,
+        script=APPLY_ACTIONS,
+        **env,
+    ):
         with tempfile.TemporaryDirectory() as scratch:
             scratch = Path(scratch)
             (scratch / "bin").mkdir()
@@ -4982,9 +5022,11 @@ class ApplyPrActionsTests(unittest.TestCase):
                 (scratch / "hygiene.sh").write_text(hygiene)
                 env["APPLY_HYGIENE"] = str(scratch / "hygiene.sh")
             result = subprocess.run(
-                ["sh", str(APPLY_ACTIONS), str(scratch / "sweep.json")]
+                ["sh", str(script), str(scratch / "sweep.json")]
                 + ([repo] if repo else [])
-                + (["--hygiene"] if hygiene is not None else []),
+                + (["--hygiene"] if hygiene is not None else [])
+                + list(args),
+                cwd=cwd,
                 capture_output=True,
                 text=True,
                 env=os.environ
@@ -5008,6 +5050,70 @@ class ApplyPrActionsTests(unittest.TestCase):
             "files_truncated": False,
         }
         return {"approve": [entry | fields]}
+
+    def authored(self, **fields):
+        return self.sweep(
+            approve=[],
+            rebase=[{"pr": 3, "reason": "conflicts", "author": "quiet-one"}],
+            hide=[{"pr": 3, "id": "IC_3", "by": "maint"}],
+            **fields,
+        )
+
+    def quiet(self, text):
+        """run_actions options for a checkout whose quiet-authors holds `text`.
+
+        The script is a copy inside that scratch checkout, run from a directory
+        that is no repository: the list belongs to the script's own checkout.
+        """
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name) / "checkout"
+        triage = root / ".claude" / "skills" / "codetrial-triage"
+        shutil.copytree(APPLY_ACTIONS.parent, triage)
+        subprocess.run(["git", "init", "-q", str(root)], check=True)
+        path = root / ".git" / "codetrial-triage" / "quiet-authors"
+        path.parent.mkdir()
+        path.write_text(text)
+        elsewhere = Path(tmp.name) / "elsewhere"
+        elsewhere.mkdir()
+        return {"script": triage / APPLY_ACTIONS.name, "cwd": elsewhere}
+
+    def test_a_quiet_author_is_not_asked_to_rebase(self):
+        _, got, log = self.run_actions(
+            self.authored(), **self.quiet("# never nudged\n  quiet-one  \n")
+        )
+        self.assertEqual(got[("rebase", 3)], "skipped")
+        # The earlier request is the only one standing, so it stays visible.
+        self.assertEqual(got[("hide", 3)], "skipped")
+        self.assertNotIn("pulls/3/reviews", log)
+
+    def test_an_author_not_listed_is_still_asked(self):
+        _, got, _ = self.run_actions(self.authored(), **self.quiet("quiet\n"))
+        self.assertEqual(got[("rebase", 3)], "applied")
+        # A login is the same one in any case.
+        _, got, _ = self.run_actions(self.authored(), **self.quiet("Quiet-One\n"))
+        self.assertEqual(got[("rebase", 3)], "skipped")
+
+    def test_no_rebase_leaves_requests_and_their_hides_to_their_owner(self):
+        _, got, log = self.run_actions(self.authored(), args=["--no-rebase"])
+        self.assertEqual(got, {})
+        self.assertNotIn("pulls/3/reviews", log)
+        self.assertNotIn("minimizeComment", log)
+
+    def test_a_quiet_author_gets_no_ci_regression_from_hygiene(self):
+        found = (
+            'echo \'{"pr":\'"$1"\',"head":"h\'"$1"\'","items":'
+            '[{"key":"ci_regression","text":"rebase"}],"body":"rebase"}\'\n'
+        )
+        prs = [{"number": 1, "head": "h1", "author": "quiet-one"}]
+        _, got, log = self.run_actions(
+            self.sweep(approve=[], rebase=[], hide=[], prs=prs),
+            hygiene=found,
+            **self.quiet("quiet-one\n"),
+        )
+        self.assertEqual(got[("hygiene_ci_regression", 1)], "skipped")
+        self.assertNotIn(("hygiene", 1), got)
+        self.assertNotIn("pulls/1/reviews", log)
 
     HYGIENE = (
         'case "$1" in\n'
@@ -5492,6 +5598,180 @@ class ApplyPrActionsTests(unittest.TestCase):
                     got[("approve", 1)], "already" if status == "queued" else "failed"
                 )
                 self.assertEqual(result.returncode, 0 if status == "queued" else 1)
+
+
+@unittest.skipUnless(shutil.which("jq"), "jq is not installed")
+class TriageRunTests(unittest.TestCase):
+    """triage-run.sh: both sweeps at once, and one digest of what changed."""
+
+    ISSUES = (
+        'if [ -n "${FAKE_ISSUES_ONCE:-}" ] && [ ! -f "$FAKE_ISSUES_ONCE" ]; then\n'
+        '    : > "$FAKE_ISSUES_ONCE"; exit 1\n'
+        "fi\n"
+        '[ "${FAKE_ISSUES:-}" != fail ] || exit 1\n'
+        "printf '%s\\n' \"$FAKE_ISSUE_JSON\"\n"
+    )
+    # The first call fails when FAKE_ONCE names a flag file, as a 504 does.
+    SWEEP = (
+        'if [ -n "${FAKE_ONCE:-}" ] && [ ! -f "$FAKE_ONCE" ]; then\n'
+        '    : > "$FAKE_ONCE"; exit 1\n'
+        "fi\n"
+        '[ "${FAKE_SWEEP:-}" != fail ] || exit 1\n'
+        "printf '%s\\n' \"$FAKE_SWEEP_JSON\"\n"
+    )
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.repo = Path(tmp.name)
+        subprocess.run(["git", "init", "-q", str(self.repo)], check=True)
+        (self.repo / "issues.sh").write_text(self.ISSUES)
+        (self.repo / "sweep.sh").write_text(self.SWEEP)
+
+    def sweep(self):
+        return {
+            "viewer": "maint",
+            "prs": [{"number": 1}, {"number": 2, "files_truncated": True}],
+            "status": [ReviewQueueTests.status_entry(1, head="h2", human=1)],
+            "moved": [
+                {"pr": 1, "changed": {"grade": ["high", "low"], "checks": [[], []]}},
+                {"pr": 2, "new": True},
+            ],
+            "gone": [],
+            "unknown": [],
+            "approve": [],
+            "rebase": [{"pr": 2, "author": "a", "reason": "conflicts"}],
+            "hide_ask": [{"pr": 1, "body": "long text"}],
+            "outdated": [],
+            "collide": [],
+        }
+
+    def run_it(self, waiting=(), sweep=(), **env):
+        issues = {
+            "unanswered": [],
+            "waiting": [dict(w) for w in waiting],
+            "linked": [],
+            "claimed": [],
+            "lint": [],
+            "truncated": [],
+        }
+        return run_fake(
+            TRIAGE_RUN,
+            [self.repo / "scratch"],
+            FAKE_GH_FAILS,
+            {"TRIAGE_ISSUE_SWEEP": self.ISSUES, "ODDS_SWEEP": self.SWEEP},
+            cwd=self.repo,
+            env={
+                "FAKE_ISSUE_JSON": json.dumps(issues),
+                "FAKE_SWEEP_JSON": json.dumps(self.sweep() | dict(sweep)),
+                "RETRY_DELAY": "0",
+            }
+            | env,
+        )
+
+    def test_the_digest_names_actions_picks_and_what_moved(self):
+        result = self.run_it()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        digest = json.loads(result.stdout)
+        self.assertEqual(digest["open_prs"], 2)
+        self.assertEqual(digest["truncated_prs"], [2])
+        # Empty lists are left out, and no comment body is repeated.
+        self.assertEqual(digest["actions"], {"rebase": [2], "hide_ask": [1]})
+        self.assertNotIn("long text", result.stdout)
+        self.assertEqual(
+            digest["moved"],
+            [
+                {"pr": 1, "grade": ["high", "low"], "also": ["checks"]},
+                {"pr": 2, "new": True},
+            ],
+        )
+        self.assertEqual([p["pr"] for p in digest["picks"]], [1])
+        self.assertTrue(digest["picks"][0]["needs_agent"])
+        self.assertIsNone(digest["issue_changes"])
+        self.assertTrue(Path(digest["sweep"]).is_file())
+        picks = self.repo / "scratch" / "picks.jsonl"
+        self.assertEqual(json.loads(picks.read_text())["pr"], 1)
+
+    def test_issue_changes_are_read_against_the_previous_run(self):
+        old = [{"issue": 1, "idle_days": 1}, {"issue": 2, "overdue": False}]
+        self.assertEqual(self.run_it(old).returncode, 0)
+        new = [{"issue": 1, "idle_days": 9}, {"issue": 2, "overdue": True}]
+        digest = json.loads(self.run_it(new + [{"issue": 3}]).stdout)
+        # A day passing is not a change.
+        self.assertEqual(
+            digest["issue_changes"],
+            {"waiting": {"added": [3], "removed": [], "changed": [2]}},
+        )
+
+    def test_a_title_edit_is_named_against_the_saved_sweep(self):
+        for title, want in (("old", []), ("new", [1])):
+            prs = {"prs": [{"number": 1, "title": title}]}
+            digest = json.loads(self.run_it(sweep=prs).stdout)
+            self.assertEqual(digest["retitled"], want, title)
+
+    def test_either_half_that_fails_once_is_run_again(self):
+        for name in ("FAKE_ONCE", "FAKE_ISSUES_ONCE"):
+            flag = self.repo / name
+            self.assertEqual(self.run_it(**{name: str(flag)}).returncode, 0, name)
+            self.assertTrue(flag.exists(), name)
+
+    def test_a_failed_half_prints_no_digest_and_keeps_the_baseline(self):
+        self.assertEqual(self.run_it([{"issue": 1}]).returncode, 0)
+        for env in ({"FAKE_SWEEP": "fail"}, {"FAKE_ISSUES": "fail"}):
+            result = self.run_it([{"issue": 5}], **env)
+            self.assertEqual((result.returncode, result.stdout), (1, ""), env)
+        digest = json.loads(self.run_it([{"issue": 1}]).stdout)
+        self.assertEqual(digest["issue_changes"], {})
+
+    def test_a_failed_run_keeps_the_pull_request_baseline_too(self):
+        # Otherwise the next run compares against a sweep nobody was shown.
+        saved = self.repo / ".git/codetrial-triage/pr-sweep-sysprog21-codetrial.json"
+        self.assertEqual(self.run_it().returncode, 0)
+        before = saved.read_text()
+        newer = {"prs": [{"number": 9}]}
+        self.assertEqual(self.run_it(sweep=newer, FAKE_ISSUES="fail").returncode, 1)
+        self.assertEqual(saved.read_text(), before)
+
+    def test_a_failed_first_run_leaves_no_pull_request_baseline(self):
+        saved = self.repo / ".git/codetrial-triage/pr-sweep-sysprog21-codetrial.json"
+        self.assertEqual(self.run_it(FAKE_ISSUES="fail").returncode, 1)
+        self.assertFalse(saved.exists())
+
+    def test_an_overlap_is_named_by_both_its_pull_requests(self):
+        overlap = {"overlap": [{"a": 1, "b": 2, "issues": [3]}]}
+        digest = json.loads(self.run_it(sweep=overlap).stdout)
+        self.assertEqual(digest["actions"]["overlap"], [1, 2])
+
+    @unittest.skipUnless(Path("/dev/full").exists(), "no /dev/full here")
+    def test_a_digest_that_cannot_be_written_keeps_both_baselines(self):
+        state = self.repo / ".git" / "codetrial-triage"
+        self.assertEqual(self.run_it([{"issue": 1}]).returncode, 0)
+        before = {p.name: p.read_text() for p in state.glob("*-sweep-*.json")}
+        self.assertEqual(len(before), 2)
+        with open("/dev/full", "w") as full:
+            result = subprocess.run(
+                ["sh", str(TRIAGE_RUN), str(self.repo / "scratch")],
+                cwd=self.repo,
+                stdout=full,
+                stderr=subprocess.PIPE,
+                env=os.environ
+                | {
+                    "TRIAGE_ISSUE_SWEEP": str(self.repo / "issues.sh"),
+                    "ODDS_SWEEP": str(self.repo / "sweep.sh"),
+                    "FAKE_ISSUE_JSON": json.dumps(
+                        {"waiting": [{"issue": 2}], "unanswered": []}
+                    ),
+                    "FAKE_SWEEP_JSON": json.dumps(self.sweep() | {"prs": []}),
+                },
+            )
+        self.assertNotEqual(result.returncode, 0)
+        after = {p.name: p.read_text() for p in state.glob("*-sweep-*.json")}
+        self.assertEqual(after, before)
+
+    def test_the_digest_says_when_the_issue_baseline_was_taken(self):
+        self.assertIsNone(json.loads(self.run_it().stdout)["issues_since"])
+        since = json.loads(self.run_it().stdout)["issues_since"]
+        self.assertRegex(since, r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
 
 
 @unittest.skipUnless(shutil.which("jq"), "jq is not installed")

@@ -6,6 +6,11 @@ reminded when a review has gone unanswered, and a branch that no longer merges
 is sent back for a rebase. One read-only call gathers all five, plus each PR's
 status and merge grade:
 
+A bare `/codetrial-triage` already has this snapshot from `triage-run.sh`
+([SKILL.md](SKILL.md)): set `snap=$SCRATCH/sweep.json` and skip the call below,
+which would replace the baseline a second time. A sweep of the pull requests alone
+makes it here:
+
 ```sh
 snap=$(.claude/skills/codetrial-odds/snapshot.sh "$repo") &&
   cp "$snap" "$SCRATCH/sweep.json" && snap=$SCRATCH/sweep.json
@@ -178,6 +183,14 @@ maintainer's:
 ```sh
 .claude/skills/codetrial-triage/apply-pr-actions.sh "$snap" "$repo" --hygiene
 ```
+
+A login the maintainer never wants nudged goes one per line in
+`<git common dir>/codetrial-triage/quiet-authors`: its rebase request, hygiene's `ci_regression` included,
+receipts as `skipped`. A caller that
+does not own rebase requests, such as the PR sweep loop's triage, adds
+`--no-rebase` instead of editing a copy of the sweep. With `--hygiene`, that
+caller still posts the `ci_regression` review, which reuses the rebase text:
+the item is hygiene's, and no other step posts it.
 
 ```sh
 gh api -X POST "repos/$repo/actions/runs/$run/approve"   # 403 "not waiting for approval": see below
