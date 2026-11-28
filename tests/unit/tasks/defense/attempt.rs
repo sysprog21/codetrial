@@ -138,10 +138,13 @@ fn a_model_is_only_one_its_task_built() {
     repo.write("build/sw/mycpu/rv32im_zicsr/fib.elf", "");
     let built = bug_tools(&repo).make;
     let make = repo.path().join("build/make-and-stray");
+
+    // `touch -t` is the one timestamp form BSD and GNU `touch` share. Next New
+    // Year's midnight is always ahead of the real build and a valid local time.
     std::fs::write(
         &make,
         format!(
-            "#!/bin/sh\n'{built}' \"$@\" || exit\nmkdir -p build/t9-stale\nprintf '#!/bin/sh\\nexit 7\\n' > build/t9-stale/Vsim\nchmod +x build/t9-stale/Vsim\ntouch -d tomorrow build/t9-stale/Vsim\n"
+            "#!/bin/sh\n'{built}' \"$@\" || exit\nmkdir -p build/t9-stale\nprintf '#!/bin/sh\\nexit 7\\n' > build/t9-stale/Vsim\nchmod +x build/t9-stale/Vsim\ntouch -t \"$(($(date +%Y) + 1))01010000\" build/t9-stale/Vsim\n"
         ),
     )
     .unwrap();
