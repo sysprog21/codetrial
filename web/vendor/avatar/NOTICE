@@ -16,3 +16,11 @@ Seed-san (fetched at runtime, not redistributed)
   Credit is required by the model's own metadata and is displayed in the lobby
   footer of web/index.html. See LICENSE-jim-vrm.txt for the grant, read out of
   the model's own VRMC_vrm.meta.
+
+Rocketbox-derived Jim (optional model fetched at runtime, not redistributed)
+  Copyright (c) 2020 Microsoft, MIT License.
+  Source: microsoft/Microsoft-Rocketbox at
+  0943055db6ec570bcef9f2c8b41c9e5467c808f9,
+  Assets/Avatars/Professions/Business_Male_04.
+  VRM conversion by jiawei110. Full permission notice, source hashes and
+  embedded metadata are recorded in LICENSE-jim-vrm.txt.

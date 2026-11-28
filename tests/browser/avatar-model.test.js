@@ -26,6 +26,74 @@ import {
 } from "../../web/avatar/model.js";
 import { LOAD_TIMEOUT_MS } from "../../web/avatar/avatar.js";
 import { failFetchWith, read } from "./source.js";
+import * as avatarModels from "../../web/avatar/model.js";
+
+test("the supported-model registry binds immutable pins and rejects external input", async () => {
+  assert.equal(avatarModels.SUPPORTED_MODELS?.length, 2);
+  const original = avatarModels.getAvatarModel();
+  assert.equal(original.id, "jim");
+  assert.equal(original.url, MODEL_URL);
+  assert.equal(original.sha256, MODEL_SHA256);
+  const candidate = avatarModels.getAvatarModel("jim-business-male-04");
+  assert.equal(
+    candidate.sha256,
+    "d78146bc5edb21fce98d31d17127a2199a276f6f60396242dd432501fd922aef",
+  );
+  assert.ok(candidate.url.endsWith("/jim-business-male-04-upperbody-v3.vrm"));
+  assert.ok(Object.isFrozen(candidate));
+  assert.ok(Object.isFrozen(avatarModels.SUPPORTED_MODELS));
+  for (const model of avatarModels.SUPPORTED_MODELS) {
+    assert.match(
+      model.url,
+      /^https:\/\/raw\.githubusercontent\.com\/[^/]+\/[^/]+\/[0-9a-f]{40}\/.+\.vrm$/,
+      `${model.id} needs a full source commit pin`,
+    );
+    assert.match(model.sha256, /^[0-9a-f]{64}$/);
+    assert.ok(read(model.license).includes(model.sha256));
+  }
+  for (const value of [
+    null,
+    "",
+    "unknown",
+    "https://example.com/model.vrm",
+    { url: MODEL_URL },
+  ]) {
+    assert.throws(
+      () => avatarModels.getAvatarModel(value),
+      /unsupported avatar/,
+    );
+    await withFetch(
+      () => {
+        throw new Error("invalid IDs must never fetch");
+      },
+      async () => {
+        await assert.rejects(
+          () => loadModelBytes(undefined, value),
+          /unsupported avatar/,
+        );
+      },
+    );
+  }
+});
+
+test("both supported caches survive cleanup and selected cache uses its own hash", async () => {
+  assert.ok(avatarModels.SUPPORTED_MODELS);
+  const supported = avatarModels.SUPPORTED_MODELS.map(
+    (entry) => `codetrial-avatar-${entry.sha256}`,
+  );
+  const retired = `codetrial-avatar-${"a".repeat(64)}`;
+  const deleted = [];
+  await evictSuperseded({
+    keys: async () => [...supported, retired, "another-app"],
+    delete: async (name) => deleted.push(name),
+  });
+  assert.deepEqual(deleted, [retired]);
+  const opened = await openModelCache(
+    { open: async (name) => ({ name }), keys: async () => [] },
+    "jim-business-male-04",
+  );
+  assert.equal(opened.name, supported[1]);
+});
 
 const MODEL = new TextEncoder().encode("stand-in for 11 MB of Seed-san").buffer;
 const IMPOSTOR = new TextEncoder().encode("something else entirely").buffer;

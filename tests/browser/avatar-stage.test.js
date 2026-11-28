@@ -294,6 +294,7 @@ async function mountStage(
     loads: 0,
     focused: 0,
     disposedAtLoad: [],
+    modelIds: [],
   };
   const retirements = [];
   let click;
@@ -321,7 +322,8 @@ async function mountStage(
   stage.initAvatarStage({
     nodes,
     onRetired: (message) => retirements.push(message),
-    loadModel: async (_mount, abort) => {
+    loadModel: async (_mount, abort, modelId) => {
+      counts.modelIds.push(modelId);
       counts.loads++;
       // What had been disposed when each load began, so a test can tell a load
       // that waited for the last model's disposal from one that only followed
@@ -370,8 +372,8 @@ async function mountStage(
     signal: () => signal,
     // The page's order: the stage starts under the preflight overlay, which
     // closes and hands the loop back through setStageCovered.
-    async start() {
-      stage.startAvatar();
+    async start(modelId) {
+      stage.startAvatar(modelId);
       await settle();
     },
     closePreflight() {
@@ -388,6 +390,34 @@ async function mountStage(
     },
   };
 }
+
+test("the selected avatar survives Hide and Show", async (t) => {
+  const env = installBrowser(t);
+  const s = await mountStage(env);
+  await s.start("jim-business-male-04");
+  s.click();
+  await s.settle();
+  s.click();
+  await s.settle();
+  assert.deepEqual(s.counts.modelIds, [
+    "jim-business-male-04",
+    "jim-business-male-04",
+  ]);
+  s.stage.stopAvatar();
+});
+
+test("a compact stage remembers its selection before any model is loaded", async (t) => {
+  const env = installBrowser(t);
+  env.display = "none";
+  const s = await mountStage(env);
+  await s.start("jim-business-male-04");
+  assert.equal(s.counts.loads, 0);
+  env.display = "block";
+  s.setWidth(240);
+  await s.settle();
+  assert.deepEqual(s.counts.modelIds, ["jim-business-male-04"]);
+  s.stage.stopAvatar();
+});
 
 test("stage waits for the preflight before drawing or reachable controls", async (t) => {
   const env = installBrowser(t);

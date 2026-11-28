@@ -46,3 +46,107 @@ Re-read the embedded grant at any time:
   node -e 'const b=require("fs").readFileSync("Seed-san.vrm");
     const j=JSON.parse(b.slice(20,20+b.readUInt32LE(12)).toString("utf8"));
     console.log(JSON.stringify(j.extensions.VRMC_vrm.meta,null,2))'
+
+
+Rocketbox-derived Jim, converted from Business_Male_04
+====================================================
+
+This optional model is fetched at runtime, not embedded in CodeTrial.
+The final VRM was processed offline; the browser does no artistic conversion.
+
+Source: https://github.com/microsoft/Microsoft-Rocketbox
+Source revision: 0943055db6ec570bcef9f2c8b41c9e5467c808f9
+Directory: Assets/Avatars/Professions/Business_Male_04
+Source license: MIT, Copyright (c) 2020 Microsoft
+Pinned license:
+https://github.com/microsoft/Microsoft-Rocketbox/blob/0943055db6ec570bcef9f2c8b41c9e5467c808f9/LICENSE.md
+VRM conversion: jiawei110
+Artifact: jim-business-male-04-upperbody-v3.vrm
+Asset revision: 4a08e53e50c53e52122cfbeb09280294448f77fd
+Pinned artifact:
+https://raw.githubusercontent.com/jiawei110/codetrial-avatar-assets/4a08e53e50c53e52122cfbeb09280294448f77fd/jim-business-male-04-upperbody-v3.vrm
+SHA-256: d78146bc5edb21fce98d31d17127a2199a276f6f60396242dd432501fd922aef
+Bytes: 3524024
+
+Inputs from that directory (SHA-256):
+Export/Business_Male_04_facial.fbx
+  af940f866c1bc087c816999fd68941b9b370ed36084bf54b80a0ff3985c47e70
+Textures/m015_body_color.tga
+  cb5e2a26dbd67f2ebe4cae00c204d5740f17c3eeec3dd1376568df9f26f49ba6
+Textures/m015_body_normal.tga
+  00772b8335ca947db9ef0aaeb839ff3289cfc6b3b4667d7205f964df59069fc3
+Textures/m015_body_specular.tga
+  83b2adb6a57f4b90e48615e6778bf5fb0e620d2954b8c3c088c264acb7fdbc0a
+Textures/m015_head_color.tga
+  45c56d522276b146a824d76aaa7167d96f8b6a2849e0682246f4b161464e6e9c
+Textures/m015_head_normal.tga
+  2d66095b9e84b49f57b4171b7e0450510d6a299dffeedcb6dc4a466e43196e2b
+Textures/m015_head_specular.tga
+  f35bd168df11dce1efc8df4aa81829707c175dcf19437ad9f42a5028db071368
+
+Offline conversion retains the full humanoid skeleton and removes lower-body
+render geometry. It exports two 1024x1024 color textures, calibrates non-metallic
+skin and clothing materials, removes unused shape keys and revises aa to move
+the jaw appearance, mouth corners, cheeks, lips and tongue together. The normal
+and specular inputs are disconnected in the exported material setup. The v3
+artifact retains ten morph targets, adding the source's left/right cheek-squint
+and outer-brow targets to relaxed/happy. Mouth corners, cheeks and brows move
+together, with reduced listening eyelid droop. The v2 jaw/blink shapes, base
+surface, skinning, textures, materials and embedded permission metadata remain
+unchanged. Conversion recipes and measured properties are preserved at the
+pinned asset revision above; v3 is the artifact filename revision, while the
+embedded metadata version remains 0.2.0-poc as exported.
+
+Embedded VRMC_vrm.meta, read from the final pinned file:
+
+{
+  "allowAntisocialOrHateUsage": true,
+  "allowExcessivelySexualUsage": true,
+  "allowExcessivelyViolentUsage": true,
+  "allowPoliticalOrReligiousUsage": true,
+  "allowRedistribution": true,
+  "authors": [
+    "Microsoft Rocketbox",
+    "jiawei110 (VRM conversion)"
+  ],
+  "avatarPermission": "everyone",
+  "commercialUsage": "corporation",
+  "copyrightInformation": "Copyright (c) 2020 Microsoft",
+  "creditNotation": "required",
+  "licenseUrl": "https://vrm.dev/licenses/1.0/",
+  "modification": "allowModificationRedistribution",
+  "name": "Jim interviewer candidate",
+  "otherLicenseUrl": "https://github.com/microsoft/Microsoft-Rocketbox/blob/0943055db6ec570bcef9f2c8b41c9e5467c808f9/LICENSE.md",
+  "references": [
+    "https://github.com/microsoft/Microsoft-Rocketbox/tree/0943055db6ec570bcef9f2c8b41c9e5467c808f9/Assets/Avatars/Professions/Business_Male_04"
+  ],
+  "thirdPartyLicenses": "Microsoft Rocketbox Avatar Library, MIT License",
+  "version": "0.2.0-poc"
+}
+
+The exporter writes the standard VRM Public License URL in licenseUrl and the
+pinned Microsoft MIT notice in otherLicenseUrl. Both are disclosed above;
+the full Microsoft grant is preserved below. Required credit is shown with the
+existing model's credit in the lobby footer.
+
+MIT License
+
+Copyright (c) 2020 Microsoft
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

@@ -34,9 +34,9 @@ let onRetired = () => {};
 
 /// The model loader. `deps.loadModel` replaces it for the stage test only,
 /// which has no WebGL; the page passes nothing.
-let loadModel = async (mount, signal) => {
+let loadModel = async (mount, signal, modelId) => {
   const { loadAvatarModel } = await import("./model.js");
-  return loadAvatarModel(mount, signal);
+  return loadAvatarModel(mount, signal, modelId);
 };
 
 /// Once per page. A second call would add a second click listener and could
@@ -127,8 +127,11 @@ let jimParticipant = null;
 let jimAnalyserContext = null;
 const jimAnalyserPeaks = [];
 
-export function startAvatar() {
+let selectedModelId;
+
+export function startAvatar(modelId = selectedModelId) {
   if (avatar || avatarRetired || avatarHidden) return;
+  selectedModelId = modelId;
   // Below the breakpoint the stage is hidden and nothing is built, but the
   // candidate can cross it at any time by widening the window or undocking
   // devtools. The width observer retries while this is wanted, so an interview
@@ -183,7 +186,7 @@ export function startAvatar() {
       nodes.jimAvatarNote.textContent =
         "Jim is here by voice; his avatar is unavailable in this browser.";
     },
-    loadModel: (signal) => loadModel(nodes.jimAvatar, signal),
+    loadModel: (signal) => loadModel(nodes.jimAvatar, signal, selectedModelId),
   });
   const { settled } = avatar;
   modelLoad = settled;

@@ -307,6 +307,7 @@ function stagePayload(extra) {
   return {
     title: nodes.title.textContent,
     meta: nodes.meta.textContent,
+    avatarId: state.interviewerAvatar,
     ...extra,
   };
 }

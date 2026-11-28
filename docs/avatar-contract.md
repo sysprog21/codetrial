@@ -12,10 +12,48 @@ reproducible bundle sources.
 ## Status
 
 Shipping. The renderer, behavior mapping, and fallback are in the repo. The
-model is not: it is fetched by the browser from a pinned upstream URL and the
-repo carries only its hash and its license record.
+models are not: the browser fetches the selected model from its commit-pinned
+URL. The repo carries a closed registry of IDs, labels, URL/hash pairs and
+license records in `web/avatar/model.js`.
 
-## Model
+### Supported appearances
+
+The preflight offers `jim` (Jim's original Seed-san appearance, the default)
+and `jim-business-male-04` (Rocketbox-derived Jim). Both represent the same
+interviewer. The labels describe a younger engineer (default) and a middle-aged
+senior engineer. Appearance and voice remain independent. A hint below
+the appearance selector suggests Puck for the original appearance and Charon
+for Rocketbox. Changing appearance updates this advice only; it never changes
+the voice selection, including Default or Random, or the operator's configured
+voice.
+
+The Start action commits the appearance for that page session. No model is
+downloaded before that action, so changing the preflight selection does not
+download a model that will be discarded. This gives up the previous preflight
+preload; a cold model may appear later while the interview continues by voice.
+Hide/Show and a stage that becomes wide enough later retain the same ID.
+There is no in-interview model switch, upload or caller-provided URL.
+
+The registry owns the URL and SHA-256 as one immutable descriptor. Only an ID
+crosses the replay boundary; an unknown ID is not a model source. Neither
+model selection nor model loading changes Gemini input, voice, assessment or
+the token endpoint's metadata.
+
+The Rocketbox model is VRM 1.0, 3,524,024 bytes, 6,147 triangles, two materials
+and two embedded 1024x1024 PNGs. It uses only `VRMC_vrm` and
+`KHR_materials_specular`, with no compression or runtime physics. Its SHA-256
+is `d78146bc5edb21fce98d31d17127a2199a276f6f60396242dd432501fd922aef`.
+The source is Microsoft Rocketbox revision
+`0943055db6ec570bcef9f2c8b41c9e5467c808f9`, `Business_Male_04`; the model
+license record preserves all seven source hashes, the full MIT notice and
+the actual embedded VRM metadata. Geometry cropping, texture/material work
+and the `aa` deformation were completed offline before publishing the VRM.
+The v3 artifact retains ten morph targets. Its `relaxed`/`happy` presets bind
+mouth corners, cheeks and outer brows together, with reduced listening eyelid
+droop; the existing state weights scale those bindings. The jaw/blink shapes
+and global mouth-amplitude mapping are unchanged by this asset update.
+
+## Original model
 
 | Field | Value |
 |---|---|
@@ -44,6 +82,9 @@ becomes a problem, measure it first.
 
 Budget for a commissioned replacement: upper body only, 1 to 3 materials, 512
 to 1024 px textures, minimal physics, 5 to 15 MB.
+
+Only the 15 MB ceiling is enforced. The 5 MB planning figure is not a minimum;
+the supported Rocketbox appearance is smaller.
 
 The size half of that budget is enforced rather than advisory. `MODEL_MAX_BYTES`
 in `web/avatar/model.js` is the 15 MB top of this range, and the fetch refuses a
@@ -130,13 +171,13 @@ buy a second 60 seconds.
 
 ## How the model gets there
 
-`web/avatar/model.js` owns both halves of the pin, the URL and the hash, and
-downloads it only when a visible avatar starts.
+`web/avatar/model.js` owns both halves of every supported pin, the URL and the
+hash, and downloads only the committed model when a visible avatar starts.
 That is a separate file from the renderer on purpose: none of it touches
 Three.js, `web/avatar/vrm.js` is the one file that does, and the split is what
 lets `node --test` drive the cache branches and the pin without a browser.
 
-Every byte handed to the loader is checked against `MODEL_SHA256` there first,
+Every byte handed to the loader is checked against its descriptor's SHA-256 first,
 on the cache path as much as the network path: a cached entry is only as
 trustworthy as whatever last wrote to the origin's storage, and re-hashing
 11 MB costs tens of milliseconds against a download that costs seconds. Bytes
@@ -172,7 +213,9 @@ private browsing and `cache.put` rejects once 11 MB will not fit, and both of
 those describe a browser that can still download and render the model
 perfectly. Those failures are swallowed and cost a download next time. The
 cache is named after the hash, so a model swap can never read a stale entry,
-and opening it deletes any superseded cache under the same prefix.
+and opening it deletes superseded caches under the same prefix. All currently
+supported hashes are retained, so selecting another supported model does not
+evict the first one's cache.
 
 The pinned URL is `raw.githubusercontent.com`, which is a git host and not a
 CDN. It is rate limited, it answers `cache-control: max-age=300`, and a
@@ -515,6 +558,16 @@ The media contract is unchanged by any of this. No first-party script captures a
 canvas stream, the only tracks published are the candidate's microphone and
 camera, and the recording template renders the same avatar from the same
 vendored bundle rather than subscribing to a second one.
+
+Every replay `stage` payload includes the committed `avatarId`, including
+clock updates, because each stage snapshot replaces its predecessor. The
+recording template waits for its first stage row before downloading a model;
+a valid but empty first replay snapshot does not imply the original model.
+Legacy stage rows without the field select the original Jim. An unsupported
+ID leaves the voice-only fallback. The first stage commits the recording's
+choice, and subsequent stage rows never trigger another model load. If replay
+is unavailable, camera and audio recording proceed under the existing
+readiness rules without guessing an appearance.
 
 ### Rendering under load
 
