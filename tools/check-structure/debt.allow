@@ -1,28 +1,30 @@
 # Existing architectural debt suppressed by `check-structure --allow`.
 # A finding not listed here fails. Fixing a listed one is never an error
 # by itself, but under `--ratchet` it must leave this list in the same
-# change: run `check-structure --update-allow` on this file.
-field-leak codetrial::accounts::Accounts::config
-field-leak codetrial::agent::evidence::EvidenceLedger::entries
-field-leak codetrial::agent::evidence::EvidenceLedger::metrics
-field-leak codetrial::livekit::media::OutputAudio::tool_ack
-field-leak codetrial::livekit::media::OutputAudio::tool_ack_task
-field-leak codetrial::livekit::room::room_events::RoomEventReader::startup_sync_pending
-field-leak codetrial::livekit::room::room_link::Recorder::eviction_seed
-field-leak codetrial::livekit::turn::RuntimeActivity::floor_tracker
-field-leak codetrial::livekit::turn::RuntimeActivity::live_exit
-field-leak codetrial::livekit::turn::RuntimeActivity::live_socket
-field-leak codetrial::livekit::turn::RuntimeActivity::phase_judge
-field-leak codetrial::livekit::turn::RuntimeActivity::prompt_text
-field-leak codetrial::livekit::turn::RuntimeActivity::socket
-field-leak codetrial::tasks::access::State::result
-shallow-module codetrial::accounts
-shallow-module codetrial::accounts::peer
-shallow-module codetrial::config
-shallow-module codetrial::livekit::turn
-shallow-module codetrial::peer_audio
-shallow-module codetrial::tasks::session
-wide-directory src/
-wide-directory src/agent/
-wide-directory src/web/
-wide-directory tests/
+# change: run `check-structure --update-allow` on this file, which adds nothing new.
+# Each entry ends with ` # ` and why it is allowed; a new one is added
+# by hand, with its reason, in a commit that says why.
+field-leak codetrial::accounts::Accounts::config # recorded when the gate was added
+field-leak codetrial::agent::evidence::EvidenceLedger::entries # recorded when the gate was added
+field-leak codetrial::agent::evidence::EvidenceLedger::metrics # recorded when the gate was added
+field-leak codetrial::livekit::media::OutputAudio::tool_ack # recorded when the gate was added
+field-leak codetrial::livekit::media::OutputAudio::tool_ack_task # recorded when the gate was added
+field-leak codetrial::livekit::room::room_events::RoomEventReader::startup_sync_pending # recorded when the gate was added
+field-leak codetrial::livekit::room::room_link::Recorder::eviction_seed # recorded when the gate was added
+field-leak codetrial::livekit::turn::RuntimeActivity::floor_tracker # recorded when the gate was added
+field-leak codetrial::livekit::turn::RuntimeActivity::live_exit # recorded when the gate was added
+field-leak codetrial::livekit::turn::RuntimeActivity::live_socket # recorded when the gate was added
+field-leak codetrial::livekit::turn::RuntimeActivity::phase_judge # recorded when the gate was added
+field-leak codetrial::livekit::turn::RuntimeActivity::prompt_text # recorded when the gate was added
+field-leak codetrial::livekit::turn::RuntimeActivity::socket # recorded when the gate was added
+field-leak codetrial::tasks::access::State::result # recorded when the gate was added
+shallow-module codetrial::accounts # recorded when the gate was added
+shallow-module codetrial::accounts::peer # recorded when the gate was added
+shallow-module codetrial::config # recorded when the gate was added
+shallow-module codetrial::livekit::turn # recorded when the gate was added
+shallow-module codetrial::peer_audio # recorded when the gate was added
+shallow-module codetrial::tasks::session # recorded when the gate was added
+wide-directory src/ # recorded when the gate was added
+wide-directory src/agent/ # recorded when the gate was added
+wide-directory src/web/ # recorded when the gate was added
+wide-directory tests/ # recorded when the gate was added

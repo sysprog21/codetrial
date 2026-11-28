@@ -684,10 +684,13 @@ gate --lane rust cargo-test cargo test --locked --workspace --manifest-path "$RO
 gate --lane rust browser-server-tests browser_tests server
 gate desktop-fmt cargo fmt --check --manifest-path "$ROOT/desktop/Cargo.toml"
 
-# The structure lints and the tool's own tests need rust-analyzer and minutes of
-# indexing, so they run daily in .github/workflows/structure.yml, not here. The
-# formatting of the tool is cheap and stays.
+# The structure lints and the tool's end-to-end tests need rust-analyzer and
+# minutes of indexing, so they run daily in .github/workflows/structure.yml, not
+# here. The formatting of the tool and its unit tests are cheap and stay; the
+# unit tests parse the committed debt list, so an entry without its reason fails
+# here rather than a day later.
 gate structure-fmt cargo fmt --check --manifest-path "$ROOT/tools/check-structure/Cargo.toml"
+gate --lane rust structure-unit-tests cargo test --locked --bins --manifest-path "$ROOT/tools/check-structure/Cargo.toml"
 gate --lane rust desktop desktop_gate
 
 gate gen-problems "$PYTHON" "$ROOT/scripts/gen-problems.py" --check

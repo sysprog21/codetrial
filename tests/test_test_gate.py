@@ -257,6 +257,7 @@ gate()
                 "browser-server-tests",
                 "cargo-deny",
                 "desktop",
+                "structure-unit-tests",
             },
         )
         self.assertEqual(rust & browser, shared)

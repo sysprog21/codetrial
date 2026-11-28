@@ -238,8 +238,8 @@ hooks or the CI gate lanes; `.github/workflows/structure.yml` runs it once a day
 and fails on anything `tools/check-structure/debt.allow` does not list. Nothing
 else catches a new tangle or leak before that run, so run it yourself:
 
-- **before** a structural refactor, for the baseline (`--update-allow` into a
-  scratch file and diff it against `debt.allow`);
+- **before** a structural refactor, for the baseline (`--keys` into a scratch
+  file, diffed against the keys of `debt.allow`);
 - **after** any change that moves a type, adds a module or a file to a
   directory, or adds a field another module touches;
 - **before calling a structural refactor done**, with `--ratchet`.
@@ -251,8 +251,10 @@ cargo run --release --manifest-path tools/check-structure/Cargo.toml \
 ```
 
 Without `--allow` it prints every finding with the places that cause it; that
-report is where to start. Apply `--update-allow` to `debt.allow` only when the
-diff against the current list is removals. A new `module-cycle`, `tangle`,
+report is where to start. `--update-allow` on `debt.allow` removes fixed
+entries, moves a circle that shrank to its new key under the reason it had,
+keeps every other reason, and refuses a finding the list does not hold; an entry is added only by hand, with ` # ` and its reason, in a
+commit of its own. A new `module-cycle`, `tangle`,
 `shallow-module` or `wide-directory` means the change is wrong: reshape it, do
 not list it.
 

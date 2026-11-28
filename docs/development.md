@@ -437,8 +437,9 @@ The findings that existed when the gate arrived are listed in
 also fails a listed entry that has been fixed, so the list shrinks in the
 change that fixes it; a day's run is what notices one that was not. When a gate failure is yours, fix the structure rather
 than the list: ask what the module is meant to hide, and narrow its interface
-instead of moving the leak elsewhere. Regenerate the list only to remove fixed
-entries:
+instead of moving the leak elsewhere. The list only shrinks through the tool:
+`--update-allow` removes fixed entries, keeps every remaining entry's reason,
+and refuses a finding the list does not hold, writing nothing.
 
 ```sh
 cargo run --release --manifest-path tools/check-structure/Cargo.toml \

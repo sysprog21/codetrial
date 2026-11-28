@@ -1397,7 +1397,7 @@ async fn spawn_counting_quota_stub(
 #[path = "web/token.rs"]
 mod token;
 
-#[path = "web/token_default.rs"]
+#[path = "web/token/default_length.rs"]
 mod token_default;
 
 #[path = "web/policy.rs"]
@@ -1429,7 +1429,7 @@ mod accounts;
 #[path = "web/login_form.rs"]
 mod login_form;
 
-#[path = "web/waiting_starts.rs"]
+#[path = "web/token/waiting_starts.rs"]
 mod waiting_starts;
 
 #[path = "web/routes.rs"]
