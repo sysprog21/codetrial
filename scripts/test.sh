@@ -652,6 +652,10 @@ gate src-test-bodies src_test_bodies
 # say why, no markers or CJK, and no file growing past its ceiling.
 gate rust-style "$PYTHON" "$ROOT/scripts/check-rust-style.py" --baseline origin/main
 
+# Python, Rust and the browser each forgive different things in a JSON file: a
+# duplicate key, a NaN, an integer the browser rounds.
+gate json "$PYTHON" "$ROOT/scripts/check-json.py"
+
 # webrtc-sys needs Clang 21+ on Linux, and without one clippy and cargo-test
 # fail on a build script rather than on anything this tree did. The Makefile's
 # default, for a run that did not come through `make check`: a caller's own CXX
@@ -714,6 +718,7 @@ gate gate-evidence-tests unittest_gate "$ROOT/tests/test_check_gate_evidence.py"
 gate fetch-gate-note-tests unittest_gate "$ROOT/tests/test_fetch_gate_note.py"
 gate gate-approve-tests unittest_gate "$ROOT/tests/test_gate_approve.py"
 gate rust-style-tests unittest_gate "$ROOT/tests/test_check_rust_style.py"
+gate json-tests unittest_gate "$ROOT/tests/test_check_json.py"
 gate ceiling-hotspots-tests unittest_gate "$ROOT/tests/test_ceiling_hotspots.py"
 gate test-gate-tests unittest_gate "$ROOT/tests/test_test_gate.py"
 gate env-check-tests unittest_gate "$ROOT/tests/test_env_check.py"

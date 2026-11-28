@@ -355,15 +355,33 @@ for paths in rules_maps:
             if not any(fnmatch.fnmatchcase(t, pattern) for t in tracked):
                 report(paths, "pattern", pattern)
 
-# The other direction: a check script outside the gate that no skill names.
-with open("scripts/test.sh", encoding="utf-8") as f:
-    gate = f.read()
+# The other direction: a check nothing runs and no skill names has dropped out
+# of every runner, and a green gate says nothing about it. Each one is run by
+# the gate, a workflow or a git hook, or codetrial-verify says when to run it.
+runners = [
+    "scripts/test.sh",
+    # Claude Code's own hooks run the agent checks.
+    ".claude/settings.json",
+    *sorted(glob.glob(".github/workflows/*.yml")),
+    *sorted(glob.glob("scripts/git-*.sh")),
+]
+# Comment lines are dropped first: a script a runner only mentions is not
+# one it runs.
+ran = ""
+for runner in runners:
+    if not os.path.exists(runner):
+        continue
+    with open(runner, encoding="utf-8") as f:
+        ran += "".join(line for line in f if not line.lstrip().startswith("#"))
 with open(".claude/skills/codetrial-verify/SKILL.md", encoding="utf-8") as f:
     verify = f.read()
+CHECK_SCRIPT = re.compile(r"(?:check-[a-z0-9-]+|[a-z0-9-]+-check)\.(?:sh|py|mjs|cjs)")
 for script in sorted(os.listdir("scripts")):
-    if script.endswith("-check.sh"):
+    if CHECK_SCRIPT.fullmatch(script):
         script = f"scripts/{script}"
-        if f"/{script}" not in gate and script not in verify:
+        if not re.search(r"(?<![A-Za-z0-9_-])" + re.escape(script), ran) and (
+            script not in verify
+        ):
             report("codetrial-verify/SKILL.md", "does not name", script)
 
 print("\n".join(problems), end="\n" if problems else "")

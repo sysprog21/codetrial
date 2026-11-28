@@ -16,6 +16,7 @@ Each exits 0 on a clean tree, so run them before handing back:
 | Command | Catches |
 |---|---|
 | `./node_modules/.bin/eslint .` | An undefined name (`no-undef`), the bug a rename leaves behind, and the other statements that cannot mean what they say (`eslint.config.mjs` lists them, each with its reason: a `finally` that drops an error, a `catch` that only rethrows, a `map` callback that returns nothing). Run `npm ci` first if `node_modules` is absent. |
+| `python3 scripts/check-json.py` | A JSON file the browser reads differently from Python or Rust: a duplicate key, a `NaN`, an integer past 2**53, a number past the double's range, an unpaired surrogate escape |
 | `./scripts/indent.sh --check` | Prettier formatting, with the Rust, Python and shell formatters |
 | `node scripts/gen-wire-fixtures.mjs --check` | A producer change that moves a wire fixture |
 | `./scripts/test.sh browser` | The node and browser tests under `tests/browser/` |

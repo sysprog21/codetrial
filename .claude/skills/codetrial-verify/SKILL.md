@@ -48,7 +48,8 @@ failed. It covers `cargo fmt --check`, `clippy -D warnings`, `cargo test`,
 ([Rust profile of codetrial-improve](../codetrial-improve/rust.md)), the Rust lane's Cargo-aware `workspace-lints` inheritance
 audit, the Python unittest suites, the Node browser tests, ESLint,
 `ruff check`, `shellcheck`, the generated-artifact drift checks, the hook suite,
-the skill references, `cargo-audit`, `cargo-deny` and `actionlint`.
+the skill references, the JSON check (`scripts/check-json.py`), `cargo-audit`,
+`cargo-deny` and `actionlint`.
 
 The architecture lints of `tools/check-structure` are not a gate: a cold index
 takes minutes, so `.github/workflows/structure.yml` runs them daily and the
@@ -139,6 +140,17 @@ scripts/evidence-replay-check.sh       # no credentials; the one cargo test the 
 Read the script's validation or usage block before a credentialed run; it is
 the source of truth for optional modes and the complete environment-variable
 list.
+
+`scripts/check-recovery-matrix.py check <ledger>` is a completion gate of
+another kind: it validates the recovery cancellation ledger, which lives outside
+the checkout, so nothing here can run it for you. Run it when recovery
+cancellation coverage is the claim
+([development.md](../../../docs/development.md) has the matrix).
+
+`scripts/check-skill-refs.py`, which the gate runs, refuses a `check-*` or
+`*-check` script under `scripts/` that the gate, a workflow and the git hooks
+all leave unrun unless this page names it, so a check cannot drop out of every
+runner unnoticed.
 
 CI additionally mutation-tests the diff: `plan-mutants` counts what the change
 is worth and `mutants` runs `cargo-mutants` over it. A surviving mutant means a

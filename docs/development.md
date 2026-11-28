@@ -299,6 +299,11 @@ must still satisfy any smaller baseline limit. The rules and the lints left
 off on purpose are in the Rust profile of codetrial-improve,
 `.claude/skills/codetrial-improve/rust.md`.
 
+`scripts/check-json.py` holds every tracked JSON file to what Python,
+serde_json and `JSON.parse` agree on: no duplicate key, no `NaN` or
+`Infinity`, no number past the double's range, no unpaired surrogate escape
+and no integer the browser would round.
+
 The compiler those lints run on is pinned in `rust-toolchain.toml`, so a new
 Rust release cannot fail an unchanged tree: Dependabot proposes each bump as
 its own pull request. The pin is the gate's compiler; `rust-version` remains the
