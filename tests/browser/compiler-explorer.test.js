@@ -2793,6 +2793,82 @@ test("jump-game-ii cases reject hop-count and landing shortcuts", () => {
   }
 });
 
+test("interleaving-string cases reject either greedy merge order", () => {
+  // No test covered this judge before, so both no-backtracking greedy orders
+  // need their own pinned case: one takes the next matching character from
+  // s1 first, the other from s2 first, and neither is sound.
+  const preferFirst = (s1, s2, s3) => {
+    let i = 0;
+    let j = 0;
+    if (s1.length + s2.length !== s3.length) return false;
+    for (const ch of s3) {
+      if (i < s1.length && s1[i] === ch) {
+        i += 1;
+      } else if (j < s2.length && s2[j] === ch) {
+        j += 1;
+      } else {
+        return false;
+      }
+    }
+    return i === s1.length && j === s2.length;
+  };
+  const preferSecond = (s1, s2, s3) => {
+    let i = 0;
+    let j = 0;
+    if (s1.length + s2.length !== s3.length) return false;
+    for (const ch of s3) {
+      if (j < s2.length && s2[j] === ch) {
+        j += 1;
+      } else if (i < s1.length && s1[i] === ch) {
+        i += 1;
+      } else {
+        return false;
+      }
+    }
+    return i === s1.length && j === s2.length;
+  };
+  const correct = (s1, s2, s3) => {
+    const n1 = s1.length;
+    const n2 = s2.length;
+    if (n1 + n2 !== s3.length) return false;
+    const dp = Array.from({ length: n1 + 1 }, () =>
+      new Array(n2 + 1).fill(false),
+    );
+    dp[0][0] = true;
+    for (let i = 0; i <= n1; i += 1) {
+      for (let j = 0; j <= n2; j += 1) {
+        if (i === 0 && j === 0) continue;
+        dp[i][j] =
+          (i > 0 && dp[i - 1][j] && s1[i - 1] === s3[i + j - 1]) ||
+          (j > 0 && dp[i][j - 1] && s2[j - 1] === s3[i + j - 1]);
+      }
+    }
+    return dp[n1][n2];
+  };
+  for (const {
+    label,
+    input: [s1, s2, s3],
+    expected,
+  } of judges["interleaving-string"].cases) {
+    assert.equal(
+      correct(s1, s2, s3),
+      expected,
+      `"${label}" must match the correct merge check`,
+    );
+  }
+  for (const [name, run, label] of [
+    ["s1 before s2", preferFirst, "shared letters"],
+    ["s2 before s1", preferSecond, "second source repeats the first letter"],
+  ]) {
+    assertRejects(
+      "interleaving-string",
+      label,
+      run,
+      `"${label}" must reject always taking the next match from ${name}`,
+    );
+  }
+});
+
 test("jump-game-ii reference strategies match shortest paths", () => {
   for (const { label, input, expected } of judges["jump-game-ii"].cases) {
     assert.equal(

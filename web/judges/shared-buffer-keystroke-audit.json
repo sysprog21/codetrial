@@ -47,6 +47,15 @@
         "aaba"
       ],
       "expected": true
+    },
+    {
+      "label": "second source repeats the first letter",
+      "input": [
+        "ab",
+        "a",
+        "aba"
+      ],
+      "expected": true
     }
   ],
   "paramNames": [
