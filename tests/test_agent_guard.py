@@ -1,14 +1,19 @@
 """The agent guard blocks hook bypasses and nothing an honest commit needs."""
 
 import json
+import os
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
 GUARD = Path(__file__).resolve().parents[1] / "scripts/agent-guard.py"
 
 BLOCKED = [
+    # The account database holds session tokens and candidates' reports.
+    "sqlite3 config/codetrial.db .dump",
+    "cat config/codetrial.db-wal",
     # Found by the pull request review.
     "git commit \\\n  --no-verify -m x",
     "git commit --no-\\\nverify -m x",
@@ -198,13 +203,24 @@ ALLOWED = [
 ]
 
 
-def run(command, tool="Bash"):
+def guard(tool, tool_input, project=None):
+    """The guard's answer to one tool call, run as Claude Code runs it, from
+    `project` when one is given."""
+    env = dict(os.environ)
+    if project is not None:
+        env["CLAUDE_PROJECT_DIR"] = str(project)
     return subprocess.run(
         [sys.executable, str(GUARD)],
-        input=json.dumps({"tool_name": tool, "tool_input": {"command": command}}),
+        input=json.dumps({"tool_name": tool, "tool_input": tool_input}),
         text=True,
         capture_output=True,
+        cwd=project,
+        env=env,
     )
+
+
+def run(command, tool="Bash"):
+    return guard(tool, {"command": command})
 
 
 class AgentGuardTests(unittest.TestCase):
@@ -228,11 +244,277 @@ class AgentGuardTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0)
 
-    def test_settings_register_the_guard_for_the_bash_tool(self):
+    def test_settings_register_the_guard_for_every_tool_it_judges(self):
         settings = json.loads((GUARD.parents[1] / ".claude/settings.json").read_text())
         entry = settings["hooks"]["PreToolUse"][0]
-        self.assertEqual(entry["matcher"], "Bash")
+        for tool in (
+            "Bash",
+            "Read",
+            "Grep",
+            "Edit",
+            "MultiEdit",
+            "Write",
+            "NotebookEdit",
+        ):
+            with self.subTest(tool=tool):
+                self.assertRegex(tool, f"^(?:{entry['matcher']})$")
         self.assertIn("scripts/agent-guard.py", entry["hooks"][0]["command"])
+
+    def test_a_tool_that_opens_a_path_is_judged_like_its_shell_reader(self):
+        root = str(GUARD.parents[1])
+        for tool, tool_input, status in (
+            ("Read", {"file_path": f"{root}/config/codetrial.env.local"}, 2),
+            ("Read", {"file_path": "config/codetrial.env.alice"}, 2),
+            ("Read", {"file_path": f"{root}/config/codetrial.env.example"}, 0),
+            ("Read", {"file_path": f"{root}/config/codetrial.db"}, 2),
+            ("Read", {"file_path": "config/codetrial.db-wal"}, 2),
+            ("Read", {"file_path": f"{root}/docs/codetrial.db.md"}, 0),
+            ("Read", {"file_path": f"{root}/src/config.rs"}, 0),
+            (
+                "Grep",
+                {"pattern": "KEY", "path": f"{root}/config", "output_mode": "content"},
+                2,
+            ),
+            # Names and counts, Grep's default, show no line of the file.
+            ("Grep", {"pattern": "KEY", "path": f"{root}/config"}, 0),
+            ("Grep", {"pattern": "KEY", "path": "config", "output_mode": "count"}, 0),
+            ("Edit", {"file_path": f"{root}/.git/hooks/pre-commit"}, 2),
+            ("Write", {"file_path": ".git/hooks/pre-push"}, 2),
+            ("MultiEdit", {"file_path": f"{root}/.git/hooks/commit-msg"}, 2),
+            ("NotebookEdit", {"notebook_path": f"{root}/.git/hooks/pre-push"}, 2),
+            ("Edit", {"file_path": f"{root}/scripts/../.git/hooks/pre-commit"}, 2),
+            # The repository's git config can repoint core.hooksPath.
+            ("Edit", {"file_path": f"{root}/.git/config"}, 2),
+            ("Write", {"file_path": f"{root}/.git/config.worktree"}, 2),
+            ("Edit", {"file_path": f"{root}/.git/worktrees/w/config.worktree"}, 2),
+            ("Read", {"file_path": f"{root}/.git/config"}, 0),
+            # The tracked script behind a hook is reviewed and tested as code.
+            ("Edit", {"file_path": f"{root}/scripts/git-pre-commit.sh"}, 0),
+            ("Write", {"file_path": f"{root}/config/codetrial.env.local"}, 0),
+        ):
+            with self.subTest(tool=tool, tool_input=tool_input):
+                result = guard(tool, tool_input, root)
+                self.assertEqual(result.returncode, status, result.stderr)
+                if status:
+                    self.assertIn("Blocked", result.stderr)
+
+
+class FileToolPathTests(unittest.TestCase):
+    """A scratch project holding a credential file, for what only a real file
+    system shows: a glob ripgrep matches against it, and a symlink to it."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        (self.root / "config").mkdir()
+        (self.root / "config/codetrial.env.local").write_text("KEY=secret\n")
+        (self.root / "config/codetrial.env.example").write_text("KEY=\n")
+
+    def guard(self, tool, tool_input):
+        return guard(tool, tool_input, self.root).returncode
+
+    def test_a_grep_glob_that_names_a_credential_file_is_refused(self):
+        for glob in ("config/*.env.local", "*.env.*", "*.local", "{*.local,*.md}"):
+            with self.subTest(glob=glob):
+                self.assertEqual(
+                    self.guard(
+                        "Grep",
+                        {"pattern": "KEY", "glob": glob, "output_mode": "content"},
+                    ),
+                    2,
+                )
+                self.assertEqual(
+                    self.guard("Grep", {"pattern": "KEY", "glob": glob}), 0
+                )
+        for glob in ("*.example", "*.rs", "!*.local"):
+            with self.subTest(glob=glob):
+                self.assertEqual(
+                    self.guard(
+                        "Grep",
+                        {"pattern": "KEY", "glob": glob, "output_mode": "content"},
+                    ),
+                    0,
+                )
+
+    def test_a_grep_glob_is_scoped_to_the_search_path(self):
+        (self.root / "src").mkdir()
+        (self.root / "source").symlink_to(self.root / "src")
+        for path, expected in (
+            ("src", 0),
+            (str(self.root / "src"), 0),
+            ("source", 0),
+            ("src/..", 2),
+        ):
+            with self.subTest(path=path):
+                self.assertEqual(
+                    self.guard(
+                        "Grep",
+                        {
+                            "pattern": "KEY",
+                            "path": path,
+                            "glob": "*",
+                            "output_mode": "content",
+                        },
+                    ),
+                    expected,
+                )
+
+    def test_slashed_globs_match_from_the_search_or_project_directory(self):
+        for glob, expected in (
+            (f"/{self.root.name}/config/*.local", 2),
+            ("config/*.local", 2),
+            ("**/config/**/codetrial.env.local", 2),
+            ("/codetrial.env.local", 0),
+            ("/*/*/*.local", 2),
+            ("/*/*/*/*.local", 0),
+            ("config/codetrial.env.local/**", 0),
+        ):
+            with self.subTest(glob=glob):
+                self.assertEqual(
+                    self.guard(
+                        "Grep",
+                        {
+                            "pattern": "KEY",
+                            "path": "..",
+                            "glob": glob,
+                            "output_mode": "content",
+                        },
+                    ),
+                    expected,
+                )
+
+    def test_a_symlink_to_a_credential_file_is_judged_by_its_target(self):
+        (self.root / "notes.txt").symlink_to(self.root / "config/codetrial.env.local")
+        self.assertEqual(
+            self.guard("Read", {"file_path": str(self.root / "notes.txt")}), 2
+        )
+        self.assertEqual(self.guard("Read", {"file_path": "notes.txt"}), 2)
+        (self.root / "plain.txt").write_text("x\n")
+        self.assertEqual(self.guard("Read", {"file_path": "plain.txt"}), 0)
+
+    def test_the_account_database_is_guarded_wherever_it_is_kept(self):
+        # --data-dir keeps it under its own name elsewhere; CODETRIAL_DB_PATH
+        # names any file, from the environment or a config file.
+        elsewhere = self.root / "data"
+        elsewhere.mkdir()
+        (elsewhere / "codetrial.db").write_text("")
+        self.assertEqual(
+            self.guard("Read", {"file_path": str(elsewhere / "codetrial.db")}), 2
+        )
+        (self.root / "config/codetrial.env.local").write_text(
+            "KEY=secret\nexport CODETRIAL_DB_PATH='accounts/store.sqlite'\n"
+        )
+        self.assertEqual(self.guard("Read", {"file_path": "accounts/store.sqlite"}), 2)
+        self.assertEqual(
+            self.guard("Read", {"file_path": "accounts/store.sqlite-wal"}), 2
+        )
+        self.assertEqual(self.guard("Read", {"file_path": "accounts/other.sqlite"}), 0)
+        refused = subprocess.run(
+            [sys.executable, str(GUARD)],
+            input=json.dumps(
+                {"tool_name": "Read", "tool_input": {"file_path": "/tmp/held.db"}}
+            ),
+            text=True,
+            capture_output=True,
+            cwd=self.root,
+            env={
+                **os.environ,
+                "CLAUDE_PROJECT_DIR": str(self.root),
+                "CODETRIAL_DB_PATH": "/tmp/held.db",
+            },
+        )
+        self.assertEqual(refused.returncode, 2)
+
+    def test_a_grep_glob_reaching_the_account_database_is_refused(self):
+        # The glob is judged against what the predicate above guards, not only
+        # against config/: the database under its own name anywhere, and the
+        # file CODETRIAL_DB_PATH names, from a search root config/ is not under.
+        (self.root / "data").mkdir()
+        (self.root / "config/codetrial.env.local").write_text(
+            "export CODETRIAL_DB_PATH='accounts/store.sqlite'\n"
+        )
+        for path, glob, expected in (
+            (".", "**/codetrial.db", 2),
+            ("data", "codetrial.db-wal", 2),
+            (".", "accounts/*.sqlite", 2),
+            ("accounts", "*.sqlite-shm", 2),
+            ("data", "*.md", 0),
+            ("accounts", "other/*.sqlite", 0),
+        ):
+            with self.subTest(path=path, glob=glob):
+                self.assertEqual(
+                    self.guard(
+                        "Grep",
+                        {
+                            "pattern": "KEY",
+                            "path": path,
+                            "glob": glob,
+                            "output_mode": "content",
+                        },
+                    ),
+                    expected,
+                )
+
+    def test_a_glob_is_read_in_ripgreps_syntax(self):
+        # ripgrep escapes with a backslash and negates a class with `^`; each
+        # of these reaches config/codetrial.env.local through it.
+        for glob in (
+            "config/[^x]odetrial.env.local",
+            "config/\\codetrial.env.local",
+            "config/codetrial.env.loca[^x]",
+            "\\config/*.local",
+        ):
+            with self.subTest(glob=glob):
+                self.assertEqual(
+                    self.guard(
+                        "Grep",
+                        {"pattern": "KEY", "glob": glob, "output_mode": "content"},
+                    ),
+                    2,
+                )
+        # An escaped star is a star: it names no credential file.
+        self.assertEqual(
+            self.guard(
+                "Grep",
+                {
+                    "pattern": "KEY",
+                    "glob": "codetrial.env.\\*",
+                    "output_mode": "content",
+                },
+            ),
+            0,
+        )
+
+    def test_a_braced_glob_is_expanded_before_it_is_judged(self):
+        for glob in (
+            "config/*.env.{local,x}",
+            "config/{a,*.env.{loc,local}}",
+            "*.{md,local}",
+        ):
+            with self.subTest(glob=glob):
+                self.assertEqual(
+                    self.guard(
+                        "Grep",
+                        {"pattern": "KEY", "glob": glob, "output_mode": "content"},
+                    ),
+                    2,
+                )
+        self.assertEqual(
+            self.guard(
+                "Grep",
+                {
+                    "pattern": "KEY",
+                    "glob": "config/*.{rs,md}",
+                    "output_mode": "content",
+                },
+            ),
+            0,
+        )
+
+    def test_an_unexpected_input_shape_is_left_alone(self):
+        self.assertEqual(self.guard("Read", {"file_path": 7}), 0)
+        self.assertEqual(self.guard("Grep", {"pattern": "x", "glob": ["*.local"]}), 0)
 
 
 if __name__ == "__main__":
