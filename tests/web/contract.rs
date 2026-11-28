@@ -917,6 +917,13 @@ fn static_problem_bank_and_judges_cover_each_problem() {
         ("add-binary", "wide all ones plus one"),
         ("add-binary", "two wide values with multi-bit carry"),
         ("add-binary", "maximum length all ones plus one"),
+        ("factorial-trailing-zeroes", "one fewer scheduled job"),
+        ("factorial-trailing-zeroes", "medium scheduling batch"),
+        ("factorial-trailing-zeroes", "two hundred scheduled jobs"),
+        ("factorial-trailing-zeroes", "thousand scheduled jobs"),
+        ("factorial-trailing-zeroes", "large odd batch"),
+        ("factorial-trailing-zeroes", "half capacity"),
+        ("factorial-trailing-zeroes", "maximum job count"),
         ("triangle", "cheapest values not connected"),
         ("triangle", "cheaper step misses the deep saving"),
         (

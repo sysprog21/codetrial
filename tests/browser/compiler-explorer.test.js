@@ -3133,6 +3133,75 @@ test("mirrored tag cases reject each wrong scan by name", async (t) => {
   );
 });
 
+test("factorial-trailing-zeroes checks repeated factors across the input range", () => {
+  const problem = "factorial-trailing-zeroes";
+  // Count individual factors independently of the usual repeated-division solution.
+  for (const { input, expected } of judges[problem].cases) {
+    const [n] = input;
+    let factors = 0;
+    for (let multiple = 5; multiple <= n; multiple += 5) {
+      for (let value = multiple; value % 5 === 0; value /= 5) factors++;
+    }
+    assert.equal(factors, expected, `trailing zero count for ${n}`);
+  }
+  const countBy = (take) => (n) => {
+    let total = 0;
+    for (let power = 5; power <= n; power *= 5) {
+      total += take(n / power, power);
+    }
+    return total;
+  };
+  const through = (limit) => (term, power) =>
+    power <= limit ? Math.floor(term) : 0;
+  const roundAt = (roundedPower) => (term, power) =>
+    power === roundedPower ? Math.round(term) : Math.floor(term);
+  const roundHigherPowers = (term, power) =>
+    power === 5 ? Math.floor(term) : Math.round(term);
+  for (const [label, n, take, wrongCount] of [
+    ["medium scheduling batch", 125, through(25), 30],
+    ["maximum job count", 10000, through(625), 2496],
+    ["one fewer scheduled job", 124, roundHigherPowers, 29],
+    ["two hundred scheduled jobs", 200, roundAt(125), 50],
+    ["thousand scheduled jobs", 1000, roundAt(625), 250],
+    ["half capacity", 5000, roundAt(3125), 1250],
+  ]) {
+    assert.deepEqual(pinnedCase(problem, label).input, [n], label);
+    const wrongSolution = countBy(take);
+    assert.equal(wrongSolution(n), wrongCount, label);
+    const message = `"${label}" must reject ${wrongCount} at ${n}`;
+    assertRejects(problem, label, wrongSolution, message);
+  }
+
+  // Truncating the running product discards twos needed by the five factors of five at 3125.
+  const label = "large odd batch";
+  assert.deepEqual(pinnedCase(problem, label).input, [3125]);
+  for (const [modulus, wrongCount] of [
+    [1000, 779],
+    [10000, 780],
+  ]) {
+    const truncatedProduct = (n) => {
+      let zeros = 0;
+      let product = 1;
+      for (let i = 2; i <= n; i++) {
+        product *= i;
+        while (product % 10 === 0) {
+          product /= 10;
+          zeros++;
+        }
+        product %= modulus;
+      }
+      return zeros;
+    };
+    assert.equal(truncatedProduct(3125), wrongCount, `modulo ${modulus}`);
+    assertRejects(
+      problem,
+      label,
+      truncatedProduct,
+      `keeping the product modulo ${modulus} undercounts at 3125`,
+    );
+  }
+});
+
 test("harness generator covers every function problem without network access", () => {
   for (const [id, spec] of Object.entries(judges)) {
     if (spec.kind !== "function") continue;
