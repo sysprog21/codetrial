@@ -2021,6 +2021,30 @@ html {
   overflow-anchor: none;
 }
 
+.transcript-view {
+  display: grid;
+  grid-template: minmax(0, 1fr) / minmax(0, 1fr);
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.transcript-view:has(> #transcript-panel[hidden]) {
+  display: none;
+}
+
+.transcript-view > .side-panel,
+.transcript-jump {
+  grid-area: 1 / 1;
+}
+
+.transcript-jump {
+  align-self: end;
+  justify-self: center;
+  z-index: 1;
+  max-width: calc(100% - 2rem);
+  margin: 0 1rem 0.75rem;
+}
+
 .transcript-row {
   display: flex;
   margin-bottom: 0.75rem;
