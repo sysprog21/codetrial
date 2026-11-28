@@ -36,7 +36,13 @@ after(async () => {
   await new Promise((closed) => (server ? server.close(closed) : closed()));
 });
 
-async function openInterview(width, height, query = "", drawing = false) {
+async function openInterview(
+  width,
+  height,
+  query = "",
+  drawing = false,
+  hasTouch = false,
+) {
   let unlocked;
   if (drawing) {
     const source = read("web/interview.js");
@@ -50,7 +56,7 @@ async function openInterview(width, height, query = "", drawing = false) {
       "the example board's lock moved; update openInterview's pattern",
     );
   }
-  const page = await browser.newPage({ viewport: { width, height } });
+  const page = await browser.newPage({ viewport: { width, height }, hasTouch });
   if (drawing)
     await page.route("**/interview.js", (route) =>
       route.fulfill({
@@ -866,101 +872,6 @@ async function typeToEnd(page, text) {
   return measure(page);
 }
 
-// The stage floats at 1920 and 1366 and is the compact card below 1200, where
-// the long row is the last one. The smallest drawer, a caption and self-view
-// growing the card, and a resize while scrolled each move what it covers. At
-// 1000 the sidebar stacks and the row is edited beside the card, three above
-// the end, where the browser has no reason to scroll the page. The widest
-// sidebar leaves the tall card over half the editor, in the desktop shell.
-for (const [width, height, rows, side, setup] of [
-  [1920, 1080, 2, "right"],
-  [1366, 900, 2, "right"],
-  [1100, 800, 80, "bottom"],
-  [1100, 600, 60, "right", "tall"],
-  [1100, 520, 80, "bottom", "scrolled"],
-  [1000, 700, 80, "right", "beside"],
-  [1100, 800, 80, "bottom", "sidebar"],
-]) {
-  test(`at ${width}x${height}${setup ? ` (${setup})` : ""} the caret at the end of a long line scrolls clear of Jim's stage`, async (t) => {
-    if (!browser) return t.skip("playwright chromium unavailable");
-    const page = await openInterview(width, height);
-    try {
-      await closeSetupCheck(page);
-      const beside = setup === "beside" ? ["", "", ""] : [];
-      if (width < 1200 && !beside.length) {
-        await page.focus("#test-drawer-resizer");
-        await page.keyboard.press("Home");
-      }
-      if (setup === "sidebar") {
-        await page.focus("#sidebar-resizer");
-        await page.keyboard.press("End");
-      }
-      if (setup === "tall" || setup === "sidebar")
-        await page.evaluate(() => {
-          document.querySelector("#captions-bar").append("Jim. ".repeat(400));
-          document.querySelector("#self-view").hidden = false;
-        });
-      const above = Array.from({ length: rows }, (_, row) => `# row ${row}`);
-      await typeToEnd(
-        page,
-        [...above, `# ${"0123456789".repeat(30)}`, ...beside].join("\n"),
-      );
-      if (setup === "scrolled")
-        assert.ok(
-          await page.evaluate(() => {
-            scrollTo(0, document.documentElement.scrollHeight);
-            const by = scrollY;
-            dispatchEvent(new Event("resize"));
-            scrollTo(0, 0);
-            return by;
-          }),
-          "the page scrolls at this size",
-        );
-      for (const key of [...beside.map(() => "ArrowUp"), "Home"])
-        await page.keyboard.press(key);
-      await settled(page);
-      const start = await measure(page);
-      assert.ok(
-        start.glyph.right > start.editor.right,
-        "the line is longer than the editor",
-      );
-      assert.ok(
-        start.stage.left < start.editor.right &&
-          start.stage.top < start.editor.bottom,
-        "the stage covers the editor, or this proves nothing",
-      );
-      await page.keyboard.press("End");
-      await settled(page);
-      const { glyph, stage, editor, compact, text, drift } =
-        await measure(page);
-      assert.equal(compact, width < 1200, "the stage this width shows");
-      assert.ok(
-        glyph.right + 3 <= stage.left ||
-          glyph.bottom <= stage.top ||
-          glyph.top >= stage.bottom,
-        `the line ends at (${glyph.right}, ${glyph.bottom}), not 3 px clear of the stage from (${stage.left}, ${stage.top})`,
-      );
-      // Taking the width where the bottom is cheaper leaves about half of it.
-      assert.ok(
-        text > editor.width * (side === "bottom" ? 0.8 : 0.5),
-        `the ${side} is reserved, yet the text is ${text} of ${editor.width} px wide`,
-      );
-      // The overlay and the gutter scroll exactly as far as the caret's textarea.
-      assert.deepEqual(drift, [0, 0, 0]);
-      // Only a card across the editor, where the page scrolls it, adds room.
-      assert.equal(
-        await page.evaluate(
-          () => getComputedStyle(document.documentElement).paddingBottom,
-        ),
-        "0px",
-        "the page adds no room past its end",
-      );
-    } finally {
-      await page.close();
-    }
-  });
-}
-
 // So tall a window that the bottom would be the cheaper side, were it taken.
 test("on a phone the card across the editor reserves neither its width nor its bottom", async (t) => {
   if (!browser) return t.skip("playwright chromium unavailable");
@@ -1054,42 +965,6 @@ test("a stage that scrolls with the page adds no room below it, wherever the pag
       await page.evaluate(() => document.documentElement.scrollHeight),
       before.length,
     );
-  } finally {
-    await page.close();
-  }
-});
-
-test("the strip beside Jim's floating stage takes a click and stays blank in forced colors", async (t) => {
-  if (!browser) return t.skip("playwright chromium unavailable");
-  const page = await openInterview(1366, 900);
-  try {
-    await closeSetupCheck(page);
-    const rows = Array.from({ length: 30 }, (_, row) => `x${row} = ${row}`);
-    const seen = await typeToEnd(page, rows.join("\n"));
-    await page
-      .locator("#editor")
-      .evaluate((node) => node.setSelectionRange(0, 0));
-    // Right of the short rows, in the strip the stage reserves, under it.
-    const x = Math.round((seen.stage.left + seen.editor.right) / 2);
-    const y = Math.round(seen.stage.bottom + 60);
-    assert.ok(y < seen.editor.bottom, "the click lands on a row of code");
-    await page.mouse.click(x, y);
-    const after = await page.evaluate(() => ({
-      focused: document.activeElement?.id,
-      caret: document.querySelector("#editor").selectionStart,
-    }));
-    assert.equal(after.focused, "editor", "the click keeps the editor focused");
-    assert.ok(after.caret > 0, "the click moves the caret to that row");
-    await page.emulateMedia({ forcedColors: "active" });
-    const colors = await page.evaluate(() =>
-      ["#editor", "#editor-highlight", ".editor-stack"].map((selector) => {
-        const style = getComputedStyle(document.querySelector(selector));
-        return selector === ".editor-stack"
-          ? style.backgroundColor
-          : style.borderRightColor;
-      }),
-    );
-    assert.deepEqual(colors, [colors[2], colors[2], colors[2]]);
   } finally {
     await page.close();
   }
@@ -1461,5 +1336,169 @@ test("a constrained caption card keeps the self view inside its padding at a sma
     assert.ok(layout.viewRight <= layout.contentRight, JSON.stringify(layout));
   } finally {
     await page.close();
+  }
+});
+
+test("Move stage switches sides without moving the editor", async (t) => {
+  if (!browser) return t.skip("playwright chromium unavailable");
+  for (const [width, height, wrap, touch] of [
+    [1024, 600, false, false],
+    [1024, 600, true, false],
+    [390, 844, false, true],
+    [1366, 900, false, false],
+    [1366, 900, true, false],
+  ]) {
+    const page = await openInterview(width, height, "", false, touch);
+    try {
+      await closeSetupCheck(page);
+      const button = page.getByRole("button", { name: "Move stage" });
+      const stage = page.locator("#jim-stage");
+      const avatar = page.locator("#jim-avatar");
+      assert.equal(await avatar.isVisible(), width > 1200);
+      const hideAvatar = page.locator("#hide-avatar");
+      const audio = page.getByText("Audio controls", { exact: true });
+      const moveBox = await button.boundingBox();
+      // The stage's content box: the controls row spans it edge to edge.
+      const content = await stage.evaluate((card) => {
+        const style = getComputedStyle(card);
+        const box = card.getBoundingClientRect();
+        const left =
+          box.left +
+          parseFloat(style.borderLeftWidth) +
+          parseFloat(style.paddingLeft);
+        const right =
+          box.right -
+          parseFloat(style.borderRightWidth) -
+          parseFloat(style.paddingRight);
+        return { left, right };
+      });
+      const near = (a, b) => Math.abs(a - b) <= 1;
+      assert.ok(near(moveBox.x, content.left), "Move stage starts the row");
+      if (width > 1200) {
+        // Move stage shares Hide avatar's row under the avatar, so the full
+        // stage is no taller than before the button existed.
+        await hideAvatar.waitFor({ state: "visible" });
+        const avatarBox = await avatar.boundingBox();
+        const hideBox = await hideAvatar.boundingBox();
+        const audioBox = await audio.boundingBox();
+        assert.ok(moveBox.y >= avatarBox.y + avatarBox.height);
+        assert.equal(moveBox.y, hideBox.y);
+        assert.equal(moveBox.height, hideBox.height);
+        assert.ok(hideBox.x >= moveBox.x + moveBox.width, "side by side");
+        assert.ok(near(hideBox.x + hideBox.width, content.right), "row end");
+        assert.ok(audioBox.y >= hideBox.y + hideBox.height);
+        // Show avatar is wider than Hide avatar and keeps the same row.
+        await hideAvatar.click();
+        await page
+          .getByRole("button", { name: "Show avatar" })
+          .waitFor({ state: "visible" });
+        const showBox = await hideAvatar.boundingBox();
+        assert.equal(showBox.y, (await button.boundingBox()).y, "one row");
+        assert.ok(near(showBox.x + showBox.width, content.right), "row end");
+        await hideAvatar.click();
+        await hideAvatar.waitFor({ state: "visible" });
+        await page
+          .getByRole("button", { name: "Hide avatar" })
+          .waitFor({ state: "visible" });
+      } else {
+        assert.ok(
+          near(moveBox.x + moveBox.width, content.right),
+          "alone, Move stage fills the row",
+        );
+        assert.equal(await hideAvatar.isVisible(), false);
+        const camera = page.locator("#self-view");
+        await camera.evaluate((video) => {
+          video.hidden = false;
+        });
+        const cameraBox = await camera.boundingBox();
+        const audioBox = await audio.boundingBox();
+        const buttonWithCamera = await button.boundingBox();
+        assert.ok(cameraBox.y >= buttonWithCamera.y + buttonWithCamera.height);
+        assert.ok(audioBox.y >= cameraBox.y + cameraBox.height);
+        await camera.evaluate((video) => {
+          video.hidden = true;
+        });
+      }
+      assert.equal(await button.locator(".move-stage-left").isVisible(), true);
+      assert.equal(
+        await button.getAttribute("aria-label"),
+        "Move stage to the left edge",
+      );
+      const editor = page.locator("#editor");
+      if (wrap) await page.getByRole("button", { name: "Auto wrap" }).click();
+      await editor.evaluate((input) => {
+        input.value = ("# " + "0123456789".repeat(25) + "\n").repeat(180);
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        input.focus({ preventScroll: true });
+        input.setSelectionRange(360, 365);
+        input.scrollLeft = 40;
+        input.scrollTop = 190;
+      });
+      const editorState = () =>
+        editor.evaluate((input) => {
+          const stack = input.closest(".editor-stack");
+          const style = getComputedStyle(input);
+          return {
+            width: input.clientWidth,
+            fullWidth:
+              stack.clientWidth -
+              document.querySelector("#editor-lines").offsetWidth,
+            wrap: style.whiteSpace,
+            bottomPadding: style.paddingBottom,
+            pagePadding: getComputedStyle(document.documentElement)
+              .paddingBottom,
+            scroll: [input.scrollLeft, input.scrollTop],
+            selection: [input.selectionStart, input.selectionEnd],
+          };
+        });
+      await settled(page);
+      const before = await editorState();
+      assert.equal(before.width, before.fullWidth);
+      assert.equal(before.wrap, wrap ? "pre-wrap" : "pre");
+      assert.equal(
+        before.bottomPadding,
+        await editor.evaluate((input) => getComputedStyle(input).paddingTop),
+      );
+      // Only a card across the editor, where the page scrolls it, adds room
+      // past the page's end, and Move stage leaves that room as it was.
+      if (width > 480) assert.equal(before.pagePadding, "0px");
+      else assert.notEqual(before.pagePadding, "0px");
+      const right = await stage.boundingBox();
+      if (touch) await button.tap();
+      else await button.click();
+      await settled(page);
+      const left = await stage.boundingBox();
+      if (width > 480) assert.ok(left.x < right.x);
+      else {
+        // A phone's compact card spans the bottom edge on either side.
+        assert.equal(right.x, 16);
+        assert.equal(right.width, width - 32);
+        assert.equal(left.x, right.x);
+      }
+      assert.equal(await button.locator(".move-stage-right").isVisible(), true);
+      assert.equal(
+        await button.getAttribute("aria-label"),
+        "Move stage to the right edge",
+      );
+      assert.equal(left.y, right.y);
+      assert.equal(left.width, right.width);
+      assert.deepEqual(await editorState(), before);
+      assert.ok(
+        await editor.evaluate((input) => input === document.activeElement),
+      );
+      await button.evaluate((el) => el.focus({ preventScroll: true }));
+      for (const [key, expected] of [
+        ["Enter", right],
+        ["Space", left],
+      ]) {
+        await page.keyboard.press(key);
+        await settled(page);
+        assert.deepEqual(await stage.boundingBox(), expected);
+        assert.deepEqual(await editorState(), before);
+        assert.ok(await button.evaluate((el) => el === document.activeElement));
+      }
+    } finally {
+      await page.close();
+    }
   }
 });
