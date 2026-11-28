@@ -484,9 +484,11 @@ pub fn requeue_orphaned_deliveries(accounts: &Accounts, now: i64) -> rusqlite::R
 
 /// Put a recording that failed its delivery back in line for one.
 ///
-/// Only from `failed` with `drive_failed`, and only while the media is still
-/// there: a tombstoned row has nothing to deliver, and a recording that failed
-/// for any other reason has no file in the staging bucket to try again with.
+/// Only from `failed` with `drive_failed`, only while the media is still there,
+/// and only when an operator has not already marked it for expiry (`deleted_by
+/// IS NULL`): a tombstoned or operator-expired row has nothing to deliver, and
+/// a recording that failed for any other reason has no file in the staging
+/// bucket to try again with.
 ///
 /// Returns the reopened row, or `None` when the guard refused, so the caller
 /// works from what the database says rather than from what it asked for.
@@ -499,12 +501,35 @@ pub fn reopen_delivery(
         let moved = connection.execute(
             "
         UPDATE recordings
-        SET state = 'transferring', updated_at = ?2
+        SET state = 'transferring', expires_at = NULL, updated_at = ?2
         WHERE id = ?1 AND state = 'failed' AND error = ?3 AND deleted_at IS NULL
+          AND deleted_by IS NULL
         ",
             (recording_id, clock.now(), Failure::Drive.as_str()),
         )?;
         if moved == 0 {
+            let operator_expired = connection
+                .query_row(
+                    "
+                SELECT 1 FROM recordings
+                WHERE id = ?1 AND state = 'failed' AND error = ?2
+                  AND deleted_at IS NULL AND deleted_by = 'operator'
+                ",
+                    (recording_id, Failure::Drive.as_str()),
+                    |_| Ok(()),
+                )
+                .optional()?
+                .is_some();
+            if operator_expired {
+                audit(
+                    "recording_delivery_reopen_refused",
+                    recording_id,
+                    &[
+                        ("reason", Failure::Drive.as_str()),
+                        ("deleted_by", "operator"),
+                    ],
+                );
+            }
             return Ok(None);
         }
         audit(

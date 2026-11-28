@@ -54,7 +54,7 @@ pub async fn delete_recording(
         let id = recording.id.clone();
         blocking(move || delivery_handles(&accounts, &id)).await
     };
-    let Ok((drive_file_id, drive_permission_id, gcs_object)) = stored else {
+    let Ok((drive_file_id, drive_permission_id, gcs_object, _)) = stored else {
         return Err("could not read the delivery handles".to_string());
     };
 

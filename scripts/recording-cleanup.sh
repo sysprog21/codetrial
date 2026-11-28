@@ -10,13 +10,16 @@ set -eu
 # reimplemented in it: a recording is due when its retention deadline has
 # passed, when it failed with `consent_withdrawn`, or when its interview's
 # consent was withdrawn, and never while its Egress job has not been confirmed
-# stopped.
+# stopped. Every `cleanup_failed` row is also due, as is a `drive_failed` row
+# `RETENTION_SECONDS` (`src/recording/queue.rs`) after its last failure.
 #
 # What this does not do is talk to Drive or GCS. Deleting media needs the
 # service account, the ordering and the per-step progress the server already
 # has, and a second implementation of a deletion is a second thing that can be
 # wrong about what it deleted. So a marked recording is deleted by the running
 # server, and if no server is running, nothing is deleted until one is.
+
+retention=86400
 
 usage()
 {
@@ -143,7 +146,11 @@ SELECT id FROM recordings
 WHERE deleted_at IS NULL
   AND state IN ('ready', 'failed', 'cleanup_failed')
   AND (egress_id IS NULL OR stopped_at IS NOT NULL)
-  AND ((expires_at IS NOT NULL AND expires_at <= $now)
+  AND ((expires_at IS NOT NULL AND expires_at <= $now
+        AND (state = 'ready' OR deleted_by = 'operator'))
+       OR state = 'cleanup_failed'
+       OR (state = 'failed' AND error = 'drive_failed'
+           AND updated_at <= $now - $retention)
        OR error = 'consent_withdrawn'
        OR interview_id IN (SELECT id FROM interviews WHERE consent_withdrawn_at IS NOT NULL))
 ORDER BY id
