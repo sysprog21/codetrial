@@ -11,7 +11,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { runInNewContext } from "node:vm";
-import { MAX_QUAD_TREE_NODES } from "../../web/compiler-explorer.js";
 import {
   assertVoidTable,
   failFetchWith,
@@ -20,6 +19,8 @@ import {
   operationsOf,
   read,
   SENTINEL,
+  jsWorkerSource,
+  stubGlobal,
 } from "./source.js";
 import { checkAnswer, testPayload } from "../../web/lib.js";
 import {
@@ -27,24 +28,41 @@ import {
   refusedSavedCharacter,
   runBrowserTests,
 } from "../../web/runners.js";
+import { ORIGINAL_TREE_NODE_ERROR } from "../../web/compiler-explorer.js";
 
 const runners = read("web/runners.js");
 
-function jsWorkerSource() {
-  const start = runners.indexOf("const JS_RUNNER_SOURCE = `");
-  assert.notEqual(start, -1, "JS_RUNNER_SOURCE is gone from web/runners.js");
-  const stop = runners.indexOf("\n  `;\n", start);
-  assert.notEqual(stop, -1, "JS_RUNNER_SOURCE has no closing delimiter");
-  const source = runners.slice(start, stop + "\n  `;".length);
-  assert.doesNotMatch(
-    source.replaceAll("${MAX_QUAD_TREE_NODES}", ""),
-    /\$\{/,
-    "an interpolation here would read from a scope it no longer has",
+test("browser execution stamps the original-node contract before posting to a worker", async (t) => {
+  t.mock.method(URL, "createObjectURL", () => "blob:test");
+  t.mock.method(URL, "revokeObjectURL", () => {});
+  const posted = [];
+  stubGlobal(
+    t,
+    "Worker",
+    class {
+      postMessage(payload) {
+        posted.push(payload.spec);
+        queueMicrotask(() => this.onmessage({ data: { results: [] } }));
+      }
+      terminate() {}
+    },
   );
-  return runInNewContext(source + "\nJS_RUNNER_SOURCE;", {
-    MAX_QUAD_TREE_NODES,
-  });
-}
+  const ancestor = JSON.parse(read("web/judges/shared-approver-lookup.json"));
+  const allocated = { ...ancestor, argTypes: ["binaryTree"] };
+  for (const spec of [ancestor, allocated]) {
+    await runBrowserTests(
+      "contract",
+      "candidate",
+      "javascript",
+      null,
+      [],
+      spec,
+    );
+  }
+  assert.equal(posted[0].originalTreeNodeError, ORIGINAL_TREE_NODE_ERROR);
+  assert.equal(posted[1].originalTreeNodeError, null);
+  assert.equal(ancestor.originalTreeNodeError, undefined);
+});
 
 test("a malformed candidate case is refused", () => {
   const spec = {

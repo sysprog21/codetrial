@@ -12,6 +12,8 @@ import {
   harnessLineOffset,
   mapCompilerResponse,
   MAX_QUAD_TREE_NODES,
+  ORIGINAL_TREE_NODE_ERROR,
+  requiresOriginalTreeNode,
 } from "./compiler-explorer.js";
 import { DIAGNOSTIC, checkAnswer, renderValue } from "./lib.js";
 
@@ -440,7 +442,13 @@ export async function runBrowserTests(
     ...testCase,
     label: testCase.label || `Your case ${index + 1}`,
   }));
-  const runnable = { ...spec, cases: [...spec.cases, ...candidates] };
+  const runnable = {
+    ...spec,
+    cases: [...spec.cases, ...candidates],
+    originalTreeNodeError: requiresOriginalTreeNode(spec)
+      ? ORIGINAL_TREE_NODE_ERROR
+      : null,
+  };
   const base = { ...empty, total: spec.cases.length };
   // Task mode alone reads a harness gap or a runner that threw as an outage.
   // The interview contract counts a harness the case cannot be built into as
@@ -896,7 +904,28 @@ const JS_RUNNER_SOURCE = `
             }
           } else {
             const args = prepareArgs(testCase);
+            const requiresOriginal = spec.originalTreeNodeError;
+            const originalTreeNodes = [];
+            if (requiresOriginal) {
+              const root = args[spec.nodeRefRootParam ?? 0];
+              if (root) originalTreeNodes[0] = root;
+              for (let i = 0; i < originalTreeNodes.length; i++) {
+                const node = originalTreeNodes[i];
+                if (node.left) originalTreeNodes[originalTreeNodes.length] = node.left;
+                if (node.right) originalTreeNodes[originalTreeNodes.length] = node.right;
+              }
+            }
             const returned = entry(...args);
+            if (requiresOriginal && returned !== null && returned !== undefined) {
+              let isOriginal = false;
+              for (let i = 0; i < originalTreeNodes.length; i++) {
+                if (returned === originalTreeNodes[i]) {
+                  isOriginal = true;
+                  break;
+                }
+              }
+              if (!isOriginal) throw new TypeError(spec.originalTreeNodeError);
+            }
             if (Number.isInteger(spec.outputPrefixParam)) {
               if (!Number.isInteger(returned) || returned < 0 || returned > args[spec.outputPrefixParam].length) {
                 throw new TypeError("Return value must be an integer length for the kept prefix.");
@@ -1311,7 +1340,24 @@ def _codetrial_run(user_code, spec_json):
                     actual.append(None if method in void_methods else returned)
             else:
                 args = _prepare_args(case, spec)
+                requires_original = spec.get("originalTreeNodeError")
+                original_tree_nodes = []
+                if requires_original:
+                    root = args[spec.get("nodeRefRootParam", 0)]
+                    if root is not None:
+                        original_tree_nodes.append(root)
+                    for node in original_tree_nodes:
+                        if node.left is not None:
+                            original_tree_nodes.append(node.left)
+                        if node.right is not None:
+                            original_tree_nodes.append(node.right)
                 returned = target(*args)
+                if requires_original and returned is not None:
+                    for node in original_tree_nodes:
+                        if returned is node:
+                            break
+                    else:
+                        raise TypeError(spec["originalTreeNodeError"])
                 output_prefix_param = spec.get("outputPrefixParam")
                 output_param = spec.get("outputParam")
                 if isinstance(output_prefix_param, int):

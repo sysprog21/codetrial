@@ -10,9 +10,29 @@
 
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import {
+  existsSync,
+  readFileSync,
+  readdirSync,
+  statSync,
+  mkdtempSync,
+  writeFileSync,
+  rmSync,
+} from "node:fs";
+import { execFile, spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { promisify } from "node:util";
+import { runInNewContext } from "node:vm";
 import { fileURLToPath } from "node:url";
 import { dirname, extname, join, sep } from "node:path";
+import {
+  generateHarness,
+  parseCompilerResults,
+  MAX_QUAD_TREE_NODES,
+  ORIGINAL_TREE_NODE_ERROR,
+  requiresOriginalTreeNode,
+} from "../../web/compiler-explorer.js";
+import { pythonDriver } from "../../web/runners.js";
 
 export const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -40,6 +60,161 @@ export function read(name) {
 /// than as a string with its backslashes doubled.
 export function candidateSource(name) {
   return read(`tests/fixtures/candidates/${name}`);
+}
+
+export function jsWorkerSource() {
+  const runners = read("web/runners.js");
+  const start = runners.indexOf("const JS_RUNNER_SOURCE = `");
+  assert.notEqual(start, -1, "JS_RUNNER_SOURCE is gone from web/runners.js");
+  const stop = runners.indexOf("\n  `;\n", start);
+  assert.notEqual(stop, -1, "JS_RUNNER_SOURCE has no closing delimiter");
+  const source = runners.slice(start, stop + "\n  `;".length);
+  assert.doesNotMatch(
+    source.replaceAll("${MAX_QUAD_TREE_NODES}", ""),
+    /\$\{/,
+    "an interpolation here would read from a scope it no longer has",
+  );
+  return runInNewContext(source + "\nJS_RUNNER_SOURCE;", {
+    MAX_QUAD_TREE_NODES,
+  });
+}
+
+// Direct driver tests supply the contract normally stamped on runBrowserTests'
+// runnable spec before it crosses the worker boundary.
+export function runnerSpec(spec) {
+  return {
+    ...spec,
+    originalTreeNodeError: requiresOriginalTreeNode(spec)
+      ? ORIGINAL_TREE_NODE_ERROR
+      : null,
+  };
+}
+
+const toolProbes = new Map();
+function probeTool(command, versionArg) {
+  const key = JSON.stringify([command, versionArg]);
+  if (!toolProbes.has(key)) {
+    const probe = spawnSync(command, [versionArg], {
+      encoding: "utf8",
+      timeout: 10000,
+    });
+    const skip =
+      probe.error?.code === "ENOENT" ? `${command} is not installed` : false;
+    const failure = skip
+      ? undefined
+      : probe.error
+        ? `${command} did not start: ${probe.error.message}`
+        : probe.status !== 0
+          ? `${command} ${versionArg} exited with ${probe.status ?? probe.signal}: ${probe.stderr.trim()}`
+          : undefined;
+    toolProbes.set(key, { skip, failure });
+  }
+  return toolProbes.get(key);
+}
+
+const toolchains = {
+  c: { compiler: "cc", flags: ["-std=c17"], file: "candidate.c" },
+  cpp: { compiler: "g++", flags: ["-std=c++20"], file: "candidate.cpp" },
+  java: { compiler: "javac", flags: [], file: "Main.java" },
+};
+
+function compiledProbes(language) {
+  const { compiler } = toolchains[language];
+  return [
+    probeTool(compiler, language === "java" ? "-version" : "--version"),
+    ...(language === "java" ? [probeTool("java", "-version")] : []),
+  ];
+}
+
+export function compiledSkip(language) {
+  const probe = compiledProbes(language).find((p) => p.skip || p.failure);
+  return probe ? probe.skip || probe.failure : false;
+}
+
+const runProcess = promisify(execFile);
+
+export async function runCompiled(
+  language,
+  spec,
+  code,
+  { flags = [], transformHarness = (source) => source } = {},
+) {
+  for (const probe of compiledProbes(language)) {
+    assert.equal(probe.skip, false, probe.skip);
+    assert.equal(probe.failure, undefined, probe.failure);
+  }
+  const dir = mkdtempSync(join(tmpdir(), "codetrial-harness-"));
+  try {
+    const config = toolchains[language];
+    const source = join(dir, config.file);
+    const binary = join(
+      dir,
+      process.platform === "win32" ? "candidate.exe" : "candidate",
+    );
+    writeFileSync(
+      source,
+      transformHarness(generateHarness(language, spec, code)),
+    );
+    await runProcess(
+      config.compiler,
+      language === "java"
+        ? [source]
+        : [...config.flags, ...flags, source, "-o", binary],
+      { timeout: 60000 },
+    );
+    const options = {
+      encoding: "utf8",
+      timeout: 10000,
+      maxBuffer: 1 << 24,
+      env: flags.some((flag) => flag.startsWith("-fsanitize"))
+        ? { ...process.env, ASAN_OPTIONS: "detect_leaks=0" }
+        : process.env,
+    };
+    const { stdout } = await runProcess(
+      language === "java" ? "java" : binary,
+      language === "java" ? ["-cp", dir, "Main"] : [],
+      options,
+    );
+    const parsed = parseCompilerResults(stdout);
+    assert.equal(parsed.setupError, undefined, parsed.setupError);
+    return parsed.results;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const pythonCommand = () => process.env.PYTHON || "python3";
+export const pythonSkip = () => probeTool(pythonCommand(), "--version").skip;
+
+// Pyodide returns the driver's last expression; CPython's exec does not.
+const pythonHost = `
+import ast, contextlib, json, sys
+request = json.load(sys.stdin)
+module = ast.parse(request["driver"])
+last = module.body.pop()
+scope = {"_CODETRIAL_CODE": request["code"], "_CODETRIAL_SPEC": request["spec"]}
+with contextlib.redirect_stdout(sys.stderr):
+    exec(compile(module, "<driver>", "exec"), scope)
+    reply = eval(compile(ast.Expression(last.value), "<driver>", "eval"), scope)
+print(reply)
+`;
+
+export function runPythonDriver(code, spec) {
+  const command = pythonCommand();
+  const probe = probeTool(command, "--version");
+  assert.equal(probe.skip, false, probe.skip);
+  assert.equal(probe.failure, undefined, probe.failure);
+  const result = spawnSync(command, ["-I", "-c", pythonHost], {
+    input: JSON.stringify({
+      driver: pythonDriver,
+      code,
+      spec: JSON.stringify(runnerSpec(spec)),
+    }),
+    encoding: "utf8",
+    timeout: 10000,
+  });
+  assert.equal(result.status, 0, result.error?.message ?? result.stderr);
+  return JSON.parse(result.stdout);
 }
 
 /// `web/interview.js` and the modules it hands its bindings to.
