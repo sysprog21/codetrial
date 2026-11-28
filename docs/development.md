@@ -299,6 +299,27 @@ must still satisfy any smaller baseline limit. The rules and the lints left
 off on purpose are in the Rust profile of codetrial-improve,
 `.claude/skills/codetrial-improve/rust.md`.
 
+Code that drops an error, a debugging leftover, a test run alone or skipped
+with no reason, and a blanket suppression are refused across the whole tree by
+the linters that read the code: ruff (`S110`, `S112`, `T100`, `PGH003`,
+`PGH004`), ESLint (`no-empty`, `no-debugger`, `no-console` in `web/`, `.only`
+and `.skip` in tests), clippy (`unused_result_ok`) and the rust-style check (an
+empty `Err` arm); none had a match when it was adopted. What no linter judges
+is prose, which this tree has long written its own way, so
+`scripts/check-added-lines.py` holds only the comments a change adds since the
+merge base with `origin/main` (with `--staged`, the index against HEAD; with
+`--commits`, each commit named on stdin, on the lines none of its parents has,
+which for a merge is the resolution): a comment that narrates the change ("now
+uses", "as per the spec"), a marker in a comment outside Rust, an emoji in any
+comment, an `eslint-disable` missing a rule name or a `-- reason`, and a Python
+test skipped with no reason. It tells comments from strings and regular
+expression literals first. Its rules were narrowed against the lines this
+repository's own history added: replayed over the 800 non-merge commits of
+`main` before it existed, they raise fewer than twenty findings. The pre-commit
+hook runs it on the index, and the pre-push hook replays it on each outgoing
+commit that no remote holds yet, which a rebase or `--no-verify` kept from the
+pre-commit hook.
+
 `scripts/check-json.py` holds every tracked JSON file to what Python,
 serde_json and `JSON.parse` agree on: no duplicate key, no `NaN` or
 `Infinity`, no number past the double's range, no unpaired surrogate escape
@@ -713,7 +734,8 @@ checks the resulting commit's parent count, since Git has already removed
 `MERGE_HEAD` at that point. A user-owned `.local` hook still runs. CI checks a
 pull request's content.
 
-The pre-commit hook runs ESLint, `ruff check` and `shellcheck`, then
+The pre-commit hook runs `scripts/check-added-lines.py --staged` over the
+lines the index adds, then ESLint, `ruff check` and `shellcheck`, then
 `scripts/indent.sh --staged`, over a checkout of the index, so an unstaged edit
 neither fails a commit nor passes one, and it never stages anything itself.
 The formatting check is what `make indent` would change in the staged files,

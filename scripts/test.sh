@@ -652,6 +652,12 @@ gate src-test-bodies src_test_bodies
 # say why, no markers or CJK, and no file growing past its ceiling.
 gate rust-style "$PYTHON" "$ROOT/scripts/check-rust-style.py" --baseline origin/main
 
+# What a whole-tree rule cannot refuse without first rewriting hundreds of old
+# lines that are fine: comments narrating the change, markers and emoji outside
+# Rust, an eslint-disable or a Python skip with no reason. Only the lines added
+# since the branch left origin/main are judged.
+gate added-lines "$PYTHON" "$ROOT/scripts/check-added-lines.py" --base origin/main
+
 # Python, Rust and the browser each forgive different things in a JSON file: a
 # duplicate key, a NaN, an integer the browser rounds.
 gate json "$PYTHON" "$ROOT/scripts/check-json.py"
@@ -718,6 +724,7 @@ gate gate-evidence-tests unittest_gate "$ROOT/tests/test_check_gate_evidence.py"
 gate fetch-gate-note-tests unittest_gate "$ROOT/tests/test_fetch_gate_note.py"
 gate gate-approve-tests unittest_gate "$ROOT/tests/test_gate_approve.py"
 gate rust-style-tests unittest_gate "$ROOT/tests/test_check_rust_style.py"
+gate added-lines-tests unittest_gate "$ROOT/tests/test_check_added_lines.py"
 gate json-tests unittest_gate "$ROOT/tests/test_check_json.py"
 gate ceiling-hotspots-tests unittest_gate "$ROOT/tests/test_ceiling_hotspots.py"
 gate test-gate-tests unittest_gate "$ROOT/tests/test_test_gate.py"

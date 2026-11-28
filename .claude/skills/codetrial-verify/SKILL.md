@@ -48,8 +48,17 @@ failed. It covers `cargo fmt --check`, `clippy -D warnings`, `cargo test`,
 ([Rust profile of codetrial-improve](../codetrial-improve/rust.md)), the Rust lane's Cargo-aware `workspace-lints` inheritance
 audit, the Python unittest suites, the Node browser tests, ESLint,
 `ruff check`, `shellcheck`, the generated-artifact drift checks, the hook suite,
-the skill references, the JSON check (`scripts/check-json.py`), `cargo-audit`,
-`cargo-deny` and `actionlint`.
+the skill references, the JSON check (`scripts/check-json.py`), the added-lines
+check (`scripts/check-added-lines.py`), `cargo-audit`, `cargo-deny` and
+`actionlint`.
+
+The added-lines check judges the comments this branch adds since its merge
+base with `origin/main`, so a finding is always in your change: reword a
+comment that narrates the change, do or file the marker, give the
+`eslint-disable` its rule and its `-- reason`. The pre-commit hook runs it with `--staged`,
+which judges only what the index adds. The gate's run needs `origin/main`
+fetched, as the rust-style gate's ceilings do, and exits 2 without it rather
+than judging nothing.
 
 The architecture lints of `tools/check-structure` are not a gate: a cold index
 takes minutes, so `.github/workflows/structure.yml` runs them daily and the

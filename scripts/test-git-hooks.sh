@@ -87,8 +87,8 @@ message()
 mkdir -p "$work/repo/scripts" || exit 1
 cp "$ROOT"/scripts/git-*.sh "$ROOT/scripts/git-commit-msg.awk" \
     "$ROOT/scripts/check-commit-log.sh" "$ROOT/scripts/check-secrets.py" \
-    "$ROOT/scripts/check-cjk.py" "$ROOT/scripts/check-interactive-review.py" \
-    "$ROOT/scripts/hashchain.py" "$ROOT/scripts/gate-note.py" \
+    "$ROOT/scripts/check-cjk.py" "$ROOT/scripts/check-added-lines.py" \
+    "$ROOT/scripts/check-interactive-review.py" "$ROOT/scripts/hashchain.py" "$ROOT/scripts/gate-note.py" \
     "$ROOT/scripts/check-gate-evidence.py" "$ROOT/scripts/env-check.sh" \
     "$ROOT/scripts/install-git-hooks.sh" "$ROOT/scripts/indent.sh" \
     "$work/repo/scripts/" || exit 1
@@ -988,6 +988,18 @@ expect 0 "the pre-commit hook allows quoted CJK" sh ./scripts/git-pre-commit.sh
 git rm -q --cached prose.py
 rm prose.py
 
+# Only what the index adds is judged: the narration on disk below the staged
+# line rides along in no commit and refuses none.
+printf 'x = 1  # now we retry twice\n' > narrated.py
+git add narrated.py
+expect 1 "the pre-commit hook refuses an added narration" sh ./scripts/git-pre-commit.sh
+contains "the narration refusal names the line" "$work/last.out" "narrated.py:1: narration:"
+printf 'x = 1  # A second try covers a slow disk.\n' > narrated.py
+git add narrated.py
+printf 'y = 2  # now we retry\n' >> narrated.py
+expect 0 "the pre-commit hook ignores an unstaged narration" sh ./scripts/git-pre-commit.sh
+git rm -fq -- narrated.py || exit 1
+
 echo "  HOOKS   path-triggered checks"
 printf '#!/bin/sh\necho hook-suite-fixture\nexit 1\n' > scripts/test-git-hooks.sh
 git add scripts/test-git-hooks.sh
@@ -1125,6 +1137,62 @@ expect 1 "the pre-push hook refuses CJK prose in outgoing commits" \
     git push -q origin HEAD:refs/heads/main
 contains "the pre-push refusal names the CJK check" "$work/last.out" "failed the CJK check"
 git reset -q --hard HEAD~1
+printf 'x = 1  # now we retry twice\n' > narrated.py
+git add narrated.py
+git -c core.hooksPath=/dev/null commit -q -m "Add a narrated retry" \
+    -m "The hook must replay the added-lines check on outgoing commits."
+expect 1 "the pre-push hook refuses an outgoing commit's narration" \
+    git push -q origin HEAD:refs/heads/main
+contains "the pre-push refusal names the added-lines check" "$work/last.out" \
+    "failed the added-lines check"
+contains "the pre-push refusal names the commit's line" "$work/last.out" \
+    "narrated.py:1: narration:"
+
+# Once a remote holds the commit, a first push to another one does not replay
+# it: that is a fork fetched long ago being handed main's own history. The fork
+# has refs of its own, from before the narrated commit, so the push is judged
+# against more than the fork's view of what is published.
+git init -q --bare "$work/stale.git"
+git remote add stale "$work/stale.git"
+git -c core.hooksPath=/dev/null push -q stale HEAD~1:refs/heads/main
+git -c core.hooksPath=/dev/null push -q origin HEAD:refs/heads/held
+printf 'y = 2\n' > clean.py
+git add clean.py
+git -c core.hooksPath=/dev/null commit -q -m "Add a clean value" \
+    -m "Pushed on top of a commit another remote already holds."
+expect 0 "a first push to a stale fork replays only what no remote holds" \
+    git push -q stale HEAD:refs/heads/clean
+git remote remove stale
+rm -rf "$work/stale.git"
+git push -q origin :refs/heads/held
+git update-ref -d refs/remotes/origin/held
+git reset -q --hard HEAD~2
+
+# A merge is replayed on the lines neither parent has: a clean one adds none,
+# and one that writes a narrated line while resolving is refused for it.
+before_merge=$(git rev-parse HEAD)
+git checkout -q -b side
+printf 'z = 3\n' > side.py
+git add side.py
+git -c core.hooksPath=/dev/null commit -q -m "Add a side value" \
+    -m "The merge below brings it in."
+git checkout -q -
+git -c core.hooksPath=/dev/null merge -q --no-ff side -m "Merge a clean side"
+expect 0 "the pre-push hook passes a clean merge" \
+    git push -q origin HEAD:refs/heads/merged
+git push -q origin :refs/heads/merged
+git update-ref -d refs/remotes/origin/merged
+git reset -q --hard "$before_merge"
+git -c core.hooksPath=/dev/null merge -q --no-ff --no-commit side
+printf 'w = 4  # now we merge\n' > resolved.py
+git add resolved.py
+git -c core.hooksPath=/dev/null commit -q -m "Merge a side with a line of its own"
+expect 1 "the pre-push hook refuses a merge's narrated resolution" \
+    git push -q origin HEAD:refs/heads/merged
+contains "the merge refusal names the resolution's line" "$work/last.out" \
+    "resolved.py:1: narration:"
+git reset -q --hard "$before_merge"
+git branch -q -D side
 
 git commit -q --allow-empty --no-verify -m "wip: skipped the hook"
 expect 1 "a commit that skipped the hook" git push -q origin HEAD:refs/heads/main

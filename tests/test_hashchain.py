@@ -53,6 +53,7 @@ class HashchainTests(unittest.TestCase):
             "check-commit-log.sh",
             "check-secrets.py",
             "check-cjk.py",
+            "check-added-lines.py",
             "install-git-hooks.sh",
             "indent.sh",
         ]:

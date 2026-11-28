@@ -153,7 +153,14 @@ codemod tool such as `fastmod` is optional and asks per match; none is required.
 - **Guard the context.** Send bulk reading and searching to a subagent and keep
   its conclusion, not its file dumps.
 - **Commit small and ordered**, only on request, under the hooks and never
-  around them. A message carries what and why; the commit-msg hook refuses a
+  around them. The pre-commit hook runs `scripts/check-added-lines.py
+  --staged` on the comments the index adds (narrating the change, a marker, an
+  emoji, an `eslint-disable` that names no rule or gives no reason, a Python
+  test skipped with no reason), and the gate runs it over the whole branch;
+  the code it once judged (an empty handler, a debugging leftover, a skipped
+  test) is now ruff's, ESLint's and clippy's over the whole tree. Reword or
+  remove what they name rather than going around it. A message carries what
+  and why; the commit-msg hook refuses a
   `how:` or `steps:` line, and the register is in
   [codetrial-conventions](../codetrial-conventions/SKILL.md#commit-messages).
   Pushing, opening a pull request and every other outward act wait for the user,
