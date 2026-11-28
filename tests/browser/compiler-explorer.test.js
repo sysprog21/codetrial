@@ -585,6 +585,69 @@ test("longest-common-prefix cases reject incomplete comparisons", () => {
   }
 });
 
+test("happy-number cases reject solutions that stop early", () => {
+  const step = (n) =>
+    [...String(n)].reduce((sum, digit) => sum + digit * digit, 0);
+
+  const stepCap = (cap) => (n) => {
+    for (let i = 0; i < cap && n !== 1; i += 1) n = step(n);
+    return n === 1;
+  };
+
+  const firstSingleDigit = (n) => {
+    while (n >= 10) n = step(n);
+    return n === 1;
+  };
+
+  const firstSingleDigitAfterAStep = (n) => {
+    do n = step(n);
+    while (n >= 10);
+    return n === 1;
+  };
+
+  for (const [label, input, shortcut, why] of [
+    // 78999 is the smallest happy number that needs seven steps, and the
+    // smallest that needs eight has hundreds of digits, so no input a judge
+    // can hold rejects a cap of seven or more. Caps up to three already fail
+    // "reaches one" (19 takes four steps); this case is the one a cap of six
+    // fails.
+    ...[4, 5, 6].map((cap) => [
+      "seven steps to one",
+      [78999],
+      stepCap(cap),
+      `a cap of ${cap} steps must not pass a value that needs seven`,
+    ]),
+    [
+      "single digit that settles",
+      [7],
+      firstSingleDigit,
+      "a single digit other than 1 can still reach 1",
+    ],
+    [
+      "reaches seven before one",
+      [1112],
+      firstSingleDigitAfterAStep,
+      "a single digit met after the first step can still reach 1",
+    ],
+    [
+      "seven steps to one",
+      [78999],
+      (n) => {
+        const seen = new Set();
+        while (n !== 1 && !seen.has(n)) {
+          seen.add(n);
+          n = [...String(n)].reduce((sum, digit) => sum + Number(digit), 0);
+        }
+        return n === 1;
+      },
+      "summing the digits without squaring them must not pass",
+    ],
+  ]) {
+    assert.deepEqual(pinnedCase("happy-number", label).input, input);
+    assertRejects("happy-number", label, shortcut, why);
+  }
+});
+
 /// Asserts that the judge accepts `solve` on every built-in case of `problem`.
 const assertSolves = (problem, solve, message) => {
   const judge = judges[problem];
