@@ -60,6 +60,9 @@ from problem_bank.rules import (  # noqa: E402, F401 -- read by main, the tests 
     validated_variant,
     validated_variants,
 )
+from problem_bank.references import (  # noqa: E402, F401 -- read by main and the tests
+    check_references,
+)
 from problem_bank.emit import (  # noqa: E402, F401 -- read by main, the tests and the guards
     candidate_problem,
     drifted,
@@ -132,6 +135,11 @@ def main() -> int:
             read_manifest()
         except RuntimeError as error:
             print(f"scripts/top-interview-150.json: {error}", file=sys.stderr)
+            return 1
+        try:
+            check_references(read_json(JUDGE_SOURCE))
+        except RuntimeError as error:
+            print(f"problem-bank/references: {error}", file=sys.stderr)
             return 1
         stale = drifted(files)
         if stale:

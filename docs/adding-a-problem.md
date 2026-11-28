@@ -67,6 +67,29 @@ that fixture too. Refresh it the same way and review the diff:
 UPDATE_PROMPT_GOLDEN=1 cargo test task_bank_prompts_have_only_allowlisted_material_and_match_golden
 ```
 
+## Reference solutions
+
+The shape checks cannot tell a wrong `expected` from a right one, and a wrong
+one fails a correct candidate in the interview. A correct answer saved as
+`problem-bank/references/<judge id>.py`, defining a function named after the
+judge's `entry`, is run over every case by `gen-problems.py --check`. Each
+input reaches it as it reaches a candidate, through JSON, so `2.0` arrives as
+`2` and an integer past 2\*\*53 as the nearest double. Its result is compared as the page compares it: through JSON, so a tuple is an
+array, then by `deepEqual` in `web/lib.js`, so `True` is not `1`. As in the
+Python driver in `web/runners.js`, a judge with `outputParam` compares that
+argument after the call, and one with `outputPrefixParam` expects the
+reference to change that argument in place and return how many leading items
+to keep, then compares that prefix. Nothing in that folder is served.
+
+Only an `exact` function judge over plain values can have one so far; the
+other checkers, linked lists, trees and class judges come later. Write
+the plainest correct solution rather than a fast one: it is read to settle
+whether a case is wrong. When the problem allows more than one right answer,
+as `find-peak-element` and `gas-station` do, the reference raises when a case
+has several, and otherwise returns what the judge expects: the one answer, or
+the problem's own result for none, such as `-1`. A case with two answers then
+fails the check with `case N raises` instead of failing a correct candidate.
+
 ## Validation messages
 
 The generator stops at the first broken contract. These messages identify the
@@ -106,3 +129,11 @@ source file to fix; do not edit generated output to silence them.
 - `plan diverges from problem-bank` means an imported id and the study plan
   differ. Mark a course-owned exercise `original` instead of adding it to the
   plan.
+- `case N expects X, the reference returns Y` comes from a reference
+  solution under `problem-bank/references/`. Work the case out by hand: either
+  the judge's `expected` is wrong, or the reference is. `case N raises` means
+  the reference failed on that case's input, or found more than one right
+answer. `fails to load` means the file itself does not run: a syntax error, a
+failed import or an exception at module level. `no judge has this id`, `only an
+  exact judge`, `needs a codec` and `defines no function` mean the file's
+  name, its judge's checker or values, or its function do not fit.
