@@ -7,6 +7,7 @@ import {
   mountFinalCodeCopy,
 } from "../../web/render.js";
 import { launchChromium, startStaticServer } from "./source.js";
+import { mountCopyButton } from "../../web/copy.js";
 
 const session = (code) => ({
   report: { incomplete: true, summary: "Interview ended.", hintsUsed: 0 },
@@ -217,3 +218,53 @@ test("a pending copy ignores duplicate clicks", async (t) => {
   await copying;
   assert.equal(view.status.textContent, "Copied!");
 });
+
+for (const rejectOld of [false, true]) {
+  for (const rejectNew of [false, true]) {
+    test(`invalidating a pending ${rejectOld ? "failure" : "success"} preserves a newer ${rejectNew ? "failure" : "success"}`, async (t) => {
+      t.mock.timers.enable({ apis: ["setTimeout"] });
+      const view = controls();
+      const writes = [];
+      const completions = [];
+      let text = "old results";
+      const invalidate = mountCopyButton(
+        view.button,
+        view.status,
+        () => text,
+        "Copy failed.",
+        {
+          writeText: (value) => {
+            writes.push(value);
+            return new Promise((resolve, reject) => {
+              completions.push({ resolve, reject });
+            });
+          },
+        },
+      );
+      const oldCopy = view.button.click();
+      await view.button.click();
+      assert.deepEqual(writes, ["old results"]);
+      invalidate();
+      assert.equal(view.status.textContent, "");
+      assert.equal(view.attributes.has("aria-disabled"), false);
+      text = "new results";
+      const newCopy = view.button.click();
+      assert.deepEqual(writes, ["old results", "new results"]);
+      if (rejectOld) completions[0].reject(new Error("old write denied"));
+      else completions[0].resolve();
+      await oldCopy;
+      assert.equal(view.status.textContent, "Copying...");
+      assert.equal(view.attributes.get("aria-disabled"), "true");
+      await view.button.click();
+      assert.deepEqual(writes, ["old results", "new results"]);
+      if (rejectNew) completions[1].reject(new Error("new write denied"));
+      else completions[1].resolve();
+      await newCopy;
+      assert.equal(
+        view.status.textContent,
+        rejectNew ? "Copy failed." : "Copied!",
+      );
+      assert.equal(view.attributes.has("aria-disabled"), false);
+    });
+  }
+}

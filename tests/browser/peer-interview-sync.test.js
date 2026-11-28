@@ -19,6 +19,11 @@ async function fixture(t, role, deferredRun = false, options = {}) {
   const page = await browser.newPage();
   t.after(() => page.close());
   await page.addInitScript(() => {
+    window.peerCopies = [];
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: async (text) => window.peerCopies.push(text) },
+    });
     window.peerTicks = [];
     window.watchTicks = [];
     const original = window.setInterval;
@@ -171,6 +176,232 @@ test("interviewer polling refreshes authoritative code and test results", async 
     await f.page.locator("#peer-results").textContent(),
     /fresh result/,
   );
+});
+
+test("peer Copy results copies displayed text, retries failures and clears with the snapshot", async (t) => {
+  const f = await fixture(t, "interviewer");
+  if (!f) return;
+  const { page } = f;
+  const button = page.getByRole("button", {
+    name: "Copy results",
+    exact: true,
+  });
+  assert.equal(await page.locator("[data-copy-results]").count(), 1);
+  assert.equal(await button.isVisible(), false);
+  f.snapshot.revision++;
+  f.snapshot.tests = {
+    passed: 1,
+    total: 2,
+    cases: [
+      {
+        label: "passing pair",
+        pass: true,
+        input: "[[2,7],9]",
+        expected: "[0,1]",
+        got: "[0,1]",
+      },
+      {
+        label: "failed pair",
+        pass: false,
+        input: "[[3,2,4],6]",
+        expected: "[1,2]",
+        got: "[]",
+      },
+    ],
+  };
+  await page.evaluate(() => window.peerTicks[0]());
+  await button.waitFor({ state: "visible" });
+  const original = await page.locator("#peer-results").innerHTML();
+  const code = await page.locator("#editor").inputValue();
+  await button.focus();
+  await page.keyboard.press("Enter");
+  await page.waitForFunction(() => window.peerCopies.length === 1);
+  const copied = await page.evaluate(() => window.peerCopies[0]);
+  assert.match(copied, /1\/2 test cases passed/);
+  assert.match(copied, /OK passing pair/);
+  assert.match(copied, /FAIL failed pair/);
+  assert.match(copied, /input .*\nexpected .*\ngot /);
+  assert.doesNotMatch(copied, /Run finished\.|Copy results|Copied!/);
+  assert.equal(await page.locator("#peer-results").innerHTML(), original);
+  assert.equal(await page.locator("#editor").inputValue(), code);
+  await page.evaluate(() => {
+    navigator.clipboard.writeText = async () => {
+      throw new Error("Denied");
+    };
+  });
+  await button.click();
+  await page.waitForFunction(() =>
+    document
+      .querySelector("[data-copy-results-status]")
+      .textContent.includes("Could not copy results"),
+  );
+  await page.evaluate(() => {
+    navigator.clipboard.writeText = async (text) =>
+      window.peerCopies.push(text);
+  });
+  await button.click();
+  await page.waitForFunction(() => window.peerCopies.length === 2);
+  assert.equal(await page.evaluate(() => window.peerCopies[1]), copied);
+  await page.evaluate(() => {
+    navigator.clipboard.writeText = () =>
+      new Promise((resolve) => {
+        window.finishPeerCopy = resolve;
+      });
+  });
+  await button.click();
+  await page.evaluate(
+    () =>
+      new Promise((resolve) => {
+        const observer = new MutationObserver(() => {
+          observer.disconnect();
+          resolve();
+        });
+        observer.observe(document.querySelector("#peer-results"), {
+          childList: true,
+        });
+        window.peerTicks[0]();
+      }),
+  );
+  assert.equal(
+    await page.locator("[data-copy-results-status]").textContent(),
+    "Copying...",
+  );
+  assert.equal(await button.getAttribute("aria-disabled"), "true");
+  await page.evaluate(() => window.finishPeerCopy());
+  await page.waitForFunction(
+    () =>
+      document.querySelector("[data-copy-results-status]").textContent ===
+      "Copied!",
+  );
+  await button.focus();
+  f.snapshot.revision++;
+  f.snapshot.tests = null;
+  await page.evaluate(() => window.peerTicks[0]());
+  await page.waitForFunction(
+    () =>
+      document.querySelector("#peer-results").textContent ===
+      "Run your code to see results.",
+  );
+  assert.equal(await button.isVisible(), false);
+  assert.equal(
+    await page.locator("#peer-results").textContent(),
+    "Run your code to see results.",
+  );
+  assert.equal(
+    await page.locator("[data-copy-results-status]").textContent(),
+    "",
+  );
+  assert.equal(
+    await page.evaluate(() => document.activeElement.id),
+    "peer-results-label",
+  );
+});
+
+test("peer Copy results is hidden during reruns and editing invalidates pending feedback", async (t) => {
+  const f = await fixture(t, "candidate", true, { cas: true });
+  if (!f) return;
+  const { page } = f;
+  const button = page.locator("[data-copy-results]");
+  assert.equal(await button.count(), 1);
+  assert.equal(await button.isVisible(), false);
+  for (let run = 0; run < 2; run++) {
+    if (run) assert.equal(await button.isVisible(), true);
+    await page.evaluate(() => {
+      window.finishPeerRun = null;
+    });
+    await page.locator("#peer-run").click();
+    await page.waitForFunction(
+      () => typeof window.finishPeerRun === "function",
+    );
+    assert.equal(await button.isVisible(), false);
+    await page.evaluate(() => window.finishPeerRun());
+    await page.waitForFunction(
+      () => !document.querySelector("#peer-run").disabled,
+    );
+    assert.equal(await button.isVisible(), true);
+  }
+  await page.evaluate(() => {
+    navigator.clipboard.writeText = (text) => {
+      window.peerCopies.push(text);
+      return new Promise((resolve) => {
+        window.finishPeerCopy = resolve;
+      });
+    };
+  });
+  await button.click();
+  assert.equal(
+    await page.locator("[data-copy-results-status]").textContent(),
+    "Copying...",
+  );
+  await page.locator("#editor").fill("const changed = 3;");
+  assert.equal(await button.isVisible(), false);
+  assert.equal(
+    await page.locator("#peer-results").textContent(),
+    "Run your code to see results.",
+  );
+  await page.evaluate(() => window.finishPeerCopy());
+  assert.equal(
+    await page.locator("[data-copy-results-status]").textContent(),
+    "",
+  );
+});
+
+test("peer round loading invalidates Copy results before the next problem arrives", async (t) => {
+  const f = await fixture(t, "interviewer");
+  if (!f) return;
+  const { page } = f;
+  const button = page.locator("[data-copy-results]");
+  assert.equal(await button.count(), 1);
+  f.snapshot.revision++;
+  f.snapshot.tests = {
+    passed: 1,
+    total: 1,
+    cases: [{ label: "prior round", pass: true }],
+  };
+  await page.evaluate(() => window.peerTicks[0]());
+  await button.waitFor({ state: "visible" });
+  await page.evaluate(() => {
+    navigator.clipboard.writeText = () =>
+      new Promise((resolve) => {
+        window.finishPeerCopy = resolve;
+      });
+  });
+  await button.click();
+  let releaseProblem;
+  await page.route("**/api/peer/sessions/s/rounds/1/problem", async (route) => {
+    await new Promise((resolve) => {
+      releaseProblem = resolve;
+    });
+    await route.fulfill({
+      json: { page: "chargeback-pair-match", title: "Pair" },
+    });
+  });
+  await page.route("**/api/peer/sessions/s/rounds/1/guide", (route) =>
+    route.fulfill({ json: { contract: "Find pair" } }),
+  );
+  await page.route("**/api/peer/sessions/s/rounds/1/snapshot", (route) =>
+    route.fulfill({
+      json: { revision: 0, language: "javascript", code: "", tests: null },
+    }),
+  );
+  f.state.currentRound.index = 1;
+  const refreshing = page.evaluate(() => window.peerTicks[0]());
+  try {
+    await until(() => typeof releaseProblem === "function");
+    assert.equal(await button.isVisible(), false);
+    assert.equal(
+      await page.locator("#peer-results").textContent(),
+      "Run your code to see results.",
+    );
+    await page.evaluate(() => window.finishPeerCopy());
+    assert.equal(
+      await page.locator("[data-copy-results-status]").textContent(),
+      "",
+    );
+  } finally {
+    releaseProblem?.();
+    await refreshing;
+  }
 });
 for (const replaced of [false, true])
   test(`expired writer recovery preserves dirty code, takeover=${replaced}`, async (t) => {

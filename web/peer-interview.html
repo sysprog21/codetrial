@@ -129,7 +129,17 @@
             ></textarea>
           </div>
           <section aria-label="Test results">
-            <h3 id="peer-results-label">Tests</h3>
+            <h3 id="peer-results-label" tabindex="-1">Tests</h3>
+            <div class="results-copy-actions" data-copy-results-actions hidden>
+              <button type="button" class="pill-button" data-copy-results>
+                Copy results
+              </button>
+              <span
+                class="muted small"
+                role="status"
+                data-copy-results-status
+              ></span>
+            </div>
             <div id="peer-results" class="peer-results">
               Run your code to see results.
             </div>
