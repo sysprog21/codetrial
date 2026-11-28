@@ -432,7 +432,7 @@ pub(in crate::livekit) fn record(
             .iter_mut()
             .find(|(stored, _)| *stored == label)
         {
-            *bytes = snapshot.bytes.clone();
+            bytes.clone_from(&snapshot.bytes);
         } else {
             board.checkpoints.push((label, snapshot.bytes.clone()));
         }

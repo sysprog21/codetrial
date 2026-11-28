@@ -11,4 +11,7 @@ extend-exclude = ["tests/fixtures/candidates"]
 force-exclude = true
 
 [lint]
-select = ["E4", "E7", "E9", "F"]
+# S110 and S112 refuse a handler that catches everything and only passes or
+# continues, T100 a debugger left in, and PGH003 and PGH004 a `type: ignore`
+# or `noqa` that names no code. None had a match when added.
+select = ["E4", "E7", "E9", "F", "S110", "S112", "T100", "PGH003", "PGH004"]

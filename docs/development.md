@@ -280,10 +280,12 @@ locks held across await and `mem::forget` are explicit denials too.
 `[workspace.lints.rust] unsafe_code = "forbid"` is what keeps this crate's
 `unsafe` count at zero — `forbid` rather than `deny`, so a local `#[allow]`
 cannot reintroduce it. `scripts/check-rust-style.py` holds what a lint cannot
-ask: that this table stays strict, that no `allow` or bare `#[ignore]` appears,
-that no marker or CJK text lands in Rust or `web/`, and that no file passes its
-Git-derived line ceiling. By default, a file may not exceed 1500 lines or its
-committed size at the same path in HEAD, whichever is larger. Without Git
+ask: that this table stays strict, that no `clippy.toml` key or `rustflags`
+entry loosens it, that no `allow`, bare `#[ignore]`, `cfg(clippy)` or `expect`
+of a whole lint group appears, that no marker or CJK text lands in Rust or
+`web/`, and that no file passes its Git-derived line ceiling. By default, a
+file may not exceed 1500 lines or its committed size at the same path in HEAD,
+whichever is larger. Without Git
 every file gets the 1500-line limit and the explicit baseline below cannot be
 read, so a source archive fails this gate; run it from a clone. The gate passes
 `--baseline origin/main`: larger files present in both the baseline and HEAD

@@ -524,7 +524,7 @@ async fn concurrent_token_requests_spend_one_recording_consent_once() {
             let (first, second) = tokio::join!(request(), request());
             let (first, second) = (first.unwrap(), second.unwrap());
             let mut statuses = [first.status().as_u16(), second.status().as_u16()];
-            statuses.sort();
+            statuses.sort_unstable();
             assert_eq!(
                 statuses,
                 [200, 403],

@@ -759,8 +759,9 @@ impl OutputAudio {
             // operation that reads identically whichever way round it is
             // written and cannot be wrong in a way anything could observe.
             let samples_per_channel = self.sample_rate / 100;
-            let frame_duration =
-                Duration::from_secs_f64(samples_per_channel as f64 / self.sample_rate as f64);
+            let frame_duration = Duration::from_secs_f64(
+                f64::from(samples_per_channel) / f64::from(self.sample_rate),
+            );
             let frame = QueuedOutputFrame {
                 output_cancellation: self.output_cancellation.clone(),
                 samples,

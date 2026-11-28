@@ -235,7 +235,7 @@ async fn live_fixture(
                 Some(Ok(Message::Text(text))) => {
                     let _ = frames.send(Some(text.to_string()));
                 }
-                Some(Ok(Message::Close(_))) | None | Some(Err(_)) => {
+                Some(Ok(Message::Close(_)) | Err(_)) | None => {
                     let _ = frames.send(None);
                     return;
                 }

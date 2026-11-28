@@ -964,7 +964,7 @@ async fn send_silent_editor(
     // The model now holds this code, so later updates diff from it rather than
     // sending it again. Review is governed by the revision the watcher last
     // reviewed, not by this baseline, so the change stays owed its review.
-    state.code_shown = state.code.clone();
+    state.code_shown.clone_from(&state.code);
     eprintln!(
         "codetrial silent_editor_context local_write=true at_ms={} revision={} language={} source_sha256={} socket={}",
         crate::agent::elapsed_ms(state),
@@ -1821,7 +1821,7 @@ fn initial_runtime_state(boot: &RuntimeBootstrap<'_>, started_at: Instant) -> Ru
     // Chosen before joining, so the browser's first packet in this language is
     // not a switch and no briefing asks for a language again.
     if let Some(language) = &boot.language {
-        state.language = language.clone();
+        state.language.clone_from(language);
         state.language_chosen = true;
     }
     if boot.interview_loop == crate::agent::InterviewLoop::CodingBehavioral {

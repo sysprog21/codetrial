@@ -6,7 +6,7 @@ use codetrial::agent::{EvidenceKind, EvidenceSource, FrameworkPhase, framework_e
 use codetrial::runtime::{TOOL_END_INTERVIEW, TOOL_READ_EDITOR};
 use std::io::Write;
 
-const SEED: u64 = 424242;
+const SEED: u64 = 424_242;
 
 #[derive(Clone, Copy)]
 struct Case {

@@ -103,14 +103,20 @@ function createMediaSampler({
             analyser = context.createAnalyser();
             analyser.fftSize = 1024;
             source.connect(analyser);
-          } catch {}
+          } catch {
+            // Without an analyser the loop still counts transport bytes; it
+            // only loses the decoded-signal half of the proof.
+          }
         }
         let stats;
         try {
           stats = await bounded(
             Promise.resolve().then(() => track.getRTCStatsReport?.()),
           );
-        } catch {}
+        } catch {
+          // A stats call that fails or times out is one sample with no
+          // transport reading, which the loop already treats as ambiguous.
+        }
         if (!isCurrent() || isStopped()) break;
         if (!isSpeaking()) {
           previous = null;
@@ -202,10 +208,14 @@ function createMediaSampler({
     } finally {
       try {
         source?.disconnect();
-      } catch {}
+      } catch {
+        // Teardown: a node that never connected has nothing to disconnect.
+      }
       try {
         analyser?.disconnect();
-      } catch {}
+      } catch {
+        // As above, for the analyser.
+      }
       if (context)
         await bounded(Promise.resolve().then(() => context.close())).catch(
           () => {},

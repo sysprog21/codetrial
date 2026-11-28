@@ -459,14 +459,14 @@ fn only_the_candidates_parseable_packet_on_a_topic_drives_the_runtime() {
 fn the_server_side_deadline_is_the_planned_minutes_plus_the_grace() {
     assert_eq!(
         interview_hard_deadline(45),
-        Duration::from_secs(45 * 60) + INTERVIEW_DEADLINE_GRACE
+        Duration::from_mins(45) + INTERVIEW_DEADLINE_GRACE
     );
 
     // The longest interview the config admits still fits, which is the only
     // reason the seconds are computed in `u64`.
     assert_eq!(
         interview_hard_deadline(90),
-        Duration::from_secs(90 * 60) + INTERVIEW_DEADLINE_GRACE
+        Duration::from_mins(90) + INTERVIEW_DEADLINE_GRACE
     );
 }
 

@@ -119,7 +119,8 @@ test("completion marker before follower startup drains without a signal race", a
     });
     child.once("exit", (code) => {
       clearTimeout(timeout);
-      code === 0 ? resolve() : reject(new Error(`capture exit ${code}`));
+      if (code === 0) resolve();
+      else reject(new Error(`capture exit ${code}`));
     });
   });
   assert.equal(fs.readFileSync(target, "utf8"), line);
@@ -170,7 +171,9 @@ test("orphaned follower exits when its shell parent disappears", async (t) => {
     if (fs.existsSync(pidFile)) {
       try {
         process.kill(Number(fs.readFileSync(pidFile, "utf8")), "SIGKILL");
-      } catch {}
+      } catch {
+        // The child may already have exited with its parent.
+      }
     }
   });
   await persisted(target);

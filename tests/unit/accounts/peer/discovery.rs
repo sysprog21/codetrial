@@ -119,12 +119,12 @@ fn only_published_fresh_availability_is_in_the_roster() {
     assert_eq!(people[0]["login"], "alice");
     assert!(people[0].get("email").is_none());
     assert!(people[0].get("identity").is_none());
-    assert!(
+    assert_eq!(
         lobby(&a, 3, 145).unwrap()["available"]
             .as_array()
             .unwrap()
-            .len()
-            == 1
+            .len(),
+        1
     );
     assert_eq!(
         lobby(&a, 3, 146).unwrap()["available"]

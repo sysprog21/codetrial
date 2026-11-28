@@ -3619,7 +3619,7 @@ fn provider_interruption_preserves_tool_only_debt_on_both_playout_paths() {
         };
         let unplayed = settle_interruption_debt(
             &mut RuntimeState {
-                transcript: (transcript).to_vec(),
+                transcript,
                 ..RuntimeState::default()
             },
             Interruptible::Yes,

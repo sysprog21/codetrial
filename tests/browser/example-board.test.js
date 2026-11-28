@@ -170,7 +170,8 @@ test("ending reconnect releases the end event after the drawing attempt, even on
           new Promise((resolve, reject) => {
             release = () => {
               order.push("drawing");
-              fails ? reject(new Error("offline")) : resolve(false);
+              if (fails) reject(new Error("offline"));
+              else resolve(false);
             };
           }),
       },

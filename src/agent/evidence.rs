@@ -783,7 +783,7 @@ impl EvidenceLedger {
             self.stuck.undo_redo_cycles += 1;
         }
         self.code.parser_observation = Some(analysis.observation.clone());
-        self.code.latest_digest = digest.clone();
+        self.code.latest_digest.clone_from(&digest);
         if self.code.digest_history.len() >= MAX_CODE_DIGEST_HISTORY {
             self.code.digest_history.remove(0);
         }

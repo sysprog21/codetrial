@@ -163,7 +163,10 @@ fn an_unstarted_reply_waits_through_interruptions_and_socket_replacement() {
     );
     let closed = trace.boundary(Boundary::SocketReplaced, ms(start, 7_000));
     assert_eq!(closed.unwrap()["stage"], "socket_replaced");
-    assert!(trace.audio(ms(start, 8_000)).unwrap()["origin"] == "provider_event");
+    assert_eq!(
+        trace.audio(ms(start, 8_000)).unwrap()["origin"],
+        "provider_event"
+    );
 }
 
 #[test]

@@ -252,7 +252,9 @@ test("reattaching blocked audio never hides the notice or steals button focus", 
   const visibility = [];
   Object.defineProperty(f.notice, "hidden", {
     get: () => visibility[visibility.length - 1] ?? false,
-    set: (hidden) => visibility.push(hidden),
+    set: (hidden) => {
+      visibility.push(hidden);
+    },
   });
   await f.playback.play(denied());
   assert.ok(visibility.length > 0);

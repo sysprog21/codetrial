@@ -72,7 +72,7 @@ fn false_stop_boundaries_and_both_interruption_orders() {
             let records = run(events);
             assert_eq!(records[0].kind, "overlap");
             assert_eq!(records[0].outcome, "interrupted");
-            assert_eq!(records[0].overlap_ms, Some(ms as u128));
+            assert_eq!(records[0].overlap_ms, Some(u128::from(ms)));
             assert_eq!(records[0].playout_ahead_ms, Some(200));
             assert_eq!(records[0].suspect == Some("false_stop"), expected);
         }

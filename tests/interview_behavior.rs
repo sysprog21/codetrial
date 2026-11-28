@@ -406,8 +406,7 @@ impl Conversation {
             let response: Value = self
                 .client
                 .post(format!(
-                    "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent",
-                    model
+                    "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
                 ))
                 .header("x-goog-api-key", key)
                 .json(&json!({

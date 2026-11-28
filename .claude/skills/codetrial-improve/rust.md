@@ -17,8 +17,8 @@ an opt-out. The portable source check needs no Cargo metadata.
 |---|---|
 | `[workspace.lints.rustdoc]` | broken documentation links and public links to private items |
 | `[workspace.lints.rust]` | `unsafe` (forbid), `pub` items nothing outside the crate can name, unused lifetimes, ignored must-use results and stale lint expectations |
-| `[workspace.lints.clippy]` | `unwrap`, `panic!`, `todo!`, `dbg!`, `allow` attributes and any suppression without a `reason`, `.clone()` on an `Arc`/`Rc`, redundant clones, `+` on strings, a function with more than three bool parameters, needless `Option`/`Result` wrapping, a panic inside a function returning `Result`, glob imports, a missing `;` after a unit expression, `as` casts that drop a sign, synchronous guards across await, discarded futures and `mem::forget` |
-| `scripts/check-rust-style.py` | `#[allow]`, including inside `cfg_attr`, and `#![deny(warnings)]`; `#[ignore]` without a reason; `.expect("")`; TODO, FIXME, XXX, HACK, `ponytail:` and the untracked working documents named in a `//`, `///` or `/* */` comment; CJK in Rust or `web/`; a file past its ceiling; a lint in the required set loosened in `Cargo.toml` |
+| `[workspace.lints.clippy]` | `unwrap`, `panic!`, `todo!`, `dbg!`, `allow` attributes and any suppression without a `reason`, `.clone()` on an `Arc`/`Rc`, redundant clones, `+` on strings, a function with more than three bool parameters, needless `Option`/`Result` wrapping, a panic inside a function returning `Result`, glob imports, a missing `;` after a unit expression, `as` casts that drop a sign or widen losslessly (use `From`), synchronous guards across await, discarded futures, `mem::forget`, `unimplemented!`, a `_` arm standing for one variant, a `_` arm on `Err` that panics or exits without naming the error, `to_owned`/`to_vec` where `clone` is meant, `to_string` on a `&&str`, enum glob imports, `Rc<Mutex>`, a `continue` that changes nothing, `x = y.clone()` where `x.clone_from(&y)` reuses the buffer, a stable sort of primitives, a `;` after a block, a `Result` turned into an `Option` only to be dropped (`.ok();`; a best-effort one says so in an `expect`), a `bool` matched as two arms or turned into 0 or 1 by an `if`, `map_or(false, ..)` for `is_some_and`, `assert!(a == b)` for `assert_eq!`, or-patterns spelled arm by arm, a format argument named twice, a long literal without separators and a `Duration` built in the wrong unit |
+| `scripts/check-rust-style.py` | `#[allow]`, including inside `cfg_attr`, and `#![deny(warnings)]`; an `expect` of `warnings` or a lint group, whose expectation any one lint meets, so it waives the rest unseen; `cfg(clippy)`; a `clippy.toml` key or `.cargo/config.toml` rustflag that loosens the table; `#[ignore]` without a reason; `.expect("")`; an `Err(_) => {}` arm or an empty `if let Err(..)`; TODO, FIXME, XXX, HACK, `ponytail:` and the untracked working documents named in a `//`, `///` or `/* */` comment; CJK in Rust or `web/`; a file past its ceiling; a lint in the required set loosened in `Cargo.toml` |
 
 `tests/test_check_rust_style.py` holds the checker to each rule. The required
 set in the checker and the table in `Cargo.toml` change together, and the test
@@ -48,9 +48,9 @@ waiver cannot outlive its cause. `allow` is refused outright.
 
 A target-dependent waiver is `#[cfg_attr(not(test), expect(..., reason = ".."))]`,
 because an `expect` that holds in one build and not the other is itself a
-finding. Integration test crates open with one `#![expect(clippy::unwrap_used,
-reason = ...)]` naming only the lints that file uses; unit tests get the same
-through `clippy.toml`.
+finding. Test code needs no waiver for `unwrap` or `panic!`: `clippy.toml`
+allows both in unit and integration tests alike, so a `#![expect]` at the top
+of a `tests/*.rs` file is stale the day it is written.
 
 ## File size
 

@@ -146,7 +146,7 @@ fn frozen_drawing_receipt_uses_received_snapshots_even_without_report_images() {
             count != 0,
             "snapshot count {count}"
         );
-        state.board_snapshots = if count == 0 { 1 } else { 0 };
+        state.board_snapshots = u32::from(count == 0);
         assert_eq!(
             frozen.drawing_received(),
             count != 0,

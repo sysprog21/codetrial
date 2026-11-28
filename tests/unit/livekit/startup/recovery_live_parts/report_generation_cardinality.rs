@@ -431,7 +431,7 @@ impl G2NativeRun {
         if let Some(candidate) = self.candidate.take() {
             if !matches!(
                 tokio::time::timeout(Duration::from_secs(10), candidate.room.close()).await,
-                Ok(Ok(())) | Ok(Err(::livekit::RoomError::AlreadyClosed))
+                Ok(Ok(()) | Err(::livekit::RoomError::AlreadyClosed))
             ) {
                 failures.push("candidate Room close did not complete".into());
             }
@@ -545,8 +545,8 @@ async fn g2_native_report_generation_and_guarded_deadline_reentry() {
         .iter()
         .map(String::as_str)
         .collect::<Vec<_>>();
-    granted.sort();
-    expected_permits.sort();
+    granted.sort_unstable();
+    expected_permits.sort_unstable();
     assert_eq!(
         granted, expected_permits,
         "one reserved End and only declared nonfinal actions"

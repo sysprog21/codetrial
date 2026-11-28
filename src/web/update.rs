@@ -32,7 +32,7 @@ const DEFAULT_API_BASE: &str = "https://api.github.com";
 /// the hour, so this is what bounds reloads and a row of open tabs: at most six
 /// requests an hour, inside the 60 GitHub allows an address that does not sign
 /// in.
-const ANSWER_TTL: Duration = Duration::from_secs(10 * 60);
+const ANSWER_TTL: Duration = Duration::from_mins(10);
 
 /// The lobby is waiting on this, so it gets far less than the client's 30
 /// second backstop.

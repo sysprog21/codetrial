@@ -175,6 +175,10 @@ impl AccountsScratch {
 
 impl Drop for AccountsScratch {
     fn drop(&mut self) {
+        #[expect(
+            clippy::unused_result_ok,
+            reason = "best effort: a scratch directory left behind fails no test"
+        )]
         std::fs::remove_dir_all(&self.dir).ok();
     }
 }

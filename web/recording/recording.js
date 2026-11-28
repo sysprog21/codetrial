@@ -154,6 +154,7 @@ function markReady() {
   // The console, not a callback. Egress watches Chrome's console output for
   // these two exact strings; there is no injected function to call, and a page
   // that waited for one would never start the recording it was loaded for.
+  // eslint-disable-next-line no-console -- Egress reads this exact console line
   console.log("START_RECORDING");
 }
 
@@ -259,7 +260,7 @@ function testsLine(payload) {
 /// appeared yet.
 export async function pumpReplay() {
   const query = lastSeq < 0 ? "" : `?after=${lastSeq}`;
-  let response = null;
+  let response;
   let body = null;
   try {
     response = await fetch(`/api/recording/replay${query}`, {
@@ -384,6 +385,7 @@ async function connect() {
   room.on(events.Disconnected, () => {
     // The recorder stops when the room does. Without this the job runs until
     // the provider's timeout and pays for a black tail.
+    // eslint-disable-next-line no-console -- Egress reads this exact console line
     console.log("END_RECORDING");
   });
   room.on(events.TrackUnsubscribed, (track) => {

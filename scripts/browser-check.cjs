@@ -577,7 +577,9 @@ async function stopAgentGroup(child, graceMs, escalate) {
   if (exited || !escalate) return;
   try {
     process.kill(-child.pid, "SIGKILL");
-  } catch {}
+  } catch {
+    // The group can exit between the grace period and the kill.
+  }
 }
 
 /// The whiteboard interview, as far as a run with no credentials can take it.

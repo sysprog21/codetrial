@@ -51,7 +51,7 @@ pub(super) async fn route(
             let parts = path.split('/').collect::<Vec<_>>();
             if parts.len() != 3 || parts[0] != "pairing-requests" || method != Method::POST {
                 return error("not_found");
-            };
+            }
             let id = parts[1].to_owned();
             match parts[2] {
                 "confirm" => {

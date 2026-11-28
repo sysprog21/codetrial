@@ -1453,9 +1453,7 @@ fn server_api_failure(text: &str) -> Option<ApiFailure> {
 }
 
 fn is_setup_complete_text(text: &str) -> bool {
-    serde_json::from_str::<Value>(text)
-        .ok()
-        .is_some_and(|message| message.get("setupComplete").is_some())
+    serde_json::from_str::<Value>(text).is_ok_and(|message| message.get("setupComplete").is_some())
 }
 
 fn voice_activity(message: &Value) -> Option<GeminiEvent> {

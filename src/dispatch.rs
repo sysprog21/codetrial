@@ -554,14 +554,14 @@ impl Drop for Slot {
 /// caller that was already handed the provider.
 pub fn agent_config_for(base: &AgentConfig, provider: &Provider) -> AgentConfig {
     let mut config = base.clone();
-    config.livekit_url = provider.url.clone();
-    config.livekit_api_key = provider.api_key.clone();
-    config.livekit_api_secret = provider.api_secret.clone();
+    config.livekit_url.clone_from(&provider.url);
+    config.livekit_api_key.clone_from(&provider.api_key);
+    config.livekit_api_secret.clone_from(&provider.api_secret);
 
     // A provider that brings any Google key of its own replaces the global
     // ones, so its rooms never bill another project.
     if !provider.google_api_keys.is_empty() {
-        config.google_api_keys = provider.google_api_keys.clone();
+        config.google_api_keys.clone_from(&provider.google_api_keys);
     }
     config
 }

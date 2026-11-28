@@ -61,6 +61,57 @@ const CORRECTNESS = {
 
   // An `await` inside a promise executor swallows its own rejection.
   "no-async-promise-executor": "error",
+
+  // A block with nothing in it, a `catch` included, drops what reached it
+  // unexplained: a comment inside says why it may be empty. A `debugger` left
+  // in stops whoever has the tools open. `promise.catch(() => {})`, this
+  // tree's fire-and-forget, is an arrow function's body, not a block.
+  "no-empty": "error",
+  "no-debugger": "error",
+
+  // More statements that cannot mean what they say. None had a match when
+  // they were added, so they cost nothing and keep it that way: a getter that
+  // returns nothing, a `finally` whose `return` drops the error, a loop that
+  // can only run once, a literal the double rounds, a `map` callback that
+  // forgets to return, a write to an import, a constant, a class, a function
+  // or a global, `x === -0`, a `for` counting away from its bound, a regex that
+  // cannot compile or cannot match, and a line break that joins two
+  // statements into one call.
+  "array-callback-return": "error",
+  "for-direction": "error",
+  "getter-return": "error",
+  "no-class-assign": "error",
+  "no-compare-neg-zero": "error",
+  "no-const-assign": "error",
+  "no-constructor-return": "error",
+  "no-empty-character-class": "error",
+  "no-func-assign": "error",
+  "no-global-assign": "error",
+  "no-import-assign": "error",
+  "no-invalid-regexp": "error",
+  "no-loss-of-precision": "error",
+  "no-shadow-restricted-names": "error",
+  "no-unexpected-multiline": "error",
+  "no-unreachable-loop": "error",
+  "no-unsafe-finally": "error",
+
+  // `let` in a `case` leaks into the next one; `new String` is never equal to
+  // the string; `setTimeout("code")` is `eval`; a `catch` that only rethrows
+  // is a `try` that says nothing; and a rejection that is not an Error has no
+  // stack to say where it came from.
+  "no-case-declarations": "error",
+  "no-new-wrappers": "error",
+  "no-implied-eval": "error",
+  "no-useless-catch": "error",
+  "prefer-promise-reject-errors": "error",
+
+  // A value written and never read is a step that was meant to matter, a
+  // setter's return value goes nowhere, and an expression standing alone
+  // as a statement (a ternary chosen for its side effect included) is
+  // usually a call or an assignment someone forgot to write.
+  "no-useless-assignment": "error",
+  "no-setter-return": "error",
+  "no-unused-expressions": "error",
 };
 
 // Where site data is blocked, touching either storage global throws rather than
@@ -92,8 +143,22 @@ export default [
     // `externals/` holds unrelated checkouts, is untracked, and is excluded in
     // `.git/info/exclude`. Linting it failed the gate on somebody else's JSX,
     // and a gate that is red for something outside the repository is one whose
-    // red line stops being read.
-    ignores: ["web/vendor/**", "node_modules/**", "target/**", "externals/**"],
+    // red line stops being read. `claudedocs/` is a per-developer working
+    // directory git ignores the same way.
+    ignores: [
+      "web/vendor/**",
+      "node_modules/**",
+      "target/**",
+      "externals/**",
+      "claudedocs/**",
+    ],
+  },
+  {
+    // Every file ESLint reads, with no `files` key: a file no block below
+    // names still gets these rules, and fails `no-undef` loudly until a block
+    // gives it the globals of where it runs, instead of passing with none.
+    linterOptions: { reportUnusedDisableDirectives: "error" },
+    rules: CORRECTNESS,
   },
   {
     // The browser tier. `web/*worker*.js` runs without a `window`, so the
@@ -105,14 +170,17 @@ export default [
       sourceType: "module",
       globals: { ...globals.browser, ...globals.worker },
     },
-    linterOptions: { reportUnusedDisableDirectives: "error" },
-    rules: CORRECTNESS,
   },
   {
     // Application code only. The review workbench under `.claude/skills` is a
-    // developer tool, not a page a candidate opens.
+    // developer tool, not a page a candidate opens. A candidate's console is
+    // no log anyone reads, so output that is not a warning or an error is a
+    // debugging leftover.
     files: ["web/**/*.js"],
-    rules: STORAGE_ACCESS,
+    rules: {
+      ...STORAGE_ACCESS,
+      "no-console": ["error", { allow: ["warn", "error"] }],
+    },
   },
   {
     // Node: the browser tests and the generator scripts.
@@ -124,19 +192,61 @@ export default [
     // as real as `process` is out here. Splitting them apart would mean marking
     // up every evaluate callback to say which half of the file it belongs to,
     // which buys a `no-undef` that is stricter about the wrong thing.
-    files: ["tests/browser/**/*.js", "scripts/**/*.mjs", "scripts/**/*.cjs"],
+    files: [
+      "tests/browser/**/*.js",
+      "tests/harness/**/*.js",
+      "tests/stubs/**/*.{js,mjs,cjs}",
+      "scripts/**/*.mjs",
+      "scripts/**/*.cjs",
+      "eslint.config.mjs",
+    ],
     languageOptions: {
       ecmaVersion: 2023,
       sourceType: "module",
       globals: { ...globals.node, ...globals.browser },
     },
-    linterOptions: { reportUnusedDisableDirectives: "error" },
-    rules: CORRECTNESS,
+  },
+  {
+    // A test run alone hides every other test in the file, and one skipped
+    // waits for something; each says so in the disable comment's reason.
+    files: ["tests/**/*.js", "tests/**/*.mjs", "scripts/**/*.test.mjs"],
+    rules: {
+      "no-restricted-properties": [
+        "error",
+        ...["test", "it", "describe", "suite"].flatMap((object) =>
+          ["only", "skip", "todo"].map((property) => ({
+            object,
+            property,
+            message:
+              "Run every test; a skip needs its reason in a disable comment.",
+          })),
+        ),
+      ],
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector:
+            "CallExpression[callee.name=/^(test|it|describe|suite)$/] > ObjectExpression > Property[key.name=/^(only|skip|todo)$/][value.value=true]",
+          message:
+            "Run every test; a skip names its reason as the option's string.",
+        },
+      ],
+    },
   },
   {
     // `.cjs` predates `type: module` in package.json and is still CommonJS.
-    files: ["scripts/**/*.cjs"],
+    files: ["scripts/**/*.cjs", "tests/stubs/**/*.cjs"],
     languageOptions: { sourceType: "commonjs" },
+  },
+  {
+    // The desktop app's start page, a classic script loaded with `defer`
+    // while the server it waits for starts.
+    files: ["desktop/ui/**/*.js"],
+    languageOptions: {
+      ecmaVersion: 2023,
+      sourceType: "script",
+      globals: globals.browser,
+    },
   },
   {
     // `importScripts` at the top of this worker pulls in the vendored MediaPipe

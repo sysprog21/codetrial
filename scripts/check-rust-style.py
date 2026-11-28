@@ -10,9 +10,18 @@ ownership, panics and casts. This owns what a lint has no way to ask:
   suppression  No `#[allow]`, no `#![deny(warnings)]`: a suppression is an
                `expect` with a `reason`, and warnings-as-errors is the gate's
                job, since a new toolchain adds warnings and a crate attribute
-               turns that into a broken build.
+               turns that into a broken build. An `expect` names one lint, not
+               `warnings` or a group: a group's expectation is met by any lint
+               in it, so it waives the rest unseen. No `cfg(clippy)` either,
+               which hides code from the linter.
+  lint-config  clippy.toml sets only keys CLIPPY_KEYS lists with the reason
+               each loosens no denied lint, and no rustflags in
+               .cargo/config.toml allow a lint or cap lint levels.
   ignore       Every `#[ignore]` says what it waits for.
   expect       An `expect` message is not empty.
+  swallow      No `Err(_) => {}` arm and no empty `if let Err(..)`: an error a
+               match receives is handled, or the code says why it may drop it
+               (`unused_result_ok` holds the `.ok();` form to the same).
   marker       No TODO, FIXME, XXX or HACK comment, no `ponytail:` label, and
                no comment naming the untracked working documents.
   language     No CJK in Rust or the browser half; fixtures that need
@@ -103,17 +112,67 @@ REQUIRED_LINTS = {
         "wildcard_imports": "deny",
         "semicolon_if_nothing_returned": "deny",
         "cast_sign_loss": "deny",
+        "cast_lossless": "deny",
         "await_holding_lock": "deny",
         "let_underscore_future": "deny",
         "mem_forget": "deny",
+        "unimplemented": "deny",
+        "match_wildcard_for_single_variants": "deny",
+        "match_wild_err_arm": "deny",
+        "implicit_clone": "deny",
+        "inefficient_to_string": "deny",
+        "enum_glob_use": "deny",
+        "rc_mutex": "deny",
+        "needless_continue": "deny",
+        "assigning_clones": "deny",
+        "stable_sort_primitive": "deny",
+        "unnecessary_semicolon": "deny",
+        "unused_result_ok": "deny",
+        "match_bool": "deny",
+        "bool_to_int_with_if": "deny",
+        "manual_is_variant_and": "deny",
+        "manual_assert_eq": "deny",
+        "unnested_or_patterns": "deny",
+        "uninlined_format_args": "deny",
+        "unreadable_literal": "deny",
+        "duration_suboptimal_units": "deny",
     },
 }
+
+# An expectation of any of these is met by any lint it covers, so it silences
+# every other one unseen; `allow_attributes` itself would waive the rule above.
+SILENCERS = (
+    LINT_GROUPS["rust"]
+    | {f"clippy::{group}" for group in LINT_GROUPS["clippy"]}
+    | {"clippy::allow_attributes", "clippy::allow_attributes_without_reason"}
+    | {"rustdoc::all"}
+)
+# The clippy.toml keys this tree sets, and why each loosens nothing the table
+# denies. Almost every key widens what some lint accepts, and `clippy::all`
+# denies hundreds, so a key is refused until it is read and listed here: a
+# list of loosening keys would be out of date with the next clippy.
+CLIPPY_KEYS = {
+    "allow-unwrap-in-tests": "a test that fails by panicking works as intended",
+    "allow-panic-in-tests": "a test that fails by panicking works as intended",
+}
+LINT_FLAGS = re.compile(r"^(?:-A|--allow\b|--cap-lints\b|--force-warn\b)")
+CLIPPY_CFG = re.compile(r"\bclippy\b")
 
 ATTRIBUTE = re.compile(r"#\s*!?\s*\[\s*")
 ATTRIBUTE_NAME = re.compile(r"\s*(?:r#)?(\w+)")
 OPEN_PAREN = re.compile(r"\s*\(")
 BARE_IGNORE = re.compile(r'\s*(?:\]|[,)]|=\s*"")')
 EMPTY_EXPECT = re.compile(r"\.\s*(?:r#)?expect\s*\(\s*\"\"\s*,?\s*\)")
+EMPTY_ERR = re.compile(r"\bErr\s*\(\s*_\w*\s*\)\s*=>\s*(?:\{\s*\}|\(\s*\))")
+IF_LET_ERR = re.compile(r"\bif\s+let\s+Err\s*\(")
+# A higher-ranked lifetime binder in a type argument has no loop body.
+RHS_TOKEN = re.compile(r"for\s*<(?=\s*')|(?:r#)?\w+|\S")
+# A brace in operand position opens a block expression or a macro argument.
+BEFORE_OPERAND = frozenset(
+    "if match while in else async move const unsafe loop try mut = ! : < > , & | + - * / % ^".split()
+)
+EMPTY_BLOCK = re.compile(r"\{\s*\}")
+ASSIGN = re.compile(r"\s*=(?![=>])")
 MARKER = re.compile(
     r"\b(?:TODO|FIXME|XXX|HACK)\b|ponytail:|\b(?:TODO|DONE|CLAUDE)\.md\b"
 )
@@ -213,6 +272,58 @@ def arguments(code, start):
             first = index + 1
 
 
+def if_let_body(code, start):
+    """Locate the branch, skipping delimiter groups and block operands."""
+    depth = pending_blocks = angles = 0
+    previous, casting = "=", False
+    for token in RHS_TOKEN.finditer(code, start):
+        word = token.group()
+        # In an expression `<` opens generic arguments only after `::` or in
+        # the type of an `as` cast; any other `<` or `>` compares, and a brace
+        # after a comparison is its operand, not the branch.
+        if not depth and word == "as":
+            casting = True
+        elif not depth and word in "&|":
+            casting = False
+        if depth:
+            depth += (word in "([{") - (word in ")]}")
+        elif word == "<" and (previous == ":" or casting):
+            angles += 1
+        elif word == ">" and angles:
+            angles -= 1
+            previous = "generic >"
+            continue
+        elif word in "([":
+            depth = 1
+        elif word in ("if", "match", "while", "for"):
+            pending_blocks += 1
+        elif word == "{":
+            if previous not in BEFORE_OPERAND:
+                if pending_blocks == 0:
+                    return token.start()
+                pending_blocks -= 1
+            depth = 1
+        elif word in ";)]}":
+            break
+        previous = word
+    return None
+
+
+def empty_err_ranges(code):
+    for match in EMPTY_ERR.finditer(code):
+        yield match.start(), match.start(), match.end()
+    for opening in IF_LET_ERR.finditer(code):
+        # The pattern's arguments end at the `)` that closes them, the last
+        # range arguments() yields.
+        ranges = list(arguments(code, opening.end()))
+        if not ranges or code[ranges[-1][1]] != ")":
+            continue
+        if assignment := ASSIGN.match(code, ranges[-1][1] + 1):
+            body = if_let_body(code, assignment.end())
+            if body is not None and (empty := EMPTY_BLOCK.match(code, body)):
+                yield opening.start(), body, empty.end()
+
+
 def attribute_findings(code):
     position = 0
     while opening := ATTRIBUTE.search(code, position):
@@ -228,9 +339,24 @@ def attribute_findings(code):
             kind = name.group(1)
             paren = OPEN_PAREN.match(code, name.end())
             args = list(arguments(code, paren.end())) if paren else []
+            if kind in ("cfg", "cfg_attr") and any(
+                CLIPPY_CFG.search(code[a:b]) for a, b in args[:1]
+            ):
+                yield (
+                    opening.start(),
+                    "suppression: cfg(clippy) hides code from the linter",
+                )
             if kind == "cfg_attr":
                 # The first argument is a condition, not an applied attribute.
                 pending.extend(start for start, _ in reversed(args[1:]))
+            elif kind == "expect" and any(
+                re.sub(r"\s+", "", code[a:b]).replace("r#", "") in SILENCERS
+                for a, b in args
+            ):
+                yield (
+                    opening.start(),
+                    "suppression: expect one lint by name, not warnings or a group",
+                )
             elif kind == "allow" or (
                 kind in ("deny", "forbid")
                 and any(
@@ -289,10 +415,25 @@ def group_overrides(table, group, priority):
             yield name, level, other
 
 
+def normalized(table, group):
+    """A [lints] table keyed by the underscore spelling Cargo treats a dashed
+    name as, and the names given twice that way."""
+    out, twice = {}, []
+    for name, entry in table.items():
+        key = name.replace("-", "_")
+        if key in out:
+            twice.append(f"Cargo.toml: [workspace.lints.{group}] {key} is set twice")
+        out[key] = entry
+    return out, twice
+
+
 def check_lint_table(root):
     manifest = tomllib.loads((root / "Cargo.toml").read_text())
     for group, wanted in REQUIRED_LINTS.items():
-        table = manifest.get("workspace", {}).get("lints", {}).get(group, {})
+        table, twice = normalized(
+            manifest.get("workspace", {}).get("lints", {}).get(group, {}), group
+        )
+        yield from twice
         for name, level in wanted.items():
             actual, priority = lint_entry(table, name)
             if actual != level:
@@ -308,6 +449,38 @@ def check_lint_table(root):
 
     if manifest.get("lints", {}).get("workspace") is not True:
         yield "Cargo.toml: inherit the workspace lint policy with [lints] workspace = true"
+
+
+def rustflags(value):
+    """Every rustflags list in a parsed Cargo config, at any depth."""
+    if isinstance(value, dict):
+        for key, inner in value.items():
+            if key == "rustflags":
+                yield inner.split() if isinstance(inner, str) else inner
+            else:
+                yield from rustflags(inner)
+
+
+def check_lint_config(root):
+    # Clippy reads either name, so a key cannot hide under the other.
+    for name in ("clippy.toml", ".clippy.toml"):
+        path = root / name
+        if not path.exists():
+            continue
+        config = tomllib.loads(path.read_text())
+        for key in sorted(set(config) - set(CLIPPY_KEYS)):
+            yield (
+                f"{name}: lint-config: {key} is not one the checker has read; "
+                "list it in CLIPPY_KEYS with why it loosens no denied lint"
+            )
+    for name in (".cargo/config.toml", ".cargo/config"):
+        path = root / name
+        if not path.exists():
+            continue
+        for flags in rustflags(tomllib.loads(path.read_text())):
+            for flag in flags:
+                if isinstance(flag, str) and LINT_FLAGS.match(flag):
+                    yield f"{name}: lint-config: rustflags {flag!r} overrides the lint table"
 
 
 def check_workspace(root):
@@ -361,6 +534,16 @@ def check_rust(root, path):
     for match in EMPTY_EXPECT.finditer(code):
         number = code.count("\n", 0, match.start()) + 1
         yield f"{rel}:{number}: expect: the message is empty"
+    # The comments are cut out of `code`, so an arm whose body is only the
+    # reason it may drop the error reads as empty there; a comment on the
+    # arm's own lines is that reason.
+    commented = {text.count("\n", 0, start) + 1 for start, _ in comments}
+    for start, body, end in empty_err_ranges(code):
+        number = code.count("\n", 0, start) + 1
+        first = number + code.count("\n", start, body)
+        last = first + code.count("\n", body, end)
+        if commented.isdisjoint(range(first, last + 1)):
+            yield f"{rel}:{number}: swallow: an empty Err arm drops the error; handle it or say why"
     for start, comment in comments:
         for found in MARKER.finditer(comment):
             number = text.count("\n", 0, start + found.start()) + 1
@@ -505,6 +688,7 @@ def git_ceilings(root, current, baseline=None):
 def run(root, baseline=None):
     read.cache_clear()
     findings = list(check_lint_table(root))
+    findings.extend(check_lint_config(root))
     for path in rust_files(root):
         findings.extend(check_rust(root, path))
     for path in web_files(root):

@@ -253,7 +253,7 @@ export function storeGroundingPacket(storage, packet) {
 }
 
 export function consumeGroundingPacket(storage) {
-  let raw = null;
+  let raw;
   try {
     raw = storage.getItem(groundingStorageKey);
   } catch {

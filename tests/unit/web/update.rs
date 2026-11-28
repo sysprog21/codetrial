@@ -154,7 +154,7 @@ async fn one_answer_serves_every_request_until_it_is_stale() {
     // Asked again just inside ten minutes and then at ten. Written out rather
     // than read from `ANSWER_TTL`, so the test pins the ten minutes
     // docs/install.md promises and not whatever the constant says.
-    let ten_minutes = Duration::from_secs(10 * 60);
+    let ten_minutes = Duration::from_mins(10);
     let asked_at = latest.answer.lock().await.as_ref().unwrap().0;
     let inside = asked_at + ten_minutes - Duration::from_secs(1);
     assert_eq!(

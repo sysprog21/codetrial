@@ -781,7 +781,7 @@ impl TaskSession {
                             after_turn: self.turns.len(),
                         },
                     );
-                    let clue = self.task.exercise.hints()[self.hint_rungs_used].to_owned();
+                    let clue = self.task.exercise.hints()[self.hint_rungs_used].clone();
                     self.hint_rungs_used += 1;
                     Some(format!(
                         "The learner requested hint rung {} (support request ID {}): {clue}. Give only this conceptual clue; do not extend it or provide code. Link this support request only to checks whose captured learner evidence actually used it.",

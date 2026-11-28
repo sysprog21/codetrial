@@ -49,6 +49,7 @@ export async function until(probe, what) {
 export async function animationsFinished(locator, what) {
   await withBackstop(
     locator.evaluate(async (el) => {
+      // eslint-disable-next-line no-unused-expressions -- the read is the flush
       getComputedStyle(el).transform;
       await Promise.all(
         el

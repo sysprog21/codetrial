@@ -798,9 +798,10 @@ pub(crate) async fn github_profile(
         // address, and the cost of turning recording back on is one extra
         // sign-in for anyone who signed in during the gap.
         async {
-            match recording {
-                true => primary_verified_email(config, access_token).await,
-                false => Ok(None),
+            if recording {
+                primary_verified_email(config, access_token).await
+            } else {
+                Ok(None)
             }
         },
     )?;

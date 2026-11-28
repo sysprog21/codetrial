@@ -128,7 +128,7 @@ fn the_five_scenarios_declare_the_explicit_action_lists_and_ceilings() {
         .iter()
         .map(|s| s.end_mode.manifest_name())
         .collect();
-    modes.sort();
+    modes.sort_unstable();
     assert_eq!(
         modes,
         [
@@ -229,7 +229,7 @@ fn the_deadline_scenario_bootstrap_has_a_twelve_minute_hard_deadline() {
     assert_eq!(boot.duration_min, 10);
     assert_eq!(
         crate::livekit::interview_hard_deadline(boot.duration_min),
-        Duration::from_secs(12 * 60)
+        Duration::from_mins(12)
     );
     assert_eq!(manifest["observation_target_s"], 12 * 60);
 }
