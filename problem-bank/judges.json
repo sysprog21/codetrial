@@ -13759,6 +13759,89 @@
           ]
         ],
         "expected": 4
+      },
+      {
+        "label": "high offer between two modest ones",
+        "input": [
+          [
+            2,
+            3,
+            2
+          ]
+        ],
+        "expected": 4
+      },
+      {
+        "label": "both ends lose to the middle",
+        "input": [
+          [
+            1,
+            5,
+            1
+          ]
+        ],
+        "expected": 5
+      },
+      {
+        "label": "last site pays the most",
+        "input": [
+          [
+            2,
+            3,
+            2,
+            5
+          ]
+        ],
+        "expected": 8
+      },
+      {
+        "label": "zero offer between two sites",
+        "input": [
+          [
+            2,
+            0,
+            3
+          ]
+        ],
+        "expected": 5
+      },
+      {
+        "label": "two adjacent sites",
+        "input": [
+          [
+            2,
+            3
+          ]
+        ],
+        "expected": 3
+      },
+      {
+        "label": "large offer after five sites",
+        "input": [
+          [
+            1,
+            1,
+            1,
+            1,
+            1,
+            9
+          ]
+        ],
+        "expected": 11
+      },
+      {
+        "label": "two empty sites before the last",
+        "input": [
+          [
+            2,
+            3,
+            2,
+            0,
+            0,
+            2
+          ]
+        ],
+        "expected": 6
       }
     ],
     "paramNames": [
