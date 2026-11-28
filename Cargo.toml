@@ -189,6 +189,9 @@ strip = "symbols"
 opt-level = 2
 debug-assertions = false
 overflow-checks = false
+# Reduce dependency build output on disk while retaining file and line
+# information in backtraces. Workspace packages keep full debug information.
+debug = "line-tables-only"
 
 # `cargo test` builds under the test profile, which does not inherit the package
 # override above, so the same line is needed here or the suite measures an
@@ -197,9 +200,11 @@ overflow-checks = false
 opt-level = 2
 debug-assertions = false
 overflow-checks = false
+# Reduce dependency build output on disk, as in the dev override above.
+debug = "line-tables-only"
 
-# Exempted from the two overrides above, which are about codec speed and have
-# nothing to say about a crate that only reads files. `rust-embed` splits on
+# Restore debug assertions for `rust-embed` to keep its asset-loading mode
+# consistent with workspace packages. `rust-embed` splits on
 # `debug_assertions` to decide whether assets live in `.rodata` or are read from
 # disk, and it splits twice: once in the derived code, which sees this crate's
 # setting, and once in the library, which sees its own. Turning it off for
