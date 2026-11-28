@@ -86,7 +86,30 @@ def next_id(previous, tree):
 
 
 def commit(sha):
-    headers, message = git("cat-file", "commit", sha).split(b"\n\n", 1)
+    return parsed(git("cat-file", "commit", sha))
+
+
+def commits(shas):
+    """Each of `shas`, which name commits, as `commit` returns it, read by one
+    git process rather than one per commit: a push verifies the whole chain
+    from the anchor, so this grows with the history, not with the push."""
+    if not shas:
+        return {}
+    out = git("cat-file", "--batch", data=("\n".join(shas) + "\n").encode())
+    found, at = {}, 0
+    for sha in shas:
+        end = out.index(b"\n", at)
+        header = out[at:end].split()
+        if len(header) != 3 or header[0] != sha.encode() or header[1] != b"commit":
+            raise ValueError(f"{sha[:12]} is not a commit this repository holds")
+        size = int(header[2])
+        found[sha] = parsed(out[end + 1 : end + 1 + size])
+        at = end + 1 + size + 1
+    return found
+
+
+def parsed(raw):
+    headers, message = raw.split(b"\n\n", 1)
     tree = next(
         line[5:].decode() for line in headers.splitlines() if line.startswith(b"tree ")
     )
@@ -136,6 +159,9 @@ def exempt_pr(login, kind):
 
 
 def change_id(message):
+    # One interpret-trailers per commit, not a batched git log: the two stop
+    # reading at different places (interpret-trailers ends a message at a
+    # `---` line), and a Change-Id written after one must stay refused.
     raw = [
         line for line in message.splitlines() if line.lower().startswith(b"change-id:")
     ]
@@ -186,31 +212,57 @@ def merge_link(sha):
     return hashlib.sha256(("codetrial/merge:" + sha).encode()).hexdigest()[:40]
 
 
-def check_merge(tree, parents):
-    objects = Path(git("rev-parse", "--git-path", "objects").decode().strip()).resolve()
-    env = {
-        key: value for key, value in os.environ.items() if not key.startswith("GIT_")
-    }
-    env.update(
-        GIT_CONFIG_NOSYSTEM="1",
-        GIT_CONFIG_GLOBAL=os.devnull,
-        GIT_ATTR_NOSYSTEM="1",
-        GIT_NO_REPLACE_OBJECTS="1",
-        GIT_TERMINAL_PROMPT="0",
-    )
-    # The current index, attributes and local merge drivers must not affect
-    # historical integrations. Computed objects live only in this bare context.
-    with tempfile.TemporaryDirectory(prefix="codetrial-merge-") as directory:
+class MergeCheck:
+    """Whether an integration commit is the clean merge of its parents.
+
+    The current index, attributes and local merge drivers must not affect
+    historical integrations, so each merge is recomputed in a bare repository
+    of its own that borrows this one's objects. It is made on the first merge
+    of a history, and once: the trees a recomputation writes into it are
+    content-addressed and change no later merge's result.
+    """
+
+    def __enter__(self):
+        self.scratch = None
+        return self
+
+    def __exit__(self, *_):
+        if self.scratch is not None:
+            self.scratch.cleanup()
+
+    def prepare(self):
+        objects = Path(
+            git("rev-parse", "--git-path", "objects").decode().strip()
+        ).resolve()
+        self.env = {
+            key: value
+            for key, value in os.environ.items()
+            if not key.startswith("GIT_")
+        }
+        self.env.update(
+            GIT_CONFIG_NOSYSTEM="1",
+            GIT_CONFIG_GLOBAL=os.devnull,
+            GIT_ATTR_NOSYSTEM="1",
+            GIT_NO_REPLACE_OBJECTS="1",
+            GIT_TERMINAL_PROMPT="0",
+        )
+        self.scratch = tempfile.TemporaryDirectory(prefix="codetrial-merge-")
+        self.directory = self.scratch.name
         subprocess.run(
-            ["git", "init", "--bare", "--quiet", "--template=", directory],
-            env=env,
+            ["git", "init", "--bare", "--quiet", "--template=", self.directory],
+            env=self.env,
             check=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
-        (Path(directory) / "objects/info/alternates").write_text(
+        (Path(self.directory) / "objects/info/alternates").write_text(
             json.dumps(str(objects), ensure_ascii=False) + "\n"
         )
+
+    def __call__(self, tree, parents):
+        if self.scratch is None:
+            self.prepare()
+        directory, env = self.directory, self.env
         result = subprocess.run(
             [
                 "git",
@@ -227,11 +279,17 @@ def check_merge(tree, parents):
             stderr=subprocess.PIPE,
             env=env,
         )
-    if result.returncode or result.stdout.splitlines()[:1] != [tree.encode()]:
-        raise ValueError(
-            "Integration commits must be clean two-parent Git merges without extra edits "
-            "(Git 2.45 or newer required); resolve conflicts on the topic branch and rebase before merging"
-        )
+        if result.returncode or result.stdout.splitlines()[:1] != [tree.encode()]:
+            raise ValueError(
+                "Integration commits must be clean two-parent Git merges without extra edits "
+                "(Git 2.45 or newer required); resolve conflicts on the topic branch and rebase before merging"
+            )
+
+
+def check_merge(tree, parents):
+    """One integration commit's check, in a scratch repository of its own."""
+    with MergeCheck() as check:
+        check(tree, parents)
 
 
 def verify(tip="HEAD", anchor=None):
@@ -242,8 +300,8 @@ def verify(tip="HEAD", anchor=None):
     anchor = resolve(anchor) if anchor is not None else base(tip)
     if anchor is None:
         return
-    commits = history(anchor, tip)
-    if trusted and commits:
+    chain = history(anchor, tip)
+    if trusted and chain:
         policy = git("show", tip + ":" + POLICY, check=False).strip()
         # A legacy branch may predate installation; once introduced, the policy
         # must survive so the next CI run cannot adopt a different anchor.
@@ -255,26 +313,29 @@ def verify(tip="HEAD", anchor=None):
                 "policy changes or deletion require a coordinated maintainer migration"
             )
     links = {anchor: seed(anchor)}
-    for sha in commits:
-        headers, message, tree, parents = commit(sha)
-        if not parents or any(parent not in links for parent in parents):
-            raise ValueError(
-                "All topic branches must descend from the anchor; rebase first"
-            )
-        if len(parents) == 2:
-            check_merge(tree, parents)
-            links[sha] = merge_link(sha)
-        elif len(parents) == 1:
-            want = next_id(links[parents[0]], tree)
-            # Dependabot cannot run the hooks; its commits continue the chain
-            # without a trailer so that merging one needs no anchor migration.
-            if not bot(headers) and change_id(message) != want:
+    read = commits(chain)
+    with MergeCheck() as check:
+        for sha in chain:
+            headers, message, tree, parents = read[sha]
+            if not parents or any(parent not in links for parent in parents):
                 raise ValueError(
-                    f"Change-Id chain breaks at {sha[:12]}; run python3 scripts/hashchain.py rechain"
+                    "All topic branches must descend from the anchor; rebase first"
                 )
-            links[sha] = want
-        else:
-            raise ValueError("Only two-parent integration merges are supported")
+            if len(parents) == 2:
+                check(tree, parents)
+                links[sha] = merge_link(sha)
+            elif len(parents) == 1:
+                want = next_id(links[parents[0]], tree)
+                # Dependabot cannot run the hooks; its commits continue the
+                # chain without a trailer so that merging one needs no anchor
+                # migration.
+                if not bot(headers) and change_id(message) != want:
+                    raise ValueError(
+                        f"Change-Id chain breaks at {sha[:12]}; run python3 scripts/hashchain.py rechain"
+                    )
+                links[sha] = want
+            else:
+                raise ValueError("Only two-parent integration merges are supported")
 
 
 def link(sha, anchor):
