@@ -4,14 +4,23 @@
 # names, and print a receipt for every one so the report states what happened
 # instead of what was intended.
 #
-# Usage: apply-pr-actions.sh <sweep.json> [repo] [--hygiene]
+# Usage: apply-pr-actions.sh <sweep.json> [repo] [--hygiene] [--no-rebase]
 #        Prints one JSON object per action: {action, pr, result, why}, with
 #        result applied, already, skipped, confirm or failed. Exits 1 when any
 #        result is failed, 2 on bad arguments, 0 otherwise. Without --hygiene
 #        only approvals, rebase requests and the hides run; --hygiene (a bare
 #        sweep) adds hygiene.sh for every open PR, posting a non-empty body as a
 #        review and each comment it names as a comment, and a thanks on each
-#        pull request merged in the last three days that has none.
+#        pull request merged in the last three days that has none. --no-rebase
+#        is for a caller that leaves rebase requests to their owner (the PR
+#        sweep loop): neither `rebase` nor `hide` is touched, so no earlier
+#        request is hidden. Hygiene runs as it otherwise would.
+#
+# An author listed, one login per line, in <git common
+# dir>/codetrial-triage/quiet-authors (# starts a comment line) is never asked
+# to rebase: the result is skipped, and the earlier requests on that PR stay.
+# Hygiene leaves its ci_regression item, the same text, out of that author's
+# review and receipts it as skipped.
 #
 # A run no longer waiting for approval counts as already approved only when its
 # live status is queued or in_progress; an unread or finished run remains
@@ -32,7 +41,7 @@
 
 set -eu
 
-usage='usage: apply-pr-actions.sh <sweep.json> [repo] [--hygiene]'
+usage='usage: apply-pr-actions.sh <sweep.json> [repo] [--hygiene] [--no-rebase]'
 [ $# -ge 1 ] || {
     echo "$usage" >&2
     exit 2
@@ -40,10 +49,12 @@ usage='usage: apply-pr-actions.sh <sweep.json> [repo] [--hygiene]'
 sweep=$1
 repo=sysprog21/codetrial
 hygiene=false
+no_rebase=false
 shift
 for arg in "$@"; do
     case $arg in
         --hygiene) hygiene=true ;;
+        --no-rebase) no_rebase=true ;;
         -*)
             echo "apply-pr-actions.sh: $arg is not an option" >&2
             exit 2
@@ -76,6 +87,19 @@ here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../../.." && pwd)
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
+if $no_rebase; then
+    jq '.rebase = [] | .hide = []' "$sweep" > "$work/sweep.json"
+    sweep=$work/sweep.json
+fi
+
+# The authors never asked to rebase. The list is the maintainer's own and lives
+# in the git directory, never in the tree.
+: > "$work/quiet"
+if common=$(cd "$root" && cd "$(git rev-parse --git-common-dir 2> /dev/null)" 2> /dev/null && pwd) \
+    && [ -f "$common/codetrial-triage/quiet-authors" ]; then
+    sed 's/^[[:space:]]*//; s/[[:space:]]*$//; /^#/d; /^$/d' \
+        "$common/codetrial-triage/quiet-authors" > "$work/quiet"
+fi
 
 receipt()
 {
@@ -205,14 +229,14 @@ done > "$work/approve.out"
 # Rebase requests, then the earlier requests they supersede.
 : > "$work/posted"
 jq -r '.prs as $p | .rebase[] | . as $r
-    | "\($r.pr) \($r.reason) \(first($p[] | select(.number == $r.pr) | .head) // "")"' \
-    "$sweep" | while read -r pr reason want; do
-    if ! now=$(gh pr view "$pr" --repo "$repo" --json mergeable,headRefOid \
+    | "\($r.pr) \($r.reason) \(first($p[] | select(.number == $r.pr) | .head) // "-") \($r.author // "")"' \
+    "$sweep" | while read -r pr reason want author; do
+    if [ -n "$author" ] && grep -qixF -- "$author" "$work/quiet"; then
+        receipt rebase "$pr" skipped "$author is never asked to rebase"
+    elif ! now=$(gh pr view "$pr" --repo "$repo" --json mergeable,headRefOid \
         --jq '.mergeable + " " + .headRefOid'); then
         receipt rebase "$pr" failed "could not read the pull request"
-        continue
-    fi
-    if [ "${now#* }" != "$want" ]; then
+    elif [ "${now#* }" != "$want" ]; then
         receipt rebase "$pr" skipped "the head moved since the sweep"
     elif [ "$reason" = conflicts ] && [ "${now% *}" != CONFLICTING ]; then
         receipt rebase "$pr" skipped "GitHub no longer reports a conflict (${now% *})"
@@ -373,6 +397,15 @@ hygiene_reviews()
         if [ ! -f "$file" ]; then
             receipt hygiene "$pr" failed "hygiene.sh failed, so the PR is unchecked"
             continue
+        fi
+        author=$(jq -r --argjson n "$pr" \
+            'first(.prs[] | select(.number == $n) | .author) // ""' "$sweep")
+        if [ -n "$author" ] && grep -qixF -- "$author" "$work/quiet" \
+            && jq -e 'any(.items[]?; .key == "ci_regression")' "$file" > /dev/null; then
+            receipt hygiene_ci_regression "$pr" skipped "$author is never asked to rebase"
+            jq '.items |= map(select(.key != "ci_regression"))
+                | .body = ([.items[].text] | join("\n\n"))' "$file" > "$file.quiet"
+            mv "$file.quiet" "$file"
         fi
         jq -e '(.body | length > 0) or ((.comments // []) | length > 0)
             or ((.hide // []) | length > 0)' "$file" > /dev/null || continue
