@@ -307,8 +307,15 @@ stage takes no pointer events, so it can never swallow a click meant for the
 editor; the Hide avatar button and the captions re-enable them for themselves.
 Below 1200px wide, beside an editor panel too narrow for the avatar, or over an
 expanded Example drawing, the avatar and its button are hidden rather than
-allowed to cover code or the drawing, and the captions move to the bottom
-corner.
+allowed to cover code or the drawing. Captions use a compact card in the
+bottom corner, with the constrained expanded-drawing exception below.
+
+When an expanded drawing cannot leave a readable card beside it, the card
+occupies a separate grid row below the editor. The workspace stacks when the
+sidebar's current width and the editor's minimum width cannot fit side by side.
+The page may scroll vertically; the card is capped at `40dvh` and scrolls
+without removing captions or self-view. It stays outside the editor so ending
+and report inertness still works. Shrinking restores the original layout.
 
 The same measurement tells the editor what the stage covers, and the editor
 keeps the side that costs it less out of its scroll range: the width beside the
