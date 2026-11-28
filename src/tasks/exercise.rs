@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 
 use super::Phase;
 use super::{
-    EXPLAINERS, TaskError, bounded_text, default_number, default_value, identifier, invalid,
+    EXPLAINERS, TaskError, bounded_text, default_count, default_value, identifier, invalid,
 };
 
 /// One downloaded task, shared by every attempt at it.
@@ -328,7 +328,7 @@ impl TaskRecord {
                 understanding_checks: serde_json::from_value(default_value("understandingChecks"))
                     .expect("well-formed task default understanding checks"),
                 required_cases: Vec::new(),
-                max_hint_rungs: (default_number("maxHintRungs") as usize).min(hints.len()),
+                max_hint_rungs: (default_count("maxHintRungs")).min(hints.len()),
                 rubric_profile: "task-engagement-v1".to_owned(),
                 languages: default_languages(),
                 optimization: None,
@@ -482,9 +482,12 @@ fn compiled_harness_types(judge: &Value, cases: &[Value]) -> bool {
         return false;
     };
     judge["returnType"].is_string()
-        && judge
-            .get("outputParam")
-            .is_none_or(|index| index.as_u64().is_some_and(|index| (index as usize) < arity))
+        && judge.get("outputParam").is_none_or(|index| {
+            index
+                .as_u64()
+                .and_then(|index| usize::try_from(index).ok())
+                .is_some_and(|index| index < arity)
+        })
         && cases
             .iter()
             .all(|case| case["input"].as_array().map(Vec::len) == Some(arity))
@@ -507,10 +510,7 @@ fn validate_sidecar(
     if sidecar.prompt_version != 1 || sidecar.rubric_profile != "task-engagement-v1" {
         return Err(invalid("unknown task version or rubric"));
     }
-    if !bounded_text(
-        &sidecar.interaction_prompt,
-        default_number("promptBytes") as usize,
-    ) {
+    if !bounded_text(&sidecar.interaction_prompt, default_count("promptBytes")) {
         return Err(invalid("invalid instructor prompt size"));
     }
     interpolate(
@@ -522,11 +522,11 @@ fn validate_sidecar(
             ("phase", ""),
         ]),
     )?;
-    if sidecar.max_hint_rungs > hints.len().min(default_number("maxHintRungs") as usize) {
+    if sidecar.max_hint_rungs > hints.len().min(default_count("maxHintRungs")) {
         return Err(invalid("hint maximum exceeds ladder"));
     }
     if sidecar.completion_targets.len() > 8
-        || sidecar.understanding_checks.len() != default_number("coreChecks") as usize
+        || sidecar.understanding_checks.len() != default_count("coreChecks")
     {
         return Err(invalid("invalid target or check count"));
     }

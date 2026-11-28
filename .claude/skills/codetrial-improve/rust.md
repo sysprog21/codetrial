@@ -38,6 +38,20 @@ fuller:
 - `indexing_slicing`, `as_conversions`, `print_stderr`: the server's logs are
   `eprintln!` and its hot paths index; a blanket ban would be waived everywhere
   and mean nothing.
+- `map_err_ignore` and `cast_possible_truncation`: what each still matches is
+  deliberate. About ninety `map_err(|_| ..)` reduce an error to a client's
+  refusal code, a timeout or an integer overflow that carries nothing more; the
+  casts left are saturating `f64` casts, which have no `TryFrom`, and small
+  constants. Where a dropped error did say something (a stored JSON that does
+  not parse, a directory that is not private) it is carried now: carry the
+  cause in new code, and size a task default with `tasks::default_count`, not
+  an `as usize`.
+- `empty_structs_with_brackets`, `case_sensitive_file_extension_comparisons`,
+  `verbose_bit_mask` and `manual_assert`: each matches a form that means what
+  it says. `struct Nothing {}` deserializes a body of `{}` where a unit struct
+  wants `null`; the grader picks `.elf` and `.scala` files by their exact
+  suffix; `key & 7 == 0` reads a protobuf wire type; and `if true { panic!() }`
+  gives a closure that always panics its `Ok` type.
 
 ## Suppressing a lint
 

@@ -11,7 +11,7 @@ use ring::{aead, pbkdf2};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::{TaskError, TaskRecord, default_number, invalid};
+use super::{TaskError, TaskRecord, default_count, default_number, invalid};
 
 /// Bytes of a set's manifest.
 const MAX_MANIFEST_BYTES: usize = 4096;
@@ -187,15 +187,17 @@ fn compact(value: &Value) -> Vec<u8> {
 
 /// Six ASCII digits, leading zeros kept.
 pub fn valid_pin(pin: &str) -> bool {
-    pin.len() == default_number("pinDigits") as usize && pin.bytes().all(|b| b.is_ascii_digit())
+    pin.len() == default_count("pinDigits") && pin.bytes().all(|b| b.is_ascii_digit())
 }
 
 /// PBKDF2-HMAC-SHA256 of the PIN, salted with the set, version and the
 /// manifest's random salt. The iteration count belongs to the format, never
 /// to the manifest, so a website cannot set how much work this does.
 fn derive_key(pin: &str, set_id: &str, version: u32, salt: &str) -> [u8; 32] {
-    let iterations =
-        NonZeroU32::new(default_number("kdfIterations") as u32).expect("positive KDF iterations");
+    let iterations = NonZeroU32::new(
+        u32::try_from(default_number("kdfIterations")).expect("KDF iterations fit in u32"),
+    )
+    .expect("positive KDF iterations");
     let salt = compact(&serde_json::json!([
         "codetrial-task-kdf-v1",
         set_id,
@@ -260,7 +262,7 @@ pub fn open_package(
         || manifest.set_version != version
         || salt_bytes.len() != 16
         || manifest.ciphertext_bytes != ciphertext.len()
-        || !(28..=default_number("setBytes") as usize + 28).contains(&ciphertext.len())
+        || !(28..=default_count("setBytes") + 28).contains(&ciphertext.len())
         || manifest.ciphertext_sha256 != crate::sha256_hex(&[&ciphertext])
     {
         return Err(invalid("invalid manifest or ciphertext").into());
@@ -328,7 +330,7 @@ pub(crate) fn decode(set_id: &str, version: u32, plaintext: &[u8]) -> Result<Loa
         };
         let encoded =
             serde_json::to_vec(&row).map_err(|_| invalid("plaintext task is not encodable"))?;
-        if encoded.len() > default_number("taskBytes") as usize {
+        if encoded.len() > default_count("taskBytes") {
             return Err(invalid("plaintext task exceeds limit"));
         }
         if records
@@ -535,11 +537,7 @@ pub async fn download(assignment: &Assignment) -> Result<Download, TaskError> {
     // Independent until both have arrived, so fetched together.
     let ((manifest, site_time), (ciphertext, _)) = tokio::try_join!(
         fetch(&client, url("manifest.json")?, MAX_MANIFEST_BYTES),
-        fetch(
-            &client,
-            url("tasks.enc")?,
-            default_number("setBytes") as usize + 28,
-        ),
+        fetch(&client, url("tasks.enc")?, default_count("setBytes") + 28),
     )?;
     Ok(Download {
         manifest,

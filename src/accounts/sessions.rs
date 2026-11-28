@@ -16,7 +16,7 @@ pub(crate) fn create_session(
 ) -> rusqlite::Result<String> {
     accounts.transaction(|transaction| {
         let now = crate::current_epoch_seconds_i64();
-        let session_id = random_token(32).map_err(|_| rusqlite::Error::InvalidQuery)?;
+        let session_id = random_token(32).map_err(crate::accounts::unwritable)?;
 
         // A positive id came from GitHub and names a returning person, so it
         // updates the row it already owns. A negative one is a freshly minted

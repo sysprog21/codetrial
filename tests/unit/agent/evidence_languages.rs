@@ -142,3 +142,30 @@ fn a_run_without_a_language_keeps_comparing_to_the_last() {
     );
     assert!(ledger.tests.regression);
 }
+
+#[test]
+fn counts_past_the_stored_width_saturate_and_passed_never_exceeds_total() {
+    let mut ledger = EvidenceLedger::default();
+    let huge = u64::from(u32::MAX) + 7;
+    ledger.record_test(
+        Some(10),
+        100,
+        &serde_json::json!({ "language": "python", "passed": huge, "total": huge }),
+    );
+    assert_eq!(
+        (ledger.tests.passed, ledger.tests.total),
+        (u32::MAX, u32::MAX)
+    );
+    ledger.record_test(
+        Some(20),
+        200,
+        &serde_json::json!({ "language": "python", "passed": huge, "total": 5 }),
+    );
+    assert_eq!((ledger.tests.passed, ledger.tests.total), (5, 5));
+    ledger.record_test(
+        Some(30),
+        300,
+        &serde_json::json!({ "language": "python", "passed": 9, "total": 5 }),
+    );
+    assert_eq!((ledger.tests.passed, ledger.tests.failed), (5, 0));
+}

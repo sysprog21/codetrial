@@ -354,3 +354,32 @@ fn an_account_cannot_keep_unbounded_invitations_waiting() {
         .unwrap()
         .expect("another account is unaffected");
 }
+
+#[test]
+fn a_stored_session_that_does_not_parse_says_so() {
+    let a = accounts();
+    let created = create(&a, 1, easy(), &crate::config::PeerConfig::default(), 100)
+        .unwrap()
+        .unwrap();
+    let id = created["sessionId"].as_str().unwrap().to_owned();
+    let error = a
+        .with(|c| {
+            c.execute(
+                "UPDATE peer_sessions SET state_json='{not json' WHERE id=?1",
+                [&id],
+            )?;
+            load(c, &id).map(|_| ())
+        })
+        .unwrap_err()
+        .to_string();
+
+    // rusqlite's InvalidQuery displays as "Query is not read-only", which sends
+    // a reader looking at SQL; the error is the JSON's.
+    assert!(error.contains("key must be a string"), "{error}");
+}
+
+#[test]
+fn a_round_index_past_the_stored_width_names_the_overflow() {
+    let error = round_idx(300).unwrap_err().to_string();
+    assert!(error.contains("too large"), "{error}");
+}

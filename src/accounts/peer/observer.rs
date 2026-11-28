@@ -58,7 +58,7 @@ pub(crate) fn append(
         if usize::try_from(bytes).unwrap_or(usize::MAX).saturating_add(segment.text.len())>MAX_TRANSCRIPT_BYTES {
             return Err(rusqlite::Error::InvalidQuery);
         }
-        c.execute("INSERT INTO peer_transcripts(session_id,seq,slot,round_idx,started_at,ended_at,text) VALUES(?1,?2,?3,?4,?5,?6,?7)",params![id,seq,u8::try_from(segment.slot).map_err(|_|rusqlite::Error::InvalidQuery)?,segment.round_index.and_then(|i|u8::try_from(i).ok()),segment.started_at,segment.ended_at,segment.text])?;
+        c.execute("INSERT INTO peer_transcripts(session_id,seq,slot,round_idx,started_at,ended_at,text) VALUES(?1,?2,?3,?4,?5,?6,?7)",params![id,seq,u8::try_from(segment.slot).map_err(crate::accounts::unwritable)?,segment.round_index.and_then(|i|u8::try_from(i).ok()),segment.started_at,segment.ended_at,segment.text])?;
         Ok(())
     })
 }
@@ -146,7 +146,7 @@ pub(crate) fn view_at(
             let rows=c.prepare("SELECT slot,round_idx,started_at,ended_at,text FROM peer_transcripts WHERE session_id=?1 ORDER BY started_at,seq")?.query_map([id],|r|Ok(Segment {slot:usize::from(r.get::<_,u8>(0)?),round_index:r.get::<_,Option<u8>>(1)?.map(usize::from),started_at:r.get(2)?,ended_at:r.get(3)?,text:r.get(4)?}))?.collect::<rusqlite::Result<Vec<_>>>()?;
             return Ok(Ok(json!({"status":status,"segments":rows,"error":error})));
         }
-        let advice:Value=serde_json::from_str(&advice).map_err(|_|rusqlite::Error::InvalidQuery)?;
+        let advice:Value=serde_json::from_str(&advice).map_err(crate::accounts::undecodable)?;
         let visible=if s.closed(){advice.as_array().into_iter().flatten().filter(|item|item["slot"].as_u64()==u64::try_from(slot).ok()).cloned().collect::<Vec<_>>()}else{vec![]};
         Ok(Ok(json!({"status":status,"advice":visible,"error":error})))
     })

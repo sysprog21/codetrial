@@ -31,8 +31,7 @@ fn availability(c: &Connection, id: &str) -> rusqlite::Result<Option<Availabilit
                 id: row.get(0)?,
                 user: row.get(1)?,
                 status: row.get(2)?,
-                settings: serde_json::from_str(&settings)
-                    .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                settings: serde_json::from_str(&settings).map_err(crate::accounts::undecodable)?,
                 provider_id: row.get(4)?,
                 room: row.get(5)?,
                 identity: row.get(6)?,
@@ -335,7 +334,7 @@ fn request_view(c: &Connection, id: &str, user: i64) -> rusqlite::Result<Option<
         Ok(json!({
             "requestId":row.get::<_,String>(0)?,
             "status":row.get::<_,String>(3)?,
-            "settings":serde_json::from_str::<Value>(&settings).map_err(|_|rusqlite::Error::InvalidQuery)?,
+            "settings":serde_json::from_str::<Value>(&settings).map_err(crate::accounts::undecodable)?,
             "confirmedByYou":if from==user{from_confirmed.is_some()}else{to_confirmed.is_some()},
             "confirmedByPartner":if to==user{from_confirmed.is_some()}else{to_confirmed.is_some()},
             "sessionId":row.get::<_,Option<String>>(7)?,
@@ -401,7 +400,7 @@ pub(crate) fn confirm(
         )?;
         if both {
             let settings: Settings = serde_json::from_value(view["settings"].clone())
-                .map_err(|_| rusqlite::Error::InvalidQuery)?;
+                .map_err(crate::accounts::undecodable)?;
             let created = match create_on(c, to, settings, config, now)? {
                 Ok(created) => created,
                 Err(code) => return Ok(Err(code)),

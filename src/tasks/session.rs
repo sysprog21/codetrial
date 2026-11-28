@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 mod evidence;
 
 use super::access::PinnedTask;
-use super::{MAX_CODE_BYTES, Phase, TaskError, default_number, invalid, opaque_id};
+use super::{MAX_CODE_BYTES, Phase, TaskError, default_count, default_number, invalid, opaque_id};
 
 /// Bytes of one captured learner turn.
 pub const MAX_TURN_BYTES: usize = 8192;
@@ -588,7 +588,7 @@ impl TaskSession {
         if self.revisions.contains_key(&revision.id) {
             return true;
         }
-        let limit = default_number("revisionSnapshots") as usize
+        let limit = default_count("revisionSnapshots")
             - usize::from(self.final_revision_id.is_none() && !final_slot);
         if self.revisions.len() >= limit {
             // A revision a run was made on is evidence, and the ids sort at
@@ -694,7 +694,7 @@ impl TaskSession {
         }
         self.requests.insert(message.request_id.clone());
         self.pending_run_revisions.remove(&message.revision_id);
-        if self.runs.len() >= default_number("publicRunSummaries") as usize {
+        if self.runs.len() >= default_count("publicRunSummaries") {
             self.mark_overflow();
             return Ok(false);
         }
@@ -877,7 +877,7 @@ impl TaskSession {
     /// it since the starter and since the platform last asked, and the attempt
     /// has looks left. Otherwise the nudge only invites them to explain.
     fn code_review_due(&self) -> bool {
-        self.code_review_nudges < default_number("codeReviewNudges") as usize
+        self.code_review_nudges < default_count("codeReviewNudges")
             && self.revision_hashes.get("initial") != Some(&self.current.content_hash)
             && self.reviewed_hash.as_ref() != Some(&self.current.content_hash)
     }
@@ -1013,7 +1013,7 @@ impl TaskSession {
         // A defense offers no follow-up, and its review is told so.
         if !self.phase.is_active()
             || self.task.preparation.defense.is_some()
-            || self.targeted_followups >= default_number("extraChecks") as usize
+            || self.targeted_followups >= default_count("extraChecks")
             || !self.checks.contains_key(check_id)
         {
             return Err(invalid("targeted follow-up unavailable"));
@@ -1115,7 +1115,7 @@ impl TaskSession {
             return Err(invalid("check references unknown revision"));
         }
         if !self.evidence_revisions.contains(revision_id)
-            && self.evidence_revisions.len() >= default_number("evidenceRevisions") as usize
+            && self.evidence_revisions.len() >= default_count("evidenceRevisions")
         {
             self.mark_overflow();
             return Err(invalid("evidence revision capacity reached"));
@@ -1162,8 +1162,7 @@ impl TaskSession {
     }
 
     pub fn next_wrap_up_check(&mut self) -> Option<String> {
-        if self.phase != Phase::WrapUp
-            || self.wrap_up_checks.len() >= default_number("wrapUpChecks") as usize
+        if self.phase != Phase::WrapUp || self.wrap_up_checks.len() >= default_count("wrapUpChecks")
         {
             return None;
         }

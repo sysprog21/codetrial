@@ -92,3 +92,31 @@ async fn a_rate_limit_on_a_peer_call_leaves_the_report_keys_usable() {
         .expect("a peer rate limit does not cool the report keys");
     server.abort();
 }
+
+#[cfg(unix)]
+#[test]
+fn an_unusable_audio_directory_says_what_is_wrong_with_it() {
+    use std::os::unix::fs::PermissionsExt;
+
+    // A name of its own, created exclusively: create_dir fails on anything
+    // already there, a stale directory or a symlink included, so the mode
+    // change below can only reach the directory this test made.
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!(
+        "codetrial-peer-audio-{}-{nanos}",
+        std::process::id()
+    ));
+    std::fs::create_dir(&dir).unwrap();
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let error = crate::gemini::load_peer_observer(&std::collections::BTreeMap::from([
+        ("GOOGLE_API_KEY".into(), "observer-test-key".into()),
+        ("CODETRIAL_PEER_AUDIO_DIR".into(), dir.display().to_string()),
+    ]))
+    .unwrap_err();
+    std::fs::remove_dir(&dir).unwrap();
+    assert!(error.starts_with("CODETRIAL_PEER_AUDIO_DIR"), "{error}");
+    assert!(error.contains("0700"), "{error}");
+}
