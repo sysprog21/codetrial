@@ -459,6 +459,57 @@ test("generated harnesses emit JSON for control characters and non-finite double
   );
 });
 
+test("is-subsequence cases reject order-blind shortcuts", () => {
+  const counts = (text) => {
+    const seen = new Map();
+    for (const c of text) seen.set(c, (seen.get(c) ?? 0) + 1);
+    return seen;
+  };
+  const enough = (s, t) => {
+    const have = counts(t);
+    return [...counts(s)].every(([c, n]) => (have.get(c) ?? 0) >= n);
+  };
+  for (const [name, answer] of [
+    ["letter counts", enough],
+    [
+      "each letter searched from the start",
+      (s, t) => {
+        let at = -1;
+        for (const c of s) {
+          const next = t.indexOf(c);
+          if (next <= at) return false;
+          at = next;
+        }
+        return true;
+      },
+    ],
+    [
+      "letter counts with only the first and last letters in order",
+      (s, t) =>
+        enough(s, t) &&
+        (s.length < 2 || t.indexOf(s[0]) < t.lastIndexOf(s[s.length - 1])),
+    ],
+    [
+      "a match the search does not step past",
+      (s, t) => {
+        let at = 0;
+        for (const c of s) {
+          at = t.indexOf(c, at);
+          if (at < 0) return false;
+        }
+        return enough(s, t);
+      },
+    ],
+  ]) {
+    assert.ok(
+      judges["is-subsequence"].cases.some(
+        ({ input: [s, t], expected }) => answer(s, t) !== expected,
+      ),
+      `the built-in cases must reject the ${name} shortcut`,
+    );
+  }
+});
+
 test("valid-anagram cases reject equal-length character-digest shortcuts", () => {
   const codes = (s) => [...s].map((c) => c.charCodeAt(0));
   const add = (values) => values.reduce((a, b) => a + b, 0);

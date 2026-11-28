@@ -2618,6 +2618,30 @@
           "abcde"
         ],
         "expected": true
+      },
+      {
+        "label": "reversed character order",
+        "input": [
+          "ab",
+          "ba"
+        ],
+        "expected": false
+      },
+      {
+        "label": "same repeated letter in both",
+        "input": [
+          "aa",
+          "aa"
+        ],
+        "expected": true
+      },
+      {
+        "label": "second copy comes too late",
+        "input": [
+          "aab",
+          "aba"
+        ],
+        "expected": false
       }
     ],
     "paramNames": [
