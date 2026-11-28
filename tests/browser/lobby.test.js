@@ -7488,7 +7488,7 @@ async function assertRecordingClickStaysInLobby(page, link) {
 }
 
 lobbyTest(
-  "recording history waits for account and device report deletion",
+  "recording history and sign-out wait for account and device report deletion",
   async (page) => {
     session.recordingAvailable = true;
     const report = savedAttempt(EASY[0]);
@@ -7555,6 +7555,7 @@ lobbyTest(
       ]);
 
       assert.equal(await link.getAttribute("inert"), "");
+      assert.equal(await page.locator("#logout").isDisabled(), true);
       assert.ok(
         (await opacity()) < enabledOpacity,
         "the pending link is visibly dimmed",
@@ -7578,6 +7579,7 @@ lobbyTest(
       .getByText("Saved reports and progress were deleted.")
       .waitFor();
     assert.deepEqual(await deviceCopies(), [[], []]);
+    assert.equal(await page.locator("#logout").isEnabled(), true);
     assert.equal(await isFocused(status), true);
     await page.getByRole("link", { name: "Your recordings" }).click();
     await page.waitForURL(`${base}/replay.html`);
@@ -9533,6 +9535,8 @@ async function stallTimedRequest(
           );
         }
         return new Promise((resolve, reject) => {
+          window.stalledRequest.respond = (data) =>
+            resolve(Response.json(data));
           onAbort(reject);
         });
       };
@@ -9558,6 +9562,270 @@ async function expireStalledRequest(page) {
     await page.evaluate(() => window.stalledRequest.aborted),
     true,
     "the pending request did not observe the timeout",
+  );
+}
+
+lobbyTest(
+  "a stalled sign-out restores lobby controls and can be retried",
+  async (page) => {
+    session.recordingAvailable = true;
+    await stallTimedRequest(page, { url: "/api/logout" });
+    await page.route("**/api/logout", async (route) => {
+      assert.equal(route.request().method(), "POST");
+      session = { signedIn: false };
+      await route.fulfill({ json: { ok: true } });
+    });
+    reports = [savedAttempt(EASY[0])];
+    await lobby(page);
+    const release = holdHistory();
+    try {
+      await restore(page);
+      assert.equal(await page.locator("#start").isDisabled(), true);
+      assert.equal(await page.locator("#logout").isEnabled(), true);
+    } finally {
+      release();
+    }
+    await awaitReady(page);
+    const controls = ["#logout", "#start", "#delete-reports"];
+    for (const selector of controls)
+      assert.equal(await page.locator(selector).isEnabled(), true, selector);
+
+    const recordings = page.locator("#recording-history");
+    const logout = page.locator("#logout");
+    await logout.focus();
+    await page.keyboard.press("Enter");
+    assert.equal(
+      await page.locator("#account-status").textContent(),
+      "Signing out...",
+    );
+    for (const selector of controls)
+      assert.equal(await page.locator(selector).isDisabled(), true, selector);
+    assert.equal(await recordings.isVisible(), true);
+    assert.equal(await recordings.evaluate((link) => link.inert), true);
+    // Chromium can retain focus on a disabled button until it blurs.
+    await logout.blur();
+    assert.equal(
+      await page.evaluate(() => document.activeElement === document.body),
+      true,
+    );
+    await expireStalledRequest(page);
+    await page.waitForFunction(() =>
+      document
+        .querySelector("#account-status")
+        .textContent.includes("Could not confirm sign-out"),
+    );
+    for (const selector of controls)
+      assert.equal(await page.locator(selector).isEnabled(), true, selector);
+    assert.equal(await recordings.isVisible(), true);
+    assert.equal(await recordings.evaluate((link) => link.inert), false);
+    assert.equal(
+      await page.evaluate(() => document.activeElement.id),
+      "logout",
+    );
+
+    const reloaded = page.waitForEvent("domcontentloaded");
+    await page.click("#logout");
+    await reloaded;
+    await awaitReady(page);
+    assert.equal(
+      await page.locator("#account-status").textContent(),
+      "Signed out",
+    );
+    assert.equal(await page.locator("#logout").isHidden(), true);
+  },
+);
+
+lobbyTest(
+  "a bad gateway during sign-out keeps the lobby open for retry",
+  async (page) => {
+    await page.route("**/api/logout", (route) =>
+      route.fulfill({ status: 502, body: "Bad Gateway" }),
+    );
+    reports = [savedAttempt(EASY[0])];
+    await lobby(page);
+    await awaitReady(page);
+    await page.click("#logout");
+    await page.waitForFunction(() =>
+      document
+        .querySelector("#account-status")
+        .textContent.includes("Could not confirm sign-out"),
+    );
+    for (const selector of ["#logout", "#start", "#delete-reports"])
+      assert.equal(await page.locator(selector).isEnabled(), true, selector);
+
+    await page.unroute("**/api/logout");
+    await page.route("**/api/logout", async (route) => {
+      session = { signedIn: false };
+      await route.fulfill({ json: { ok: true } });
+    });
+    const reloaded = page.waitForEvent("domcontentloaded");
+    await page.click("#logout");
+    await reloaded;
+    await awaitReady(page);
+    assert.equal(await page.locator("#logout").isHidden(), true);
+  },
+);
+
+lobbyTest(
+  "a signed-in recheck releases sign-out before saved reports arrive",
+  async (page) => {
+    reports = [savedAttempt(EASY[0])];
+    await stallTimedRequest(page, { url: "/api/reports", after: 1 });
+    await page.route("**/api/logout", (route) =>
+      route.fulfill({ status: 503 }),
+    );
+    await lobby(page);
+    await awaitReady(page);
+    assert.equal(await page.locator("#delete-reports").isEnabled(), true);
+    const logout = page.locator("#logout");
+    const status = page.locator("#account-status");
+    const retryMessage = "Could not confirm sign-out. Try signing out again.";
+    await logout.click();
+    await page.waitForFunction(() => window.stalledRequest !== undefined);
+    await status.getByText(retryMessage, { exact: true }).waitFor();
+    assert.equal(await logout.isEnabled(), true);
+    assert.equal(await page.locator("#start").isDisabled(), true);
+    assert.equal(await page.locator("#delete-reports").isDisabled(), true);
+
+    let releaseLogout;
+    const held = new Promise((resolve) => (releaseLogout = resolve));
+    await page.route("**/api/logout", async (route) => {
+      await held;
+      await route.fulfill({ status: 503 });
+    });
+    try {
+      const retry = page.waitForRequest("**/api/logout");
+      await logout.click();
+      await retry;
+      const sessionReads = () =>
+        page.evaluate(
+          () =>
+            window.lobbyRequests.filter(({ path }) => path === "/api/session")
+              .length,
+        );
+      const beforeRestore = await sessionReads();
+      await restore(page);
+      assert.equal(await sessionReads(), beforeRestore);
+      await expireStalledRequest(page);
+      assert.equal(await status.textContent(), "Signing out...");
+      assert.equal(await logout.isDisabled(), true);
+    } finally {
+      releaseLogout();
+    }
+    await status.getByText(retryMessage, { exact: true }).waitFor();
+    await awaitReady(page);
+  },
+);
+
+for (const { freshSessionFails, storageBlocked } of [
+  { freshSessionFails: false, storageBlocked: false },
+  { freshSessionFails: true, storageBlocked: false },
+  { freshSessionFails: true, storageBlocked: true },
+]) {
+  lobbyTest(
+    freshSessionFails
+      ? `a failed session recheck after sign-out offers account retry with storage ${storageBlocked ? "blocked" : "available"}`
+      : "a session recheck after sign-out restores the required login controls",
+    async (page) => {
+      if (storageBlocked) await blockSessionStorage(page);
+      await stallTimedRequest(page, { url: "/api/session", after: 1 });
+      await page.addInitScript((entry) => {
+        localStorage.setItem("codetrial_history", JSON.stringify([entry]));
+      }, savedAttempt(EASY[0]).payload);
+      await lobby(page);
+      await awaitReady(page);
+
+      let releaseLogout;
+      const logoutResponse = new Promise(
+        (resolve) => (releaseLogout = resolve),
+      );
+      await page.route("**/api/logout", async (route) => {
+        await logoutResponse;
+        await route.fulfill({ status: 503 });
+      });
+      const signedOut = {
+        signedIn: false,
+        loginRequired: true,
+        guestModeAvailable: false,
+      };
+      let releaseSession;
+      const sessionResponse = new Promise(
+        (resolve) => (releaseSession = resolve),
+      );
+      await page.route("**/api/session", async (route) => {
+        await sessionResponse;
+        await route.fulfill(
+          freshSessionFails ? { status: 503 } : { json: signedOut },
+        );
+      });
+
+      await restore(page);
+      await page.waitForFunction(() => window.stalledRequest !== undefined);
+      try {
+        await page.click("#logout");
+        if (freshSessionFails) await expireStalledRequest(page);
+        else
+          await page.evaluate((session) => {
+            window.stalledRequest.respond(session);
+          }, signedOut);
+        assert.equal(await page.locator("#login-link").isHidden(), true);
+        assert.equal(
+          await page.locator("#account-status").textContent(),
+          "Signing out...",
+        );
+        assert.equal(
+          await page.locator("#start").textContent(),
+          "Start interview",
+        );
+        assert.doesNotMatch(
+          await page.locator("#history").textContent(),
+          /saved on this device/,
+        );
+        const freshRead = page.waitForRequest("**/api/session");
+        releaseLogout();
+        await freshRead;
+        assert.equal(await page.locator("#start").isDisabled(), true);
+        assert.equal(await page.locator("#logout").isDisabled(), true);
+        assert.equal(
+          await page.locator("#account-status").textContent(),
+          "Signing out...",
+        );
+      } finally {
+        releaseLogout();
+        releaseSession();
+      }
+
+      const logout = page.locator("#logout");
+      const login = page.locator("#login-link");
+      await login.waitFor();
+      assert.equal(await logout.isHidden(), true);
+      if (freshSessionFails) {
+        assert.equal(await login.textContent(), "Retry account check");
+        assert.equal(await page.locator("#github-login").isHidden(), true);
+        assert.equal(await page.locator("#start").isDisabled(), true);
+        assert.equal(await page.locator("#delete-reports").isDisabled(), true);
+        await page.unroute("**/api/session");
+        await login.click();
+        await awaitReady(page);
+        assert.equal(await logout.isVisible(), true);
+      } else {
+        await awaitReady(page);
+        assert.equal(await login.textContent(), "Use GitHub");
+        assert.equal(await page.locator("#github-login").isVisible(), true);
+        assert.equal(
+          await page.locator("#start").textContent(),
+          "Use GitHub to start",
+        );
+        assert.equal(
+          await page.locator("#account-status").textContent(),
+          "Enter your GitHub username to start.",
+        );
+        assert.match(
+          await page.locator("#history").textContent(),
+          /saved on this device/,
+        );
+      }
+    },
   );
 }
 
@@ -14302,7 +14570,7 @@ lobbyTest(
 
 for (const outcome of ["success", "failure"]) {
   lobbyTest(
-    `recording history waits for sign-out and a fresh session after ${outcome}`,
+    `recording history follows lobby recovery after sign-out ${outcome}`,
     async (page) => {
       session.recordingAvailable = true;
       reports = pagedEntries("recorded", 1, () => ({}));
@@ -14358,29 +14626,33 @@ for (const outcome of ["success", "failure"]) {
         await page.keyboard.press("Tab");
         assert.equal(await isFocused(page.locator("#progress-problem")), true);
 
-        // A restore may observe the server-side logout before the POST returns.
+        // A restore must wait for the in-flight sign-out to settle.
         if (outcome === "success") session = { signedIn: false };
-        await checkPendingSessionRestore(page, async () => {
-          assert.equal(await link.isVisible(), true);
-          assert.equal(await link.getAttribute("inert"), "");
-          assert.equal(await page.locator("#delete-reports").isVisible(), true);
-        });
+        await restore(page);
+        assert.equal(await link.isVisible(), true);
+        assert.equal(await link.getAttribute("inert"), "");
+        assert.equal(await page.locator("#delete-reports").isVisible(), true);
         if (outcome === "success") {
-          const login = page.getByRole("button", { name: "Use GitHub" });
-          await login.waitFor();
-          assert.equal(await login.isDisabled(), true);
-          await page.locator("#github-login").fill("candidate");
-          await page.locator("#github-login").press("Enter");
+          assert.equal(await page.locator("#login-link").isHidden(), true);
+          assert.equal(
+            await page.locator("#account-status").textContent(),
+            "Signing out...",
+          );
+          holdSession = sessionHeld;
+          const reloaded = page.waitForEvent("domcontentloaded");
+          releaseLogout();
+          await reloaded;
+          assert.equal(await link.isHidden(), true);
         } else {
           await link.waitFor();
           assert.equal(await link.getAttribute("inert"), "");
+          releaseLogout();
+          await page.waitForFunction(() =>
+            document
+              .querySelector("#account-status")
+              .textContent.includes("Could not confirm sign-out"),
+          );
         }
-
-        holdSession = sessionHeld;
-        const reloaded = page.waitForEvent("domcontentloaded");
-        releaseLogout();
-        await reloaded;
-        assert.equal(await link.isHidden(), true);
       } finally {
         releaseLogout();
         releaseSession();

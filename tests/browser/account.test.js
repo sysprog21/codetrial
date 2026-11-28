@@ -59,7 +59,7 @@ test("lobby exposes signed in and signed out account hooks", () => {
   assert.doesNotMatch(script, /window\.location\.href = "\/api\/login"/);
   assert.match(script, /fetchJson\("\/api\/session"\)/);
   assert.match(script, /fetchJson\("\/api\/reports"\)/);
-  assert.match(script, /fetch\("\/api\/logout", \{ method: "POST" \}\)/);
+  assert.match(script, /fetch\("\/api\/logout", \{\s*method: "POST"/);
   assert.match(script, /readDeviceHistory\(\)/);
   assert.match(script, /clearReportHistory\(\{ account: accountHistory \}\)/);
   assert.match(

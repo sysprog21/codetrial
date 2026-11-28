@@ -133,7 +133,7 @@ let loginPending = false;
 let logoutPending = false;
 // Successful and uncertain POSTs need an account check before another login.
 // Null means no check is owed; otherwise this is "recorded" or "unknown", or
-// "unchecked" for a session check that failed where storage is blocked, which
+// "unchecked" for a failed session check that must be retried, which
 // holds Start and is retried the same way but has no POST behind it.
 let loginResult = null;
 // This tab's session store, or null where site data is blocked. The block lifts
@@ -1532,7 +1532,7 @@ function syncLobbyControls() {
     !historyReady || starting || accountBusy || deletingReports;
   nodes.siblingSuggestionPick.disabled = nodes.sequelSuggestionPick.disabled;
   syncPresetControls();
-  nodes.logout.disabled = logoutPending;
+  nodes.logout.disabled = starting || logoutPending || deletingReports;
   if (nodes.recordingHistory) {
     const recordingBlocked = deletingReports || logoutPending;
     if (recordingBlocked)
@@ -1575,13 +1575,41 @@ function setStartGate(blocked) {
 }
 
 nodes.logout.addEventListener("click", async () => {
-  if (logoutPending) return;
+  if (nodes.logout.hidden || nodes.logout.disabled) return;
+  // Neither a session read nor a report read started before sign-out is current.
+  historyLoad += 1;
   logoutPending = true;
+  nodes.accountStatus.textContent = "Signing out...";
   syncLobbyControls();
-  // A fresh session decides what to show even if the logout response was lost.
-  await fetch("/api/logout", { method: "POST" }).catch(() => {});
-  window.location.reload();
+  try {
+    const response = await fetch("/api/logout", {
+      method: "POST",
+      signal: AbortSignal.timeout(requestTimeoutMs),
+    });
+    if (response.ok) {
+      window.location.reload();
+      return;
+    }
+  } catch {
+    // The server may have ended the session without the browser receiving
+    // the cookie update. A new sign-out request can still clear the cookie.
+  }
+  await refreshHistory({ afterLogout: true });
 });
+
+function finishLogoutRecovery() {
+  if (!logoutPending) return;
+  logoutPending = false;
+  syncLobbyControls();
+  if (document.activeElement === document.body) {
+    const retry = !nodes.logout.hidden
+      ? nodes.logout
+      : !nodes.githubLogin.hidden
+        ? nodes.githubLogin
+        : nodes.loginLink;
+    retry.focus();
+  }
+}
 
 applyDifficulties();
 // Nothing is recommended before the reports arrive, because they choose the
@@ -1592,7 +1620,8 @@ applyDifficulties();
 // for good.
 refreshHistory();
 
-function refreshHistory() {
+function refreshHistory({ afterLogout = false } = {}) {
+  if (logoutPending && !afterLogout) return;
   renderProblemAttempts([]);
   const generation = ++historyLoad;
   historyRefreshing = generation > 1;
@@ -1602,10 +1631,11 @@ function refreshHistory() {
   // A cached page may retain its selection while its account is unknown.
   start.disabled = true;
   // A restored page can start a second load before the first one finishes.
-  return loadAccount(generation).finally(() => {
+  return loadAccount(generation, afterLogout).finally(() => {
     if (generation === historyLoad) {
       historyRefreshing = false;
       settle();
+      if (afterLogout) finishLogoutRecovery();
     }
   });
 }
@@ -1653,7 +1683,7 @@ function setRecordingHistoryAvailable(available) {
   nodes.historyHeader.hidden = !available && nodes.deleteReports.hidden;
 }
 
-async function loadAccount(generation) {
+async function loadAccount(generation, afterLogout) {
   accountHistory = null;
   let signedOutMessage = "Signed out";
   try {
@@ -1723,11 +1753,15 @@ async function loadAccount(generation) {
       loginResult = null;
       accountHistory = true;
       nodes.loginLink.textContent = "Use GitHub";
-      nodes.accountStatus.textContent = `Signed in as ${session.user.login}`;
+      nodes.accountStatus.textContent = afterLogout
+        ? "Could not confirm sign-out. Try signing out again."
+        : `Signed in as ${session.user.login}`;
       nodes.githubLogin.hidden = true;
       nodes.loginLink.hidden = true;
       nodes.logout.hidden = false;
       setStartGate(false);
+      // A confirmed session enables another sign-out even while reports load.
+      if (afterLogout) finishLogoutRecovery();
       await renderServerHistory(generation);
       return;
     }
@@ -1767,9 +1801,9 @@ async function loadAccount(generation) {
     }
   }
   if (generation !== historyLoad) return;
-  // Not waved through as the catch above says: with storage blocked, a server
-  // that requires sign-in would send the candidate straight back. Retry is GET.
-  if (accountHistory === null && tabStorageBlocked) {
+  // After sign-out, or with storage blocked, an unknown session needs an
+  // explicit account check before Start can proceed. Retry is GET.
+  if (accountHistory === null && (tabStorageBlocked || afterLogout)) {
     loginResult ??= "unchecked";
     // A restored page may still be labelled for the start that left it.
     setStartGate(signInFirst);
