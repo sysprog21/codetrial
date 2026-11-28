@@ -53,6 +53,7 @@ class HashchainTests(unittest.TestCase):
             "check-commit-log.sh",
             "check-secrets.py",
             "check-cjk.py",
+            "check-added-lines.py",
             "install-git-hooks.sh",
             "indent.sh",
         ]:
@@ -91,6 +92,52 @@ class HashchainTests(unittest.TestCase):
         return self.run_command(
             [sys.executable, "scripts/hashchain.py", *args], **kwargs
         )
+
+    def test_a_change_id_after_a_divider_line_is_no_trailer(self):
+        # interpret-trailers ends a message at a `---` line, as a patch email
+        # does, so a Change-Id written after one is not the message's trailer.
+        # git log's %(trailers) reads on past it; verify must not.
+        probe = (
+            "import sys\n"
+            "sys.path.insert(0, 'scripts')\n"
+            "import hashchain\n"
+            "body = b'Fix it\\n\\nThe reason.\\n---\\nChange-Id: I' + b'0' * 40 + b'\\n'\n"
+            "hashchain.change_id(body)\n"
+        )
+        result = self.run_command([sys.executable, "-c", probe], check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Exactly one final Change-Id", result.stderr)
+
+    def test_the_batch_read_matches_one_commit_at_a_time(self):
+        (self.repo / "sample.txt").write_text("second\n")
+        self.git("add", "sample.txt")
+        self.commit("Add a second link")
+        probe = (
+            "import json, sys\n"
+            "sys.path.insert(0, 'scripts')\n"
+            "import hashchain\n"
+            "shas = sys.argv[1:]\n"
+            "one = [hashchain.commit(sha) for sha in shas]\n"
+            "batch = hashchain.commits(shas)\n"
+            "print(json.dumps([batch[sha] == got for sha, got in zip(shas, one)]))\n"
+        )
+        shas = self.git("rev-list", "HEAD").stdout.split()
+        result = self.run_command([sys.executable, "-c", probe, *shas])
+        self.assertEqual(
+            result.stdout.strip(), "[" + ", ".join(["true"] * len(shas)) + "]"
+        )
+        tree = self.git("rev-parse", "HEAD^{tree}").stdout.strip()
+        only_batch = (
+            "import sys\n"
+            "sys.path.insert(0, 'scripts')\n"
+            "import hashchain\n"
+            "hashchain.commits(sys.argv[1:])\n"
+        )
+        refused = self.run_command(
+            [sys.executable, "-c", only_batch, tree], check=False
+        )
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("is not a commit", refused.stderr)
 
     def broken(self, copied=False):
         parent = self.git("rev-parse", "HEAD").stdout.strip()

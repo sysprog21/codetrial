@@ -312,8 +312,8 @@ fn continuity_input_for<'a>(
                 .map(opening)
                 .unwrap_or_default(),
             if crate::agent::pending_candidate_line(state)
-                .filter(missing)
-                .is_some()
+                .as_ref()
+                .is_some_and(missing)
             {
                 crate::agent::latest_candidate_continuity(state)
             } else {

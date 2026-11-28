@@ -93,17 +93,11 @@ fn keys(workspace: &Path) -> Vec<String> {
 
 /// The keys of the configuration that `flags` choose.
 fn configured_keys(workspace: &Path, flags: &[&str]) -> Vec<String> {
-    let allow = workspace.with_extension("keys");
-    let mut arguments = vec!["--update-allow", allow.to_str().unwrap()];
+    let mut arguments = vec!["--keys"];
     arguments.extend(flags);
-    let update = run(workspace, &arguments);
-    assert_eq!(update.code, Some(0));
-    let mut keys: Vec<String> = std::fs::read_to_string(&allow)
-        .unwrap()
-        .lines()
-        .filter(|line| !line.is_empty() && !line.starts_with('#'))
-        .map(str::to_owned)
-        .collect();
+    let listed = run(workspace, &arguments);
+    assert_eq!(listed.code, Some(0));
+    let mut keys: Vec<String> = listed.stdout.lines().map(str::to_owned).collect();
     keys.sort();
     keys
 }
@@ -429,7 +423,27 @@ fn the_allow_file_suppresses_only_existing_entries_and_notes_what_is_fixed() {
     let workspace = workspace("field_leak", None, "allow");
     let allow = workspace.with_extension("allow");
     let allow = allow.to_str().unwrap();
-    assert_eq!(run(&workspace, &["--update-allow", allow]).code, Some(0));
+
+    // A finding new to the list is refused, and nothing is written. The scratch
+    // workspace outlives a run, so an earlier run's list goes first.
+    if Path::new(allow).exists() {
+        std::fs::remove_file(allow).unwrap();
+    }
+    let refused = run(&workspace, &["--update-allow", allow]);
+    assert_eq!(refused.code, Some(1));
+    assert!(
+        refused.stderr.contains("is not on the list"),
+        "{}",
+        refused.stderr
+    );
+    assert!(!Path::new(allow).exists());
+
+    // Entered by hand, each with its reason, it is allowed and kept.
+    let entries: String = keys(&workspace)
+        .iter()
+        .map(|key| format!("{key} # the fixture's own leak\n"))
+        .collect();
+    std::fs::write(allow, entries).unwrap();
     let allowed = run(&workspace, &["--allow", allow]);
     assert_eq!(allowed.code, Some(0));
     assert!(allowed.stdout.contains(&format!("{TOOL}: ok")));
@@ -442,6 +456,12 @@ fn the_allow_file_suppresses_only_existing_entries_and_notes_what_is_fixed() {
     assert!(fixed.stdout.contains("2 allowed entries"));
     assert!(fixed.stdout.contains("now fixed"));
 
+    // The overlay fixed both leaks, so the update leaves no entry; that a
+    // remaining entry keeps its reason is the shrunk-cycle test's.
+    assert_eq!(run(&workspace, &["--update-allow", allow]).code, Some(0));
+    let kept = std::fs::read_to_string(allow).unwrap();
+    assert!(kept.lines().all(|l| l.starts_with('#')), "{kept}");
+
     let lib = workspace.join("src/lib.rs");
     let ring = "\npub mod ring {\n    pub struct A(pub Option<Box<B>>);\n    pub struct B(pub Option<Box<C>>);\n\
                 pub struct C(pub Option<Box<D>>);\n    pub struct D(pub Option<Box<E>>);\n\
@@ -453,6 +473,32 @@ fn the_allow_file_suppresses_only_existing_entries_and_notes_what_is_fixed() {
     assert_eq!(new.code, Some(1));
     assert!(new.stdout.contains("error[tangle]: 8 things"));
     assert!(!new.stdout.contains("field-leak"));
+}
+
+#[test]
+fn a_list_of_another_workspace_is_refused_not_emptied() {
+    // Run from the wrong directory, the tool judges a workspace the list does
+    // not describe: every entry would read as fixed, and an update would empty
+    // the list. One whose entries name no crate or directory here is refused.
+    let workspace = workspace("field_leak", None, "foreign_list");
+    let allow = workspace.with_extension("allow");
+    // src/ is this fixture's too, as it is almost any crate's.
+    let foreign = "field-leak elsewhere::Store::config # another workspace's\n\
+                   wide-directory src/ # another workspace's\n";
+    std::fs::write(&allow, foreign).unwrap();
+    let allow = allow.to_str().unwrap();
+    for flag in ["--allow", "--update-allow"] {
+        let refused = run(&workspace, &[flag, allow]);
+        assert_eq!(refused.code, Some(2), "{flag}: {}", refused.stderr);
+        assert!(
+            refused
+                .stderr
+                .contains("names no crate or directory of this workspace"),
+            "{flag}: {}",
+            refused.stderr
+        );
+        assert_eq!(std::fs::read_to_string(allow).unwrap(), foreign);
+    }
 }
 
 #[test]
@@ -690,7 +736,7 @@ fn outside_a_cargo_workspace_reports_error() {
 fn a_ratchet_fails_on_a_fixed_entry_that_a_plain_allow_only_notes() {
     let workspace = workspace("clean", None, "ratchet");
     let allow = workspace.with_extension("allow");
-    std::fs::write(&allow, "tangle ghost::module\n").unwrap();
+    std::fs::write(&allow, "tangle clean::ghost # long since fixed\n").unwrap();
     let allow = allow.to_str().unwrap();
     let plain = run(&workspace, &["--allow", allow]);
     assert_eq!(plain.code, Some(0));
@@ -730,7 +776,7 @@ fn a_cycle_that_shrank_is_still_allowed_but_its_entry_is_stale_under_a_ratchet()
     // The entry an earlier, larger circle left behind: its members include the
     // ones the circle has now.
     let allow = workspace.with_extension("shrunk.allow");
-    std::fs::write(&allow, format!("{found},ghost::module\n")).unwrap();
+    std::fs::write(&allow, format!("{found},ghost::module # an older circle\n")).unwrap();
     let allow = allow.to_str().unwrap();
 
     let plain = run(&workspace, &["--allow", allow]);
@@ -744,4 +790,16 @@ fn a_cycle_that_shrank_is_still_allowed_but_its_entry_is_stale_under_a_ratchet()
         "{}",
         ratchet.stderr
     );
+
+    // The update lists the circle as it is now, under the reason it had.
+    assert_eq!(run(&workspace, &["--update-allow", allow]).code, Some(0));
+    let updated = std::fs::read_to_string(allow).unwrap();
+    assert!(
+        updated
+            .lines()
+            .any(|line| line == format!("{found} # an older circle")),
+        "{updated}"
+    );
+    let tight = run(&workspace, &["--allow", allow, "--ratchet"]);
+    assert_eq!(tight.code, Some(0), "{}", tight.stderr);
 }

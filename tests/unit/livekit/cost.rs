@@ -665,7 +665,7 @@ async fn resume_benchmark_if_due(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Called only between completed responses. Leave headroom for an audio
     // utterance and pacing before the provider's ten-minute socket cap.
-    if session.age() < Duration::from_secs(8 * 60) {
+    if session.age() < Duration::from_mins(8) {
         return Ok(());
     }
     let (key, handle) = session
@@ -792,7 +792,7 @@ async fn compression_trial(
         if total.samples != total.turn_complete_samples {
             return Err(io::Error::other("usage observations are not one per completed turn; inspect raw metadata before comparing sums").into());
         }
-        latencies.sort();
+        latencies.sort_unstable();
         Ok::<_, Box<dyn std::error::Error + Send + Sync>>(json!({
             "label": label, "model": boot.live_model, "workload_version": BENCHMARK_WORKLOAD_VERSION,
             "sockets": sockets,
@@ -1071,13 +1071,10 @@ fn selected_language_answer(text: &str, expected: &str) -> bool {
         .collect::<Vec<_>>();
     match words.as_slice() {
         [language]
-        | ["you", "selected", language]
-        | ["you", "chose", language]
-        | ["you", "have", "chosen", language]
+        | ["you", "selected" | "chose", language]
+        | ["you", "have" | "ve", "chosen", language]
         | ["you", "ve", "selected", language]
-        | ["you", "ve", "chosen", language]
-        | ["you", "re", "using", language]
-        | ["you", "are", "using", language]
+        | ["you", "re" | "are", "using", language]
         | ["the", "language", "is", language] => *language == expected,
         _ => false,
     }

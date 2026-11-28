@@ -30,6 +30,8 @@ can still bypass local hooks, which is why CI recomputes the chain and the
 size of the change. See docs/development.md, "What cannot be enforced locally".
 """
 
+import fnmatch
+import functools
 import json
 import os
 import posixpath
@@ -66,18 +68,30 @@ READS = {
     "--get", "--get-all", "--get-regexp", "--get-urlmatch", "--unset", "--unset-all",
     "--remove-section", "--list", "-l", "--show-origin", "--show-scope", "--name-only",
 }  # fmt: skip
-CREDENTIAL_FILE = re.compile(r"(^|/)config/[^/]*\.env\.(?!example$)[^/]+$")
+# The account database beside them holds live session tokens and candidates'
+# reports, so it is read the same way: by the server, never into a transcript.
+# --data-dir moves it out of config/ under its own name, and CODETRIAL_DB_PATH
+# names any file (account_db_path in src/launch.rs), so the name is judged
+# wherever it is, and the configured path besides (database_paths).
+CREDENTIAL_FILE = re.compile(
+    r"(^|/)config/(?:[^/]*\.env\.(?!example$)[^/]+|[^/]*\.db(?:-wal|-shm|-journal)?)$"
+    r"|(^|/)codetrial\.db(?:-wal|-shm|-journal)?$"
+)
+DB_SIDECARS = ("", "-wal", "-shm", "-journal")
+ACCOUNT_DATABASES = {"codetrial.db" + sidecar for sidecar in DB_SIDECARS}
 # A glob or the directory itself reaches the same files, and a recursive reader
 # prints them: `grep -r KEY config`, `cat config/*.local`.
 CREDENTIAL_REACH = re.compile(r"(?!.*\.example$)(^|/)config/[^/]*[*?\[][^/]*$")
 CREDENTIAL_READ = (
-    "reads a credential file under config/, which would put a secret in the transcript"
+    "reads a credential file under config/ or the account database, which would put "
+    "a secret or a candidate's material in the transcript"
 )
 READERS = {
     "cat", "tac", "less", "more", "head", "tail", "grep", "egrep", "fgrep", "rg",
     "ag", "awk", "sed", "cut", "sort", "uniq", "tr", "od", "xxd", "hexdump",
     "strings", "base64", "bat", "cp", "mv", "scp", "rsync",
     "nl", "paste", "diff", "cmp", "jq", "tar", "zip", "zcat", "dd", "find",
+    "sqlite3",
 }  # fmt: skip
 # The last operand of these is where the data goes, not what is read, so a copy
 # that creates a credential file (the README's setup step) is not a read.
@@ -90,6 +104,24 @@ NAME_FLAGS = {
     "--files", "--files-with-matches", "--files-without-match", "--count", "--quiet",
 }  # fmt: skip
 HOOK_FILE = re.compile(r"(^|/)\.git/hooks(/|$)|(^|/)scripts/git-[^/]+$")
+# The tools that open a path themselves, and the input naming it. A Read of a
+# credential file shows it as `cat` would, and so does a Grep asked for lines;
+# an edit of an installed hook rewrites what checks every commit, as a shell
+# redirect into it would. The tracked scripts behind the hooks stay editable
+# here: a change to one is reviewed, and the hook suite runs on it.
+PATH_READERS = {"Read": "file_path", "Grep": "path"}
+PATH_WRITERS = {
+    "Edit": "file_path",
+    "MultiEdit": "file_path",
+    "Write": "file_path",
+    "NotebookEdit": "notebook_path",
+}
+INSTALLED_HOOK = re.compile(r"(^|/)\.git/hooks(/|$)")
+# The repository's git config can point core.hooksPath away, which the shell
+# form `git config core.hooksPath` is already refused for.
+# With extensions.worktreeConfig, config.worktree (and a linked worktree's own,
+# under .git/worktrees/) can set core.hooksPath as well.
+GIT_CONFIG = re.compile(r"(^|/)\.git/(?:worktrees/[^/]+/)?config(?:\.worktree)?$")
 WRITERS = {"rm", "mv", "cp", "ln", "chmod", "tee", "truncate", "install", "dd"}
 # `<<<` is a here-string with no body, so it must not open a heredoc that would
 # swallow the commands on the lines after it.
@@ -415,20 +447,55 @@ def reads_credential(program, tokens):
     return any(reaches_credentials(t.split("=", 1)[-1]) for t in operands)
 
 
+@functools.lru_cache(maxsize=None)
+def database_paths():
+    """The account database CODETRIAL_DB_PATH names, in the guard's own
+    environment or in a config file, with its journal files: read here so the
+    path is judged, never shown."""
+    configured = [os.environ.get("CODETRIAL_DB_PATH", "")]
+    config = os.path.join(project_dir(), "config")
+    for name in credential_names():
+        if ".env." not in name:
+            continue
+        try:
+            with open(
+                os.path.join(config, name), encoding="utf-8", errors="replace"
+            ) as f:
+                for line in f:
+                    key, _, value = line.strip().partition("=")
+                    key = key.strip()
+                    if key.startswith("export "):
+                        key = key[len("export ") :].strip()
+                    if key == "CODETRIAL_DB_PATH":
+                        configured.append(value.strip().strip("'\""))
+        except OSError:
+            continue
+    found = set()
+    for path in filter(None, configured):
+        path = os.path.join(project_dir(), os.path.expanduser(path))
+        found.update(os.path.realpath(path + sidecar) for sidecar in DB_SIDECARS)
+    return found
+
+
 def reaches_credentials(path):
     """Whether a path names, globs or is the directory of the credential files."""
     path = posixpath.normpath(path)
     if CREDENTIAL_FILE.search(path) or CREDENTIAL_REACH.search(path):
         return True
+    databases = database_paths()
+    if databases:
+        try:
+            if os.path.realpath(os.path.join(project_dir(), path)) in databases:
+                return True
+        except (OSError, ValueError):
+            pass
     # The directory itself is only this repository's `config`, not `.git/config`
     # or `src/config`: a recursive reader on it prints every file inside.
     if path == "config":
         return True
-    try:
-        here = os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
-    except OSError:  # the working directory was deleted: fail to the lexical rule
-        return False
-    return path == posixpath.join(here, "config")
+    # With the working directory deleted this is `./config`, which no
+    # normalized path equals: the lexical rule above is what is left.
+    return path == posixpath.join(project_dir(), "config")
 
 
 def names_only(program, args):
@@ -474,28 +541,192 @@ def redirects_from_credential(command):
     )
 
 
+def project_dir():
+    try:
+        return os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
+    except OSError:  # the working directory was deleted
+        return "."
+
+
+def spellings(path):
+    """A path as written and as the file system resolves it, so a symlink the
+    agent made to a credential file is judged by what it points at."""
+    if not isinstance(path, str) or not path:
+        return []
+    found = [posixpath.normpath(path)]
+    try:
+        real = os.path.realpath(os.path.join(project_dir(), path))
+    except (OSError, ValueError):
+        return found
+    found.append(real)
+    return found
+
+
+@functools.lru_cache(maxsize=None)
+def credential_names():
+    """The credential files under this repository's config/, by name."""
+    root = project_dir()
+    try:
+        names = os.listdir(os.path.join(root, "config"))
+    except OSError:
+        return []
+    return [name for name in names if CREDENTIAL_FILE.search(f"config/{name}")]
+
+
+def braces(glob):
+    """The patterns a glob's braces stand for, as ripgrep expands them:
+    `config/*.env.{local,x}` is both `config/*.env.local` and
+    `config/*.env.x`, nested braces included."""
+    match = re.search(r"\{([^{}]*)\}", glob)
+    if not match:
+        return [glob]
+    head, tail = glob[: match.start()], glob[match.end() :]
+    return [p for part in match.group(1).split(",") for p in braces(head + part + tail)]
+
+
+def as_fnmatch(piece):
+    """One `/`-free piece of a ripgrep glob in fnmatch's syntax. ripgrep reads
+    `\\x` as a literal x and `[^...]` as a negated class, where fnmatch knows
+    no escape and negates with `[!...]`; read as fnmatch reads them, such a
+    glob would match a file ripgrep does not, and miss one it does."""
+    out, i = [], 0
+    while i < len(piece):
+        char = piece[i]
+        if char == "\\" and i + 1 < len(piece):
+            literal = piece[i + 1]
+            out.append("[" + literal + "]" if literal in "*?[" else literal)
+            i += 2
+            continue
+        if piece.startswith("[^", i):
+            out.append("[!")
+            i += 2
+            continue
+        out.append(char)
+        i += 1
+    return "".join(out)
+
+
+def matches_grep_glob(parts, pattern):
+    """Whether a ripgrep glob matches a path, given as its parts relative to
+    where the glob is anchored: a glob without a slash matches the base name."""
+    if "/" not in pattern:
+        return fnmatch.fnmatchcase(parts[-1], as_fnmatch(pattern))
+    # Each position is a prefix of parts matched by the pattern so far.
+    positions = {0}
+    pieces = pattern.lstrip("/").split("/")
+    for index, piece in enumerate(pieces):
+        if not positions:
+            return False
+        if piece == "**":
+            start = min(positions)
+            if index == len(pieces) - 1:
+                start += 1
+            positions = set(range(start, len(parts) + 1))
+        else:
+            positions = {
+                i + 1
+                for i in positions
+                if i < len(parts) and fnmatch.fnmatchcase(parts[i], as_fnmatch(piece))
+            }
+    return len(parts) in positions
+
+
+def glob_reaches_credentials(glob, search_root):
+    """Whether a positive Grep glob includes a credential file, which ripgrep's
+    -g reaches even where its ignore files would skip it. The glob is matched
+    against the files reaches_credentials guards that can be listed (those in
+    config/ and the database CODETRIAL_DB_PATH names), each relative to the
+    search root and to the project; a database under its own name in some
+    other directory cannot be listed, so a glob naming it there is refused by
+    that name."""
+    if not isinstance(glob, str) or not glob:
+        return False
+    patterns = [p for p in braces(glob.strip()) if p and not p.startswith("!")]
+    if any(p.rstrip("/").rsplit("/", 1)[-1] in ACCOUNT_DATABASES for p in patterns):
+        return True
+    names = credential_names()
+    databases = database_paths()
+    if not names and not databases:
+        return False
+
+    config = spellings("config")[-1]
+    targets = [posixpath.join(config, name) for name in names] + sorted(databases)
+    project = spellings(".")[-1]
+    bases = {search_root or project, project}
+    for target in targets:
+        # A file the search does not descend to is out of reach whatever the
+        # glob says; one it does is matched as the search root and the project
+        # see it.
+        if search_root and parts_below(target, search_root) is None:
+            continue
+        for base in bases:
+            parts = parts_below(target, base)
+            if parts is not None and any(matches_grep_glob(parts, p) for p in patterns):
+                return True
+    return False
+
+
+def parts_below(path, base):
+    """The parts of path relative to base, or None when it is not below it."""
+    relative = posixpath.relpath(path, base)
+    if relative == ".." or relative.startswith("../"):
+        return None
+    return relative.split("/")
+
+
+def tool_reason(tool, tool_input):
+    """Why a call of a tool that opens a path itself is refused, or None."""
+    if tool in PATH_READERS:
+        paths = spellings(tool_input.get(PATH_READERS[tool]))
+        # Grep shows lines only when asked for them; its names and counts, like
+        # `grep -l`, reveal no secret.
+        lines = tool != "Grep" or tool_input.get("output_mode") == "content"
+        # A Read has no glob, so the second test is only ever a Grep's.
+        if lines and (
+            any(reaches_credentials(path) for path in paths)
+            or glob_reaches_credentials(
+                tool_input.get("glob"), paths[-1] if paths else None
+            )
+        ):
+            return CREDENTIAL_READ
+    if tool in PATH_WRITERS:
+        for path in spellings(tool_input.get(PATH_WRITERS[tool])):
+            if INSTALLED_HOOK.search(path):
+                return HOOKS_CHANGE
+            if GIT_CONFIG.search(path):
+                return HOOKS_PATH
+    return None
+
+
+def blocked(why, what="command"):
+    hint = (
+        "Name the variable you need to see set or unset, not its value, "
+        "or ask the user to run the command themselves."
+        if why == CREDENTIAL_READ
+        else "The hooks generate the Change-Id and check the interactive "
+        "review; CI checks both again, so skipping them here only moves "
+        "the failure. Fix what the hook reports, or ask the user to run "
+        "the command themselves if it really is needed."
+    )
+    print(f"Blocked: this {what} {why}.\n{hint}", file=sys.stderr)
+    return 2
+
+
 def main():
     try:
         call = json.load(sys.stdin)
     except ValueError:
         return 0
-    if call.get("tool_name") != "Bash":
-        return 0
-    text = (call.get("tool_input") or {}).get("command", "")
+    tool = call.get("tool_name")
+    tool_input = call.get("tool_input") or {}
+    if tool != "Bash":
+        why = tool_reason(tool, tool_input)
+        return blocked(why, f"{tool} call") if why else 0
+    text = tool_input.get("command", "")
     for command in simple_commands(text):
         why = reason(command)
         if why:
-            hint = (
-                "Name the variable you need to see set or unset, not its value, "
-                "or ask the user to run the command themselves."
-                if why == CREDENTIAL_READ
-                else "The hooks generate the Change-Id and check the interactive "
-                "review; CI checks both again, so skipping them here only moves "
-                "the failure. Fix what the hook reports, or ask the user to run "
-                "the command themselves if it really is needed."
-            )
-            print(f"Blocked: this command {why}.\n{hint}", file=sys.stderr)
-            return 2
+            return blocked(why)
     return 0
 
 

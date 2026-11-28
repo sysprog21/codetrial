@@ -205,11 +205,11 @@ pub(crate) fn feedback(
     }
     // Only the rubric fields are kept; any other key in the request is dropped.
     let payload = json!({"submitted":submitted,"dimensions":fields.iter().map(|(name,field)|(name.clone(),json!({"score":field["score"],"example":field["example"],"improvement":field["improvement"]}))).collect::<serde_json::Map<_,_>>()});
-    let already:Option<i64>=c.query_row("SELECT submitted_at FROM peer_feedback WHERE session_id=?1 AND round_idx=?2 AND author_slot=?3",params![s.id,round_idx(index)?,u8::try_from(slot).map_err(|_| rusqlite::Error::InvalidQuery)?],|row|row.get(0)).optional()?.flatten();
+    let already:Option<i64>=c.query_row("SELECT submitted_at FROM peer_feedback WHERE session_id=?1 AND round_idx=?2 AND author_slot=?3",params![s.id,round_idx(index)?,u8::try_from(slot).map_err(crate::accounts::unwritable)?],|row|row.get(0)).optional()?.flatten();
     if already.is_some() {
         return Ok(Err("feedback_submitted"));
     }
-    c.execute("INSERT INTO peer_feedback (session_id,round_idx,author_slot,kind,rubric_version,payload_json,submitted_at) VALUES (?1,?2,?3,?4,'peer-rubric-v1',?5,?6) ON CONFLICT(session_id,round_idx,author_slot) DO UPDATE SET payload_json=excluded.payload_json,submitted_at=excluded.submitted_at",params![s.id,round_idx(index)?,u8::try_from(slot).map_err(|_| rusqlite::Error::InvalidQuery)?,if candidate{"candidate"}else{"interviewer"},payload.to_string(),submitted.then_some(now)])?;
+    c.execute("INSERT INTO peer_feedback (session_id,round_idx,author_slot,kind,rubric_version,payload_json,submitted_at) VALUES (?1,?2,?3,?4,'peer-rubric-v1',?5,?6) ON CONFLICT(session_id,round_idx,author_slot) DO UPDATE SET payload_json=excluded.payload_json,submitted_at=excluded.submitted_at",params![s.id,round_idx(index)?,u8::try_from(slot).map_err(crate::accounts::unwritable)?,if candidate{"candidate"}else{"interviewer"},payload.to_string(),submitted.then_some(now)])?;
     Ok(Ok(json!({"saved":true,"submitted":submitted})))
 }
 

@@ -1254,7 +1254,7 @@ pub(crate) fn is_unreachable_host(host: &str) -> bool {
     // An IPv4 address wearing an IPv6 costume is still that address.
     let address = match address {
         std::net::IpAddr::V6(v6) => v6.to_ipv4_mapped().map_or(address, std::net::IpAddr::V4),
-        other => other,
+        v4 @ std::net::IpAddr::V4(_) => v4,
     };
     match address {
         std::net::IpAddr::V4(v4) => {

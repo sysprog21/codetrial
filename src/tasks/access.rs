@@ -12,12 +12,12 @@ use serde_json::{Value, json};
 use tokio::time::Instant;
 
 use super::TaskError;
-use super::default_number;
 use super::exercise::{Exercise, TaskRecord};
 use super::package::{
     Assignment, BUILT_IN_SET, BUILT_IN_SITE, BUILT_IN_VERSION, Download, LoadedSet, OpenError,
     SetConfig, download, open_package, site_base,
 };
+use super::{default_count, default_number};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccessError {
@@ -415,7 +415,7 @@ pub struct PinnedTask {
 
 /// Whether `result` is small enough to be kept as it is.
 pub fn result_fits(result: &Value) -> bool {
-    result.to_string().len() <= default_number("reviewBytes") as usize
+    result.to_string().len() <= default_count("reviewBytes")
 }
 
 impl PinnedTask {
@@ -566,7 +566,7 @@ fn hint_limit(set: &LoadedSet, record: &TaskRecord) -> usize {
     record
         .sidecar()
         .max_hint_rungs
-        .min(set.config.rules.max_hint_rungs as usize)
+        .min(usize::try_from(set.config.rules.max_hint_rungs).unwrap_or(usize::MAX))
 }
 
 impl TaskService {

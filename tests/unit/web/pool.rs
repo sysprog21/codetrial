@@ -402,9 +402,7 @@ async fn a_refused_project_returns_after_the_cache_ttl() {
 fn a_verdict_is_refreshed_before_it_can_expire() {
     assert!(
         PROVIDER_QUOTA_REFRESH < PROVIDER_QUOTA_TTL,
-        "refresh every {:?} cannot keep a {:?} cache warm",
-        PROVIDER_QUOTA_REFRESH,
-        PROVIDER_QUOTA_TTL
+        "refresh every {PROVIDER_QUOTA_REFRESH:?} cannot keep a {PROVIDER_QUOTA_TTL:?} cache warm"
     );
 
     // Not merely shorter: short enough that a pass can be missed and the next

@@ -242,7 +242,7 @@ fn round_route(
                 Err(e) => Ok(Err(e)),
             }
         }
-        ("problem", &Method::GET) | ("guide", &Method::GET) => {
+        ("problem" | "guide", &Method::GET) => {
             if s.current_round != Some(index) {
                 return Ok(Err("round_unavailable"));
             }

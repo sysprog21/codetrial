@@ -367,6 +367,30 @@ while read -r local_ref local_sha remote_ref remote_sha; do
         continue
     fi
 
+    # The lines each outgoing commit adds, read from the commit: a rebase or a
+    # commit made with --no-verify never met the pre-commit hook's copy. Only
+    # the commits no remote holds: a first push to a fork that has not fetched
+    # main lately would otherwise replay main's own history, written before the
+    # check, and refuse a branch for lines it did not write.
+    set -- "$local_sha" --not --remotes
+    if git cat-file -e "${remote_sha}^{commit}" 2> /dev/null; then
+        set -- "$@" "$remote_sha"
+    fi
+
+    # A merge is replayed too, and judged on the lines neither parent has: the
+    # resolution, since each side's own commits answer for the rest.
+    added_commits=$(git rev-list "$@") || {
+        echo "Push rejected: cannot inspect outgoing history." >&2
+        failed=1
+        continue
+    }
+    if [ -n "$added_commits" ] && ! printf '%s\n' "$added_commits" \
+        | python3 "$script_dir/check-added-lines.py" --commits; then
+        echo "Push rejected: an outgoing commit failed the added-lines check." >&2
+        failed=1
+        continue
+    fi
+
     # No new commit to judge (a head already published, or one only a merge
     # moved) still gets the review note below.
     if [ -n "$commits" ] \

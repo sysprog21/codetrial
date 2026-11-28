@@ -366,7 +366,7 @@ fn sweep_sessions_once(accounts: &Accounts) {
 /// How often expired sessions are reclaimed. An hour, because the rows are
 /// small and the thing being bounded is a deployment's lifetime, not a
 /// request's.
-const SESSION_SWEEP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60 * 60);
+const SESSION_SWEEP_INTERVAL: std::time::Duration = std::time::Duration::from_hours(1);
 
 /// Background tasks stopped when the server that started them is.
 ///
@@ -1074,7 +1074,7 @@ pub(crate) fn client_ip(headers: &header::HeaderMap, peer: SocketAddr, hops: u32
     // IPv6 address, which the prefix mask would turn into `::` for everyone.
     match forwarded_client(headers, peer, hops).to_canonical() {
         IpAddr::V6(address) => IpAddr::V6((u128::from(address) & (u128::MAX << 64)).into()),
-        v4 => v4,
+        v4 @ IpAddr::V4(_) => v4,
     }
 }
 

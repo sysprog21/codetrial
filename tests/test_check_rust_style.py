@@ -79,6 +79,136 @@ class RustStyle(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertFires("suppression", "src/lib.rs", text)
 
+    def test_an_expect_of_warnings_or_a_group_is_refused(self):
+        for text in (
+            '#[expect(warnings, reason = "x")]\nfn f() {}\n',
+            '#![expect(clippy::all, reason = "x")]\n',
+            '#[expect(clippy :: pedantic, reason = "x")]\nfn f() {}\n',
+            '#[expect(dead_code, unused, reason = "x")]\nfn f() {}\n',
+            '#[cfg_attr(test, expect(clippy::restriction, reason = "x"))]\nfn f() {}\n',
+            '#[expect(clippy::allow_attributes, reason = "x")]\nfn f() {}\n',
+            '#[expect(clippy::allow_attributes_without_reason, reason = "x")]\nfn f() {}\n',
+            '#[expect(r#warnings, reason = "x")]\nfn f() {}\n',
+        ):
+            with self.subTest(text=text):
+                self.assertFires("suppression", "src/lib.rs", text)
+
+    def test_an_expect_of_one_lint_is_accepted(self):
+        for text in (
+            '#[expect(dead_code, reason = "x")]\nfn f() {}\n',
+            '#[expect(clippy::too_many_lines, reason = "all of it")]\nfn f() {}\n',
+            '#[cfg_attr(not(test), expect(clippy::unused_self, reason = "x"))]\nfn f() {}\n',
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(self.findings("src/lib.rs", text), [])
+
+    def test_cfg_clippy_is_refused(self):
+        for text in (
+            "#[cfg(not(clippy))]\nfn f() {}\n",
+            '#[cfg_attr(clippy, expect(dead_code, reason = "x"))]\nfn f() {}\n',
+            "#![cfg(any(clippy, test))]\n",
+        ):
+            with self.subTest(text=text):
+                self.assertFires("suppression", "src/lib.rs", text)
+        self.assertEqual(
+            self.findings("src/lib.rs", '#[cfg(feature = "x")]\nfn f() {}\n'), []
+        )
+
+    def test_clippy_toml_cannot_loosen_a_denied_lint(self):
+        for key in (
+            "max-fn-params-bools = 9",
+            'allowed-wildcard-imports = ["x"]',
+            "allow-dbg-in-tests = true",
+            "too-many-arguments-threshold = 20",
+        ):
+            with self.subTest(key=key):
+                self.write("clippy.toml", "allow-unwrap-in-tests = true\n" + key + "\n")
+                found = list(self.style.check_lint_config(self.root))
+                self.assertEqual(len(found), 1, found)
+                self.assertIn("lint-config", found[0])
+        self.write("clippy.toml", "allow-unwrap-in-tests = true\n")
+        self.assertEqual(list(self.style.check_lint_config(self.root)), [])
+        # Clippy reads `.clippy.toml` too.
+        self.write(".clippy.toml", "too-many-arguments-threshold = 100\n")
+        found = list(self.style.check_lint_config(self.root))
+        self.assertEqual(len(found), 1, found)
+        self.assertTrue(found[0].startswith(".clippy.toml:"), found)
+
+    def test_rustflags_cannot_allow_or_cap_lints(self):
+        for name in (".cargo/config.toml", ".cargo/config"):
+            for flags in (
+                '["-Aclippy::unwrap_used"]',
+                '["--cap-lints", "warn"]',
+                '"-A dead_code"',
+                '["--allow", "dead_code"]',
+                '["--force-warn", "unused"]',
+            ):
+                with self.subTest(name=name, flags=flags):
+                    self.write(name, f"[target.'cfg(unix)']\nrustflags = {flags}\n")
+                    found = list(self.style.check_lint_config(self.root))
+                    self.assertEqual(len(found), 1, found)
+                    (self.root / name).unlink()
+        self.write(".cargo/config.toml", '[build]\nrustflags = ["-Clink-arg=-ObjC"]\n')
+        self.assertEqual(list(self.style.check_lint_config(self.root)), [])
+
+    def test_the_gate_reads_the_lint_config(self):
+        self.write("src/lib.rs", "pub fn f() {}\n")
+        self.write("clippy.toml", "allow-dbg-in-tests = true\n")
+        self.assertTrue(
+            any("lint-config" in line for line in self.style.run(self.root)),
+        )
+
+    def test_the_real_lint_config_passes(self):
+        self.assertEqual(list(self.style.check_lint_config(ROOT)), [])
+
+    def test_an_empty_err_arm_is_refused(self):
+        for text in (
+            "fn f() { match g() { Ok(v) => h(v), Err(_) => {} } }\n",
+            "fn f() { match g() { Ok(v) => h(v), Err(_error) => () } }\n",
+            "fn f() { if let Err(error) = g() {} }\n",
+            "fn f() {\n    match g() {\n        Ok(v) => h(v),\n        Err(_) => {\n        }\n    }\n}\n",
+        ):
+            with self.subTest(text=text):
+                self.assertFires("swallow", "src/lib.rs", text)
+        for text in (
+            "fn f() { match g() { Ok(v) => h(v), Err(e) => log(e) } }\n",
+            "fn f() { if let Err(error) = g() { log(error); } }\n",
+            'const S: &str = "Err(_) => {}";\n',
+            "// Err(_) => {} is refused\nfn f() {}\n",
+            "fn f() {\n    match g() {\n        Ok(v) => h(v),\n        Err(_) => {\n"
+            "            // The peer left; there is nothing to report.\n        }\n    }\n}\n",
+            "fn f() { if let Err(_) = g() { /* best effort */ } }\n",
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(self.findings("src/lib.rs", text), [])
+
+    def test_if_let_checks_the_body_after_the_entire_operand(self):
+        for operand in (
+            "run(|| {})",
+            "run(|| { check(); })",
+            "{ g() }",
+            "&mut { g() }",
+            "run::<for<'a> fn(&'a ())>()",
+            "make_result!{}",
+            "if ready() { g() } else { h() }",
+            "if { ready() } { g() } else { h() }",
+            "run(|| {\n // caller supplied callback\n})",
+            "match g() { value => value }",
+            "items[{ pick() }].clone()",
+            # A brace after a comparison is its operand; one after the `>`
+            # that closes a turbofish or a cast's type is the branch.
+            "result && count > { let low = 1; low + 1 }",
+            "result && count < { 2 }",
+            "x as Result<(), E>",
+            "Vec::<u8>::new().first().copied().ok_or(())",
+        ):
+            with self.subTest(operand=operand):
+                head = f"fn f() {{ if let Err(err) = {operand} "
+                self.assertEqual(
+                    self.findings("src/lib.rs", head + "{ report(err); } }"), []
+                )
+                self.assertFires("swallow", "src/lib.rs", head + "{} }")
+
     def test_a_method_named_allow_is_not_a_suppression(self):
         self.assertEqual(
             self.findings("src/lib.rs", "fn f(l: L) { l.allow(1); }\n"), []
@@ -540,6 +670,16 @@ class RustStyle(unittest.TestCase):
                 )
                 findings = list(self.style.check_lint_table(self.root))
                 self.assertEqual(bool(findings), level != "deny", findings)
+
+    def test_a_dashed_spelling_cannot_set_a_required_lint_twice(self):
+        self.write(
+            "Cargo.toml",
+            MANIFEST.replace(
+                'unwrap_used = "deny"', 'unwrap_used = "deny"\nunwrap-used = "allow"'
+            ),
+        )
+        findings = list(self.style.check_lint_table(self.root))
+        self.assertTrue(any("set twice" in line for line in findings), findings)
 
     def test_a_group_allowed_above_a_required_lint_is_refused(self):
         weakened = MANIFEST.replace(

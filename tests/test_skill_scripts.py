@@ -4096,20 +4096,21 @@ class SkillRefsTests(unittest.TestCase):
     def check(self, refs, extra=()):
         with tempfile.TemporaryDirectory() as repo:
             repo = Path(repo)
-            files = dict(extra) | {
+            files = {
                 "Makefile": "hooks:\n\ttrue\nindent:\n\ttrue\nfmt_all:\n\ttrue\n"
                 "test lint: hooks\n\ttrue\nindent-check:= yes\n",
                 ".github/workflows/check.yml": "jobs:\n  gates:\n"
                 "    strategy:\n      matrix:\n        include:\n"
                 "          - lane: rust\n          - lane: portable\n",
-                "scripts/test.sh": "#!/bin/sh\ncase $1 in --fixture) ;; esac\n",
+                "scripts/test.sh": "#!/bin/sh\ncase $1 in --fixture) ;; esac\n"
+                'gate skill-refs "$ROOT/scripts/check-skill-refs.py"\n',
                 "src/main.rs": "fn main() {}\n",
                 "Cargo.toml": "[package]\n",
                 ".claude/skills/codetrial-verify/SKILL.md": skill("codetrial-verify"),
                 ".claude/skills/fixture/guide.md": "# Guide\n",
                 ".claude/skills/fixture/target.md": GOOD_TARGET,
                 ".claude/skills/fixture/refs.md": refs,
-            }
+            } | dict(extra)
             for name, text in files.items():
                 (repo / name).parent.mkdir(parents=True, exist_ok=True)
                 (repo / name).write_text(text)
@@ -4121,6 +4122,36 @@ class SkillRefsTests(unittest.TestCase):
             return subprocess.run(
                 [sys.executable, str(script)], cwd=repo, capture_output=True, text=True
             )
+
+    def test_a_check_script_nothing_runs_or_names_is_reported(self):
+        unrun = {
+            "scripts/check-orphan.py": "",
+            "scripts/orphan-check.sh": "",
+            "scripts/check-in-ci.py": "",
+            "scripts/check-in-hook.mjs": "",
+            "scripts/check-by-hand.py": "",
+            "scripts/checker-helper.py": "",
+            "scripts/check-in-a-comment.py": "",
+            "scripts/check-by-claude.py": "",
+            ".claude/settings.json": '{"command": "python3 scripts/check-by-claude.py"}\n',
+            ".github/workflows/ci.yml": "run: python3 scripts/check-in-ci.py\n"
+            "# scripts/check-in-a-comment.py is only named here\n",
+            "scripts/git-pre-commit.sh": 'node "$ROOT/scripts/check-in-hook.mjs"\n',
+            ".claude/skills/codetrial-verify/SKILL.md": skill(
+                "codetrial-verify",
+                body="# Verify\n\nRun `scripts/check-by-hand.py` before a release.\n",
+            ),
+        }
+        result = self.check(RESOLVING, unrun)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertEqual(
+            result.stdout.splitlines(),
+            [
+                "codetrial-verify/SKILL.md: does not name scripts/check-in-a-comment.py",
+                "codetrial-verify/SKILL.md: does not name scripts/check-orphan.py",
+                "codetrial-verify/SKILL.md: does not name scripts/orphan-check.sh",
+            ],
+        )
 
     def test_references_that_resolve_print_nothing(self):
         result = self.check(RESOLVING)

@@ -358,8 +358,8 @@ fn set_rules_are_held_to_their_bounds_at_both_ends() {
         decoded(&changed)
     };
     let (low, high) = (
-        crate::config::MIN_DURATION_MIN as u64,
-        crate::config::MAX_DURATION_MIN as u64,
+        u64::from(crate::config::MIN_DURATION_MIN),
+        u64::from(crate::config::MAX_DURATION_MIN),
     );
     let hints = default_number("maxHintRungs");
     for (field, accepted, refused) in [

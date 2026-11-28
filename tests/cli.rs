@@ -356,7 +356,6 @@ fn spawn_server(build: impl Fn(&str) -> Command) -> (String, ServerProcess) {
                     || error.starts_with(SIGKILL_PREFIX) =>
             {
                 last = error;
-                continue;
             }
             Err(error) => panic!("{error}"),
         }

@@ -60,7 +60,9 @@ function takeOverRecorder(page) {
       window.captureHandle = config.handle;
       try {
         configure?.(config);
-      } catch {}
+      } catch {
+        // The test needs only the handle; the real call may refuse it here.
+      }
     };
     navigator.mediaDevices.getDisplayMedia = () =>
       new Promise((grant, refuse) => (window.picker = { grant, refuse }));

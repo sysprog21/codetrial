@@ -79,7 +79,9 @@ class Element {
     this.markup = [];
     for (const name of MARKUP) {
       Object.defineProperty(this, name, {
-        set: (value) => void this.markup.push(String(value)),
+        set: (value) => {
+          this.markup.push(String(value));
+        },
         get: () => this.markup.at(-1) ?? "",
       });
     }

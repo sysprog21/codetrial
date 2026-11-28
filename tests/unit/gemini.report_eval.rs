@@ -162,7 +162,7 @@ fn rate(values: impl IntoIterator<Item = bool>) -> Option<f64> {
     let (yes, count) = values.into_iter().fold((0, 0), |(yes, count), value| {
         (yes + usize::from(value), count + 1)
     });
-    (count > 0).then(|| yes as f64 / count as f64)
+    (count > 0).then(|| yes as f64 / f64::from(count))
 }
 
 fn paired_metrics(base: &Value, other: &Value) -> Value {

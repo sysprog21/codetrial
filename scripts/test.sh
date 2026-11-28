@@ -652,6 +652,16 @@ gate src-test-bodies src_test_bodies
 # say why, no markers or CJK, and no file growing past its ceiling.
 gate rust-style "$PYTHON" "$ROOT/scripts/check-rust-style.py" --baseline origin/main
 
+# What a whole-tree rule cannot refuse without first rewriting hundreds of old
+# lines that are fine: comments narrating the change, markers and emoji outside
+# Rust, an eslint-disable or a Python skip with no reason. Only the lines added
+# since the branch left origin/main are judged.
+gate added-lines "$PYTHON" "$ROOT/scripts/check-added-lines.py" --base origin/main
+
+# Python, Rust and the browser each forgive different things in a JSON file: a
+# duplicate key, a NaN, an integer the browser rounds.
+gate json "$PYTHON" "$ROOT/scripts/check-json.py"
+
 # webrtc-sys needs Clang 21+ on Linux, and without one clippy and cargo-test
 # fail on a build script rather than on anything this tree did. The Makefile's
 # default, for a run that did not come through `make check`: a caller's own CXX
@@ -674,10 +684,13 @@ gate --lane rust cargo-test cargo test --locked --workspace --manifest-path "$RO
 gate --lane rust browser-server-tests browser_tests server
 gate desktop-fmt cargo fmt --check --manifest-path "$ROOT/desktop/Cargo.toml"
 
-# The structure lints and the tool's own tests need rust-analyzer and minutes of
-# indexing, so they run daily in .github/workflows/structure.yml, not here. The
-# formatting of the tool is cheap and stays.
+# The structure lints and the tool's end-to-end tests need rust-analyzer and
+# minutes of indexing, so they run daily in .github/workflows/structure.yml, not
+# here. The formatting of the tool and its unit tests are cheap and stay; the
+# unit tests parse the committed debt list, so an entry without its reason fails
+# here rather than a day later.
 gate structure-fmt cargo fmt --check --manifest-path "$ROOT/tools/check-structure/Cargo.toml"
+gate --lane rust structure-unit-tests cargo test --locked --bins --manifest-path "$ROOT/tools/check-structure/Cargo.toml"
 gate --lane rust desktop desktop_gate
 
 gate gen-problems "$PYTHON" "$ROOT/scripts/gen-problems.py" --check
@@ -714,6 +727,8 @@ gate gate-evidence-tests unittest_gate "$ROOT/tests/test_check_gate_evidence.py"
 gate fetch-gate-note-tests unittest_gate "$ROOT/tests/test_fetch_gate_note.py"
 gate gate-approve-tests unittest_gate "$ROOT/tests/test_gate_approve.py"
 gate rust-style-tests unittest_gate "$ROOT/tests/test_check_rust_style.py"
+gate added-lines-tests unittest_gate "$ROOT/tests/test_check_added_lines.py"
+gate json-tests unittest_gate "$ROOT/tests/test_check_json.py"
 gate ceiling-hotspots-tests unittest_gate "$ROOT/tests/test_ceiling_hotspots.py"
 gate test-gate-tests unittest_gate "$ROOT/tests/test_test_gate.py"
 gate env-check-tests unittest_gate "$ROOT/tests/test_env_check.py"

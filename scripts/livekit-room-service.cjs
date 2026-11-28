@@ -117,7 +117,10 @@ async function roomService(method, body) {
     error.status = response.status;
     try {
       error.code = JSON.parse(text).code;
-    } catch {}
+    } catch {
+      // A body that is not JSON has no Twirp code; the status still says
+      // what failed.
+    }
     throw error;
   }
 

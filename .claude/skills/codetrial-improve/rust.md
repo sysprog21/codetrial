@@ -17,8 +17,8 @@ an opt-out. The portable source check needs no Cargo metadata.
 |---|---|
 | `[workspace.lints.rustdoc]` | broken documentation links and public links to private items |
 | `[workspace.lints.rust]` | `unsafe` (forbid), `pub` items nothing outside the crate can name, unused lifetimes, ignored must-use results and stale lint expectations |
-| `[workspace.lints.clippy]` | `unwrap`, `panic!`, `todo!`, `dbg!`, `allow` attributes and any suppression without a `reason`, `.clone()` on an `Arc`/`Rc`, redundant clones, `+` on strings, a function with more than three bool parameters, needless `Option`/`Result` wrapping, a panic inside a function returning `Result`, glob imports, a missing `;` after a unit expression, `as` casts that drop a sign, synchronous guards across await, discarded futures and `mem::forget` |
-| `scripts/check-rust-style.py` | `#[allow]`, including inside `cfg_attr`, and `#![deny(warnings)]`; `#[ignore]` without a reason; `.expect("")`; TODO, FIXME, XXX, HACK, `ponytail:` and the untracked working documents named in a `//`, `///` or `/* */` comment; CJK in Rust or `web/`; a file past its ceiling; a lint in the required set loosened in `Cargo.toml` |
+| `[workspace.lints.clippy]` | `unwrap`, `panic!`, `todo!`, `dbg!`, `allow` attributes and any suppression without a `reason`, `.clone()` on an `Arc`/`Rc`, redundant clones, `+` on strings, a function with more than three bool parameters, needless `Option`/`Result` wrapping, a panic inside a function returning `Result`, glob imports, a missing `;` after a unit expression, `as` casts that drop a sign or widen losslessly (use `From`), synchronous guards across await, discarded futures, `mem::forget`, `unimplemented!`, a `_` arm standing for one variant, a `_` arm on `Err` that panics or exits without naming the error, `to_owned`/`to_vec` where `clone` is meant, `to_string` on a `&&str`, enum glob imports, `Rc<Mutex>`, a `continue` that changes nothing, `x = y.clone()` where `x.clone_from(&y)` reuses the buffer, a stable sort of primitives, a `;` after a block, a `Result` turned into an `Option` only to be dropped (`.ok();`; a best-effort one says so in an `expect`), a `bool` matched as two arms or turned into 0 or 1 by an `if`, `map_or(false, ..)` for `is_some_and`, `assert!(a == b)` for `assert_eq!`, or-patterns spelled arm by arm, a format argument named twice, a long literal without separators and a `Duration` built in the wrong unit |
+| `scripts/check-rust-style.py` | `#[allow]`, including inside `cfg_attr`, and `#![deny(warnings)]`; an `expect` of `warnings` or a lint group, whose expectation any one lint meets, so it waives the rest unseen; `cfg(clippy)`; a `clippy.toml` key or `.cargo/config.toml` rustflag that loosens the table; `#[ignore]` without a reason; `.expect("")`; an `Err(_) => {}` arm or an empty `if let Err(..)`; TODO, FIXME, XXX, HACK, `ponytail:` and the untracked working documents named in a `//`, `///` or `/* */` comment; CJK in Rust or `web/`; a file past its ceiling; a lint in the required set loosened in `Cargo.toml` |
 
 `tests/test_check_rust_style.py` holds the checker to each rule. The required
 set in the checker and the table in `Cargo.toml` change together, and the test
@@ -38,6 +38,20 @@ fuller:
 - `indexing_slicing`, `as_conversions`, `print_stderr`: the server's logs are
   `eprintln!` and its hot paths index; a blanket ban would be waived everywhere
   and mean nothing.
+- `map_err_ignore` and `cast_possible_truncation`: what each still matches is
+  deliberate. About ninety `map_err(|_| ..)` reduce an error to a client's
+  refusal code, a timeout or an integer overflow that carries nothing more; the
+  casts left are saturating `f64` casts, which have no `TryFrom`, and small
+  constants. Where a dropped error did say something (a stored JSON that does
+  not parse, a directory that is not private) it is carried now: carry the
+  cause in new code, and size a task default with `tasks::default_count`, not
+  an `as usize`.
+- `empty_structs_with_brackets`, `case_sensitive_file_extension_comparisons`,
+  `verbose_bit_mask` and `manual_assert`: each matches a form that means what
+  it says. `struct Nothing {}` deserializes a body of `{}` where a unit struct
+  wants `null`; the grader picks `.elf` and `.scala` files by their exact
+  suffix; `key & 7 == 0` reads a protobuf wire type; and `if true { panic!() }`
+  gives a closure that always panics its `Ok` type.
 
 ## Suppressing a lint
 
@@ -48,9 +62,9 @@ waiver cannot outlive its cause. `allow` is refused outright.
 
 A target-dependent waiver is `#[cfg_attr(not(test), expect(..., reason = ".."))]`,
 because an `expect` that holds in one build and not the other is itself a
-finding. Integration test crates open with one `#![expect(clippy::unwrap_used,
-reason = ...)]` naming only the lints that file uses; unit tests get the same
-through `clippy.toml`.
+finding. Test code needs no waiver for `unwrap` or `panic!`: `clippy.toml`
+allows both in unit and integration tests alike, so a `#![expect]` at the top
+of a `tests/*.rs` file is stale the day it is written.
 
 ## File size
 
@@ -224,8 +238,8 @@ hooks or the CI gate lanes; `.github/workflows/structure.yml` runs it once a day
 and fails on anything `tools/check-structure/debt.allow` does not list. Nothing
 else catches a new tangle or leak before that run, so run it yourself:
 
-- **before** a structural refactor, for the baseline (`--update-allow` into a
-  scratch file and diff it against `debt.allow`);
+- **before** a structural refactor, for the baseline (`--keys` into a scratch
+  file, diffed against the keys of `debt.allow`);
 - **after** any change that moves a type, adds a module or a file to a
   directory, or adds a field another module touches;
 - **before calling a structural refactor done**, with `--ratchet`.
@@ -237,8 +251,10 @@ cargo run --release --manifest-path tools/check-structure/Cargo.toml \
 ```
 
 Without `--allow` it prints every finding with the places that cause it; that
-report is where to start. Apply `--update-allow` to `debt.allow` only when the
-diff against the current list is removals. A new `module-cycle`, `tangle`,
+report is where to start. `--update-allow` on `debt.allow` removes fixed
+entries, moves a circle that shrank to its new key under the reason it had,
+keeps every other reason, and refuses a finding the list does not hold; an entry is added only by hand, with ` # ` and its reason, in a
+commit of its own. A new `module-cycle`, `tangle`,
 `shallow-module` or `wide-directory` means the change is wrong: reshape it, do
 not list it.
 

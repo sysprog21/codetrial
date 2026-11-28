@@ -926,7 +926,7 @@ fn code_analysis_separates_a_rename_from_an_argument_swap() {
     );
 
     // Pointing a reference at another name already in scope is not a rename
-    // either: the function now returns something else.
+    // either: after the edit, the function returns something else.
     for (before, after) in [
         (
             "def f(x, y):\n    return x\n",

@@ -280,10 +280,12 @@ locks held across await and `mem::forget` are explicit denials too.
 `[workspace.lints.rust] unsafe_code = "forbid"` is what keeps this crate's
 `unsafe` count at zero — `forbid` rather than `deny`, so a local `#[allow]`
 cannot reintroduce it. `scripts/check-rust-style.py` holds what a lint cannot
-ask: that this table stays strict, that no `allow` or bare `#[ignore]` appears,
-that no marker or CJK text lands in Rust or `web/`, and that no file passes its
-Git-derived line ceiling. By default, a file may not exceed 1500 lines or its
-committed size at the same path in HEAD, whichever is larger. Without Git
+ask: that this table stays strict, that no `clippy.toml` key or `rustflags`
+entry loosens it, that no `allow`, bare `#[ignore]`, `cfg(clippy)` or `expect`
+of a whole lint group appears, that no marker or CJK text lands in Rust or
+`web/`, and that no file passes its Git-derived line ceiling. By default, a
+file may not exceed 1500 lines or its committed size at the same path in HEAD,
+whichever is larger. Without Git
 every file gets the 1500-line limit and the explicit baseline below cannot be
 read, so a source archive fails this gate; run it from a clone. The gate passes
 `--baseline origin/main`: larger files present in both the baseline and HEAD
@@ -296,6 +298,32 @@ history fails locally and in CI. Diverged refs are supported, but the branch
 must still satisfy any smaller baseline limit. The rules and the lints left
 off on purpose are in the Rust profile of codetrial-improve,
 `.claude/skills/codetrial-improve/rust.md`.
+
+Code that drops an error, a debugging leftover, a test run alone or skipped
+with no reason, and a blanket suppression are refused across the whole tree by
+the linters that read the code: ruff (`S110`, `S112`, `T100`, `PGH003`,
+`PGH004`), ESLint (`no-empty`, `no-debugger`, `no-console` in `web/`, `.only`
+and `.skip` in tests), clippy (`unused_result_ok`) and the rust-style check (an
+empty `Err` arm); none had a match when it was adopted. What no linter judges
+is prose, which this tree has long written its own way, so
+`scripts/check-added-lines.py` holds only the comments a change adds since the
+merge base with `origin/main` (with `--staged`, the index against HEAD; with
+`--commits`, each commit named on stdin, on the lines none of its parents has,
+which for a merge is the resolution): a comment that narrates the change ("now
+uses", "as per the spec"), a marker in a comment outside Rust, an emoji in any
+comment, an `eslint-disable` missing a rule name or a `-- reason`, and a Python
+test skipped with no reason. It tells comments from strings and regular
+expression literals first. Its rules were narrowed against the lines this
+repository's own history added: replayed over the 800 non-merge commits of
+`main` before it existed, they raise fewer than twenty findings. The pre-commit
+hook runs it on the index, and the pre-push hook replays it on each outgoing
+commit that no remote holds yet, which a rebase or `--no-verify` kept from the
+pre-commit hook.
+
+`scripts/check-json.py` holds every tracked JSON file to what Python,
+serde_json and `JSON.parse` agree on: no duplicate key, no `NaN` or
+`Infinity`, no number past the double's range, no unpaired surrogate escape
+and no integer the browser would round.
 
 The compiler those lints run on is pinned in `rust-toolchain.toml`, so a new
 Rust release cannot fail an unchanged tree: Dependabot proposes each bump as
@@ -409,8 +437,9 @@ The findings that existed when the gate arrived are listed in
 also fails a listed entry that has been fixed, so the list shrinks in the
 change that fixes it; a day's run is what notices one that was not. When a gate failure is yours, fix the structure rather
 than the list: ask what the module is meant to hide, and narrow its interface
-instead of moving the leak elsewhere. Regenerate the list only to remove fixed
-entries:
+instead of moving the leak elsewhere. The list only shrinks through the tool:
+`--update-allow` removes fixed entries, keeps every remaining entry's reason,
+and refuses a finding the list does not hold, writing nothing.
 
 ```sh
 cargo run --release --manifest-path tools/check-structure/Cargo.toml \
@@ -706,7 +735,8 @@ checks the resulting commit's parent count, since Git has already removed
 `MERGE_HEAD` at that point. A user-owned `.local` hook still runs. CI checks a
 pull request's content.
 
-The pre-commit hook runs ESLint, `ruff check` and `shellcheck`, then
+The pre-commit hook runs `scripts/check-added-lines.py --staged` over the
+lines the index adds, then ESLint, `ruff check` and `shellcheck`, then
 `scripts/indent.sh --staged`, over a checkout of the index, so an unstaged edit
 neither fails a commit nor passes one, and it never stages anything itself.
 The formatting check is what `make indent` would change in the staged files,

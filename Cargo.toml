@@ -28,8 +28,8 @@ unfulfilled_lint_expectations = "deny"
 # were added, so denying them costs nothing and keeps it that way: a request
 # or a data packet that reaches an `unwrap` or a `panic!` takes the interview
 # down with it, and `dbg!` and `todo!` are leftovers. A startup invariant
-# says why with `expect`, which stays allowed. Test code is exempt through
-# clippy.toml for unit tests and a crate attribute in each tests/*.rs.
+# says why with `expect`, which stays allowed. Test code, unit and integration
+# alike, is exempt from `unwrap_used` and `panic` through clippy.toml.
 [workspace.lints.clippy]
 all = "deny"
 dbg_macro = "deny"
@@ -59,12 +59,56 @@ panic_in_result_fn = "deny"
 wildcard_imports = "deny"
 semicolon_if_nothing_returned = "deny"
 cast_sign_loss = "deny"
+# A widening `as` hides which casts can lose data; `From` says this one cannot.
+cast_lossless = "deny"
 
 # A guard held across an await blocks the executor; a dropped future never runs
 # and a forgotten guard never releases what it holds.
 await_holding_lock = "deny"
 let_underscore_future = "deny"
 mem_forget = "deny"
+
+# These had at most two matches each when added. `unimplemented!` is `todo!`
+# under another name. A wildcard arm standing for one variant swallows the next
+# variant added, and a `_` arm on `Err` that panics or exits hides which error it
+# was; an `Err(_) => {}` that does nothing is the rust-style check's. The rest are
+# clones, conversions, imports, locks and loop jumps that say less than the
+# plain form beside them.
+unimplemented = "deny"
+match_wildcard_for_single_variants = "deny"
+match_wild_err_arm = "deny"
+implicit_clone = "deny"
+inefficient_to_string = "deny"
+enum_glob_use = "deny"
+rc_mutex = "deny"
+needless_continue = "deny"
+
+# Pedantic lints with at most eight matches when added, each a clone, a sort
+# or a semicolon that does more work, or says less, than the form beside it:
+# assigning a clone where clone_from reuses the buffer, a stable sort of values
+# no order can tell apart, and a `;` after a block.
+assigning_clones = "deny"
+stable_sort_primitive = "deny"
+unnecessary_semicolon = "deny"
+
+# A Result turned into an Option only to be dropped reads as handled and is
+# not. It had two matches when added, both best-effort cleanups that now say
+# so in an expect.
+unused_result_ok = "deny"
+
+# Pedantic lints with at most eight matches when added, each a longer spelling
+# of a plainer form: a bool matched as two arms, a bool turned into 0 or 1 by an
+# if, map_or(false, ..) for is_some_and, assert!(a == b) that hides both sides,
+# or-patterns written out arm by arm, a format argument named twice, a long
+# literal with no separators, and a Duration of milliseconds counting minutes.
+match_bool = "deny"
+bool_to_int_with_if = "deny"
+manual_is_variant_and = "deny"
+manual_assert_eq = "deny"
+unnested_or_patterns = "deny"
+uninlined_format_args = "deny"
+unreadable_literal = "deny"
+duration_suboptimal_units = "deny"
 
 [workspace.lints.rustdoc]
 broken_intra_doc_links = "deny"

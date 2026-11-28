@@ -772,7 +772,7 @@ for (const [name, value] of Object.entries(files)) {
   const path = join(FIXTURES, name);
   const wanted = `${JSON.stringify(value, null, 2)}\n`;
   if (check) {
-    let found = null;
+    let found;
     try {
       found = readFileSync(path, "utf8");
     } catch {

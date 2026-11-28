@@ -98,7 +98,8 @@ cargo run --release --manifest-path tools/check-structure/Cargo.toml \
 ```
 
 ```text
-check-structure [crate_or_mod] [--allow <path> [--ratchet]] [--update-allow <path>] [--timings] [--all-ties]
+check-structure [crate_or_mod] [--allow <path> [--ratchet]] [--update-allow <path>] [--keys]
+                [--timings] [--all-ties]
                 [--target <triple>] [-F, --features <features>]
                 [--all-features] [--no-default-features]
 ```
@@ -108,10 +109,13 @@ check-structure [crate_or_mod] [--allow <path> [--ratchet]] [--update-allow <pat
 | `crate_or_mod` | Check only one crate or module, for example `codetrial::agent`. |
 | `--allow <path>` | Suppress the listed findings. A finding not listed still fails. |
 | `--ratchet` | With `--allow`, also fail while the list holds an entry that is fixed, or a circle that has since shrunk and is listed under another key, so the debt only shrinks. Judges the whole list, so it cannot be given a `crate_or_mod`. |
-| `--update-allow <path>` | Write the current findings to `<path>` and exit 0. Cannot be combined with `--allow` or a `crate_or_mod`, which would drop every entry outside it. |
+| `--update-allow <path>` | Drop the entries of `<path>` that are fixed, keeping each remaining entry's reason (a circle that shrank keeps the reason of the entry it shrank from), and exit 0. A finding not on the list is refused, naming it, and nothing is written: only a person can say why a finding is allowed. Cannot be combined with `--allow` or a `crate_or_mod`, which would drop every entry outside it. |
+| `--keys` | Print `<lint> <key>` for each finding, the form an entry starts with, and exit 0. For a baseline before a refactor, or to write a new entry by hand. |
 | `--timings` | Print on stderr how long the index, the model and the lints took. |
 | `--all-ties` | List every tie of a module cycle or tangle. Without it, the report shows the seven dearest and counts the rest. |
 | `--target`, `--features`, `--all-features`, `--no-default-features` | Choose the configuration, as `cargo check` takes them. |
+
+Run from inside another workspace, such as this tool's own directory, every listed finding would read as fixed and `--update-allow` would empty the list. So `--allow` and `--update-allow` both exit 2, writing nothing, on a list that names crates of which this workspace has none; a list of directories alone is judged by its directories.
 
 Exit status: 0 clean, 1 findings (or a stale entry under `--ratchet`), 2 the
 tool could not run (no workspace, no `rust-analyzer`, a malformed index).
@@ -120,11 +124,16 @@ When `GITHUB_ACTIONS=true`, each finding is also written as an
 
 ## The debt list
 
-`debt.allow` has one `<lint> <key>` per line, sorted. It records the findings
-that existed when the gate was added, so the gate could start refusing new
-ones. Fix a finding by changing the structure, not the list: decide what the
-module is meant to hide, and narrow its interface rather than moving the leak
-to another module. Remove the entry in the same change with `--update-allow`.
+`debt.allow` has one `<lint> <key> # <reason>` per line, sorted. An entry
+without a reason is a parse error, and so is one listed twice; a unit test
+parses the committed list, so `scripts/test.sh` refuses one the daily run would.
+The list records the findings that existed when the gate was added, so the gate
+could start refusing new ones. Fix a finding by changing the structure, not the
+list: decide what the module is meant to hide, and narrow its interface rather
+than moving the leak to another module. Remove the entry in the same change
+with `--update-allow`, which never lists a finding no entry covered (a circle
+that splits keeps its reason for both halves). A finding that has to be allowed
+is added by hand, with its reason, in a commit of its own that says why.
 
 ## Tests
 

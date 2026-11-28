@@ -272,7 +272,7 @@ function emit(name, wanted) {
     writeFileSync(path, wanted);
     return;
   }
-  let found = null;
+  let found;
   try {
     found = readFileSync(path, "utf8");
   } catch {

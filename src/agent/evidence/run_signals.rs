@@ -150,13 +150,13 @@ impl EvidenceLedger {
         let total = payload
             .get("total")
             .and_then(serde_json::Value::as_u64)
-            .unwrap_or(0)
-            .min(u64::from(u32::MAX)) as u32;
+            .unwrap_or(0);
+        let total = u32::try_from(total).unwrap_or(u32::MAX);
         let passed = payload
             .get("passed")
             .and_then(serde_json::Value::as_u64)
-            .unwrap_or(0)
-            .min(u64::from(total)) as u32;
+            .unwrap_or(0);
+        let passed = u32::try_from(passed).map_or(total, |passed| passed.min(total));
         let failed = total.saturating_sub(passed);
         let executed = total > 0 && !run_failed_to_start(payload);
         let signature = failure_signature(payload);

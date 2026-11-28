@@ -44,6 +44,7 @@ struct Options {
     scope: Option<String>,
     allow: Option<PathBuf>,
     update_allow: Option<PathBuf>,
+    keys: bool,
     ratchet: bool,
     timings: bool,
     all_ties: bool,
@@ -53,7 +54,7 @@ struct Options {
 fn usage() -> String {
     format!(
         "\
-usage: {TOOL} [crate_or_mod] [--allow <path> [--ratchet]] [--update-allow <path>]
+usage: {TOOL} [crate_or_mod] [--allow <path> [--ratchet]] [--update-allow <path>] [--keys]
        [--timings] [--all-ties] [--target <triple>] [-F, --features <features>] [--all-features]
        [--no-default-features]
 
@@ -67,8 +68,11 @@ options:
   --ratchet                    with --allow, fail while the list holds an entry
                                that is fixed or smaller (a circle that shrank),
                                so the debt only shrinks; not with <crate_or_mod>
-  --update-allow <path>        write current diagnostics to <path>; not with
+  --update-allow <path>        drop the entries of <path> that are fixed; refuses,
+                               writing nothing, a finding not on it; not with
                                <crate_or_mod>, which would drop the rest
+  --keys                       print `<lint> <key>` for each finding, the form an
+                               allowlist entry starts with, and exit 0
   --timings                    print on stderr how long the index, the model and the
                                lints took
   --all-ties                   list every tie of a circle, not the first seven
@@ -92,8 +96,9 @@ A flag's value is the next word, or follows `=`: `--target=<triple>`.
 }
 
 /// The flags, and whether each takes a value. `-F` is `--features`.
-const FLAGS: [(&str, bool); 9] = [
+const FLAGS: [(&str, bool); 10] = [
     ("--allow", true),
+    ("--keys", false),
     ("--ratchet", false),
     ("--timings", false),
     ("--all-ties", false),
@@ -113,6 +118,7 @@ fn parse_arguments(arguments: &[String]) -> Result<Options, String> {
         scope: None,
         allow: None,
         update_allow: None,
+        keys: false,
         ratchet: false,
         timings: false,
         all_ties: false,
@@ -147,6 +153,7 @@ fn parse_arguments(arguments: &[String]) -> Result<Options, String> {
         match flag {
             "--allow" => options.allow = Some(PathBuf::from(value)),
             "--update-allow" => options.update_allow = Some(PathBuf::from(value)),
+            "--keys" => options.keys = true,
             "--ratchet" => options.ratchet = true,
             "--timings" => options.timings = true,
             "--all-ties" => options.all_ties = true,
@@ -159,6 +166,9 @@ fn parse_arguments(arguments: &[String]) -> Result<Options, String> {
     }
     if options.allow.is_some() && options.update_allow.is_some() {
         return Err("'--allow' and '--update-allow' cannot be given together".to_owned());
+    }
+    if options.keys && (options.allow.is_some() || options.update_allow.is_some()) {
+        return Err("'--keys' only lists findings, so it takes no allowlist".to_owned());
     }
     if options.ratchet && options.allow.is_none() {
         return Err("'--ratchet' needs '--allow'".to_owned());
@@ -238,17 +248,72 @@ fn run(options: Options) -> Result<bool, Error> {
         );
     }
 
-    if let Some(path) = options.update_allow {
-        let allow = AllowList::from_diagnostics(&all);
-        allow.write(&path)?;
-        eprintln!("{TOOL}: wrote {} entries to {}", all.len(), path.display());
+    if options.keys {
+        for diagnostic in &all {
+            println!("{} {}", diagnostic.lint.name(), diagnostic.key);
+        }
         return Ok(true);
     }
 
-    let (reported, fixed_allowed, allow_shown) = match &options.allow {
-        Some(path) => {
-            let allow = AllowList::read(path)?;
+    // A key is a directory (`src/web/`) or starts with the crate it is in; a
+    // list naming none of this workspace's is another workspace's, and judging
+    // it here would call every entry fixed.
+    let knows = |name: &str| match name.strip_suffix('/') {
+        Some(directory) => workspace.root.join(directory).is_dir(),
+        None => lint::resolve_node(&model, name).is_some(),
+    };
 
+    // Each list is read once, so one piped in (`--allow /dev/stdin`) is the
+    // same list when it is checked here and when it is applied below.
+    let allow = match &options.allow {
+        Some(path) => Some((path, AllowList::read(path)?)),
+        None => None,
+    };
+    let update = match &options.update_allow {
+        Some(path) => Some((path, AllowList::read_or_empty(path)?)),
+        None => None,
+    };
+    for (path, list) in allow.iter().chain(&update) {
+        if list.names_nothing_known(knows) {
+            return Err(Error::new(format!(
+                "{} names no crate or directory of this workspace ({}); run from the \
+                 workspace it lists, or, if every crate it names is gone, remove \
+                 those entries by hand",
+                path.display(),
+                workspace.root.display()
+            )));
+        }
+    }
+
+    if let Some((path, list)) = update {
+        return match list.updated(&all) {
+            Ok(allow) => {
+                allow.write(path)?;
+                eprintln!(
+                    "{TOOL}: wrote {} entries to {}",
+                    allow.len(),
+                    path.display()
+                );
+                Ok(true)
+            }
+            Err(new) => {
+                for diagnostic in &new {
+                    eprintln!(
+                        "{TOOL}: {} {} is not on the list; fix it, or add it to {} by hand \
+                         with ` # ` and why it is allowed",
+                        diagnostic.lint.name(),
+                        diagnostic.key,
+                        path.display()
+                    );
+                }
+                eprintln!("{TOOL}: {} left unchanged", path.display());
+                Ok(false)
+            }
+        };
+    }
+
+    let (reported, fixed_allowed, allow_shown) = match allow {
+        Some((path, allow)) => {
             // Under a scope the findings are only some of the workspace's, so
             // an entry the scope does not reach is not one that was fixed.
             let fixed = if scope.is_some() {
@@ -403,6 +468,8 @@ mod tests {
             &["--no-default-features=true"],
             &["--allow", "a", "--allow", "b"],
             &["--allow", "a", "--update-allow", "b"],
+            &["--keys", "--allow", "a"],
+            &["--keys", "--update-allow", "a"],
             &["--ratchet"],
             &["--allow", "a", "--ratchet", "--ratchet"],
             &["my-crate", "--update-allow", "a"],

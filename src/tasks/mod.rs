@@ -75,6 +75,13 @@ pub fn default_number(key: &str) -> u64 {
     DEFAULTS[key].as_u64().expect("numeric task default")
 }
 
+/// A task default that counts or sizes something in memory: a limit on a
+/// list's length or a byte budget. The table is checked in, so a value past
+/// `usize` is a broken build, not an input.
+pub fn default_count(key: &str) -> usize {
+    usize::try_from(default_number(key)).expect("task default fits in usize")
+}
+
 pub fn default_value(key: &str) -> Value {
     DEFAULTS[key].clone()
 }

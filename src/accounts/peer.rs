@@ -113,7 +113,7 @@ pub(crate) struct Session {
 
 /// A round index as the narrow integer the tables store it in.
 pub(crate) fn round_idx(index: usize) -> rusqlite::Result<u8> {
-    u8::try_from(index).map_err(|_| rusqlite::Error::InvalidQuery)
+    u8::try_from(index).map_err(crate::accounts::unwritable)
 }
 
 impl Round {
@@ -125,7 +125,7 @@ impl Round {
 }
 
 pub(crate) fn entropy() -> rusqlite::Result<String> {
-    random_token(32).map_err(|_| rusqlite::Error::InvalidQuery)
+    random_token(32).map_err(crate::accounts::unwritable)
 }
 
 pub(crate) fn load(connection: &Connection, id: &str) -> rusqlite::Result<Option<Session>> {
@@ -137,8 +137,7 @@ pub(crate) fn load(connection: &Connection, id: &str) -> rusqlite::Result<Option
         )
         .optional()?;
     let Some(data) = data else { return Ok(None) };
-    let mut session: Session =
-        serde_json::from_str(&data).map_err(|_| rusqlite::Error::InvalidQuery)?;
+    let mut session: Session = serde_json::from_str(&data).map_err(crate::accounts::undecodable)?;
     session.members = connection.prepare("SELECT slot,peer_members.user_id,participant_identity,entered_at,last_seen_at,users.login,peer_profiles.nickname FROM peer_members JOIN users ON users.id=peer_members.user_id LEFT JOIN peer_profiles ON peer_profiles.user_id=users.id WHERE session_id=?1 ORDER BY slot")?.query_map([id], |row| {
         let slot = usize::from(row.get::<_, u8>(0)?);
         Ok(Member { slot, user_id: row.get(1)?, identity: row.get(2)?, entered_at: row.get(3)?, last_seen_at: row.get(4)?, login: row.get(5)?, nickname:row.get(6)?, ready: false })
@@ -146,30 +145,30 @@ pub(crate) fn load(connection: &Connection, id: &str) -> rusqlite::Result<Option
 
     // Readiness changes belong to the session proposal and are persisted in
     // that proposal rather than inferred from a live connection.
-    let data: Value = serde_json::from_str(&data).map_err(|_| rusqlite::Error::InvalidQuery)?;
+    let data: Value = serde_json::from_str(&data).map_err(crate::accounts::undecodable)?;
     for member in &mut session.members {
         member.ready = data["ready"][member.slot].as_bool().unwrap_or(false);
     }
     session.rounds = connection
         .prepare("SELECT state_json FROM peer_rounds WHERE session_id=?1 ORDER BY idx")?
         .query_map([id], |row| row.get::<_, String>(0))?
-        .map(|row| serde_json::from_str(&row?).map_err(|_| rusqlite::Error::InvalidQuery))
+        .map(|row| serde_json::from_str(&row?).map_err(crate::accounts::undecodable))
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(Some(session))
 }
 
 pub(crate) fn save(connection: &Connection, session: &Session) -> rusqlite::Result<()> {
-    let mut state = serde_json::to_value(session).map_err(|_| rusqlite::Error::InvalidQuery)?;
+    let mut state = serde_json::to_value(session).map_err(crate::accounts::unwritable)?;
     state["ready"] = json!([
         session.members.first().is_some_and(|m| m.ready),
         session.members.get(1).is_some_and(|m| m.ready)
     ]);
-    connection.execute("INSERT INTO peer_sessions (id,creator_id,status,version,settings_json,state_json,created_at,expires_at,provider_id,room_name,room_generation,hard_deadline,outcome,room_deleted_at,delete_attempts,next_delete_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16) ON CONFLICT(id) DO UPDATE SET status=excluded.status,version=excluded.version,state_json=excluded.state_json,provider_id=excluded.provider_id,room_name=excluded.room_name,room_generation=excluded.room_generation,hard_deadline=excluded.hard_deadline,outcome=excluded.outcome,room_deleted_at=excluded.room_deleted_at,delete_attempts=excluded.delete_attempts,next_delete_at=excluded.next_delete_at", params![session.id,session.creator_id,session.status,i64::try_from(session.version).map_err(|_| rusqlite::Error::InvalidQuery)?,session.settings_json(),state.to_string(),session.created_at,session.expires_at,session.provider_id,session.room_name,i64::try_from(session.room_generation).map_err(|_| rusqlite::Error::InvalidQuery)?,session.hard_deadline,session.outcome,session.room_deleted_at,session.delete_attempts,session.next_delete_at])?;
+    connection.execute("INSERT INTO peer_sessions (id,creator_id,status,version,settings_json,state_json,created_at,expires_at,provider_id,room_name,room_generation,hard_deadline,outcome,room_deleted_at,delete_attempts,next_delete_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16) ON CONFLICT(id) DO UPDATE SET status=excluded.status,version=excluded.version,state_json=excluded.state_json,provider_id=excluded.provider_id,room_name=excluded.room_name,room_generation=excluded.room_generation,hard_deadline=excluded.hard_deadline,outcome=excluded.outcome,room_deleted_at=excluded.room_deleted_at,delete_attempts=excluded.delete_attempts,next_delete_at=excluded.next_delete_at", params![session.id,session.creator_id,session.status,i64::try_from(session.version).map_err(crate::accounts::unwritable)?,session.settings_json(),state.to_string(),session.created_at,session.expires_at,session.provider_id,session.room_name,i64::try_from(session.room_generation).map_err(crate::accounts::unwritable)?,session.hard_deadline,session.outcome,session.room_deleted_at,session.delete_attempts,session.next_delete_at])?;
     for member in &session.members {
-        connection.execute("INSERT INTO peer_members (session_id,slot,user_id,participant_identity,entered_at,last_seen_at) VALUES (?1,?2,?3,?4,?5,?6) ON CONFLICT(session_id,slot) DO UPDATE SET participant_identity=excluded.participant_identity,entered_at=excluded.entered_at,last_seen_at=excluded.last_seen_at",params![session.id,u8::try_from(member.slot).map_err(|_| rusqlite::Error::InvalidQuery)?,member.user_id,member.identity,member.entered_at,member.last_seen_at])?;
+        connection.execute("INSERT INTO peer_members (session_id,slot,user_id,participant_identity,entered_at,last_seen_at) VALUES (?1,?2,?3,?4,?5,?6) ON CONFLICT(session_id,slot) DO UPDATE SET participant_identity=excluded.participant_identity,entered_at=excluded.entered_at,last_seen_at=excluded.last_seen_at",params![session.id,u8::try_from(member.slot).map_err(crate::accounts::unwritable)?,member.user_id,member.identity,member.entered_at,member.last_seen_at])?;
     }
     for round in &session.rounds {
-        connection.execute("INSERT INTO peer_rounds (session_id,idx,interviewer_slot,candidate_slot,problem_id,status,version,started_at,deadline,sealed_at,writer_lease,writer_lease_until,final_capture_incomplete,state_json) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14) ON CONFLICT(session_id,idx) DO UPDATE SET status=excluded.status,version=excluded.version,started_at=excluded.started_at,deadline=excluded.deadline,sealed_at=excluded.sealed_at,writer_lease=excluded.writer_lease,writer_lease_until=excluded.writer_lease_until,final_capture_incomplete=excluded.final_capture_incomplete,state_json=excluded.state_json", params![session.id,u8::try_from(round.index).map_err(|_| rusqlite::Error::InvalidQuery)?,u8::try_from(round.interviewer_slot).map_err(|_| rusqlite::Error::InvalidQuery)?,u8::try_from(round.candidate_slot).map_err(|_| rusqlite::Error::InvalidQuery)?,round.problem_id,round.status,i64::try_from(round.version).map_err(|_| rusqlite::Error::InvalidQuery)?,round.started_at,round.deadline,round.sealed_at,round.writer_lease,round.writer_lease_until,round.final_capture_incomplete,serde_json::to_string(round).map_err(|_| rusqlite::Error::InvalidQuery)?])?;
+        connection.execute("INSERT INTO peer_rounds (session_id,idx,interviewer_slot,candidate_slot,problem_id,status,version,started_at,deadline,sealed_at,writer_lease,writer_lease_until,final_capture_incomplete,state_json) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14) ON CONFLICT(session_id,idx) DO UPDATE SET status=excluded.status,version=excluded.version,started_at=excluded.started_at,deadline=excluded.deadline,sealed_at=excluded.sealed_at,writer_lease=excluded.writer_lease,writer_lease_until=excluded.writer_lease_until,final_capture_incomplete=excluded.final_capture_incomplete,state_json=excluded.state_json", params![session.id,u8::try_from(round.index).map_err(crate::accounts::unwritable)?,u8::try_from(round.interviewer_slot).map_err(crate::accounts::unwritable)?,u8::try_from(round.candidate_slot).map_err(crate::accounts::unwritable)?,round.problem_id,round.status,i64::try_from(round.version).map_err(crate::accounts::unwritable)?,round.started_at,round.deadline,round.sealed_at,round.writer_lease,round.writer_lease_until,round.final_capture_incomplete,serde_json::to_string(round).map_err(crate::accounts::unwritable)?])?;
     }
     Ok(())
 }

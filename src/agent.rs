@@ -1598,7 +1598,7 @@ pub fn elapsed_ms(state: &RuntimeState) -> u64 {
 
 /// Whole milliseconds, saturating rather than wrapping past `u64::MAX`.
 pub(crate) fn saturating_ms(duration: std::time::Duration) -> u64 {
-    duration.as_millis().min(u128::from(u64::MAX)) as u64
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
 /// How long ago the candidate's newest board arrived, in whole seconds, or

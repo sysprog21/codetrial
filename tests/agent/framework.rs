@@ -1280,7 +1280,7 @@ fn framework_evidence_is_server_stamped_validated_deduplicated_and_capped() {
     let direct = json!({
         "phase":"algorithm", "source":"candidate_speech", "kind":"observed",
         "confidence":88, "summary":"Candidate explained the invariant.\n",
-        "atMs":999999, "frameworkVersion":999, "unknown":"ignored"
+        "atMs":999_999, "frameworkVersion":999, "unknown":"ignored"
     });
     let first = record_framework_evidence(&mut state, &direct).unwrap();
     assert!(
@@ -2991,7 +2991,7 @@ fn test_progress_states_whether_the_code_changed_since_the_run() {
     // Retained evidence credit does not establish the outcome of edited code;
     // Python indentation and whitespace inside literals can change execution.
     state.code = tested.replace("\n    ", "\n        ");
-    assert!(state.code != tested);
+    assert_ne!(state.code, tested);
     let nudge = silence_nudge(&state, "", None);
     assert!(
         !nudge.contains("The latest test run executed the code on screen"),

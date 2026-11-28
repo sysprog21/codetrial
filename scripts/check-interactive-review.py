@@ -893,9 +893,9 @@ def recorded(base, head, login=None, keys=None, unavailable=False):
     completed review of exactly this code. It does not show who wrote the
     answers or that anyone understood them.
     """
-    # FIXME: nothing yet checks that the author can explain the change; the
-    # approver's question about one passage was withdrawn until a replacement
-    # is decided.
+    # Nothing yet checks that the author can explain the change: the
+    # approver's question about one passage was withdrawn, and no replacement
+    # has been decided.
     tip = head
     marker = read_marker(tip)
     while marker is None:

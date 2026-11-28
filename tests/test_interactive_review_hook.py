@@ -77,6 +77,7 @@ class InteractiveHookTests(unittest.TestCase):
             "check-commit-log.sh",
             "check-secrets.py",
             "check-cjk.py",
+            "check-added-lines.py",
             "check-interactive-review.py",
             "check-gate-evidence.py",
             "gate-note.py",

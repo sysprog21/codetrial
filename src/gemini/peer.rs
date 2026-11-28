@@ -50,8 +50,8 @@ pub fn load_peer_observer(
     }
     let audio_dir = present(values, "CODETRIAL_PEER_AUDIO_DIR").map(PathBuf::from);
     if let Some(dir) = &audio_dir {
-        ensure_private_directory(dir).map_err(|_| {
-            "CODETRIAL_PEER_AUDIO_DIR must be a writable private directory".to_owned()
+        ensure_private_directory(dir).map_err(|error| {
+            format!("CODETRIAL_PEER_AUDIO_DIR must be a writable private directory: {error}")
         })?;
     }
     Ok(Some(PeerObserverConfig {

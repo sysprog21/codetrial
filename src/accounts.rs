@@ -164,3 +164,19 @@ where
             Err(rusqlite::Error::InvalidQuery)
         })
 }
+
+/// A stored column that does not decode, with the decoder's own reason.
+/// rusqlite's `InvalidQuery` would display as "Query is not read-only" and send
+/// a reader looking at SQL; this displays the cause alone.
+pub(crate) fn undecodable(
+    error: impl std::error::Error + Send + Sync + 'static,
+) -> rusqlite::Error {
+    rusqlite::types::FromSqlError::Other(Box::new(error)).into()
+}
+
+/// A value that cannot be written as a parameter (an integer past the stored
+/// width, an encoding that failed, a token that could not be drawn), with its
+/// cause.
+pub(crate) fn unwritable(error: impl std::error::Error + Send + Sync + 'static) -> rusqlite::Error {
+    rusqlite::Error::ToSqlConversionFailure(Box::new(error))
+}

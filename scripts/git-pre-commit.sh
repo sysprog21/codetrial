@@ -46,6 +46,11 @@ fi
 python3 "$ROOT/scripts/check-secrets.py" || exit 1
 python3 "$ROOT/scripts/check-cjk.py" || exit 1
 
+# The comments this commit adds, read from the copied index: one narrating the
+# change, a marker or an emoji, an eslint-disable or a Python skip with no
+# reason.
+python3 "$ROOT/scripts/check-added-lines.py" --staged || exit 1
+
 if [ -f "$ROOT/.claude/skills/codetrial-review/SKILL.md" ]; then
     python3 "$ROOT/scripts/check-interactive-review.py" staged || exit 1
 fi
@@ -135,7 +140,7 @@ fi
 # Include deletions: removing a checker or a skill target can break its users.
 changed=$(git -c core.quotePath=false diff --cached --name-only)
 if [ "$(git config --get codetrial.hookSuite)" != true ] && printf '%s\n' "$changed" \
-    | grep -Eq '^scripts/(git-.*[.]sh|git-commit-msg[.]awk|install-git-hooks[.]sh|test-git-hooks[.]sh|check-commit-log[.]sh|check-secrets[.]py|check-cjk[.]py|check-interactive-review[.]py|hashchain[.]py|hashchain-base)$'; then
+    | grep -Eq '^scripts/(git-.*[.]sh|git-commit-msg[.]awk|install-git-hooks[.]sh|test-git-hooks[.]sh|check-commit-log[.]sh|check-secrets[.]py|check-cjk[.]py|check-added-lines[.]py|check-interactive-review[.]py|hashchain[.]py|hashchain-base)$'; then
     # The suite owns scratch repositories; none may inherit this index.
     (
         for variable in $(git rev-parse --local-env-vars); do

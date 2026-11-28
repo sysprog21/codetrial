@@ -1109,7 +1109,7 @@ async fn stacked_sdk_and_ingress_stores_exceed_the_local_age_bound_in_capture_ag
     };
     assert_eq!(first.data[0], 11, "the oldest delivered numbered frame");
     let age = delivered_at.duration_since(capture_time(first.data[0]));
-    assert_eq!(age, Duration::from_millis(79_000));
+    assert_eq!(age, Duration::from_secs(79));
     assert!(
         age > Duration::from_secs(40),
         "local dwell under 40 s still lets capture-to-send age pass 40 s"

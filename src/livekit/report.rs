@@ -510,7 +510,7 @@ enum RecoveryNotice {
 /// A wait as the page is told it, rounded up, so a page that waits exactly
 /// this long is not early.
 pub(super) fn whole_seconds(wait: std::time::Duration) -> u64 {
-    wait.as_millis().div_ceil(1000) as u64
+    u64::try_from(wait.as_millis().div_ceil(1000)).unwrap_or(u64::MAX)
 }
 
 fn recovery_notice(notice: RecoveryNotice) -> serde_json::Value {

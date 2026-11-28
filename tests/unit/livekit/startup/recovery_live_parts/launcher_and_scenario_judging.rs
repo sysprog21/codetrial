@@ -206,6 +206,10 @@ impl<'a> LiveEffects<'a> {
             "candidate_joined",
             json!({"room": self.room_name, "identity": self.candidate_identity}),
         );
+        #[expect(
+            clippy::unused_result_ok,
+            reason = "a timeout is judged below, by whether a reader was probed"
+        )]
         self.wait_for(
             Duration::from_secs(self.setup_s).saturating_sub(began.elapsed()),
             "the interview to start",
