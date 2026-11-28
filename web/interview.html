@@ -1083,14 +1083,24 @@
             >
           </p>
         </div>
-        <button
-          id="hide-avatar"
-          class="pill-button hide-avatar"
-          type="button"
-          hidden
-        >
-          Hide avatar
-        </button>
+        <!-- One row under the avatar, so Move stage adds no height to the
+             full stage. On the compact card Hide avatar goes and Move stage
+             takes the whole row. -->
+        <div class="jim-stage-controls">
+          <button id="move-stage" class="pill-button move-stage" type="button">
+            <span class="move-stage-left" aria-hidden="true">&larr;</span>
+            Move stage
+            <span class="move-stage-right" aria-hidden="true">&rarr;</span>
+          </button>
+          <button
+            id="hide-avatar"
+            class="pill-button hide-avatar"
+            type="button"
+            hidden
+          >
+            Hide avatar
+          </button>
+        </div>
         <!-- The candidate's own camera, so a screen recorder captures their
              face without opening the camera a second time. Shown only when
              the candidate says they are recording, below Jim and under his

@@ -304,31 +304,23 @@ stage down with it, and the toolbar's controls (Run tests in the editor, the
 drawing tools at the board) stay visible at every width the avatar is shown. The
 stylesheet's `4.25rem` is only the fallback before that first measurement. The
 stage takes no pointer events, so it can never swallow a click meant for the
-editor; the Hide avatar button and the captions re-enable them for themselves.
+editor; the stage controls and captions re-enable them for themselves.
 Below 1200px wide, beside an editor panel too narrow for the avatar, or over an
-expanded Example drawing, the avatar and its button are hidden rather than
-allowed to cover code or the drawing, and the captions move to the bottom
-corner.
+expanded Example drawing, the avatar and its button are hidden, so the smaller
+compact card covers less of the code and the drawing, and the captions move to
+the bottom corner.
 
-The same measurement tells the editor what the stage covers, and the editor
-keeps the side that costs it less out of its scroll range: the width beside the
-stage, reserved once for the whole editor, so rows below the stage end at the
-same column and leave an empty strip that is the reservation, not a layout gap;
-or the bottom rows under a compact card, measured with the page and the panel
-unscrolled, where they overlap most. The end of a long line and the caret typing
-there come to rest clear of the stage, and a click beside the code still reaches
-the editor. Code still passes under the compact card before it is scrolled. A
-card over half the editor's width never takes the width, which would leave less
-than half of the editor for the code. In the desktop shell, one window tall from
-1024px up, it always takes the bottom, as beside the widest sidebar: that is
-only room to scroll in a panel that scrolls itself, so it hides no row the card
-does not already cover. Below that, as on a phone, the page, not the editor, is
-what scrolls, so the card takes neither side and the page gets room past its end
-as tall as the part of the window the card covers, and stops a caret it scrolls
-into view above the card, so the last rows and the caret typing there come to
-rest clear of it, under the self-view and a long caption alike. A stage that
-does not fit in the window where it floats scrolls with the page under the
-toolbar and adds no such room.
+Move stage switches the full stage or the compact card to the opposite window
+edge at the same height, and its accessible name says which edge the next
+press goes to. Click or tap keeps editor focus, and Enter and Space keep focus
+on the button. The editor keeps its full width on both sides, with the caret
+and scroll position unchanged: the stage floats over the code rather than
+reserving room beside it, and moving it reveals what it covered. On the left it
+covers part of the sidebar instead, which the candidate chose and one press
+undoes. On a phone the compact card spans the bottom edge on either side, so
+Move stage has no visible effect there; the page instead gets room past its end
+as tall as the part of the window the card covers, so the last rows and the
+caret typing there scroll above it.
 
 Every VRM loads in a T-pose and the format ships no idle animation, so
 `loadVrm` drops the upper arms once at load. This is model-independent: without

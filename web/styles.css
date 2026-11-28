@@ -954,9 +954,8 @@ p {
    keeps in --jim-stage-top: a toolbar that wraps to two rows pushes the stage
    down instead of letting it cover Run tests, and 4.25rem is only the
    fallback before the first measurement.
-   pointer-events are off for the stage and back on only for the Hide avatar
-   control and captions, so the panel itself never swallows a click meant for
-   the editor. */
+   pointer-events are off for the stage and back on for its controls and
+   captions, so the panel itself never swallows a click meant for the editor. */
 .jim-stage {
   position: fixed;
   top: var(--jim-stage-top, 4.25rem);
@@ -1076,9 +1075,29 @@ p {
   display: none;
 }
 
-.hide-avatar {
-  pointer-events: auto;
+.jim-stage.on-left {
+  right: auto;
+  left: 1.5rem;
+}
+
+/* Move stage and Hide avatar share one row and fill it between them, so the
+   stage keeps the height it had with Hide avatar alone. Each grows from its
+   own label, and the smaller type and narrow padding keep both on one line
+   in the 168px stage, Show avatar being the wider label; at a larger default
+   font the second button wraps under rather than overflowing. */
+.jim-stage-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
   margin-top: 0.35rem;
+}
+
+.jim-stage-controls > .pill-button {
+  flex: 1 1 auto;
+  padding: 0.35rem 0.125rem;
+  font-size: var(--text-2xs);
+  white-space: nowrap;
+  pointer-events: auto;
 }
 
 /* A card on the stage like the turn line and captions. The alert tint is
@@ -1642,14 +1661,8 @@ p {
   position: absolute;
   inset: 0 0 0 var(--editor-gutter);
   margin: 0;
-  /* What Jim's stage covers, measured by interview.js. A border, not right
-     padding, which a textarea leaves out of its scroll range, nor a narrower
-     box, which would not take a click beside the code; the bottom is padded
-     so the text area never resizes as the card grows with the captions. */
   border: 0;
-  border-right: var(--jim-stage-reserve-right, 0px) solid transparent;
   padding: 1rem;
-  padding-bottom: calc(1rem + var(--jim-stage-reserve-bottom, 0px));
   font-family: var(--editor-font-family);
   font-size: var(--editor-font-size);
   line-height: 1.5;
@@ -1659,14 +1672,6 @@ p {
      scroll. Auto wrap (.wrap, below) hides the gutter and wraps instead. */
   white-space: pre;
   overflow: auto;
-}
-
-/* Forced colors paint a transparent border; a system color is kept. */
-@media (forced-colors: active) {
-  #editor,
-  #editor-highlight {
-    border-right-color: Canvas;
-  }
 }
 
 #editor-highlight {
@@ -1712,8 +1717,6 @@ p {
   width: var(--editor-gutter);
   margin: 0;
   padding: 1rem 0.5rem;
-  /* Follows the text layers' scrollTop, so it reserves the same bottom. */
-  padding-bottom: calc(1rem + var(--jim-stage-reserve-bottom, 0px));
   overflow: hidden;
   color: var(--code-gutter-ink);
   background-color: var(--code-gutter);
@@ -1734,8 +1737,6 @@ p {
      past what they can follow and the painted text would sit a line above the
      caret near the end of a long file. Wheel, keys, and the caret still scroll. */
   scrollbar-width: none;
-  /* Keeps the caret above the compact card while typing. */
-  scroll-padding-bottom: calc(1rem + var(--jim-stage-reserve-bottom, 0px));
   background: transparent;
   /* Transparent glyphs: the overlay supplies the visible, colored ones. */
   color: transparent;
@@ -4800,6 +4801,16 @@ html:has(body.practice-page) {
 /* Keep the cards hidden while the selected title mapping is unavailable. */
 .lobby .problem-grid.title-search-unavailable {
   display: none !important;
+}
+
+.move-stage-left,
+.move-stage-right {
+  display: none;
+}
+
+.jim-stage:not(.on-left) .move-stage-left,
+.jim-stage.on-left .move-stage-right {
+  display: inline;
 }
 
 .jim-volume-controls {
