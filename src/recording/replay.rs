@@ -3,7 +3,7 @@ use serde_json::Value;
 
 use crate::accounts::Accounts;
 
-use super::RecordingState;
+use super::{RETENTION_EXPIRES_AT, RecordingState};
 
 /// The replay, which is the interview without the video.
 ///
@@ -695,10 +695,12 @@ fn replay_view(
         // there.
         let recording: Option<(String, Option<i64>, i64)> = transaction
             .query_row(
-                "
-        SELECT state, expires_at, quota_exceeded FROM recordings
+                &format!(
+                    "
+        SELECT state, {RETENTION_EXPIRES_AT}, quota_exceeded FROM recordings
         WHERE interview_id = ?1 AND account_id = ?2
-        ",
+        "
+                ),
                 (interview_id, account_id),
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
@@ -713,7 +715,8 @@ fn replay_view(
             // Expiry is read here and written by the retention sweeper. A
             // deadline that has passed is a refusal whether or not the sweeper
             // has run yet, because the link outliving the file is the failure
-            // this check exists for.
+            // this check exists for. Before `ready` it holds the Drive grant's
+            // expiry unless `--expire` (`deleted_by = 'operator'`) set it.
             if expires_at.is_some_and(|expires_at| expires_at <= now) {
                 return Ok(SnapshotView::Expired);
             }

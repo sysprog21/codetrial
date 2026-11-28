@@ -2,14 +2,15 @@
 //! asked about it.
 
 use codetrial::recording::{
-    Clock, DELIVERY_BACKOFF_SECONDS, Failure, RETENTION_SECONDS, RecordingState, delete_recording,
-    deliver_recording, due_for_deletion, enqueue_delivery, record_egress_id, recording_by_id,
-    run_delivery_queue, sweep_recordings,
+    Clock, DELIVERY_BACKOFF_SECONDS, Failure, MIN_GRANT_REMAINING_SECONDS, RETENTION_SECONDS,
+    RecordingState, delete_recording, deliver_recording, due_for_deletion, enqueue_delivery,
+    record_egress_id, recording_by_id, run_delivery_queue, sweep_recordings,
 };
 
 use std::sync::Arc;
 
 use codetrial::recording::{BoxFuture, Recorder, RecordingProvider, StartEgress};
+use codetrial::recording::{SnapshotView::Expired, recording_summary, replay_snapshot};
 
 use crate::failure::{FakeDelivery, transferring};
 use crate::lifecycle::{FakeProvider, harness, start, state_of};
@@ -160,6 +161,10 @@ async fn a_job_that_arrives_after_the_row_was_deleted_is_not_recorded() {
 async fn a_delivery_out_of_attempts_is_due_a_retention_window_after_it_failed() {
     let (_scratch, accounts, _provider, clock, recorder) = harness("exhausted-deadline");
     let recording = transferring(&accounts, &recorder).await;
+    _scratch
+        .open()
+        .execute("UPDATE recordings SET expires_at = 1", [])
+        .unwrap();
     enqueue_delivery(&accounts, &recording.id, clock.now()).unwrap();
     let delivery = FakeDelivery::default();
     *delivery.refuse_transfer.lock().unwrap() = true;
@@ -226,7 +231,7 @@ async fn an_exhausted_delivery_whose_deletion_failed_is_due_again() {
     scratch
         .open()
         .execute(
-            "UPDATE recordings SET state = 'cleanup_failed', error = 'cleanup_failed'
+            "UPDATE recordings SET state = 'cleanup_failed', error = 'cleanup_failed', expires_at = 1
              WHERE id = ?1",
             [&recording.id],
         )
@@ -278,4 +283,339 @@ async fn an_adopted_job_is_stopped_when_its_row_was_deleted() {
         "the job nothing names is stopped: {stops:?}"
     );
     assert!(stops[0].starts_with("EG_orphan@"), "{stops:?}");
+}
+const FAIL_ONCE: &str = "
+    CREATE TRIGGER fail_finish BEFORE UPDATE ON recordings
+    WHEN NEW.state = 'ready' AND OLD.retries = 0
+    BEGIN SELECT RAISE(FAIL, 'finish'); END
+";
+
+fn revokes_of(drive: &FakeDelivery) -> usize {
+    drive
+        .calls()
+        .into_iter()
+        .filter(|call| call.contains("permission=permission-1"))
+        .count()
+}
+
+#[tokio::test]
+async fn transfer_retry_after_share_keeps_the_drive_expiry() {
+    let (scratch, accounts, _, clock, recorder) = harness("retry-keeps-expiry");
+    let (db, drive) = (scratch.open(), FakeDelivery::default());
+    let recording = transferring(&accounts, &recorder).await;
+    db.execute_batch(FAIL_ONCE).unwrap();
+    enqueue_delivery(&accounts, &recording.id, 1_000).unwrap();
+
+    run_delivery_queue(&accounts, &recorder, &drive).await;
+    assert_eq!(
+        state_of(&accounts, &recording.id),
+        RecordingState::Transferring
+    );
+    assert_eq!(*drive.shared_expires_at.lock().unwrap(), vec![87_400]);
+
+    clock.advance(60);
+    run_delivery_queue(&accounts, &recorder, &drive).await;
+    assert_eq!(state_of(&accounts, &recording.id), RecordingState::Ready);
+    assert_eq!(*drive.shared_expires_at.lock().unwrap(), vec![87_400]);
+    assert_eq!(revokes_of(&drive), 0);
+    assert_eq!(
+        recording_summary(&accounts, &recording.id, 1)
+            .unwrap()
+            .unwrap()
+            .expires_at,
+        Some(87_400)
+    );
+}
+
+#[tokio::test]
+async fn operator_retry_shortly_before_expiry_revokes_and_reshares() {
+    let (scratch, accounts, _, clock, recorder) = harness("operator-retry-reshare");
+    let (db, drive) = (scratch.open(), FakeDelivery::default());
+    let recording = transferring(&accounts, &recorder).await;
+    db.execute_batch(FAIL_ONCE).unwrap();
+    enqueue_delivery(&accounts, &recording.id, 1_000).unwrap();
+    db.execute("UPDATE delivery_queue SET attempts = 4", [])
+        .unwrap();
+
+    run_delivery_queue(&accounts, &recorder, &drive).await;
+    assert_eq!(state_of(&accounts, &recording.id), RecordingState::Failed);
+    assert_eq!(*drive.shared_expires_at.lock().unwrap(), vec![87_400]);
+
+    clock.advance(86_300);
+    enqueue_delivery(&accounts, &recording.id, clock.now()).unwrap();
+    run_delivery_queue(&accounts, &recorder, &drive).await;
+    assert_eq!(state_of(&accounts, &recording.id), RecordingState::Ready);
+    assert_eq!(revokes_of(&drive), 1);
+    assert_eq!(
+        *drive.shared_expires_at.lock().unwrap(),
+        vec![87_400, 173_700]
+    );
+    assert_eq!(
+        recording_summary(&accounts, &recording.id, 1)
+            .unwrap()
+            .unwrap()
+            .expires_at,
+        Some(173_700)
+    );
+}
+
+#[tokio::test]
+async fn operator_expired_failed_row_with_queued_retry_stays_due() {
+    let (scratch, accounts, _, clock, recorder) = harness("operator-expired-queued");
+    let (db, drive) = (scratch.open(), FakeDelivery::default());
+    let recording = transferring(&accounts, &recorder).await;
+    db.execute_batch(FAIL_ONCE).unwrap();
+    enqueue_delivery(&accounts, &recording.id, 1_000).unwrap();
+    db.execute("UPDATE delivery_queue SET attempts = 4", [])
+        .unwrap();
+
+    run_delivery_queue(&accounts, &recorder, &drive).await;
+    assert_eq!(state_of(&accounts, &recording.id), RecordingState::Failed);
+
+    enqueue_delivery(&accounts, &recording.id, clock.now()).unwrap();
+    db.execute(
+        "UPDATE recordings SET expires_at = ?1, deleted_by = 'operator'",
+        [clock.now()],
+    )
+    .unwrap();
+
+    run_delivery_queue(&accounts, &recorder, &drive).await;
+    assert_eq!(state_of(&accounts, &recording.id), RecordingState::Failed);
+    assert_eq!(due_for_deletion(&accounts, clock.now()).unwrap().len(), 1);
+
+    // If `--expire` lands while an active attempt is revoking the old grant,
+    // `forget_drive_file` must clear `drive_permission_id` without clearing the
+    // operator's `expires_at`, and `share_file` stops without calling `share`
+    // once the row is no longer `transferring`.
+    enqueue_delivery(&accounts, &recording.id, clock.now()).unwrap();
+    db.execute_batch(
+        "UPDATE recordings SET state = 'transferring';
+         CREATE TRIGGER expire_during_revoke
+         AFTER UPDATE OF drive_permission_id ON recordings
+         WHEN NEW.drive_permission_id IS NULL
+         BEGIN
+             UPDATE recordings SET state = 'failed', error = 'drive_failed'
+             WHERE id = OLD.id;
+         END;",
+    )
+    .unwrap();
+    run_delivery_queue(&accounts, &recorder, &drive).await;
+    assert_eq!(state_of(&accounts, &recording.id), RecordingState::Failed);
+    assert_eq!(*drive.shared_expires_at.lock().unwrap(), vec![87_400]);
+    assert_eq!(due_for_deletion(&accounts, clock.now()).unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn retried_delivery_revokes_and_reshares_an_expired_grant() {
+    let (scratch, accounts, _, clock, recorder) = harness("expired-grant-reshare");
+    let (db, drive) = (scratch.open(), FakeDelivery::default());
+    let recording = transferring(&accounts, &recorder).await;
+    db.execute_batch(FAIL_ONCE).unwrap();
+    enqueue_delivery(&accounts, &recording.id, 1_000).unwrap();
+
+    run_delivery_queue(&accounts, &recorder, &drive).await;
+    assert_eq!(*drive.shared_expires_at.lock().unwrap(), vec![87_400]);
+
+    // Once the remaining window falls to `MIN_GRANT_REMAINING_SECONDS` (or
+    // below it), `share_file` revokes the expiring grant and shares again. When
+    // revoking fails, `share_file` stops before calling `share` and keeps the
+    // recorded permission for the next attempt.
+    *drive.refuse_delete.lock().unwrap() = true;
+    clock.advance(RETENTION_SECONDS - MIN_GRANT_REMAINING_SECONDS);
+    run_delivery_queue(&accounts, &recorder, &drive).await;
+    assert_eq!(
+        state_of(&accounts, &recording.id),
+        RecordingState::Transferring
+    );
+    assert_eq!(*drive.shared_expires_at.lock().unwrap(), vec![87_400]);
+
+    *drive.refuse_delete.lock().unwrap() = false;
+    clock.advance(300);
+    let expected_expires_at = clock.now() + RETENTION_SECONDS;
+    run_delivery_queue(&accounts, &recorder, &drive).await;
+    assert_eq!(state_of(&accounts, &recording.id), RecordingState::Ready);
+    assert_eq!(revokes_of(&drive), 2);
+    assert_eq!(
+        *drive.shared_expires_at.lock().unwrap(),
+        vec![87_400, expected_expires_at]
+    );
+    assert_eq!(
+        recording_summary(&accounts, &recording.id, 1)
+            .unwrap()
+            .unwrap()
+            .expires_at,
+        Some(expected_expires_at)
+    );
+}
+
+#[tokio::test]
+async fn retried_delivery_revokes_and_reshares_a_grant_with_no_recorded_expiry() {
+    let (scratch, accounts, _, clock, recorder) = harness("missing-expiry-final-attempt");
+    let (db, drive) = (scratch.open(), FakeDelivery::default());
+    let recording = transferring(&accounts, &recorder).await;
+    db.execute_batch(FAIL_ONCE).unwrap();
+    enqueue_delivery(&accounts, &recording.id, 1_000).unwrap();
+
+    run_delivery_queue(&accounts, &recorder, &drive).await;
+    assert_eq!(*drive.shared_expires_at.lock().unwrap(), vec![87_400]);
+
+    // An old-format row on its final attempt: `drive_permission_id` is set,
+    // `expires_at` is NULL, and no further retry attempt remains.
+    db.execute_batch(
+        "UPDATE recordings SET expires_at = NULL;
+         UPDATE delivery_queue SET attempts = 2;",
+    )
+    .unwrap();
+    clock.advance(60);
+    run_delivery_queue(&accounts, &recorder, &drive).await;
+    assert_eq!(state_of(&accounts, &recording.id), RecordingState::Ready);
+    assert_eq!(revokes_of(&drive), 1);
+    assert_eq!(
+        *drive.shared_expires_at.lock().unwrap(),
+        vec![87_400, 87_460]
+    );
+    assert_eq!(
+        recording_summary(&accounts, &recording.id, 1)
+            .unwrap()
+            .unwrap()
+            .expires_at,
+        Some(87_460)
+    );
+}
+
+#[tokio::test]
+async fn grant_expiry_stays_hidden_from_summary_until_operator_expiry() {
+    let (scratch, accounts, _, _, recorder) = harness("grant-hidden-from-summary");
+    let (db, drive) = (scratch.open(), FakeDelivery::default());
+    let recording = transferring(&accounts, &recorder).await;
+    db.execute_batch(FAIL_ONCE).unwrap();
+    enqueue_delivery(&accounts, &recording.id, 1_000).unwrap();
+    db.execute("UPDATE delivery_queue SET attempts = 4", [])
+        .unwrap();
+
+    run_delivery_queue(&accounts, &recorder, &drive).await;
+    assert_eq!(state_of(&accounts, &recording.id), RecordingState::Failed);
+    assert_eq!(
+        recording_summary(&accounts, &recording.id, 1)
+            .unwrap()
+            .unwrap()
+            .expires_at,
+        None
+    );
+
+    db.execute("UPDATE recordings SET deleted_by = 'operator'", [])
+        .unwrap();
+    assert_eq!(
+        recording_summary(&accounts, &recording.id, 1)
+            .unwrap()
+            .unwrap()
+            .expires_at,
+        Some(87_400)
+    );
+}
+
+#[tokio::test]
+async fn grant_expiry_does_not_expire_replay_before_delivery() {
+    let (scratch, accounts, _, _, recorder) = harness("grant-hidden-from-replay");
+    let (db, drive) = (scratch.open(), FakeDelivery::default());
+    let recording = transferring(&accounts, &recorder).await;
+    db.execute_batch(FAIL_ONCE).unwrap();
+    enqueue_delivery(&accounts, &recording.id, 1_000).unwrap();
+    db.execute("UPDATE delivery_queue SET attempts = 4", [])
+        .unwrap();
+
+    run_delivery_queue(&accounts, &recorder, &drive).await;
+    assert!(!matches!(
+        replay_snapshot(&accounts, "int-1", 1, 90_000),
+        Ok(Expired)
+    ));
+
+    db.execute("UPDATE recordings SET deleted_by = 'operator'", [])
+        .unwrap();
+    assert!(matches!(
+        replay_snapshot(&accounts, "int-1", 1, 90_000),
+        Ok(Expired)
+    ));
+}
+
+#[tokio::test]
+async fn retention_cleanup_script_lists_exhausted_and_failed_cleanup_rows() {
+    assert!(
+        std::fs::read_to_string("./scripts/recording-cleanup.sh")
+            .unwrap()
+            .contains(&format!("\nretention={RETENTION_SECONDS}\n")),
+        "recording-cleanup.sh retention must match RETENTION_SECONDS"
+    );
+
+    if std::process::Command::new("sh")
+        .args(["-c", "command -v sqlite3"])
+        .output()
+        .map(|out| !out.status.success())
+        .unwrap_or(true)
+    {
+        assert_ne!(
+            std::env::var("CI").as_deref(),
+            Ok("true"),
+            "sqlite3 is not installed, and CI must run this test"
+        );
+        return;
+    }
+
+    let (scratch, accounts, _, _, recorder) = harness("retention-script-states");
+    let recording = transferring(&accounts, &recorder).await;
+    let db = scratch.path().to_str().unwrap();
+    let conn = scratch.open();
+    let list_at = |now: i64| {
+        let out = std::process::Command::new("sh")
+            .arg("./scripts/recording-cleanup.sh")
+            .args(["--db", db, "--now", &now.to_string()])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+
+    conn.execute(
+        "UPDATE recordings
+         SET state = 'cleanup_failed', error = 'cleanup_failed', expires_at = 1
+         WHERE id = ?1",
+        [&recording.id],
+    )
+    .unwrap();
+    assert_eq!(
+        list_at(9),
+        recording.id,
+        "cleanup_failed is due whatever its expires_at"
+    );
+
+    conn.execute(
+        "UPDATE recordings
+         SET state = 'failed', error = 'drive_failed', updated_at = 1000, expires_at = 1
+         WHERE id = ?1",
+        [&recording.id],
+    )
+    .unwrap();
+    let window = 1000 + RETENTION_SECONDS;
+    assert_eq!(
+        list_at(window - 1),
+        "nothing is due for deletion",
+        "drive_failed is not due before the retention window"
+    );
+    assert_eq!(
+        list_at(window),
+        recording.id,
+        "drive_failed is due a retention window after its last failure"
+    );
+
+    let expired = std::process::Command::new("sh")
+        .arg("./scripts/recording-cleanup.sh")
+        .args(["--db", db, "--now", "1050", "--expire", &recording.id])
+        .output()
+        .unwrap();
+    assert!(expired.status.success(), "{expired:?}");
+    assert_eq!(
+        list_at(1050),
+        recording.id,
+        "--expire makes a failed row due at once"
+    );
 }

@@ -2,7 +2,7 @@ use rusqlite::OptionalExtension;
 
 use crate::accounts::Accounts;
 
-use super::store::{SELECT_RECORDING, row_to_recording};
+use super::store::{RETENTION_EXPIRES_AT, SELECT_RECORDING, row_to_recording};
 use super::{Failure, RETENTION_SECONDS, Recording, RecordingState};
 
 /// One page of an account's recordings, newest first.
@@ -68,11 +68,13 @@ pub fn recording_summary(
     accounts.with(|connection| {
         connection
             .query_row(
-                "
-        SELECT id, interview_id, state, error, created_at, ready_at, expires_at,
-               deleted_at, quota_exceeded
+                &format!(
+                    "
+        SELECT id, interview_id, state, error, created_at, ready_at,
+               {RETENTION_EXPIRES_AT}, deleted_at, quota_exceeded
         FROM recordings WHERE id = ?1 AND account_id = ?2
-        ",
+        "
+                ),
                 (recording_id, account_id),
                 |row| {
                     let state: String = row.get(2)?;
@@ -111,11 +113,11 @@ pub fn recording_summary(
 /// row, and the ones it did remove are not.
 ///
 /// A delivery that ran out of attempts is due the retention window after its
-/// last failure, which is how long an operator has to retry it: it has no
-/// `expires_at`, and its Drive file, recipient and replay would otherwise stay.
-/// A deletion of it that fails moves it to `cleanup_failed` and replaces the
-/// error that made it due, so that state is due on its own while it has no
-/// `expires_at`.
+/// last failure, which is how long an operator has to retry it, whatever its
+/// `expires_at`: until a row is `ready` that column holds the Drive grant's
+/// expiry, which `RETENTION_EXPIRES_AT` hides unless `--expire` set it. A
+/// deletion of it that fails moves it to `cleanup_failed`, which is due on
+/// every pass.
 ///
 /// A recording whose Egress job was never confirmed stopped is not due, however
 /// old it is. Tombstoning gives up the room name, which is the only thing the
@@ -129,11 +131,11 @@ pub fn due_for_deletion(accounts: &Accounts, now: i64) -> rusqlite::Result<Vec<R
         WHERE deleted_at IS NULL
           AND state IN ('ready', 'failed', 'cleanup_failed')
           AND (egress_id IS NULL OR stopped_at IS NOT NULL)
-          AND ((expires_at IS NOT NULL AND expires_at <= ?1)
+          AND (({RETENTION_EXPIRES_AT} <= ?1)
                OR error = ?2
-               OR (state = 'failed' AND error = ?3 AND expires_at IS NULL
+               OR (state = 'failed' AND error = ?3
                    AND updated_at <= ?1 - ?4)
-               OR (state = 'cleanup_failed' AND expires_at IS NULL)
+               OR state = 'cleanup_failed'
                OR interview_id IN (
                    SELECT id FROM interviews WHERE consent_withdrawn_at IS NOT NULL
                ))

@@ -24,6 +24,7 @@ pub(super) const SELECT_RECORDING: &str = "
                created_at, updated_at
         FROM recordings
 ";
+pub(super) const RETENTION_EXPIRES_AT: &str = "CASE WHEN state NOT IN ('transferring', 'failed') OR deleted_by = 'operator' THEN expires_at END";
 
 pub(super) fn row_to_recording(row: &rusqlite::Row<'_>) -> rusqlite::Result<Recording> {
     let state: String = row.get(5)?;
@@ -480,15 +481,17 @@ pub fn prune_webhook_events(accounts: &Accounts, before: i64) -> rusqlite::Resul
     })
 }
 
+pub(super) type DeliveryHandles = (Option<String>, Option<String>, Option<String>, Option<i64>);
+
 pub(super) fn delivery_handles(
     accounts: &Accounts,
     recording_id: &str,
-) -> rusqlite::Result<(Option<String>, Option<String>, Option<String>)> {
+) -> rusqlite::Result<DeliveryHandles> {
     accounts.with(|connection| {
         connection.query_row(
-            "SELECT drive_file_id, drive_permission_id, gcs_object FROM recordings WHERE id = ?1",
+            "SELECT drive_file_id, drive_permission_id, gcs_object, expires_at FROM recordings WHERE id = ?1",
             [recording_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )
     })
 }

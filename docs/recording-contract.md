@@ -562,6 +562,10 @@ uploading again. It cannot make the same promise about a permission: a crash
 between Drive accepting the share and the write that records it leaves one
 nothing names. Deleting the file removes its permissions, so retention still
 reaches it, and the delivery queue's claim is what closes the window.
+A recorded `drive_permission_id` is kept with its `expires_at` while more than
+`MIN_GRANT_REMAINING_SECONDS` remains before that deadline, or revoked and
+cleared with `expires_at` before sharing when less remains or `expires_at` is
+null (including after an operator retry clears `expires_at` on reopen).
 
 Each Drive handle is written on its own and only while the row is still
 `transferring`. A withdrawal that wins the race leaves a file this delivery
@@ -1030,7 +1034,10 @@ never stored, which finishes a file with a hole in it.
 
 `retry_delivery`, the recovery `drive_failed` names, is an operator inserting a
 queue row by hand. The worker reopens a `drive_failed` recording when it claims
-one, guarded in the statement rather than in the transition table: "failed for
+one, while its media is still present and `deleted_by` is null (so a row an
+operator already marked with `--expire` is refused with
+`recording_delivery_reopen_refused` rather than reopened),
+guarded in the statement rather than in the transition table: "failed for
 this one reason" is not a state the table has, and giving it one would make every
 other failure re-openable too. The bytes never left the staging bucket, which is
 why this is a delivery to retry rather than an interview to record again.
@@ -1126,10 +1133,11 @@ retention mechanism: the deletion at expiry is what actually removes the media,
 and the permission expiring is what covers the gap if a deletion is late.
 
 A cleanup that deletes a file this delivery uploaded also clears the row's
-`drive_file_id` and `drive_permission_id`, when the whole cleanup succeeded. A
+`drive_file_id` and `drive_permission_id`, when the whole cleanup succeeded, and
+one revoking a retried row's grant clears the permission and `expires_at`. A
 cleanup whose file deletion worked and whose staging deletion did not leaves the
 row naming a file that is gone; that row is one whose recording has already
-moved on, which is the only reason this cleanup runs, so nothing will read the
+moved on, which is the only reason that cleanup runs, so nothing will read the
 handle again. A handle naming a file that is gone
 is worse than no handle: a later attempt reads it, skips the upload, and tries
 to share something that is not there.
@@ -1251,13 +1259,14 @@ the next retention pass takes the row.
 A recording is only due while it is `ready`, `failed` or `cleanup_failed`. One
 still `transferring` is being uploaded, and withdrawal moves it out of that
 state on its own. A recording that failed for some other reason and was never
-delivered has no deadline at all: its staged object is the bucket's lifecycle
-rule to collect, which is why that rule is provisioned rather than optional.
-The one failure that can leave a Drive file, `drive_failed`, is the exception:
-its row is due the retention window after its last failure, which is also how
-long an operator has to retry the delivery before the deletion pass takes the
-file, the address and the replay. A retry that fails again starts the window
-over.
+delivered has no retention deadline unless an operator brings it forward with
+`--expire`: its staged object is the bucket's lifecycle rule to collect, which
+is why that rule is provisioned rather than optional. The one failure that can
+leave a Drive file, `drive_failed`, is the exception: its row is due the
+retention window after its last failure, whatever its `expires_at`, which is
+also how long an operator has to retry the delivery before the deletion pass
+takes the file, the address and the replay. A retry that fails again starts the
+window over.
 
 `cleanup_failed` is an alert, not a state anything retries silently. It is also
 picked up by the next retention pass, so an outage that ends means the deletion
@@ -1384,7 +1393,7 @@ failure that has no symptom until it has a bad one.
 | `duration_seconds` | INTEGER | yes | from the provider, once the recording ends |
 | `created_at`, `updated_at` | INTEGER | no | epoch seconds |
 | `started_at`, `ended_at`, `ready_at` | INTEGER | yes | each null until it happens |
-| `expires_at` | INTEGER | yes | the retention deadline |
+| `expires_at` | INTEGER | yes | the Drive grant's expiry until the row is `ready`, then the retention deadline |
 | `stopped_at` | INTEGER | yes | when the provider agreed to stop; an egress id with no `stopped_at` is a job still running |
 | `deleted_at` | INTEGER | yes | when the media was deleted |
 | `delete_error` | TEXT | yes | a short machine code for a partial failure |

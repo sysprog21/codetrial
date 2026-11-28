@@ -1362,10 +1362,11 @@ mod failure {
         preempt_share: Mutex<Option<std::path::PathBuf>>,
         pub(crate) refuse_transfer: Mutex<bool>,
         refuse_share: Mutex<bool>,
-        refuse_delete: Mutex<bool>,
+        pub(crate) refuse_delete: Mutex<bool>,
         refuse_revoke: Mutex<bool>,
         refuse_object_delete: Mutex<bool>,
         calls: Mutex<Vec<String>>,
+        pub(crate) shared_expires_at: Mutex<Vec<i64>>,
     }
 
     impl FakeDelivery {
@@ -1405,11 +1406,12 @@ mod failure {
             &'a self,
             _drive_file_id: &'a str,
             _recipient_email: &'a str,
-            _expires_at: i64,
+            expires_at: i64,
         ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, String>> + Send + 'a>>
         {
             Box::pin(async move {
                 self.calls.lock().unwrap().push("share".to_string());
+                self.shared_expires_at.lock().unwrap().push(expires_at);
                 if let Some(path) = self.preempt_share.lock().unwrap().as_ref() {
                     rusqlite::Connection::open(path)
                         .unwrap()
@@ -2709,14 +2711,10 @@ mod failure {
             );
 
             // An id nobody has is a failure rather than a quiet success.
+            let db = scratch.path().to_str().unwrap();
             let missing = std::process::Command::new("sh")
                 .arg("./scripts/recording-cleanup.sh")
-                .args([
-                    "--db",
-                    scratch.path().to_str().unwrap(),
-                    "--expire",
-                    "rec-nobody",
-                ])
+                .args(["--db", db, "--expire", "rec-nobody"])
                 .output()
                 .unwrap();
             assert!(!missing.status.success());

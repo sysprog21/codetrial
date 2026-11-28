@@ -12,6 +12,10 @@ use super::{
     recording_by_id,
 };
 
+/// The shortest remaining life a stored Drive permission may still have when
+/// a retry reuses it instead of revoking and granting a fresh window.
+pub const MIN_GRANT_REMAINING_SECONDS: i64 = 60 * 60;
+
 pub async fn deliver_recording(
     accounts: &Arc<Accounts>,
     recorder: &Recorder,
@@ -40,7 +44,7 @@ pub async fn deliver_recording(
         .share_file(&uploaded, recipient_email, expires_at)
         .await?;
 
-    transfer.finish(&uploaded, &shared, expires_at).await?;
+    transfer.finish(&uploaded, &shared).await?;
     audit("recording_ready", &recording.id, &[]);
     Ok(RecordingState::Ready)
 }
@@ -68,11 +72,13 @@ struct Uploaded {
     drive_file_id: String,
     made_here: bool,
 
-    /// A permission an earlier attempt already granted. Carried out of the
-    /// upload step because it is read from the same row, and asking Drive to
-    /// grant the same person the same access twice is either a duplicate grant
-    /// or an error, and neither is what a retry wanted.
+    /// A permission an earlier attempt already granted, along with the deadline
+    /// stored beside it. Carried out of the upload step because both are read
+    /// from the same row, and asking Drive to grant the same person the same
+    /// access twice is either a duplicate grant or an error, and neither is
+    /// what a retry wanted.
     existing_permission: Option<String>,
+    existing_expires_at: Option<i64>,
 }
 
 /// The same, for the permission.
@@ -105,13 +111,16 @@ impl Transfer<'_> {
         record_delivery_failure(self.accounts, self.recorder, &self.recording.id).await;
     }
 
-    /// Undoes the parts of this delivery that landed, for a row somebody else
-    /// has already moved on from.
+    /// Undoes the parts of this delivery that landed on a row somebody else has
+    /// already moved on from, or revokes a stored grant `share_file` is about
+    /// to replace on a row still `transferring`. Returns what happened across
+    /// the remote revoke/delete and the `forget_drive_file` write (including
+    /// whether the row is still `transferring`).
     async fn clean_up_after_losing(
         &self,
         step: &str,
         handles: (Option<&str>, Option<(&str, &str)>),
-    ) {
+    ) -> Cleanup {
         clean_up_after_losing(
             self.accounts,
             self.delivery,
@@ -120,7 +129,7 @@ impl Transfer<'_> {
             handles,
             &self.gcs_object,
         )
-        .await;
+        .await
     }
 
     /// Writes the staged object down before anything remote happens.
@@ -167,7 +176,7 @@ impl Transfer<'_> {
             let id = self.recording.id.clone();
             blocking(move || delivery_handles(&accounts, &id)).await
         };
-        let Ok((existing, existing_permission, _)) = handles else {
+        let Ok((existing, existing_permission, _, existing_expires_at)) = handles else {
             // Not knowing whether a file exists is not permission to make
             // another one. A read failure read as "no file" is how the
             // no-orphan guarantee stops holding during exactly the trouble it
@@ -217,6 +226,7 @@ impl Transfer<'_> {
                 drive_file_id,
                 made_here,
                 existing_permission,
+                existing_expires_at,
             }),
             Err(_) => {
                 // A write that failed is not a state race. The file stays where
@@ -253,7 +263,8 @@ impl Transfer<'_> {
     }
 
     /// Grants the recipient time-limited access, or keeps the grant an earlier
-    /// attempt made, and writes the permission id down before returning.
+    /// attempt made while its deadline still holds, and writes the permission
+    /// id down before returning.
     async fn share_file(
         &self,
         uploaded: &Uploaded,
@@ -261,8 +272,50 @@ impl Transfer<'_> {
         expires_at: i64,
     ) -> Result<Shared, Failure> {
         let drive_file_id = uploaded.drive_file_id.as_str();
-        let made_here = uploaded.existing_permission.is_none();
-        let permission_id = match uploaded.existing_permission.clone() {
+        let min_expires_at = self.recorder.clock.now() + MIN_GRANT_REMAINING_SECONDS;
+        let existing_valid = uploaded
+            .existing_expires_at
+            .is_some_and(|stored| stored > min_expires_at);
+        if let Some(permission_id) = uploaded
+            .existing_permission
+            .as_deref()
+            .filter(|_| !existing_valid)
+        {
+            match self
+                .clean_up_after_losing("share", (None, Some((drive_file_id, permission_id))))
+                .await
+            {
+                Cleanup::Transferring => {}
+                Cleanup::Lost => {
+                    audit(
+                        "recording_delivery_lost",
+                        &self.recording.id,
+                        &[("step", "share")],
+                    );
+                    return Err(Failure::Drive);
+                }
+                Cleanup::RevokeFailed => {
+                    let failure =
+                        self.failed("share", "the stored Drive permission could not be revoked");
+                    self.record_failure().await;
+                    return Err(failure);
+                }
+                Cleanup::ForgetFailed => {
+                    let failure = self.failed(
+                        "share",
+                        "the revoked Drive permission could not be cleared from the recording",
+                    );
+                    self.record_failure().await;
+                    return Err(failure);
+                }
+            }
+        }
+        let existing_permission = uploaded
+            .existing_permission
+            .clone()
+            .filter(|_| existing_valid);
+        let made_here = existing_permission.is_none();
+        let permission_id = match existing_permission {
             Some(permission_id) => permission_id,
             None => match self
                 .delivery
@@ -284,7 +337,7 @@ impl Transfer<'_> {
             let accounts = Arc::clone(self.accounts);
             let id = self.recording.id.clone();
             let permission_id = permission_id.clone();
-            blocking(move || set_drive_permission(&accounts, &id, &permission_id)).await
+            blocking(move || set_drive_permission(&accounts, &id, &permission_id, expires_at)).await
         } else {
             Ok(true)
         };
@@ -320,17 +373,12 @@ impl Transfer<'_> {
     }
 
     /// Marks the recording delivered, which is the write that makes it `Ready`.
-    async fn finish(
-        &self,
-        uploaded: &Uploaded,
-        shared: &Shared,
-        expires_at: i64,
-    ) -> Result<(), Failure> {
+    async fn finish(&self, uploaded: &Uploaded, shared: &Shared) -> Result<(), Failure> {
         let finished = {
             let accounts = Arc::clone(self.accounts);
             let clock = Arc::clone(&self.recorder.clock);
             let id = self.recording.id.clone();
-            blocking(move || finish_delivery(&accounts, clock.as_ref(), &id, expires_at)).await
+            blocking(move || finish_delivery(&accounts, clock.as_ref(), &id)).await
         };
         match finished {
             Ok(true) => Ok(()),
@@ -420,11 +468,22 @@ async fn cleanup_scope(accounts: &Arc<Accounts>, recording_id: &str) -> CleanupS
     }
 }
 
+/// What `clean_up_after_losing` did, so `share_file` can tell a row that is
+/// still `transferring` from one that moved on, a failed remote revoke, or a
+/// failed database write in `forget_drive_file`.
+enum Cleanup {
+    Transferring,
+    Lost,
+    RevokeFailed,
+    ForgetFailed,
+}
+
 /// The cleanup one lost delivery is allowed to perform.
 ///
-/// `mine` is what this invocation created: a file it uploaded, and a permission
-/// it granted paired with the file that permission is on. A file it reused
-/// belongs to an earlier attempt and the staged object belongs to the
+/// `mine` is what this invocation removes: a file it uploaded, or a permission
+/// paired with the file it is on, which this call granted or, when `share_file`
+/// replaces a stored grant, one an earlier attempt granted. A file
+/// it reused belongs to an earlier attempt and the staged object belongs to the
 /// recording, so deleting either because this call lost a race takes media from
 /// somebody who still wants it.
 async fn clean_up_after_losing(
@@ -434,12 +493,12 @@ async fn clean_up_after_losing(
     step: &str,
     mine: (Option<&str>, Option<(&str, &str)>),
     gcs_object: &str,
-) {
+) -> Cleanup {
     let scope = cleanup_scope(accounts, recording_id).await;
     let (drive_file_id, permission) = if scope.mine { mine } else { (None, None) };
     let object = scope.object.then_some(gcs_object);
     if drive_file_id.is_none() && permission.is_none() && object.is_none() {
-        return;
+        return Cleanup::RevokeFailed;
     }
     let outcome = delivery
         .revoke_and_delete(drive_file_id, permission, object)
@@ -447,34 +506,47 @@ async fn clean_up_after_losing(
     let deleted = outcome.is_ok();
     report_cleanup(recording_id, step, outcome);
 
-    // A handle that names a file this call just deleted is worse than no
-    // handle: a later attempt reads it, skips the upload, and tries to share
-    // something that is not there. Guarded on the value, so a row that has
-    // moved on to some other file keeps it.
-    if deleted && let Some(drive_file_id) = drive_file_id {
+    // Forget a deleted file, and forget a revoked permission with its deadline
+    // even when its file is kept, guarded on the values so another file stays.
+    if deleted {
         let accounts = Arc::clone(accounts);
         let recording_id = recording_id.to_string();
-        let drive_file_id = drive_file_id.to_string();
-        let _ = blocking(move || forget_drive_file(&accounts, &recording_id, &drive_file_id)).await;
+        let file = drive_file_id.map(str::to_string);
+        let perm = permission.map(|(_, id)| id.to_string());
+        match blocking(move || forget_drive_file(&accounts, &recording_id, file, perm)).await {
+            Ok(true) => Cleanup::Transferring,
+            Ok(false) => Cleanup::Lost,
+            Err(_) => Cleanup::ForgetFailed,
+        }
+    } else {
+        Cleanup::RevokeFailed
     }
 }
 
-/// Give up a Drive handle whose file is gone.
+/// Give up a deleted Drive file, or a revoked permission and its deadline, and
+/// report whether the row is still `transferring`.
 fn forget_drive_file(
     accounts: &Accounts,
     recording_id: &str,
-    drive_file_id: &str,
-) -> rusqlite::Result<()> {
-    accounts.with(|connection| {
+    drive_file_id: Option<String>,
+    permission_id: Option<String>,
+) -> rusqlite::Result<bool> {
+    accounts.transaction(|connection| {
         connection.execute(
             "
         UPDATE recordings
-        SET drive_file_id = NULL, drive_permission_id = NULL
-        WHERE id = ?1 AND drive_file_id = ?2 AND deleted_at IS NULL
+        SET drive_file_id = CASE WHEN drive_file_id = ?2 THEN NULL ELSE drive_file_id END,
+            drive_permission_id = NULL,
+            expires_at = CASE WHEN drive_permission_id = ?3 AND state <> 'ready' AND deleted_by IS NULL THEN NULL ELSE expires_at END
+        WHERE id = ?1 AND (drive_file_id = ?2 OR drive_permission_id = ?3) AND deleted_at IS NULL
         ",
-            (recording_id, drive_file_id),
+            (recording_id, drive_file_id, permission_id),
         )?;
-        Ok(())
+        connection.query_row(
+            "SELECT state = 'transferring' FROM recordings WHERE id = ?1",
+            [recording_id],
+            |row| row.get(0),
+        )
     })
 }
 
@@ -553,14 +625,15 @@ fn set_drive_permission(
     accounts: &Accounts,
     recording_id: &str,
     permission_id: &str,
+    expires_at: i64,
 ) -> rusqlite::Result<bool> {
     accounts.with(|connection| {
         let changed = connection.execute(
             "
-        UPDATE recordings SET drive_permission_id = ?2
+        UPDATE recordings SET drive_permission_id = ?2, expires_at = ?3
         WHERE id = ?1 AND state = 'transferring' AND drive_permission_id IS NULL
         ",
-            (recording_id, permission_id),
+            (recording_id, permission_id, expires_at),
         )?;
         Ok(changed > 0)
     })
@@ -589,24 +662,22 @@ fn finish_delivery(
     accounts: &Accounts,
     clock: &dyn Clock,
     recording_id: &str,
-    expires_at: i64,
 ) -> rusqlite::Result<bool> {
     let now = clock.now();
     accounts.with(|connection| {
         let changed = connection.execute(
             "
         UPDATE recordings
-        SET expires_at = ?2,
-            state = 'ready',
+        SET state = 'ready',
             -- Cleared, or a delivery that failed once and then worked would be
             -- `ready` still carrying `drive_failed`, and the status route would
             -- tell a candidate their recording had not been delivered.
             error = NULL,
-            ready_at = ?3,
-            updated_at = ?3
+            ready_at = ?2,
+            updated_at = ?2
         WHERE id = ?1 AND state = 'transferring'
         ",
-            (recording_id, expires_at, now),
+            (recording_id, now),
         )?;
         Ok(changed > 0)
     })
